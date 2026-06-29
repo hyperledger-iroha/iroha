@@ -43,6 +43,7 @@ contract TairaXorBscSccpBridge {
     uint256 private constant MAX_TAIRA_RECIPIENT_BYTES = 256;
     bytes32 private constant TAIRA_XOR_BURN_SOURCE_EVENT_PREFIX =
         keccak256("iroha:sccp:taira-xor:burn-source-event:v1");
+    uint256 private constant TAIRA_TO_TOKEN_SCALE = 1000000000;
 
     ITairaXorToken public token;
     ISccpMessageVerifier public verifier;
@@ -276,8 +277,9 @@ contract TairaXorBscSccpBridge {
             publicInputs[2] == _abiWordU32(SCCP_DOMAIN_BSC),
             "Unexpected target domain"
         );
-        (address recipient, uint256 amount) =
+        (address recipient, uint256 tairaAmount) =
             _parseTairaXorTransferPayload(canonicalPayloadBytes);
+        uint256 tokenAmount = _scaleTairaAmount(tairaAmount);
         bytes32 expectedMessageId =
             tairaXorTransferMessageId(canonicalPayloadBytes);
         require(publicInputs[0] == expectedMessageId, "Message id mismatch");
@@ -303,12 +305,12 @@ contract TairaXorBscSccpBridge {
         require(!usedMessageProofs[messageId], "Message proof already used");
 
         usedMessageProofs[messageId] = true;
-        require(token.mint(recipient, amount), "Token mint failed");
+        require(token.mint(recipient, tokenAmount), "Token mint failed");
 
         emit TairaXorMintFinalized(
             messageId,
             recipient,
-            amount,
+            tokenAmount,
             routeIdHash,
             assetKeyHash,
             payloadHash
@@ -319,7 +321,7 @@ contract TairaXorBscSccpBridge {
         bytes32 submittedRouteIdHash,
         bytes32 submittedAssetKeyHash,
         bytes calldata tairaRecipient,
-        uint256 amount
+        uint256 tokenAmount
     ) external returns (bytes32 sourceEventDigest) {
         require(submittedRouteIdHash == routeIdHash, "Unexpected route");
         require(submittedAssetKeyHash == assetKeyHash, "Unexpected asset");
@@ -328,22 +330,27 @@ contract TairaXorBscSccpBridge {
             tairaRecipient.length <= MAX_TAIRA_RECIPIENT_BYTES,
             "TAIRA recipient is too long"
         );
-        require(amount != 0, "Amount is required");
+        require(tokenAmount != 0, "Amount is required");
+        require(
+            tokenAmount % TAIRA_TO_TOKEN_SCALE == 0,
+            "Amount must align to TAIRA scale"
+        );
         require(burnNonce != uint256(-1), "Burn nonce exhausted");
 
         uint256 nonce = burnNonce;
         burnNonce = nonce + 1;
+        uint256 tairaAmount = tokenAmount / TAIRA_TO_TOKEN_SCALE;
         bytes32 recipientHash = keccak256(tairaRecipient);
         sourceEventDigest = tairaXorBurnSourceEventDigest(
             submittedRouteIdHash,
             submittedAssetKeyHash,
             msg.sender,
             recipientHash,
-            amount,
+            tairaAmount,
             nonce
         );
 
-        require(token.burnFrom(msg.sender, amount), "Token burn failed");
+        require(token.burnFrom(msg.sender, tokenAmount), "Token burn failed");
         require(
             sourceBridge.submitSccpSourceEvent(
                 SCCP_DOMAIN_BSC,
@@ -357,12 +364,20 @@ contract TairaXorBscSccpBridge {
             sourceEventDigest,
             msg.sender,
             recipientHash,
-            amount,
+            tairaAmount,
             nonce,
             submittedRouteIdHash,
             submittedAssetKeyHash,
             tairaRecipient
         );
+    }
+
+    function _scaleTairaAmount(uint256 amount) private pure returns (uint256) {
+        require(
+            amount <= uint256(-1) / TAIRA_TO_TOKEN_SCALE,
+            "Amount exceeds token scale"
+        );
+        return amount * TAIRA_TO_TOKEN_SCALE;
     }
 
     function tairaXorTransferMessageId(

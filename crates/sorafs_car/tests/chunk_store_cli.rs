@@ -301,6 +301,219 @@ fn cli_writes_chunk_fetch_plan_json() {
 }
 
 #[test]
+fn cli_persists_chunks_to_directory() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = write_payload(&payload_path, 700_000);
+    let chunk_dir = tempdir.path().join("persisted-chunks");
+
+    let output = cargo_bin_cmd!("sorafs_chunk_store")
+        .arg(&payload_path)
+        .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
+        .output()
+        .expect("run chunk store CLI");
+    assert!(output.status.success(), "cli exited with failure");
+
+    let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
+    let persisted = stdout_json
+        .get("persisted_chunks")
+        .and_then(Value::as_object)
+        .expect("persisted_chunks object");
+    assert_eq!(
+        persisted
+            .get("total_bytes")
+            .and_then(Value::as_u64)
+            .expect("total_bytes"),
+        payload.len() as u64
+    );
+    let records = persisted
+        .get("records")
+        .and_then(Value::as_array)
+        .expect("records array");
+    let chunk_count = stdout_json
+        .get("chunk_count")
+        .and_then(Value::as_u64)
+        .expect("chunk_count") as usize;
+    assert_eq!(records.len(), chunk_count);
+
+    for record in records {
+        let record = record.as_object().expect("record object");
+        let file_name = record
+            .get("file_name")
+            .and_then(Value::as_str)
+            .expect("file_name");
+        let offset = record
+            .get("offset")
+            .and_then(Value::as_u64)
+            .expect("offset") as usize;
+        let length = record
+            .get("length")
+            .and_then(Value::as_u64)
+            .expect("length") as usize;
+        let digest = record
+            .get("digest_blake3")
+            .and_then(Value::as_str)
+            .expect("digest_blake3");
+        let persisted_bytes = std::fs::read(chunk_dir.join(file_name)).expect("read chunk file");
+        assert_eq!(persisted_bytes.len(), length);
+        assert_eq!(
+            &payload[offset..offset + length],
+            persisted_bytes.as_slice()
+        );
+        assert_eq!(digest, to_hex(blake3::hash(&persisted_bytes).as_bytes()));
+    }
+
+    let partial_files: Vec<_> = std::fs::read_dir(&chunk_dir)
+        .expect("read chunk dir")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "partial"))
+        .collect();
+    assert!(
+        partial_files.is_empty(),
+        "partial files should be renamed away"
+    );
+}
+
+#[test]
+fn cli_persists_empty_payload_to_directory() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("empty.bin");
+    std::fs::write(&payload_path, []).expect("write empty payload");
+    let chunk_dir = tempdir.path().join("empty-chunks");
+
+    let output = cargo_bin_cmd!("sorafs_chunk_store")
+        .arg(&payload_path)
+        .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
+        .output()
+        .expect("run chunk store CLI");
+    assert!(output.status.success(), "cli exited with failure");
+
+    let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
+    assert_eq!(
+        stdout_json
+            .get("input_bytes")
+            .and_then(Value::as_u64)
+            .expect("input_bytes"),
+        0
+    );
+    assert_eq!(
+        stdout_json
+            .get("chunk_count")
+            .and_then(Value::as_u64)
+            .expect("chunk_count"),
+        1
+    );
+    let persisted = stdout_json
+        .get("persisted_chunks")
+        .and_then(Value::as_object)
+        .expect("persisted_chunks object");
+    assert_eq!(
+        persisted
+            .get("total_bytes")
+            .and_then(Value::as_u64)
+            .expect("total_bytes"),
+        0
+    );
+    let records = persisted
+        .get("records")
+        .and_then(Value::as_array)
+        .expect("records array");
+    assert_eq!(
+        records.len(),
+        1,
+        "empty payload should create one empty chunk record"
+    );
+    let record = records[0].as_object().expect("record object");
+    assert_eq!(
+        record
+            .get("file_name")
+            .and_then(Value::as_str)
+            .expect("file_name"),
+        "chunk_00000.bin"
+    );
+    assert_eq!(
+        record
+            .get("length")
+            .and_then(Value::as_u64)
+            .expect("length"),
+        0
+    );
+    assert!(chunk_dir.is_dir(), "chunk directory should exist");
+    let persisted_bytes =
+        std::fs::read(chunk_dir.join("chunk_00000.bin")).expect("read empty chunk file");
+    assert!(
+        persisted_bytes.is_empty(),
+        "empty chunk file should be empty"
+    );
+}
+
+#[test]
+fn cli_rejects_non_empty_chunk_directory() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    write_payload(&payload_path, 4096);
+    let chunk_dir = tempdir.path().join("persisted-chunks");
+    std::fs::create_dir(&chunk_dir).expect("create chunk dir");
+    std::fs::write(chunk_dir.join("existing.bin"), b"do not remove").expect("write sentinel");
+
+    let output = cargo_bin_cmd!("sorafs_chunk_store")
+        .arg(&payload_path)
+        .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
+        .output()
+        .expect("run chunk store CLI");
+    assert!(!output.status.success(), "cli should reject non-empty dir");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must be empty or absent"),
+        "expected non-empty directory error, got {stderr}"
+    );
+    assert!(
+        chunk_dir.join("existing.bin").exists(),
+        "preflight must not remove existing files"
+    );
+}
+
+#[test]
+fn manifest_cli_persists_chunks_to_directory() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = write_payload(&payload_path, 96 * 1024);
+    let chunk_dir = tempdir.path().join("manifest-chunks");
+
+    let output = cargo_bin_cmd!("sorafs_manifest_chunk_store")
+        .arg(&payload_path)
+        .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
+        .output()
+        .expect("run manifest chunk store CLI");
+    assert!(output.status.success(), "cli exited with failure");
+
+    let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
+    let persisted = stdout_json
+        .get("persisted_chunks")
+        .and_then(Value::as_object)
+        .expect("persisted_chunks object");
+    assert_eq!(
+        persisted
+            .get("total_bytes")
+            .and_then(Value::as_u64)
+            .expect("total_bytes"),
+        payload.len() as u64
+    );
+    let first_record = persisted
+        .get("records")
+        .and_then(Value::as_array)
+        .and_then(|records| records.first())
+        .and_then(Value::as_object)
+        .expect("first record");
+    let first_file = first_record
+        .get("file_name")
+        .and_then(Value::as_str)
+        .expect("file_name");
+    assert!(chunk_dir.join(first_file).is_file(), "chunk file missing");
+}
+
+#[test]
 fn cli_writes_report_to_stdout_when_json_dash() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");

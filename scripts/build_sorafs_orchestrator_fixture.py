@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -25,10 +26,86 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def read_open_flags() -> int:
+    """Return descriptor flags for reading fixture inputs fail-closed."""
+
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+
+def write_open_flags() -> int:
+    """Return descriptor flags for writing generated fixture files fail-closed."""
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+
+def validate_fixture_path(path: Path, label: str) -> None:
+    """Reject symlinked fixture paths and parent chains before I/O."""
+
+    if not isinstance(path, Path):
+        raise ValueError(f"{label} must be a path")
+    try:
+        if path.is_symlink():
+            raise ValueError(f"{label} `{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                raise ValueError(f"{label} parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                raise ValueError(
+                    f"{label} parent `{parent}` must be a directory when it exists"
+                )
+    except ValueError:
+        raise
+    except OSError as error:
+        raise ValueError(f"failed to inspect {label} `{path}`: {error}") from error
+
+
+def ensure_fixture_directory(path: Path, label: str) -> None:
+    """Create a generated fixture directory without following symlink parents."""
+
+    validate_fixture_path(path, label)
+    path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir():
+        raise ValueError(f"{label} `{path}` must be a directory")
+
+
+def fixture_file_size(path: Path, label: str) -> int:
+    """Return a regular fixture file size through a no-follow descriptor."""
+
+    validate_fixture_path(path, label)
+    if not path.is_file():
+        raise ValueError(f"{label} `{path}` must exist and be a file")
+    fd = -1
+    try:
+        fd = os.open(path, read_open_flags())
+        return os.fstat(fd).st_size
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def load_chunker_fixture(root: Path) -> Dict[str, Any]:
     plan_path = root / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
-    with plan_path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    validate_fixture_path(plan_path, "chunker fixture")
+    if not plan_path.is_file():
+        raise ValueError(f"chunker fixture `{plan_path}` must exist and be a file")
+    fd = -1
+    try:
+        fd = os.open(plan_path, read_open_flags())
+        handle = os.fdopen(fd, "r", encoding="utf-8")
+        fd = -1
+        with handle:
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def build_plan_specs(plan_fixture: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -134,9 +211,18 @@ def build_options() -> Dict[str, Any]:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-        handle.write("\n")
+    validate_fixture_path(path, "orchestrator fixture output")
+    fd = -1
+    try:
+        fd = os.open(path, write_open_flags(), 0o666)
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def main() -> None:
@@ -164,7 +250,7 @@ def main() -> None:
         if args.output is not None
         else root / "fixtures" / "sorafs_orchestrator" / FIXTURE_NAME
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_fixture_directory(output_dir, "orchestrator fixture output directory")
 
     write_json(output_dir / "plan.json", plan_specs)
     write_json(output_dir / "providers.json", providers)
@@ -172,7 +258,7 @@ def main() -> None:
     write_json(output_dir / "options.json", options)
 
     payload_path = Path("fuzz") / "sorafs_chunker" / "sf1_profile_v1_input.bin"
-    payload_bytes = (root / payload_path).stat().st_size
+    payload_bytes = fixture_file_size(root / payload_path, "chunker payload")
 
     metadata = {
         "version": 1,

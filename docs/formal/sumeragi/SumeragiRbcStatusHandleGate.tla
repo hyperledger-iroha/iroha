@@ -315,8 +315,14 @@ RbcStatusHandleMatchesSpec ==
        /\ ActualGlobalSnapshot(c) = SpecGlobalSnapshot(c)
        /\ ActualGlobalActiveCount(c) = SpecGlobalActiveCount(c)
 
-SafetyFast ==
-  RbcStatusHandleMatchesSpec
+RbcStatusHandleExactness ==
+  /\ RbcStatusHandleMatchesSpec
+
+RbcStatusHandleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStatusHandleExactness
+
+SafetyFast == RbcStatusHandleExactness
 
 BugConfigureNoneKeepsMap ==
   ActualConfigureMap("none_with_state") = SpecConfigureMap("none_with_state")

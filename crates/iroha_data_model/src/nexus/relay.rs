@@ -799,6 +799,9 @@ pub enum LaneRelayError {
     /// Lane identifier not present in the configured catalog.
     #[error("lane relay references unknown lane {0}")]
     UnknownLane(LaneId),
+    /// Dataspace identifier not present in the configured catalog.
+    #[error("lane relay references unknown dataspace {0}")]
+    UnknownDataspace(DataSpaceId),
     /// Dataspace identifier does not match the configured lane.
     #[error("lane relay dataspace mismatch (expected {expected}, got {actual})")]
     DataspaceMismatch {
@@ -933,6 +936,9 @@ impl PartialEq for LaneRelayError {
             | (InvalidFastpqProof, InvalidFastpqProof)
             | (Encode(_), Encode(_)) => true,
             (UnknownLane(a_lane), UnknownLane(b_lane)) => a_lane == b_lane,
+            (UnknownDataspace(a_dataspace), UnknownDataspace(b_dataspace)) => {
+                a_dataspace == b_dataspace
+            }
             (
                 ConflictingRelay {
                     lane: a_lane,
@@ -1019,6 +1025,7 @@ impl LaneRelayError {
         match self {
             LaneRelayError::NexusDisabled => "nexus_disabled",
             LaneRelayError::UnknownLane(_) => "unknown_lane",
+            LaneRelayError::UnknownDataspace(_) => "unknown_dataspace",
             LaneRelayError::DataspaceMismatch { .. } => "dataspace_mismatch",
             LaneRelayError::StaleRelay { .. } => "stale_height",
             LaneRelayError::ConflictingRelay { .. } => "conflicting_relay",

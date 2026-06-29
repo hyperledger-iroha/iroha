@@ -27,6 +27,18 @@ fixtures through the SF-11 reference outcome contract.
 Remaining SF-8b work is live operator evidence: archive a production PoR/PoTR
 failure, repair, escalation, and governance handoff once the deployed auditor
 roster and SF-9 coordinator publish their runbooks.
+`scripts/check_sorafs_repair_rollout_evidence.py` now provides the fail-closed
+SF-8b rollout evidence gate for deployed repair promotion packets, and
+`scripts/run_sorafs_repair_rollout_evidence.py` provides the matching reviewed
+evidence collection planner/runner. The checker exports its required top-level
+payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
+checker-backed `evidence_contract` map in dry-run output for the selected
+required kinds. Signed auditor API, worker lifecycle, event stream, governance
+handoff, and approval artifacts must bind to a valid
+auditor roster digest; worker, event stream, and handoff artifacts must also
+bind to a valid failure-capture evidence bundle digest. Roster or failure
+bundle mismatches are recorded on the offending artifact in the JSON summary
+before required-kind validity is reported.
 
 ## Component Overview
 | Component | Responsibilities | Implementation Notes |
@@ -261,6 +273,11 @@ The escalation policy is sourced from `governance.sorafs_repair_escalation` in `
 - Production PoR/PoTR Merkle replay archives, object-storage evidence retention,
   and auditor notification wiring remain live rollout evidence items.
 
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_repair_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_repair_rollout_evidence_test.py`
+
 ## SLA & Observability
 - Metrics (Prometheus naming):
   - `torii_sorafs_repair_tasks_total{status}` — Counter for task transitions.
@@ -333,6 +350,43 @@ not meet quorum, minimum-voter, dispute-window, or appeal-window requirements,
 and penalties are capped to the policy maximum. Proposals without a summary are
 accepted and remain in dispute until votes resolve at the dispute deadline.
 
+## Rollout Evidence Gate
+
+Use the rollout gate after the deployed auditor roster, SF-9 coordinator,
+PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, repair
+event streams, governance handoff, observability, and governance packet have
+produced reviewed, payload-free JSON evidence:
+
+```sh
+python3 scripts/check_sorafs_repair_rollout_evidence.py \
+  @scripts/examples/sorafs_repair_rollout_evidence.args.example
+```
+
+For staged collections with reviewed evidence paths, prefer the planner so the
+verifier command and summary path are reproducible:
+
+```sh
+python3 scripts/run_sorafs_repair_rollout_evidence.py \
+  @scripts/examples/sorafs_repair_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor
+roster, failure capture, signed auditor API, worker lifecycle, event streams,
+governance handoff, observability, and governance approval evidence. It reports
+`ready` only when every required kind is present, every recognized artifact is
+valid, raw PoR/PoTR evidence, raw repair payloads, signed auditor requests,
+response bodies, signed transactions, secrets, and ledgers are absent, route
+latency, event lag, and repair latency stay under configured thresholds, the
+auditor roster meets the configured minimum, governance is bound to
+`iroha_config`, auditor API / worker lifecycle / event stream / governance
+handoff / governance approval artifacts carry a `roster_digest_hex` that
+matches a valid auditor-roster artifact, and worker lifecycle / event stream /
+governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches
+a valid PoR/PoTR failure-capture artifact in the same rollout bundle. Its
+collection planner exposes those exact required payload fields through
+`--dry-run` without touching live repair services.
+
 ## Rollout Status
 Implemented engineering coverage:
 - `sorafs_node::repair` owns the scheduler, persistent repair store, PoR history linkage, worker leases, watchdog escalation, and governance audit/slash publication hooks.
@@ -340,5 +394,12 @@ Implemented engineering coverage:
 - Local golden and integration coverage now exercises the repair schemas, scheduler state transitions, auditor request validation, PoR failure binding, REST endpoints, and repair worker flows.
 - `iroha sorafs repair` and `iroha sorafs gc` provide operator CLI coverage;
   `sorafs-validate repair` provides release/fixture validation.
+- The SF-8b rollout evidence gate, collection planner, operator argfile
+  templates, and focused tests are implemented for payload-free deployed
+  evidence review, including cross-artifact auditor-roster and failure-bundle
+  digest binding.
 
-Remaining rollout work is live operator evidence: collect production PoR failure, repair, and governance handoff artifacts once the deployed auditor roster and SF-9 coordinator publish their runbooks.
+Remaining rollout work is live operator evidence: collect production PoR
+failure, repair, and governance handoff artifacts once the deployed auditor
+roster and SF-9 coordinator publish their runbooks, then pass the SF-8b rollout
+evidence gate.

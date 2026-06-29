@@ -23,15 +23,48 @@ run_contract_check() {
   local header="${2}"
 
   python3 - "$rust_ffi" "$header" <<'PY'
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 
 rust_ffi = Path(sys.argv[1])
 header = Path(sys.argv[2])
 
-rust_text = rust_ffi.read_text(encoding="utf-8")
-header_text = header.read_text(encoding="utf-8")
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def fail(path: Path, label: str, message: str) -> None:
+    raise SystemExit(f"[sorafs-reference-header] {label} {message}: {path}")
+
+def read_text_no_follow(path: Path, label: str) -> str:
+    if path.is_symlink():
+        fail(path, label, "must not be a symlink")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        fail(path, label, "is missing")
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(path, label, "must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            fail(path, label, "must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read()
+    except OSError as exc:
+        raise SystemExit(
+            f"[sorafs-reference-header] failed to read {label}: {path}: {exc}"
+        ) from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+rust_text = read_text_no_follow(rust_ffi, "Rust FFI source")
+header_text = read_text_no_follow(header, "C header")
 
 rust_export_pattern = re.compile(
     r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
@@ -134,6 +167,14 @@ expected_signatures = {
     ),
     "sorafs_reference_validate_orderbook_json": bytes_label_signature(
         "sorafs_reference_validate_orderbook_json",
+        extra_prefix=[u32("kind")],
+    ),
+    "sorafs_reference_validate_pop_json": bytes_label_signature(
+        "sorafs_reference_validate_pop_json",
+        extra_prefix=[u32("kind")],
+    ),
+    "sorafs_reference_validate_hedging_json": bytes_label_signature(
+        "sorafs_reference_validate_hedging_json",
         extra_prefix=[u32("kind")],
     ),
     "sorafs_reference_validate_pdp_commitment_json": bytes_label_signature(
@@ -280,11 +321,75 @@ print(
 PY
 }
 
+copy_file_no_follow() {
+  local source_file="${1}"
+  local target_file="${2}"
+  local label="${3}"
+  SORAFS_REFERENCE_HEADER_COPY_SOURCE="${source_file}" \
+  SORAFS_REFERENCE_HEADER_COPY_TARGET="${target_file}" \
+  SORAFS_REFERENCE_HEADER_COPY_LABEL="${label}" \
+  python3 <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+source = pathlib.Path(os.environ["SORAFS_REFERENCE_HEADER_COPY_SOURCE"])
+target = pathlib.Path(os.environ["SORAFS_REFERENCE_HEADER_COPY_TARGET"])
+label = os.environ["SORAFS_REFERENCE_HEADER_COPY_LABEL"]
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def fail(path: pathlib.Path, path_label: str, message: str) -> None:
+    sys.exit(f"[sorafs-reference-header] {path_label} {message}: {path}")
+
+if source.is_symlink():
+    fail(source, f"{label} source", "must not be a symlink")
+try:
+    source_stat = source.lstat()
+except FileNotFoundError:
+    fail(source, f"{label} source", "is missing")
+if not stat.S_ISREG(source_stat.st_mode):
+    fail(source, f"{label} source", "must be a regular file")
+
+if target.is_symlink():
+    fail(target, f"{label} target", "must not be a symlink")
+target.parent.mkdir(parents=True, exist_ok=True)
+
+read_fd = os.open(source, read_open_flags())
+write_fd = -1
+try:
+    descriptor_stat = os.fstat(read_fd)
+    if not stat.S_ISREG(descriptor_stat.st_mode):
+        fail(source, f"{label} source", "must be a regular file")
+    write_fd = os.open(target, write_open_flags(), 0o666)
+    while True:
+        chunk = os.read(read_fd, 1024 * 1024)
+        if not chunk:
+            break
+        os.write(write_fd, chunk)
+finally:
+    os.close(read_fd)
+    if write_fd >= 0:
+        os.close(write_fd)
+PY
+}
+
 make_negative_workspace() {
   local tmp
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sorafs-reference-header.XXXXXX")"
-  cp "${RUST_FFI}" "${tmp}/reference_ffi.rs"
-  cp "${HEADER}" "${tmp}/sorafs_reference.h"
+  copy_file_no_follow "${RUST_FFI}" "${tmp}/reference_ffi.rs" "negative-control Rust FFI"
+  copy_file_no_follow "${HEADER}" "${tmp}/sorafs_reference.h" "negative-control C header"
   echo "${tmp}"
 }
 

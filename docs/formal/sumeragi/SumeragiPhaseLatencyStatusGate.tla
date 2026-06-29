@@ -280,6 +280,17 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+PhaseLatencyStatusActionsMatchSpec ==
+  \A c \in Candidates:
+    ImplementationActions(c) = SpecActions(c)
+
+PhaseLatencyStatusExactness ==
+  /\ PhaseLatencyStatusActionsMatchSpec
+
+PhaseLatencyStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PhaseLatencyStatusExactness
+
 BugResetKeepsLatest ==
   ImplementationActions(ResetClearsLatest) = SpecActions(ResetClearsLatest)
 

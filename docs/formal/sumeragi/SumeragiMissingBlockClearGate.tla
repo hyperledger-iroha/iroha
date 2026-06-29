@@ -84,8 +84,15 @@ ActualOutput ==
 MissingBlockClearMatchesSpec ==
   ActualOutput = SpecOutput
 
+MissingBlockClearExactness ==
+  /\ MissingBlockClearMatchesSpec
+
+MissingBlockClearCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingBlockClearExactness
+
 SafetyFast ==
-  MissingBlockClearMatchesSpec
+  MissingBlockClearExactness
 
 BugPayloadAvailableWithoutLocalRejected ==
   ActualPayloadMissing = SpecPayloadMissing

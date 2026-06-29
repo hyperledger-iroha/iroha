@@ -435,6 +435,10 @@ CertifiedFetchExactness ==
   /\ CertifiedFetchAdmissionExact
   /\ CertifiedFetchMaterializationExact
 
+CertifiedFetchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CertifiedFetchExactness
+
 Safety ==
   CertifiedFetchExactness
 

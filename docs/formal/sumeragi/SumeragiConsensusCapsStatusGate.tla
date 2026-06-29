@@ -208,6 +208,17 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+ConsensusCapsStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+ConsensusCapsStatusExactness ==
+  /\ ConsensusCapsStatusActionsMatchSpec
+
+ConsensusCapsStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ConsensusCapsStatusExactness
+
 BugInitialCapsPresent ==
   ImplementationActions(InitialAbsent) = SpecActions(InitialAbsent)
 

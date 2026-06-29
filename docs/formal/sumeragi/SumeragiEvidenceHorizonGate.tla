@@ -180,8 +180,21 @@ EvidenceHorizonCoreSafety ==
   /\ StaleEvidenceRejected
   /\ RecentAndFutureEvidenceAllowed
 
-SafetyFast == EvidenceHorizonCoreSafety
+EvidenceHorizonExactness ==
+  /\ MatchesSpec
+  /\ ZeroHorizonDisablesFilter
+  /\ MissingSubjectDefaultsToCurrent
+  /\ SaturatingLowerBound
+  /\ InclusiveLowerBound
+  /\ StaleEvidenceRejected
+  /\ RecentAndFutureEvidenceAllowed
+EvidenceHorizonCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EvidenceHorizonExactness
 
-Safety == EvidenceHorizonCoreSafety
+SafetyFast ==
+  EvidenceHorizonExactness
+
+Safety == EvidenceHorizonExactness
 
 ====

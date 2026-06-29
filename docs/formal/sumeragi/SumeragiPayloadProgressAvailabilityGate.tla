@@ -222,8 +222,19 @@ PayloadProgressAvailabilityCoreSafety ==
   /\ HashOnlyAndAbsentPayloadsDoNotGateProgress
   /\ InvalidOwnersDoNotFallThroughToFallbackStores
 
-NoBugInvariant == PayloadProgressAvailabilityCoreSafety
+PayloadProgressAvailabilityExactness ==
+  /\ ActionsMatchSpec
+  /\ PendingPayloadOwnersGateProgress
+  /\ InflightPayloadOwnersGateProgress
+  /\ FallbackPayloadStoresGateProgress
+  /\ HashOnlyAndAbsentPayloadsDoNotGateProgress
+  /\ InvalidOwnersDoNotFallThroughToFallbackStores
+PayloadProgressAvailabilityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PayloadProgressAvailabilityExactness
 
-SafetyFast == PayloadProgressAvailabilityCoreSafety
+NoBugInvariant == PayloadProgressAvailabilityExactness
+
+SafetyFast == PayloadProgressAvailabilityExactness
 
 ====

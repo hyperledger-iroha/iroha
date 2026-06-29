@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -210,7 +211,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
     sorafs::pin_registry::{PinStatus, StorageClass},
-    zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
+    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::StorageReadOnly;
@@ -220,8 +221,9 @@ use super::{
     *,
 };
 use crate::{
-    smartcontracts::Execute, soracloud_runtime::soracloud_hf_generated_source_binding,
-    state::StateTransaction,
+    smartcontracts::Execute,
+    soracloud_runtime::soracloud_hf_generated_source_binding,
+    state::{StateTransaction, public_lane_validator_record_matches_key},
 };
 
 const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
@@ -555,11 +557,16 @@ fn require_active_public_lane_validator(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let is_active_validator = state_transaction.world.public_lane_validators.iter().any(
-        |((_lane_id, account_id), record)| {
-            account_id == authority && record.status == PublicLaneValidatorStatus::Active
-        },
-    );
+    let is_active_validator =
+        state_transaction
+            .world
+            .public_lane_validators
+            .iter()
+            .any(|(key, record)| {
+                public_lane_validator_record_matches_key(key, record)
+                    && key.1 == *authority
+                    && record.status == PublicLaneValidatorStatus::Active
+            });
     if is_active_validator {
         Ok(())
     } else {
@@ -1141,77 +1148,71 @@ fn validate_soracloud_fhe_stark_native_envelope_bytes(
     Ok(())
 }
 
+const SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS: &[&[u8]] = &[
+    b"placeholder",
+    b"not production ready",
+    b"not-production-ready",
+    b"not for production",
+    b"not-for-production",
+    b"replace before production",
+    b"replace-before-production",
+    b"replace_before_production",
+    b"replace-me",
+    b"replace me",
+    b"replace_me",
+    b"changeme",
+    b"change-me",
+    b"change me",
+    b"change_me",
+    b"test-only",
+    b"test only",
+    b"test_only",
+    b"your-",
+    b"your_",
+    b"your-audit",
+    b"your audit",
+    b"your_audit",
+    b"your-proof",
+    b"your proof",
+    b"your_proof",
+    b"todo pending",
+    b"todo",
+    b"pending native stark",
+    b"pending stark",
+    b"not_for_production",
+    b"not_production_ready",
+    b"draft",
+    b"draft-only",
+    b"draft only",
+    b"draft_only",
+    b"dummy",
+    b"fake",
+    b"stub",
+    b"mock",
+    b"fixture",
+    b"sample",
+    b"template",
+    b"example",
+];
+
 fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes: &[u8]) -> bool {
-    const PLACEHOLDER_MARKERS: &[&[u8]] = &[
-        b"placeholder",
-        b"not production ready",
-        b"not-production-ready",
-        b"not for production",
-        b"not-for-production",
-        b"replace before production",
-        b"replace-before-production",
-        b"replace_before_production",
-        b"replace-me",
-        b"replace me",
-        b"replace_me",
-        b"changeme",
-        b"change-me",
-        b"change me",
-        b"change_me",
-        b"test-only",
-        b"test only",
-        b"test_only",
-        b"your-",
-        b"your_",
-        b"your-audit",
-        b"your audit",
-        b"your_audit",
-        b"your-proof",
-        b"your proof",
-        b"your_proof",
-        b"todo pending",
-        b"todo",
-        b"pending native stark",
-        b"pending stark",
-        b"not_for_production",
-        b"not_production_ready",
-        b"draft",
-        b"draft-only",
-        b"draft only",
-        b"draft_only",
-        b"dummy",
-        b"fake",
-        b"stub",
-        b"mock",
-        b"fixture",
-        b"sample",
-        b"template",
-        b"example",
-    ];
     let is_text_byte = |byte: &u8| byte.is_ascii_graphic() || byte.is_ascii_whitespace();
     if envelope_bytes.iter().all(is_text_byte) {
         return soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
             envelope_bytes,
-            PLACEHOLDER_MARKERS,
+            SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
         );
     }
-    let Some(start) = envelope_bytes.iter().position(is_text_byte) else {
-        return false;
-    };
-    let Some(end) = envelope_bytes
-        .iter()
-        .rposition(is_text_byte)
-        .map(|index| index + 1)
-    else {
-        return false;
-    };
-    let decorated_text = &envelope_bytes[start..end];
-    decorated_text.iter().all(is_text_byte)
-        && !decorated_text.iter().all(u8::is_ascii_whitespace)
-        && soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
-            decorated_text,
-            PLACEHOLDER_MARKERS,
-        )
+    envelope_bytes
+        .split(|byte| !is_text_byte(byte))
+        .any(|decorated_text| {
+            !decorated_text.is_empty()
+                && !decorated_text.iter().all(u8::is_ascii_whitespace)
+                && soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
+                    decorated_text,
+                    SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
+                )
+        })
 }
 
 fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
@@ -1236,10 +1237,23 @@ fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8], markers: 
     if collapsed_text.is_empty() {
         return false;
     }
-    markers.iter().any(|marker| {
-        let collapsed_marker = ascii_alnum_collapsed(marker);
-        collapsed_marker.len() >= SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES
-            && ascii_windows_contains(&collapsed_text, &collapsed_marker)
+    soracloud_collapsed_placeholder_markers(markers)
+        .iter()
+        .any(|marker| ascii_windows_contains(&collapsed_text, marker))
+}
+
+fn soracloud_collapsed_placeholder_markers(markers: &[&[u8]]) -> &'static [Vec<u8>] {
+    debug_assert!(std::ptr::eq(
+        markers,
+        SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
+    ));
+    static SORACLOUD_COLLAPSED_PLACEHOLDER_MARKERS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+    SORACLOUD_COLLAPSED_PLACEHOLDER_MARKERS.get_or_init(|| {
+        markers
+            .iter()
+            .map(|marker| ascii_alnum_collapsed(marker))
+            .filter(|marker| marker.len() >= SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES)
+            .collect()
     })
 }
 
@@ -1575,6 +1589,7 @@ fn validate_soracloud_fhe_public_key_proof_native_envelope_bytes(
     )
 }
 
+#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
 ) -> Result<(), InstructionExecutionError> {
@@ -1585,6 +1600,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
     )
 }
 
+#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
 ) -> Result<(), InstructionExecutionError> {
@@ -1593,6 +1609,91 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
         envelope_bytes,
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
     )
+}
+
+struct SoracloudFheStatementOpenVerifyContract {
+    proof_label: &'static str,
+    shape_label: &'static str,
+    wrapper_label: &'static str,
+    expected_circuit_id: &'static str,
+    expected_public_inputs_schema: &'static [u8],
+    validate_native_envelope_bytes: fn(&[u8]) -> Result<(), InstructionExecutionError>,
+}
+
+const FHE_FULL_BOOTSTRAP_MATERIAL_OPEN_VERIFY_CONTRACT: SoracloudFheStatementOpenVerifyContract =
+    SoracloudFheStatementOpenVerifyContract {
+        proof_label: "FHE full-bootstrap material proof",
+        shape_label: "FHE full-bootstrap material OpenVerifyEnvelope",
+        wrapper_label: "FHE full-bootstrap material STARK public-input wrapper",
+        expected_circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+        expected_public_inputs_schema:
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        validate_native_envelope_bytes:
+            validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes,
+    };
+
+const FHE_FULL_BOOTSTRAP_EXECUTION_OPEN_VERIFY_CONTRACT: SoracloudFheStatementOpenVerifyContract =
+    SoracloudFheStatementOpenVerifyContract {
+        proof_label: "FHE full-bootstrap execution proof",
+        shape_label: "FHE full-bootstrap execution OpenVerifyEnvelope",
+        wrapper_label: "FHE full-bootstrap execution STARK public-input wrapper",
+        expected_circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        expected_public_inputs_schema:
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        validate_native_envelope_bytes:
+            validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes,
+    };
+
+fn validate_soracloud_fhe_statement_open_verify_envelope(
+    contract: &SoracloudFheStatementOpenVerifyContract,
+    envelope: &OpenVerifyEnvelope,
+    statement_hash: Hash,
+    bounds: OpenVerifyEnvelopeBounds,
+) -> Result<StarkFriOpenProofV1, InstructionExecutionError> {
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(format!(
+            "{} envelope must declare STARK backend",
+            contract.proof_label
+        )));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(format!(
+            "{} envelope aux must be empty",
+            contract.proof_label
+        )));
+    }
+    envelope.validate_with_bounds(bounds).map_err(|err| {
+        invalid_parameter(format!("invalid {} shape: {err}", contract.shape_label))
+    })?;
+    if envelope.circuit_id != contract.expected_circuit_id {
+        return Err(invalid_parameter(format!(
+            "{} circuit id must be canonical v1",
+            contract.proof_label
+        )));
+    }
+    if envelope.public_inputs != contract.expected_public_inputs_schema {
+        return Err(invalid_parameter(format!(
+            "{} public-input schema mismatch",
+            contract.proof_label
+        )));
+    }
+    let open = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+        .map_err(|err| invalid_parameter(format!("invalid {}: {err}", contract.wrapper_label)))?;
+    if open.version != 1 {
+        return Err(invalid_parameter(format!(
+            "{} version must be 1",
+            contract.wrapper_label
+        )));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(format!(
+            "{} public inputs do not match statement hash",
+            contract.proof_label
+        )));
+    }
+    (contract.validate_native_envelope_bytes)(&open.envelope_bytes)?;
+    Ok(open)
 }
 
 #[cfg(feature = "zk-stark")]
@@ -2306,11 +2407,15 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
             "{label} native BFV AIR public padding context is required"
         ))
     })?;
-    if let Some(expected_trace_material_digest) = public_padding_context
+    let expected_trace_material_digest = public_padding_context
         .expected_trace_material_digest
         .as_ref()
-        && &public_padding_context.trace_material_digest != expected_trace_material_digest
-    {
+        .ok_or_else(|| {
+            invalid_parameter(format!(
+                "{label} native BFV AIR governed trace material digest is required"
+            ))
+        })?;
+    if &public_padding_context.trace_material_digest != expected_trace_material_digest {
         return Err(invalid_parameter(format!(
             "{label} native BFV AIR trace material digest mismatch"
         )));
@@ -3310,53 +3415,11 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_envelope(
     envelope: &OpenVerifyEnvelope,
     statement_hash: Hash,
 ) -> Result<(), InstructionExecutionError> {
-    if envelope.backend != BackendTag::Stark {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope must declare STARK backend",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope aux must be empty",
-        ));
-    }
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material OpenVerifyEnvelope shape: {err}"
-            ))
-        })?;
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof circuit id must be canonical v1",
-        ));
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public-input schema mismatch",
-        ));
-    }
-    let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material STARK public-input wrapper: {err}"
-            ))
-        })?;
-    if open.version != 1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material STARK public-input wrapper version must be 1",
-        ));
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open.public_inputs != expected_public_inputs {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public inputs do not match statement hash",
-        ));
-    }
-    validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
-        &open.envelope_bytes,
+    validate_soracloud_fhe_statement_open_verify_envelope(
+        &FHE_FULL_BOOTSTRAP_MATERIAL_OPEN_VERIFY_CONTRACT,
+        envelope,
+        statement_hash,
+        soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds(),
     )?;
     let vk_commitment = attachment.vk_commitment.ok_or_else(|| {
         invalid_parameter("FHE full-bootstrap material proof requires vk_commitment")
@@ -3383,54 +3446,11 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_envelope(
     envelope: &OpenVerifyEnvelope,
     statement_hash: Hash,
 ) -> Result<(), InstructionExecutionError> {
-    if envelope.backend != BackendTag::Stark {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof envelope must declare STARK backend",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof envelope aux must be empty",
-        ));
-    }
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap execution OpenVerifyEnvelope shape: {err}"
-            ))
-        })?;
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof circuit id must be canonical v1",
-        ));
-    }
-    if envelope.public_inputs
-        != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof public-input schema mismatch",
-        ));
-    }
-    let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap execution STARK public-input wrapper: {err}"
-            ))
-        })?;
-    if open.version != 1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution STARK public-input wrapper version must be 1",
-        ));
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open.public_inputs != expected_public_inputs {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof public inputs do not match statement hash",
-        ));
-    }
-    validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
-        &open.envelope_bytes,
+    validate_soracloud_fhe_statement_open_verify_envelope(
+        &FHE_FULL_BOOTSTRAP_EXECUTION_OPEN_VERIFY_CONTRACT,
+        envelope,
+        statement_hash,
+        soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds(),
     )?;
     let vk_commitment = attachment.vk_commitment.ok_or_else(|| {
         invalid_parameter("FHE full-bootstrap execution proof requires vk_commitment")
@@ -3871,53 +3891,11 @@ fn verify_soracloud_fhe_full_bootstrap_material_proof_backend(
         ));
     }
     let envelope = full_bootstrap_material_proof_attachment_envelope(attachment)?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope must declare STARK backend",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope aux must be empty",
-        ));
-    }
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material OpenVerifyEnvelope shape: {err}"
-            ))
-        })?;
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof circuit id must be canonical v1",
-        ));
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public-input schema mismatch",
-        ));
-    }
-    let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material STARK public-input wrapper: {err}"
-            ))
-        })?;
-    if open.version != 1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material STARK public-input wrapper version must be 1",
-        ));
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open.public_inputs != expected_public_inputs {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public inputs do not match statement hash",
-        ));
-    }
-    validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
-        &open.envelope_bytes,
+    validate_soracloud_fhe_statement_open_verify_envelope(
+        &FHE_FULL_BOOTSTRAP_MATERIAL_OPEN_VERIFY_CONTRACT,
+        &envelope,
+        statement_hash,
+        soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds(),
     )?;
     let record = state_transaction
         .world
@@ -8262,14 +8240,15 @@ fn hf_active_validator_stakes(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<BTreeMap<AccountId, u128>, InstructionExecutionError> {
     let mut stakes = BTreeMap::new();
-    for ((_lane_id, validator_account_id), record) in
-        state_transaction.world.public_lane_validators.iter()
-    {
+    for (key, record) in state_transaction.world.public_lane_validators.iter() {
+        if !public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
         if record.status != PublicLaneValidatorStatus::Active {
             continue;
         }
         let stake = numeric_to_u128(&record.total_stake)?;
-        let entry = stakes.entry(validator_account_id.clone()).or_insert(0_u128);
+        let entry = stakes.entry(key.1.clone()).or_insert(0_u128);
         *entry = (*entry).saturating_add(stake.max(1));
     }
     Ok(stakes)
@@ -18078,6 +18057,63 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(8),
+                validator: BOB_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(9_000, 0),
+                self_stake: Numeric::new(9_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        assert!(
+            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+            "a row whose storage-key lane disagrees with the embedded record lane must not grant Soracloud runtime authority"
+        );
+
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: ALICE_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(8_000, 0),
+                self_stake: Numeric::new(8_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        assert!(
+            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+            "a row whose storage-key validator disagrees with the embedded record validator must not grant Soracloud runtime authority"
+        );
+        Ok(())
+    }
+
     fn insert_active_public_lane_validator(
         state_transaction: &mut StateTransaction<'_, '_>,
         validator: AccountId,
@@ -18099,6 +18135,63 @@ mod tests {
                 last_reward_epoch: None,
             },
         );
+    }
+
+    #[test]
+    fn hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        insert_active_public_lane_validator(&mut state_transaction, BOB_ID.clone(), 700);
+
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::new(2), BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(3),
+                validator: BOB_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(9_000, 0),
+                self_stake: Numeric::new(9_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::new(4), BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(4),
+                validator: ALICE_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(8_000, 0),
+                self_stake: Numeric::new(8_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+
+        let stakes = hf_active_validator_stakes(&state_transaction)?;
+        assert_eq!(stakes.get(&ALICE_ID), Some(&1_000_u128));
+        assert_eq!(
+            stakes.get(&BOB_ID),
+            Some(&700_u128),
+            "mismatched key/record validator rows must not inflate HF active stake"
+        );
+        Ok(())
     }
 
     fn configure_staking_assets_for_validator_slash_test(
@@ -21325,7 +21418,9 @@ mod tests {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
             trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
-            expected_trace_material_digest: None,
+            expected_trace_material_digest: Some(
+                sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            ),
             expected_trace_rows: None,
             expected_composition_values: None,
         }
@@ -21380,7 +21475,9 @@ mod tests {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
             trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
-            expected_trace_material_digest: None,
+            expected_trace_material_digest: Some(
+                sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            ),
             expected_trace_rows: Some(expected_trace_rows),
             expected_composition_values: Some(expected_composition_values),
         }
@@ -22174,6 +22271,30 @@ mod tests {
             panic!("binary-decorated placeholder native STARK envelope bytes must fail");
         };
         assert_invalid_parameter_contains(err, "placeholder");
+
+        let binary_fragmented_placeholder =
+            b"native verifier metadata\xffoperator your.proof payload";
+        for (label, max_bytes) in [
+            (
+                "FHE full-bootstrap material",
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            ),
+            (
+                "FHE full-bootstrap execution",
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            ),
+        ] {
+            let Err(err) = validate_soracloud_fhe_stark_native_envelope_bytes(
+                label,
+                binary_fragmented_placeholder,
+                max_bytes,
+            ) else {
+                panic!(
+                    "{label} binary-fragmented placeholder native STARK envelope bytes must fail"
+                );
+            };
+            assert_invalid_parameter_contains(err, "placeholder");
+        }
     }
 
     #[test]
@@ -23218,6 +23339,19 @@ mod tests {
         )
         .expect("BFV AIR boundary accepts public padding-row openings");
 
+        let mut missing_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        missing_trace_digest_context.expected_trace_material_digest = None;
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(missing_trace_digest_context),
+        )
+        .expect_err("BFV AIR boundary must require verifier-owned trace digests");
+        assert_invalid_parameter_contains(err, "governed trace material digest is required");
+
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             Hash::prehashed([0_u8; Hash::LENGTH]),
@@ -23230,7 +23364,9 @@ mod tests {
         let mut zero_trace_digest_context = public_padding_context
             .clone()
             .expect("sample carries public-padding context");
-        zero_trace_digest_context.trace_material_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
+        let zero_trace_material_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
+        zero_trace_digest_context.trace_material_digest = zero_trace_material_digest;
+        zero_trace_digest_context.expected_trace_material_digest = Some(zero_trace_material_digest);
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
@@ -23243,8 +23379,11 @@ mod tests {
         let mut placeholder_trace_digest_context = public_padding_context
             .clone()
             .expect("sample carries public-padding context");
-        placeholder_trace_digest_context.trace_material_digest =
+        let placeholder_trace_material_digest =
             Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        placeholder_trace_digest_context.trace_material_digest = placeholder_trace_material_digest;
+        placeholder_trace_digest_context.expected_trace_material_digest =
+            Some(placeholder_trace_material_digest);
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
@@ -23263,8 +23402,12 @@ mod tests {
         let mut delayed_placeholder_trace_digest_context = public_padding_context
             .clone()
             .expect("sample carries public-padding context");
-        delayed_placeholder_trace_digest_context.trace_material_digest =
+        let delayed_placeholder_trace_material_digest =
             Hash::new(&delayed_placeholder_trace_digest_preimage);
+        delayed_placeholder_trace_digest_context.trace_material_digest =
+            delayed_placeholder_trace_material_digest;
+        delayed_placeholder_trace_digest_context.expected_trace_material_digest =
+            Some(delayed_placeholder_trace_material_digest);
         let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
             label,
             statement_hash,
@@ -23274,6 +23417,80 @@ mod tests {
         .expect_err("BFV AIR boundary must reject delayed-placeholder public trace digests");
         assert_invalid_parameter_contains(err, "transcript public-padding openings");
 
+        let mut binary_framed_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        let binary_framed_trace_material_digest = Hash::new(
+            [
+                b"\xff".as_slice(),
+                b"pending BFV full-bootstrap execution witness digest".as_slice(),
+            ]
+            .concat(),
+        );
+        binary_framed_trace_digest_context.trace_material_digest =
+            binary_framed_trace_material_digest;
+        binary_framed_trace_digest_context.expected_trace_material_digest =
+            Some(binary_framed_trace_material_digest);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(binary_framed_trace_digest_context),
+        )
+        .expect_err("BFV AIR boundary must reject binary-framed public trace digests");
+        assert_invalid_parameter_contains(err, "placeholder");
+
+        let delayed_binary_framed_trace_digest_preimage = [
+            b"full-bootstrap material before placeholder: ".as_slice(),
+            b"\xff".as_slice(),
+            b"pending BFV full-bootstrap execution witness digest".as_slice(),
+        ]
+        .concat();
+        let mut delayed_binary_framed_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        let delayed_binary_framed_trace_material_digest =
+            Hash::new(&delayed_binary_framed_trace_digest_preimage);
+        delayed_binary_framed_trace_digest_context.trace_material_digest =
+            delayed_binary_framed_trace_material_digest;
+        delayed_binary_framed_trace_digest_context.expected_trace_material_digest =
+            Some(delayed_binary_framed_trace_material_digest);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(delayed_binary_framed_trace_digest_context),
+        )
+        .expect_err("BFV AIR boundary must reject delayed binary-framed public trace digests");
+        assert_invalid_parameter_contains(err, "placeholder");
+
+        let leading_delayed_binary_framed_trace_digest_preimage = [
+            b" \n\t".as_slice(),
+            b"full-bootstrap material before placeholder: ".as_slice(),
+            b"\xff".as_slice(),
+            b"pending BFV full-bootstrap execution witness digest".as_slice(),
+        ]
+        .concat();
+        let mut leading_delayed_binary_framed_trace_digest_context = public_padding_context
+            .clone()
+            .expect("sample carries public-padding context");
+        let leading_delayed_binary_framed_trace_material_digest =
+            Hash::new(&leading_delayed_binary_framed_trace_digest_preimage);
+        leading_delayed_binary_framed_trace_digest_context.trace_material_digest =
+            leading_delayed_binary_framed_trace_material_digest;
+        leading_delayed_binary_framed_trace_digest_context.expected_trace_material_digest =
+            Some(leading_delayed_binary_framed_trace_material_digest);
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            statement_hash,
+            &native,
+            Some(leading_delayed_binary_framed_trace_digest_context),
+        )
+        .expect_err(
+            "BFV AIR boundary must reject leading delayed binary-framed public trace digests",
+        );
+        assert_invalid_parameter_contains(err, "placeholder");
+
         for separator_spelled_preimage in [
             b"p-e-n-d-i-n-g BFV full-bootstrap execution witness digest".as_slice(),
             b"p.e.n.d.i.n.g BFV full-bootstrap execution witness digest".as_slice(),
@@ -23282,8 +23499,11 @@ mod tests {
             let mut separator_spelled_trace_digest_context = public_padding_context
                 .clone()
                 .expect("sample carries public-padding context");
+            let separator_spelled_trace_material_digest = Hash::new(separator_spelled_preimage);
             separator_spelled_trace_digest_context.trace_material_digest =
-                Hash::new(separator_spelled_preimage);
+                separator_spelled_trace_material_digest;
+            separator_spelled_trace_digest_context.expected_trace_material_digest =
+                Some(separator_spelled_trace_material_digest);
             let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
                 label,
                 statement_hash,
@@ -23302,8 +23522,12 @@ mod tests {
             let mut delayed_separator_spelled_trace_digest_context = public_padding_context
                 .clone()
                 .expect("sample carries public-padding context");
-            delayed_separator_spelled_trace_digest_context.trace_material_digest =
+            let delayed_separator_spelled_trace_material_digest =
                 Hash::new(&delayed_separator_spelled_trace_digest_preimage);
+            delayed_separator_spelled_trace_digest_context.trace_material_digest =
+                delayed_separator_spelled_trace_material_digest;
+            delayed_separator_spelled_trace_digest_context.expected_trace_material_digest =
+                Some(delayed_separator_spelled_trace_material_digest);
             let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
                 label,
                 statement_hash,
@@ -23703,7 +23927,9 @@ mod tests {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
             trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
-            expected_trace_material_digest: None,
+            expected_trace_material_digest: Some(
+                sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            ),
             expected_trace_rows: Some(expected_trace_rows),
             expected_composition_values: Some(expected_composition_values),
         });
@@ -27989,6 +28215,49 @@ mod tests {
             .expect_err("release audit package digest drift must fail before material proof generation");
         assert_invalid_parameter_contains(err, "release audit package digest mismatch");
 
+        let mut report_tamper_package = release_audit_package.clone();
+        report_tamper_package
+            .audit_report_bytes
+            .extend_from_slice(b"; material proof report byte tamper after signing");
+        let err =
+            prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &transcript,
+                &vk_box,
+                &report_tamper_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err("tampered audit report bytes must fail before material proof generation");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(err, "release audit report bytes digest mismatch");
+
+        let mut archive_tamper_package = release_audit_package.clone();
+        archive_tamper_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; material proof archive byte tamper after signing");
+        let err =
+            prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &artifacts,
+                &transcript,
+                &vk_box,
+                &archive_tamper_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err("tampered audit archive bytes must fail before material proof generation");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(
+            err,
+            "release audit evidence archive bytes digest mismatch",
+        );
+
         let wrong_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let err =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
@@ -31499,6 +31768,8 @@ mod tests {
                 derives_opening_schedule_from_trace_material_digest: true,
                 bounds_opening_schedule_rejection_sampling: true,
                 validates_transcript_public_padding_openings: true,
+                validates_transcript_public_opening_material: true,
+                requires_verifier_owned_trace_material_digest: true,
                 validates_merkle_path_shape: true,
                 validates_merkle_path_roots: true,
                 validates_fri_query_chain: true,
@@ -33092,6 +33363,59 @@ mod tests {
             )
             .expect_err("release audit package digest drift must fail before proof generation");
         assert_invalid_parameter_contains(err, "release audit package digest mismatch");
+
+        let mut report_tamper_package = release_audit_package.clone();
+        report_tamper_package
+            .audit_report_bytes
+            .extend_from_slice(b"; execution proof report byte tamper after signing");
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &report_tamper_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err("tampered audit report bytes must fail before execution proof generation");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(err, "release audit report bytes digest mismatch");
+
+        let mut archive_tamper_package = release_audit_package.clone();
+        archive_tamper_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; execution proof archive byte tamper after signing");
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &archive_tamper_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err("tampered audit archive bytes must fail before execution proof generation");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(
+            err,
+            "release audit evidence archive bytes digest mismatch",
+        );
 
         let wrong_vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let mut drifted_output = output.clone();
@@ -35603,7 +35927,9 @@ mod tests {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
             trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
-            expected_trace_material_digest: None,
+            expected_trace_material_digest: Some(
+                sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            ),
             expected_trace_rows: None,
             expected_composition_values: Some(expected_composition_values.clone()),
         });
@@ -35623,7 +35949,9 @@ mod tests {
             slot_index: 0,
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
             trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
-            expected_trace_material_digest: None,
+            expected_trace_material_digest: Some(
+                sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+            ),
             expected_trace_rows: Some(expected_trace_rows),
             expected_composition_values: None,
         });
@@ -35679,7 +36007,9 @@ mod tests {
                 slot_index: 0,
                 bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
                 trace_material_digest: sample_full_bootstrap_bfv_native_air_trace_material_digest(),
-                expected_trace_material_digest: None,
+                expected_trace_material_digest: Some(
+                    sample_full_bootstrap_bfv_native_air_trace_material_digest(),
+                ),
                 expected_trace_rows: None,
                 expected_composition_values: Some(expected_composition_values),
             },
@@ -39000,6 +39330,43 @@ mod tests {
         .expect_err("stale policy-pinned release audit digest must fail runtime preflight");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "digest mismatch");
+
+        let mut report_tamper_policy = complete_policy.clone();
+        let mut report_tamper_package = release_audit_package.clone();
+        report_tamper_package
+            .audit_report_bytes
+            .extend_from_slice(b"; runtime report byte tamper after signing");
+        report_tamper_policy.full_bootstrap_release_audit_package = Some(report_tamper_package);
+        let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+            &params,
+            &evaluation_keys,
+            &job,
+            Some(&artifacts),
+            &report_tamper_policy,
+        )
+        .expect_err("runtime release audit policy must reject tampered report bytes");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(err, "release audit report bytes digest mismatch");
+
+        let mut archive_tamper_policy = complete_policy.clone();
+        let mut archive_tamper_package = release_audit_package.clone();
+        archive_tamper_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; runtime archive byte tamper after signing");
+        archive_tamper_policy.full_bootstrap_release_audit_package = Some(archive_tamper_package);
+        let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+            &params,
+            &evaluation_keys,
+            &job,
+            Some(&artifacts),
+            &archive_tamper_policy,
+        )
+        .expect_err("runtime release audit policy must reject tampered evidence archive bytes");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(
+            err,
+            "release audit evidence archive bytes digest mismatch",
+        );
 
         for (label, placeholder_digest) in [
             ("direct", Hash::new(b"not production ready")),

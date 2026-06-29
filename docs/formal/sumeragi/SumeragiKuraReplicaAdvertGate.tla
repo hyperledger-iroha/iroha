@@ -195,12 +195,19 @@ HighAdvertTupleRecordedExactly ==
   /\ RecordPayloadLenWrong \notin
        ImplementationActions(RemoteHighTupleRecord)
 
-SafetyFast ==
+KuraReplicaAdvertExactness ==
   /\ ActionsMatchSpec
   /\ UnauthenticatedAdvertsDoNotMutate
   /\ SelfAdvertsDoNotMutate
   /\ RemoteAdvertsAreRecordedExactly
   /\ ZeroPayloadLenRecordedExactly
   /\ HighAdvertTupleRecordedExactly
+
+KuraReplicaAdvertCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KuraReplicaAdvertExactness
+
+SafetyFast ==
+  KuraReplicaAdvertExactness
 
 ====

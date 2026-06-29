@@ -377,8 +377,14 @@ TickDeadlineHelpersMatchSpec ==
   /\ \A c \in NextCases:
        ActualNextDeadline(c) = SpecNextDeadline(c)
 
+TickDeadlineHelpersExactness ==
+  /\ TickDeadlineHelpersMatchSpec
+TickDeadlineHelpersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TickDeadlineHelpersExactness
+
 SafetyFast ==
-  TickDeadlineHelpersMatchSpec
+  TickDeadlineHelpersExactness
 
 BugMergeUsesLatestDeadline ==
   ActualMerge("merge_both") = SpecMerge("merge_both")

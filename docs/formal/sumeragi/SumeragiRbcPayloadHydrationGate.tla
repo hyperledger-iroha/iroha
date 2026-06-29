@@ -170,8 +170,15 @@ HydrationSafetyAnchors ==
   /\ Invalidated \in ImplementationActions(HashMismatch)
   /\ Invalidated \in ImplementationActions(NonzeroCountMismatch)
 
-SafetyFast ==
+RbcPayloadHydrationExactness ==
   /\ RbcPayloadHydrationMatchesSpec
   /\ HydrationSafetyAnchors
+
+RbcPayloadHydrationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcPayloadHydrationExactness
+
+SafetyFast ==
+  RbcPayloadHydrationExactness
 
 ====

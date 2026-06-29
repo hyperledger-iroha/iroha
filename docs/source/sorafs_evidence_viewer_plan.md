@@ -11,7 +11,19 @@ SFM-4b3 is not yet shipped as a moderation evidence viewer. The repository has
 adjacent evidence metadata schemas, governance evidence export helpers, and a
 Taikai media validation harness, but it does not contain the browser viewer,
 streaming backend, watermark engine, WebAuthn session flow, or access-log
-service required for moderated juror evidence review.
+service required for moderated juror evidence review. The shared SFM-4b
+moderation-panel rollout evidence gate now validates a dedicated
+`sorafs.moderation_panel.evidence_viewer_canary.v1` artifact for the viewer
+boundary, including role-scoped manifests, short-lived URLs, attested sessions,
+strict CSP/offline-mode controls, watermark metadata hashing, append-only access
+logs, anomaly events, audit digests, legal-hold binding, Governance DAG and
+transparency-ledger export coverage, and payload-free digest preimages for the
+session manifest, watermark metadata, access log, legal-hold receipt, and
+transparency report. It also rejects raw evidence, signed URLs, session tokens,
+response bodies, raw access logs, legal-hold receipt payloads, transparency
+report payloads, or watermark secrets.
+That gate is a promotion blocker for deployed evidence; it does not replace the
+missing viewer service.
 
 ## Shipped Adjacent Foundations
 
@@ -25,6 +37,10 @@ service required for moderated juror evidence review.
   evidence viewer.
 - Taikai viewer metrics and dashboards provide a useful model for stream health
   telemetry, but they do not satisfy moderation evidence access controls.
+- `scripts/check_sorafs_moderation_panel_rollout_evidence.py` validates the
+  SFM-4b evidence-viewer canary as a payload-free deployment gate and rejects
+  missing access event coverage, long-lived segment URLs, private viewer
+  material, and incomplete watermark/access-log controls.
 
 ## Target Runtime Shape
 
@@ -53,6 +69,16 @@ No production route should claim support for `/v1/evidence/session`,
 `/v1/evidence/manifest`, `/v1/evidence/log`, or `/v1/evidence/audit` until the
 service exists and the authorization model is enforced.
 
+Until those routes exist, evidence-viewer rollout review must use the
+payload-free SFM-4b canary artifact rather than captured payloads or response
+bodies:
+
+```sh
+python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
+  @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
+  --require-kind evidence_viewer
+```
+
 ## Remaining Production Gates
 
 - Build the browser evidence viewer with role-scoped case manifests, trauma
@@ -64,15 +90,25 @@ service exists and the authorization model is enforced.
   attempts, screenshots, session expiry, and attestation failures.
 - Add retention, erasure, and legal-hold workflows with signed receipts.
 - Export anonymized access reports and daily audit digests to the Governance DAG.
+- Make the deployed canary publish only digest evidence for session manifests,
+  watermark metadata, access logs, legal-hold receipts, and transparency
+  reports; raw access logs, legal-hold receipt bodies, and transparency report
+  payloads must never enter rollout archives.
 - Add end-to-end security tests for unauthorized access, replay, stale URLs,
   audit-log tampering, and watermark metadata mismatch.
+- Collect a passing payload-free `evidence_viewer` canary through the SFM-4b
+  rollout evidence gate after the viewer service exists.
 
 ## Validation
 
 Existing adjacent checks do not prove evidence-viewer readiness. For now, use
+the SFM-4b rollout gate for payload-free evidence-viewer promotion checks and
 the Taikai harness only for media envelope and telemetry validation:
 
 ```sh
+python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
+  @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
+  --require-kind evidence_viewer
 cargo test -p sorafs_orchestrator taikai
 ```
 

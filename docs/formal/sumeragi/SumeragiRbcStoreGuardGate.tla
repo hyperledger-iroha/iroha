@@ -560,6 +560,30 @@ SafetyAnchors ==
   /\ TempPathAnchors
   /\ FileClassAnchors
 
+RbcStoreGuardExactness ==
+  /\ AllManifestMatches
+  /\ AllLoadChoicesMatchSpec
+  /\ AllLoadDeleteFlagsMatchSpec
+  /\ AllValidationResultsMatchSpec
+  /\ AllValidationDeleteFlagsMatchSpec
+  /\ AllLimitKeysMatchSpec
+  /\ AllLimitPressureMatchesSpec
+  /\ AllTempPathsMatchSpec
+  /\ AllFileClassesMatchSpec
+  /\ ManifestAnchors
+  /\ LoadChoiceAnchors
+  /\ LoadDeletionAnchors
+  /\ ValidationAcceptAnchors
+  /\ ValidationDeletionAnchors
+  /\ LimitKeyAnchors
+  /\ LimitPressureAnchors
+  /\ TempPathAnchors
+  /\ FileClassAnchors
+
+RbcStoreGuardCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStoreGuardExactness
+
 BugManifestAcceptVersionMismatch ==
   ActualManifestMatches("version_mismatch") = SpecManifestMatches("version_mismatch")
 

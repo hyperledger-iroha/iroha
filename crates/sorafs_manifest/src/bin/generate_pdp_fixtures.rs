@@ -130,13 +130,71 @@ fn main() -> Result<(), Box<dyn Error>> {
         challenge_json(&duplicate_hot_leaf_challenge),
     )?;
 
-    let mut missing_signature_proof = proof;
+    let mut missing_signature_proof = proof.clone();
     missing_signature_proof.signature.clear();
     assert!(missing_signature_proof.validate().is_err());
     write_norito_pair(
         &negative_dir.join("missing_signature_proof_v1"),
         &missing_signature_proof,
         proof_json(&missing_signature_proof),
+    )?;
+
+    let mut missing_segment_path_proof = proof.clone();
+    missing_segment_path_proof.proof_leaves[0]
+        .segment_merkle_path
+        .clear();
+    assert!(missing_segment_path_proof.validate().is_err());
+    write_norito_pair(
+        &negative_dir.join("missing_segment_path_proof_v1"),
+        &missing_segment_path_proof,
+        proof_json(&missing_segment_path_proof),
+    )?;
+
+    let mut missing_hot_leaf_path_proof = proof.clone();
+    missing_hot_leaf_path_proof.proof_leaves[0].hot_leaves[0]
+        .leaf_merkle_path
+        .clear();
+    assert!(missing_hot_leaf_path_proof.validate().is_err());
+    write_norito_pair(
+        &negative_dir.join("missing_hot_leaf_path_proof_v1"),
+        &missing_hot_leaf_path_proof,
+        proof_json(&missing_hot_leaf_path_proof),
+    )?;
+
+    let mut late_proof = proof.clone();
+    late_proof.issued_at_unix = challenge.response_deadline_unix + 1;
+    late_proof.validate()?;
+    write_norito_pair(
+        &negative_dir.join("late_proof_v1"),
+        &late_proof,
+        proof_json(&late_proof),
+    )?;
+
+    let mut wrong_provider_proof = proof.clone();
+    wrong_provider_proof.provider_id = [0x88; 32];
+    wrong_provider_proof.validate()?;
+    write_norito_pair(
+        &negative_dir.join("wrong_provider_proof_v1"),
+        &wrong_provider_proof,
+        proof_json(&wrong_provider_proof),
+    )?;
+
+    let mut wrong_manifest_proof = proof.clone();
+    wrong_manifest_proof.manifest_digest = [0x77; 32];
+    wrong_manifest_proof.validate()?;
+    write_norito_pair(
+        &negative_dir.join("wrong_manifest_proof_v1"),
+        &wrong_manifest_proof,
+        proof_json(&wrong_manifest_proof),
+    )?;
+
+    let mut wrong_path_proof = proof;
+    wrong_path_proof.proof_leaves[0].segment_hash = digest("sorafs.pdp.segment.1.wrong");
+    wrong_path_proof.validate()?;
+    write_norito_pair(
+        &negative_dir.join("wrong_path_proof_v1"),
+        &wrong_path_proof,
+        proof_json(&wrong_path_proof),
     )?;
 
     Ok(())

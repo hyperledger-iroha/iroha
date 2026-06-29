@@ -241,9 +241,19 @@ MaterializeQcCoreSafety ==
   /\ CacheInsertionMatchesSpec
   /\ FailClosedCasesStayNone
 
-NoBugInvariant == MaterializeQcCoreSafety
+MaterializeQcExactness ==
+  /\ ResultMatchesSpec
+  /\ TryFormMatchesSpec
+  /\ KuraRecoveryMatchesSpec
+  /\ CacheInsertionMatchesSpec
+  /\ FailClosedCasesStayNone
+MaterializeQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MaterializeQcExactness
 
-SafetyFast == MaterializeQcCoreSafety
+NoBugInvariant == MaterializeQcExactness
+
+SafetyFast == MaterializeQcExactness
 
 BugIgnoreCachedExisting == NoBugInvariant
 BugEmptyRosterSkipsRecovery == NoBugInvariant

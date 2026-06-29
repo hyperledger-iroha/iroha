@@ -405,4 +405,8 @@ NativeAmxAttestationExactness ==
   /\ NativeAmxFailClosedExact
   /\ NativeAmxDeterministicCacheExact
 
+NativeAmxAttestationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NativeAmxAttestationExactness
+
 ====

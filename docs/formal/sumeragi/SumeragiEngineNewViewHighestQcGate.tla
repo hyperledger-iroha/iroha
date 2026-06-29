@@ -275,7 +275,7 @@ ValuesStayInDomain ==
     /\ SpecFinalHighest(candidate) \in QcValues
     /\ ImplementationFinalHighest(candidate) \in QcValues
 
-Safety ==
+EngineNewViewHighestQcExactness ==
   /\ FinalHighestMatchesSpec
   /\ AcceptedNoHighestPreservesStoredHighest
   /\ AcceptedImprovingHighestRecordsExactCarriedQc
@@ -284,5 +284,14 @@ Safety ==
   /\ IncompatibleHighestNeverRecords
   /\ WrongContextNeverRecords
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineNewViewHighestQcExactness
+
+EngineNewViewHighestQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineNewViewHighestQcExactness
+
+SafetyFast == EngineNewViewHighestQcExactness
 
 ====

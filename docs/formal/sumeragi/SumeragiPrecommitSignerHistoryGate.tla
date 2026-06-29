@@ -284,6 +284,13 @@ NoBugInvariant == PrecommitSignerHistoryCoreSafety
 
 SafetyFast == PrecommitSignerHistoryCoreSafety
 
+PrecommitSignerHistoryExactness ==
+  /\ PrecommitSignerHistoryCoreSafety
+
+PrecommitSignerHistoryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrecommitSignerHistoryExactness
+
 BugHistoryDropsNewerView ==
   {} = {PreserveNewerRecord}
 

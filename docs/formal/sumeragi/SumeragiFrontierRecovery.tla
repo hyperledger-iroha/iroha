@@ -1817,8 +1817,43 @@ FrontierRecoveryLivenessEnvelope ==
   /\ FuturePromotionReadyEventuallyPromotes
   /\ PromotedSecondSlotEventuallyClears
 
-FrontierRecoveryCorrectnessEnvelope ==
+FrontierRecoveryExactness ==
+  /\ CommitImpliesVoteQuorum
+  /\ CommitImpliesPayloadAvailability
+  /\ CommittedFrontierHasNoStagedFuture
+  /\ VoteBackedNotDroppedAsZeroEvidenceZombie
+  /\ ZeroEvidenceDropHasNoConsensusEvidence
+  /\ ZeroEvidenceDropHasNoStagedFuture
+  /\ PostGstVoteBackedFrontierHasProgress
+  /\ FuturePromotionReadyHasProgress
+  /\ StaleRecoveryOwnerHasClearProgress
+  /\ VoteQueueBacklogHasDrainProgress
+  /\ MissingPayloadHasRecoveryProgress
+  /\ PayloadRecoveredHasLocalOwner
+  /\ QuorumWindowHasRetransmitProgress
+  /\ QuorumRetransmitClearsRescheduleWindow
+  /\ RetransmitHasFollowthroughProgress
+  /\ FutureEvidenceHasReanchorProgress
+  /\ FutureEvidencePreservedUntilPromotion
+  /\ FuturePromotionResetsActiveProgress
+  /\ FuturePromotionInstallsFreshSecondSlot
+  /\ FuturePromotionReadyClearsCurrentWrapper
+  /\ FuturePromotionReadyClearsActiveMarkers
+  /\ TerminalFrontierOutcomesAreExclusive
+  /\ RotatedFrontierHasRetransmitEvidence
+  /\ RotatedFrontierHasNoStagedFuture
+  /\ ViewBoundDropHasRetransmitEvidence
+  /\ ViewBoundDropHasNoStagedFuture
+  /\ PendingProgressEventsTouchAge
+  /\ StaleRecoveryUnlockIsViewScoped
+  /\ StaleRecoveryUnlockClearsStaleOwner
+FrontierRecoveryTemporalExactness ==
   /\ FrontierRecoveryAlwaysMatchesStateSafetyEnvelope
   /\ FrontierRecoveryLivenessEnvelope
+
+FrontierRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierRecoveryExactness
+  /\ FrontierRecoveryTemporalExactness
 
 ====

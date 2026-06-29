@@ -219,8 +219,19 @@ HighestQcFetchBodyKnownCoreSafety ==
   /\ DeferredHashOnlyAndAbsentBodiesStillFetch
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == HighestQcFetchBodyKnownCoreSafety
+HighestQcFetchBodyKnownExactness ==
+  /\ ActionsMatchSpec
+  /\ KuraBodiesSuppressFetch
+  /\ PendingBodiesSuppressFetchUnlessAborted
+  /\ InflightBodiesSuppressFetchUnlessAborted
+  /\ DeferredHashOnlyAndAbsentBodiesStillFetch
+  /\ LookupShapeMatchesShortCircuit
+HighestQcFetchBodyKnownCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HighestQcFetchBodyKnownExactness
 
-SafetyFast == HighestQcFetchBodyKnownCoreSafety
+NoBugInvariant == HighestQcFetchBodyKnownExactness
+
+SafetyFast == HighestQcFetchBodyKnownExactness
 
 ====

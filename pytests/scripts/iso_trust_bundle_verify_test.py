@@ -184,6 +184,252 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 detail = VERIFIER._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("trust-hidden", detail)
+        hidden = "token=trust-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = VERIFIER._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=trust-ancestor-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER._reject_symlinked_existing_ancestors(
+                            VERIFIER.Path("ancestor") / "leaf",
+                            display_label="summary_out",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=trust-reader-inspect-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = VERIFIER.Path(raw_root) / "trust.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER._read_regular_file(path, display_label="trust bundle")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect trust bundle", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_file_stat_failures_return_false(self):
+        hidden = "token=trust-alias-stat-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_stat = path_type.stat
+        cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for failure in cases:
+            with self.subTest(error=type(failure).__name__):
+
+                def failing_stat(_self, *args, error=failure, **kwargs):
+                    raise error
+
+                path_type.stat = failing_stat
+                try:
+                    self.assertFalse(
+                        VERIFIER._same_existing_file(
+                            VERIFIER.Path("left"),
+                            VERIFIER.Path("right"),
+                        )
+                    )
+                finally:
+                    path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=trust-resolve-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+        target = VERIFIER.Path("bundle.json")
+        for name, failure in failure_cases:
+            with self.subTest(name=name):
+
+                def failing_resolve(self, *args, error=failure, **kwargs):
+                    if self == target:
+                        raise error
+                    return original_resolve(self, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+                try:
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER._reject_duplicate_paths([target], "--bundle")
+                finally:
+                    path_type.resolve = original_resolve
+
+                message = str(caught.exception)
+                self.assertIn("cannot resolve --bundle[0]", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(target), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=trust-reader-open-secret"
+        cleanup_hidden = "token=trust-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "bundle.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = VERIFIER.os.fdopen
+            original_close = VERIFIER.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            VERIFIER.os.fdopen = failing_fdopen
+            VERIFIER.os.close = failing_close
+            try:
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="bundle",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+                VERIFIER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open bundle for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=trust-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            VERIFIER.os.fdopen = failing_fdopen
+            VERIFIER.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="bundle",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+                VERIFIER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open bundle for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=trust-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            VERIFIER.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="bundle",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open bundle for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -228,8 +474,32 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertNotIn(str(root), message)
 
     def test_direct_run_bundle_must_be_repeatable_path_list_before_loading(self):
+        hidden = "trust-hostile-bundle-list-secret"
+        pathlike_hidden = "trust-hostile-bundle-pathlike-secret"
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={pathlike_hidden}")
+
         cases = (
             ("bare string", "missing-bundle.json", "--bundle must be a repeatable path list"),
+            (
+                "hostile list",
+                HostileList(["missing-bundle.json"]),
+                "--bundle must be a repeatable path list",
+            ),
+            (
+                "hostile pathlike entry",
+                [HostilePathLike()],
+                "--bundle[0] must be a path",
+            ),
             ("bad entry", [object()], "--bundle[0] must be a path"),
         )
         for name, bundle, message in cases:
@@ -251,6 +521,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     error = str(caught.exception)
                     self.assertIn(message, error)
+                    self.assertNotIn(hidden, error)
+                    self.assertNotIn(pathlike_hidden, error)
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 
@@ -425,8 +697,15 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertNotIn(str(path), error)
 
     def test_direct_run_scalar_paths_must_be_paths_before_bundle_loading(self):
+        hidden = "trust-hostile-scalar-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         cases = (
             ("summary", "summary_out", object(), "summary_out"),
+            ("summary pathlike", "summary_out", HostilePathLike(), "summary_out"),
             ("profile", "emit_profile_json", object(), "emit_profile_json"),
         )
         for name, field, value, label in cases:
@@ -449,6 +728,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     message = str(caught.exception)
                     self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn(hidden, message)
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
@@ -495,6 +775,171 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertIn("must not be a symlink", message)
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
+
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=trust-output-inspect-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden)),
+            ("exists_runtime", "exists", RuntimeError(hidden)),
+            ("lstat_os", "lstat", OSError(5, hidden)),
+            ("lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER._ensure_text_output_target(
+                            VERIFIER.Path("summary.json"),
+                            display_label="summary_out",
+                            create_parent=False,
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_parent_creation_failures_do_not_echo_detail(self):
+        hidden = "token=trust-output-create-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("mkdir_os", OSError(5, hidden)),
+            ("mkdir_runtime", RuntimeError(hidden)),
+            ("mkdir_type", TypeError(hidden)),
+            ("mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                            VERIFIER._ensure_text_output_target(
+                                VERIFIER.Path(raw_root) / "out" / "summary.json",
+                                display_label="summary_out",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=trust-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for summary_out"),
+            ("replace", None, "cannot replace summary_out"),
+            ("fsync_runtime", None, "cannot write temporary output for summary_out"),
+            ("replace_runtime", None, "cannot replace summary_out"),
+            ("fsync", "unlink", "cannot write temporary output for summary_out"),
+            ("fsync", "close", "cannot write temporary output for summary_out"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for summary_out"),
+            ("fsync", "close_runtime", "cannot write temporary output for summary_out"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "trust.summary.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = VERIFIER.os.fsync
+                original_replace = VERIFIER.os.replace
+                original_unlink = VERIFIER.os.unlink
+                original_close = VERIFIER.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                VERIFIER.os.fsync = failing_fsync
+                VERIFIER.os.replace = failing_replace
+                VERIFIER.os.unlink = failing_unlink
+                VERIFIER.os.close = failing_close
+                try:
+                    with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                        VERIFIER._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="summary_out",
+                        )
+                finally:
+                    VERIFIER.os.fsync = original_fsync
+                    VERIFIER.os.replace = original_replace
+                    VERIFIER.os.unlink = original_unlink
+                    VERIFIER.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
@@ -638,6 +1083,53 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=trust-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--summary-out"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--summary-out",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--summary-out")],
+                "--summary-out requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("trust-argv-secret", stderr)
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = ("--unknown-trust\x1bflag", "--unknown-trust\u202eflag")
@@ -920,6 +1412,302 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertIn("control characters", message)
                 self.assertNotIn(hidden, message)
                 self.assertNotIn("trust-string-leak", message)
+
+    def test_bundle_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "trust-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        required = VERIFIER._required_string(
+            {"authority": HostileText("Example Trust Authority")},
+            "authority",
+            "bundle.source",
+        )
+        self.assertEqual(required, "Example Trust Authority")
+        self.assertIs(type(required), str)
+        optional = VERIFIER._optional_string(
+            {"label": HostileText("Anchor")},
+            "label",
+            "bundle.x509_trust_anchors[0]",
+        )
+        self.assertEqual(optional, "Anchor")
+        self.assertIs(type(optional), str)
+        digest_list = VERIFIER._sha256_list(
+            {"signature_public_key_sha256_pins": [HostileText("1" * 64)]},
+            "signature_public_key_sha256_pins",
+            "bundle",
+        )
+        self.assertEqual(digest_list, ["1" * 64])
+        self.assertIs(type(digest_list[0]), str)
+        oid_list = VERIFIER._oid_list(
+            {"x509_required_certificate_policy_oids": [HostileText("1.2.3")]},
+            "x509_required_certificate_policy_oids",
+            "bundle",
+        )
+        self.assertEqual(oid_list, ["1.2.3"])
+        self.assertIs(type(oid_list[0]), str)
+        timestamp = VERIFIER._parse_timestamp(
+            HostileText("2026-06-04T00:00:00Z"),
+            "bundle.source.retrieved_at",
+        )
+        self.assertIsNotNone(timestamp)
+        present = VERIFIER._reject_unknown_keys(
+            {HostileText("authority"): "Example Trust Authority"},
+            {"authority"},
+            "bundle.source",
+        )
+        self.assertEqual(present, {"authority"})
+        self.assertTrue(all(type(key) is str for key in present))
+
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string(
+                    {"authority": HostileText("Example\x1bAuthority")},
+                    "authority",
+                    "bundle.source",
+                ),
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"label": HostileText("Anchor\x1b")},
+                    "label",
+                    "bundle.x509_trust_anchors[0]",
+                ),
+            ),
+            (
+                "sha256-list",
+                lambda: VERIFIER._sha256_list(
+                    {"signature_public_key_sha256_pins": [HostileText("1" * 63 + "\x1b")]},
+                    "signature_public_key_sha256_pins",
+                    "bundle",
+                ),
+            ),
+            (
+                "oid-list",
+                lambda: VERIFIER._oid_list(
+                    {"x509_required_certificate_policy_oids": [HostileText("1.2.\x1b")]},
+                    "x509_required_certificate_policy_oids",
+                    "bundle",
+                ),
+            ),
+            (
+                "timestamp",
+                lambda: VERIFIER._parse_timestamp(
+                    HostileText("2026-06-04T00:00:00Z\x1b"),
+                    "bundle.source.retrieved_at",
+                ),
+            ),
+            (
+                "secret-scan",
+                lambda: VERIFIER._check_no_secret_material(
+                    {"metadata": HostileText("warning \x1b[31mred")}
+                ),
+            ),
+            (
+                "require-object-dict-subclass",
+                lambda: VERIFIER._require_object(
+                    HostileDict({"authority": "redacted"}),
+                    "bundle.source",
+                ),
+            ),
+            (
+                "sha256-list-subclass",
+                lambda: VERIFIER._sha256_list(
+                    {"signature_public_key_sha256_pins": HostileList(["1" * 64])},
+                    "signature_public_key_sha256_pins",
+                    "bundle",
+                ),
+            ),
+            (
+                "oid-list-subclass",
+                lambda: VERIFIER._oid_list(
+                    {"x509_required_certificate_policy_oids": HostileList(["1.2.3"])},
+                    "x509_required_certificate_policy_oids",
+                    "bundle",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: VERIFIER._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: VERIFIER._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: VERIFIER._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "secret-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileText("private_key"): "redacted"}
+                ),
+            ),
+            (
+                "control-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileText("metadata\x1b"): "redacted"}
+                ),
+            ),
+            (
+                "unknown-key",
+                lambda: VERIFIER._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"authority"},
+                    "bundle.source",
+                ),
+            ),
+            (
+                "non-string-key",
+                lambda: VERIFIER._check_no_secret_material({HostileKey(): "redacted"}),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: VERIFIER._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"authority"},
+                    "bundle.source",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: VERIFIER._reject_unknown_keys(
+                    HostileDict({"authority": "redacted"}),
+                    {"authority"},
+                    "bundle.source",
+                ),
+            ),
+            (
+                "secret-list-subclass",
+                lambda: VERIFIER._check_no_secret_material(HostileList(["redacted"])),
+            ),
+            (
+                "secret-dict-subclass",
+                lambda: VERIFIER._check_no_secret_material(
+                    HostileDict({"metadata": "redacted"})
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
+    def test_public_bundle_summary_rejects_hostile_container_subclasses(self):
+        hidden = "trust-public-summary-container-secret"
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list_len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"list_deepcopy={hidden}")
+
+        class HostileDict(dict):
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError(f"dict_get={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"dict_deepcopy={hidden}")
+
+        cases = (
+            (
+                "top-level",
+                lambda: VERIFIER._public_bundle_summary(HostileDict({"path": "x"})),
+                {},
+            ),
+            (
+                "nested-source",
+                lambda: VERIFIER._public_bundle_summary(
+                    {
+                        "profile_id": "swift-cbpr-plus",
+                        "_internal": "redacted",
+                        "source": HostileDict({"url": "https://pki.example/source"}),
+                    }
+                )["source"],
+                "unsupported",
+            ),
+            (
+                "nested-pin-list",
+                lambda: VERIFIER._public_bundle_summary(
+                    {
+                        "profile_id": "swift-cbpr-plus",
+                        "signature_public_key_sha256_pins": HostileList(["1" * 64]),
+                    }
+                )["signature_public_key_sha256_pins"],
+                "unsupported",
+            ),
+            (
+                "non-finite-source-float",
+                lambda: VERIFIER._public_bundle_summary(
+                    {
+                        "profile_id": "swift-cbpr-plus",
+                        "source": {"authority": "bank", "score": float("nan")},
+                    }
+                )["source"]["score"],
+                "unsupported",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                try:
+                    result = action()
+                except Exception as error:
+                    self.fail(
+                        "hostile container method was invoked: "
+                        f"{type(error).__name__}"
+                    )
+                self.assertEqual(result, expected)
+
+        output = VERIFIER._public_bundle_summary(
+            {"profile_id": "swift-cbpr-plus", "_internal": "redacted"}
+        )
+        self.assertNotIn("_internal", output)
 
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (
@@ -2947,6 +3735,49 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("--max-source-age-days must use printable ASCII", stderr)
             self.assertNotIn(hidden, stderr)
+
+    def test_source_freshness_budget_helper_rejects_hostile_scalars_without_echo(self):
+        hidden = "trust-hostile-source-age-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"strip={hidden}")
+
+            def isdecimal(self):
+                raise RuntimeError(f"isdecimal={hidden}")
+
+        class HostileInt(int):
+            def __new__(cls, value):
+                return int.__new__(cls, value)
+
+            def __le__(self, _other):
+                raise RuntimeError(f"le={hidden}")
+
+        parsed = VERIFIER._optional_positive_cli_int(
+            HostileText("7"),
+            "--max-source-age-days",
+        )
+        self.assertEqual(parsed, 7)
+        self.assertIs(type(parsed), int)
+
+        cases = (
+            HostileText("7\x1b"),
+            HostileInt(7),
+        )
+        for value in cases:
+            with self.subTest(kind=type(value).__name__):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._optional_positive_cli_int(
+                        value,
+                        "--max-source-age-days",
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("--max-source-age-days", message)
+                self.assertNotIn(hidden, message)
 
     def test_source_freshness_budget_rejects_noncanonical_decimal_spellings(self):
         cases = ("0007", "+7", "07", "7.0", "-0")

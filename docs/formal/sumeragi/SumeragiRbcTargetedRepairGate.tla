@@ -548,9 +548,12 @@ SafetyAnchors ==
   /\ RescueAuthoritativeReadyAnchors
   /\ RescueMissingQcAnchors
 
+RbcTargetedRepairExactness ==
+  /\ RbcTargetedRepairCoreSafety
+  /\ SafetyAnchors
+
 RbcTargetedRepairCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ SafetyAnchors
+  /\ RbcTargetedRepairExactness
 
 ====

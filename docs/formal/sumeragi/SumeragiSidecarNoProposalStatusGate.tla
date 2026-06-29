@@ -195,7 +195,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..15
 
-Safety ==
+SidecarNoProposalStatusActionsMatchSpec ==
   /\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
   /\ ImplementationActions(SidecarQuarantineRecord) =
        SpecActions(SidecarQuarantineRecord)
@@ -225,6 +225,16 @@ Safety ==
        SpecActions(SnapshotProjectsNoProposal)
   /\ ImplementationActions(ResetAfterRecordsClears) =
        SpecActions(ResetAfterRecordsClears)
+
+SidecarNoProposalStatusExactness ==
+  /\ SidecarNoProposalStatusActionsMatchSpec
+
+Safety ==
+  SidecarNoProposalStatusExactness
+
+SidecarNoProposalStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SidecarNoProposalStatusExactness
 
 BugResetEmptyKeepsSidecar ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

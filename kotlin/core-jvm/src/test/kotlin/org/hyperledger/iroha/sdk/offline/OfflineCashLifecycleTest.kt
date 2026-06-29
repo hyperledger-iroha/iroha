@@ -6,6 +6,7 @@ import kotlin.coroutines.startCoroutine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class OfflineCashLifecycleTest {
     @Test
@@ -79,17 +80,128 @@ class OfflineCashLifecycleTest {
     }
 
     @Test
-    fun `configuration snapshot requires cached issuer key`() {
+    fun `configuration snapshot requires cached identity time issuer key and ABI`() {
+        val issuerPublicKeyBase64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        val issuerPublicKeyBase64Url = "__________________________________________8"
+        val shortIssuerPublicKeyBase64 = "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqw"
+        val longIssuerPublicKeyBase64 = "zc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3N"
         val snapshot = OfflineCashConfigurationSnapshot(
             chainId = "00000042",
             assetDefinitionId = "pkr#sbp",
             offlinePaymentsEnabled = true,
-            issuerPublicKeyBase64 = "issuer-key",
+            issuerPublicKeyBase64 = issuerPublicKeyBase64,
             nativeBridgeAbiVersion = 7,
+            artifactSetId = "artifact-set",
+            circuitId = "kagemusha-recursive-compact-v1",
             createdAtMs = 100,
             expiresAtMs = 1_000,
         )
         snapshot.requireUsableForOfflineExchange(nowMs = 999, requiredNativeBridgeAbiVersion = 7)
+        OfflineCashConfigurationSnapshot(
+            chainId = "00000042",
+            assetDefinitionId = "pkr#sbp",
+            offlinePaymentsEnabled = true,
+            issuerPublicKeyBase64 = issuerPublicKeyBase64Url,
+            nativeBridgeAbiVersion = 7,
+            artifactSetId = "artifact-set",
+            circuitId = "kagemusha-recursive-compact-v1",
+            createdAtMs = 100,
+            expiresAtMs = 1_000,
+        ).requireUsableForOfflineExchange(nowMs = 999, requiredNativeBridgeAbiVersion = 7)
+
+        val malformedIdentitySnapshots = listOf(
+            "chainId" to OfflineCashConfigurationSnapshot(
+                chainId = "",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+            ),
+            "chainId" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042\n",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+            ),
+            "assetDefinitionId" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+            ),
+            "artifactSetId" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+                artifactSetId = "artifact set",
+            ),
+            "circuitId" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+                circuitId = "kagemusha-recursive-compact-v1\n",
+            ),
+        )
+        for ((fieldName, malformedSnapshot) in malformedIdentitySnapshots) {
+            val malformedIdentity = assertFailsWith<OfflineCashConfigurationSnapshotException> {
+                malformedSnapshot.requireUsableForOfflineExchange(
+                    nowMs = 200,
+                    requiredNativeBridgeAbiVersion = 7,
+                )
+            }
+            assertEquals("malformed_snapshot", malformedIdentity.code)
+            assertTrue(malformedIdentity.message?.contains(fieldName) == true)
+        }
+
+        val malformedTimeSnapshots = listOf(
+            "createdAtMs" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+                createdAtMs = -1,
+            ),
+            "expiresAtMs" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+                expiresAtMs = -1,
+            ),
+            "expiresAtMs" to OfflineCashConfigurationSnapshot(
+                chainId = "00000042",
+                assetDefinitionId = "pkr#sbp",
+                offlinePaymentsEnabled = true,
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
+                nativeBridgeAbiVersion = 7,
+                createdAtMs = 100,
+                expiresAtMs = 100,
+            ),
+        )
+        for ((fieldName, malformedSnapshot) in malformedTimeSnapshots) {
+            val malformedTime = assertFailsWith<OfflineCashConfigurationSnapshotException> {
+                malformedSnapshot.requireUsableForOfflineExchange(
+                    nowMs = 200,
+                    requiredNativeBridgeAbiVersion = 7,
+                )
+            }
+            assertEquals("malformed_snapshot", malformedTime.code)
+            assertTrue(malformedTime.message?.contains(fieldName) == true)
+        }
+
+        val malformedNow = assertFailsWith<OfflineCashConfigurationSnapshotException> {
+            snapshot.requireUsableForOfflineExchange(nowMs = -1, requiredNativeBridgeAbiVersion = 7)
+        }
+        assertEquals("malformed_snapshot", malformedNow.code)
+        assertTrue(malformedNow.message?.contains("nowMs") == true)
 
         val error = assertFailsWith<OfflineCashConfigurationSnapshotException> {
             OfflineCashConfigurationSnapshot(
@@ -103,9 +215,13 @@ class OfflineCashLifecycleTest {
 
         for (issuerKey in listOf(
             "",
-            " issuer-key",
-            "issuer-key ",
-            "issuer key",
+            " $issuerPublicKeyBase64",
+            "$issuerPublicKeyBase64 ",
+            "not base64",
+            "!!!!",
+            "$issuerPublicKeyBase64=",
+            shortIssuerPublicKeyBase64,
+            longIssuerPublicKeyBase64,
             "issuer-key\n",
             "issuer-key\u2603",
         )) {
@@ -126,7 +242,7 @@ class OfflineCashLifecycleTest {
                 chainId = "00000042",
                 assetDefinitionId = "pkr#sbp",
                 offlinePaymentsEnabled = false,
-                issuerPublicKeyBase64 = "issuer-key",
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
                 nativeBridgeAbiVersion = 7,
             ).requireUsableForOfflineExchange(nowMs = 200, requiredNativeBridgeAbiVersion = 7)
         }
@@ -137,7 +253,7 @@ class OfflineCashLifecycleTest {
                 chainId = "00000042",
                 assetDefinitionId = "pkr#sbp",
                 offlinePaymentsEnabled = true,
-                issuerPublicKeyBase64 = "issuer-key",
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
                 nativeBridgeAbiVersion = 6,
             ).requireUsableForOfflineExchange(nowMs = 200, requiredNativeBridgeAbiVersion = 7)
         }
@@ -148,7 +264,7 @@ class OfflineCashLifecycleTest {
                 chainId = "00000042",
                 assetDefinitionId = "pkr#sbp",
                 offlinePaymentsEnabled = true,
-                issuerPublicKeyBase64 = "issuer-key",
+                issuerPublicKeyBase64 = issuerPublicKeyBase64,
                 nativeBridgeAbiVersion = 0,
             ).requireUsableForOfflineExchange(nowMs = 200, requiredNativeBridgeAbiVersion = 7)
         }

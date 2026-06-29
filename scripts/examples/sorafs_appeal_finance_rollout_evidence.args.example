@@ -1,0 +1,17 @@
+# Example arguments for the SFM-4b2 appeal finance rollout evidence gate.
+# Use runtime artifact locations; do not store secrets, raw deposit payloads,
+# signed transactions, response bodies, or raw ledgers here.
+--evidence-dir
+artifacts/sorafs/appeal-finance/staged
+--summary-out
+artifacts/sorafs/appeal-finance/staged/rollout-summary.json
+--max-canary-age-secs
+86400
+--max-dashboard-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-settlement-lag-secs
+900
+--min-peers
+4

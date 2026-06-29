@@ -248,7 +248,7 @@ OutputMatchesSpec ==
   \A c \in Cases:
     OutputMatches(c)
 
-Safety ==
+LateNewViewEmissionExactness ==
   /\ SelectionMatchesSpec
   /\ OutputMatchesSpec
 
@@ -283,6 +283,13 @@ SelectionOrder ==
 
 InnerEmissionResult ==
   OutputMatches("emit_failure")
+
+Safety ==
+  LateNewViewEmissionExactness
+
+LateNewViewEmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LateNewViewEmissionExactness
 
 =============================================================================
 ====

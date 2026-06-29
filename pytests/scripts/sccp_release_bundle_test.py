@@ -42,6 +42,16 @@ EVM_EVIDENCE_SCRIPT_FRAGMENTS = (
 )
 
 
+class HostilePublicKey:
+    """Mapping key that public sanitizers must classify without stringifying."""
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile __str__")
+
+    def __repr__(self):
+        return "secret-token-hostile-key"
+
+
 def phase_command_lines(fragments) -> list[str]:
     """Render required fragments as realistic production-corridor commands."""
 
@@ -504,6 +514,12 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         label,
         valid_canary,
     ) == []
+    canary_with_missing_blockers = {**valid_canary, "blockers": []}
+    canary_with_missing_blockers.pop("blockers")
+    assert verifier._active_launch_route_canary_metadata_blockers(
+        label,
+        canary_with_missing_blockers,
+    ) == []
 
     route_canary_blocker_cases = (
         (
@@ -532,6 +548,21 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
             "route canary blockers[0] contains sensitive name",
         ),
         (
+            "sensitive_percent_encoded",
+            ["secret%2dtoken-route-canary-blocker"],
+            "route canary blockers[0] contains sensitive name",
+        ),
+        (
+            "sensitive_html_entity",
+            ["private&#95;key-route-canary-blocker"],
+            "route canary blockers[0] contains sensitive name",
+        ),
+        (
+            "sensitive_nested_html_entity",
+            ["private&amp;#95;key-route-canary-blocker"],
+            "route canary blockers[0] contains sensitive name",
+        ),
+        (
             "valid_nonempty",
             ["route canary governance review pending"],
             "route canary blockers must be empty",
@@ -553,7 +584,11 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         )
 
         assert any(expected_blocker in blocker for blocker in blockers), case_label
-        assert "secret-token" not in "\n".join(blockers)
+        blocker_text = "\n".join(blockers)
+        assert "secret-token" not in blocker_text
+        assert "secret%2dtoken" not in blocker_text
+        assert "private&#95;key" not in blocker_text
+        assert "private&amp;#95;key" not in blocker_text
 
     upstream_hash_roles = (
         ("source verifier material hash", fixed_hex32(0xB1)),
@@ -859,6 +894,110 @@ def test_release_bundle_hex_predicates_redact_parser_exit_causes(
             assert exception_type.__name__ not in rendered
 
 
+def test_release_bundle_canonical_fixed_hex_parser_failures_are_bounded(
+    monkeypatch,
+) -> None:
+    """Strict verifier canonical hex byte parsing must fail closed."""
+
+    verifier = load_verify_helpers()
+    label = "readiness report cryptographic evidence row"
+    route_label = "all-lanes summary lane domain 1 route_allowlist"
+
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, exception_type=exception_type):
+                raise exception_type(
+                    "secret-token verifier canonical fixed hex "
+                    f"{exception_type.__name__} detail"
+                )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(verifier, "bytes", SecretBytes, raising=False)
+
+            assert (
+                verifier._canonical_fixed_hex_bytes(
+                    fixed_hex32(0xB1),
+                    byte_length=32,
+                )
+                is None
+            )
+            errors = [
+                *verifier._source_adapter_gate_template_hash_errors(
+                    f"{label} source_adapter_gate_hash",
+                    verifier.SCCP_DOMAIN_ETH,
+                    fixed_hex32(0xB2),
+                ),
+                *verifier._source_adapter_gate_template_audit_errors(
+                    f"{label} source_adapter_gate_audit_hashes",
+                    verifier.SCCP_DOMAIN_ETH,
+                    {"evm_source_gate_hash": fixed_hex32(0xB3)},
+                ),
+                *verifier._source_record_template_hash_errors(
+                    label,
+                    verifier.SCCP_DOMAIN_ETH,
+                    {"source_verifier_material_hash": fixed_hex32(0xB4)},
+                ),
+                *verifier._route_canary_template_hash_errors(
+                    label,
+                    verifier.SCCP_DOMAIN_ETH,
+                    {"route_canary_evidence_hash": fixed_hex32(0xB5)},
+                ),
+                *verifier._all_lanes_route_canary_template_hash_errors(
+                    "all-lanes summary lane domain 1 route_canary",
+                    verifier.SCCP_DOMAIN_ETH,
+                    {"evidence_hash": fixed_hex32(0xB6)},
+                ),
+            ]
+            lane = {
+                "domain": verifier.SCCP_DOMAIN_ETH,
+                "chain": "eth",
+                "source_record_hashes": {
+                    "source_verifier_material_hash": fixed_hex32(0xB7),
+                    "source_adapter_engine_deployment_hash": fixed_hex32(0xB8),
+                },
+                "destination_binding": {
+                    "destination_binding_hash": fixed_hex32(0xB9),
+                },
+            }
+            errors.extend(
+                verifier._route_allowlist_recompute_errors(
+                    route_label,
+                    lane,
+                    {"route_allowlist_hash": fixed_hex32(0xBA)},
+                )
+            )
+            rendered = "\n".join(errors)
+
+            assert (
+                f"{label} source_adapter_gate_hash must be a canonical "
+                "bytes32 hex string"
+            ) in rendered
+            assert (
+                f"{label} source_adapter_gate_audit_hashes evm_source_gate_hash "
+                "must be a canonical bytes32 hex string"
+            ) in rendered
+            assert (
+                f"{label} source_verifier_material_hash must be a canonical "
+                "bytes32 hex string"
+            ) in rendered
+            assert (
+                f"{label} route_canary_evidence_hash must be a canonical "
+                "bytes32 hex string"
+            ) in rendered
+            assert (
+                "all-lanes summary lane domain 1 route_canary evidence_hash "
+                "must be a canonical bytes32 hex string"
+            ) in rendered
+            assert (
+                f"{route_label} route_allowlist_hash must be a canonical "
+                "bytes32 hex string"
+            ) in rendered
+            assert "secret-token" not in rendered
+            assert exception_type.__name__ not in rendered
+
+
 def test_release_bundle_solana_pubkey_redacts_parser_exit_causes(
     monkeypatch,
 ) -> None:
@@ -953,6 +1092,18 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
     assert verifier._active_launch_route_allowlist_binding_blockers(
         label,
         valid_lane,
+    ) == []
+    route_allowlist_with_missing_blockers = {
+        **valid_lane["route_allowlist"],
+        "blockers": [],
+    }
+    route_allowlist_with_missing_blockers.pop("blockers")
+    assert verifier._active_launch_route_allowlist_binding_blockers(
+        label,
+        {
+            **valid_lane,
+            "route_allowlist": route_allowlist_with_missing_blockers,
+        },
     ) == []
 
     reused_role_lane = {
@@ -1129,6 +1280,24 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
     assert verifier._active_launch_governed_deployment_metadata_blockers(
         label,
         valid_lane,
+    ) == []
+    destination_with_missing_blockers = {
+        **valid_lane["destination_binding"],
+        "blockers": [],
+    }
+    destination_with_missing_blockers.pop("blockers")
+    source_gate_with_missing_blockers = {
+        **valid_lane["source_adapter_gate"],
+        "blockers": [],
+    }
+    source_gate_with_missing_blockers.pop("blockers")
+    assert verifier._active_launch_governed_deployment_metadata_blockers(
+        label,
+        {
+            **valid_lane,
+            "destination_binding": destination_with_missing_blockers,
+            "source_adapter_gate": source_gate_with_missing_blockers,
+        },
     ) == []
 
     reused_role_lane = {
@@ -1371,6 +1540,32 @@ def load_report_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)  # type: ignore[assignment]
     return module
+
+
+def test_release_bundle_unsupported_scope_notes_match_readiness_and_verifier() -> None:
+    """Release scripts must share the exact unsupported-network scope notes."""
+
+    bundle = load_bundle_module()
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for attr in (
+        "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+        "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
+    ):
+        values = {
+            "bundle": getattr(bundle, attr),
+            "report": getattr(report, attr),
+            "verifier": getattr(verifier, attr),
+        }
+        assert len(set(values.values())) == 1, values
+
+    assert "Sub&#115;trate/Pol&#107;adot" in (
+        verifier.SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE
+    )
+    assert "Sub&#115;trate/Pol&#107;adot" in (
+        verifier.SCCP_NOT_REMAINING_WORK_SCOPE_NOTE
+    )
 
 
 def minimal_source_inventory() -> dict[str, dict[str, object]]:
@@ -2717,6 +2912,7 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
 
 def test_release_bundle_verifier_redacts_source_inventory_read_failures(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """Source inventory read/decode failures must not echo local details."""
 
@@ -2765,6 +2961,58 @@ def test_release_bundle_verifier_redacts_source_inventory_read_failures(
         end_marker="end",
         label="SCCP adversarial region",
     )
+    helper_failure_rendered: list[str] = []
+    for exception_type in (RuntimeError, SystemExit):
+        with monkeypatch.context() as patch:
+
+            def fail_read_text(*_args, exception_type=exception_type, **_kwargs):
+                raise exception_type(
+                    "secret-token source inventory helper detail "
+                    f"{exception_type.__name__} /tmp/operator/private/source.py"
+                )
+
+            patch.setattr(Path, "read_text", fail_read_text)
+            helper_errors = verifier._source_marker_inventory_errors(
+                ((missing_source, ("required marker",)),),
+                label="SCCP adversarial",
+            )
+            sdk_helper_errors = verifier._sdk_test_inventory_errors(
+                ((missing_source, ("required marker",)),),
+                label="SCCP adversarial SDK",
+            )
+            unready_helper_errors = (
+                verifier._sccp_unready_transparent_proof_config_inventory_errors(
+                    inventory=(),
+                    forbidden_paths=(missing_source,),
+                )
+            )
+            helper_region, helper_region_errors = verifier._source_region(
+                missing_source,
+                start_marker="start",
+                end_marker="end",
+                label="SCCP adversarial region",
+            )
+
+        helper_failure_rendered.extend(
+            [
+                *helper_errors,
+                *sdk_helper_errors,
+                *unready_helper_errors,
+                *helper_region_errors,
+            ]
+        )
+        assert helper_errors == ["SCCP adversarial source inventory cannot be read"]
+        assert sdk_helper_errors == [
+            "SCCP adversarial SDK SDK test inventory cannot be read"
+        ]
+        assert unready_helper_errors == [
+            "SCCP unready transparent-proof config-only source inventory "
+            "cannot be read"
+        ]
+        assert helper_region is None
+        assert helper_region_errors == [
+            "SCCP adversarial region source cannot be read"
+        ]
     rendered = "\n".join(
         [
             *invalid_errors,
@@ -2775,6 +3023,7 @@ def test_release_bundle_verifier_redacts_source_inventory_read_failures(
             *unready_missing_errors,
             *region_errors,
             *missing_region_errors,
+            *helper_failure_rendered,
         ]
     )
 
@@ -2796,7 +3045,10 @@ def test_release_bundle_verifier_redacts_source_inventory_read_failures(
     assert "secret-token" not in rendered
     assert str(tmp_path) not in rendered
     assert "UnicodeDecodeError" not in rendered
+    assert "RuntimeError" not in rendered
+    assert "SystemExit" not in rendered
     assert "No such file" not in rendered
+    assert "/tmp/operator" not in rendered
 
 
 def test_release_bundle_verifier_guards_release_input_provenance_schema_inventory(
@@ -3393,6 +3645,31 @@ def test_release_bundle_phase_command_matchers_reject_comment_fragments() -> Non
             ), f"{module.__name__} {phase} accepted commented {fragment}"
 
 
+def test_release_bundle_phase_command_matchers_allow_only_known_swift_setup() -> None:
+    """Report and verifier matchers must allow Swift bridge setup but no extras."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    setup_commands = (
+        "+ rustup target add aarch64-apple-ios aarch64-apple-ios-sim "
+        "x86_64-apple-ios aarch64-apple-darwin",
+        "+ bash /repo/scripts/build_norito_xcframework.sh",
+        "+ rm -rf /repo/dist/NoritoBridge.xcframework",
+        "+ unzip -q -o /repo/dist/NoritoBridge.xcframework.zip -d /repo/dist",
+    )
+
+    for module in (report, verifier):
+        for command in setup_commands:
+            assert module._phase_command_matches_known_trace(
+                "swift-sdk",
+                command,
+            ), f"{module.__name__} rejected Swift setup command: {command}"
+        assert not module._phase_command_matches_known_trace(
+            "swift-sdk",
+            "+ true secret-token-hidden-command",
+        )
+
+
 def test_release_bundle_phase_command_matchers_reject_inert_option_values() -> None:
     """Report and verifier matchers must require option-selected fragments."""
 
@@ -3983,6 +4260,22 @@ def build_ready_bundle(tmp_path: Path) -> Path:
     return output_dir
 
 
+def test_release_bundle_preflight_accepts_absolute_phase_evidence_dir(
+    tmp_path: Path,
+) -> None:
+    """Absolute source logs must become safe public corridor artifact paths."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+
+    phase_artifacts = report["corridor"]["evidence_artifacts"]
+    for phase, artifact in phase_artifacts.items():
+        assert artifact["path"] == f"corridor/{phase}.log"
+        assert not Path(artifact["path"]).is_absolute()
+
+
 def test_generated_bundle_self_verifier_reports_strict_errors(tmp_path: Path) -> None:
     """Production bundle generation must surface strict verifier failures."""
 
@@ -4249,6 +4542,7 @@ def test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leak
             "operator_note": "safe note",
             "secret-token-summary": "secret-token-value",
             7: "secret-token-int-key",
+            HostilePublicKey(): "secret-token-hostile-summary",
         },
     )
 
@@ -4263,6 +4557,8 @@ def test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leak
     assert "7" not in payload
     assert "safe note" not in captured.out
     assert "secret-token" not in captured.out
+    assert "hostile" not in captured.out
+    assert "__str__" not in captured.out
     assert "Traceback" not in captured.out
 
     errors = "\n".join(payload["errors"])
@@ -4438,6 +4734,45 @@ def test_release_bundle_release_notes_mark_malformed_blocker_containers() -> Non
         assert "- o\n- p\n- e\n- r" not in notes
 
 
+def test_release_bundle_release_notes_redact_encoded_blocker_lists() -> None:
+    """Release-note blocker bullets must apply decoded public blocker guards."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    duplicate_blocker = "safe duplicated release notes blocker"
+    encoded_duplicate_blocker = "safe%20duplicated%20release%20notes%20blocker"
+    encoded_sensitive_blocker = "operator secret&#45;token-release-notes-blocker"
+    report = {
+        "production_ready": False,
+        "blockers": [
+            duplicate_blocker,
+            encoded_duplicate_blocker,
+            encoded_sensitive_blocker,
+        ],
+    }
+    artifacts = [
+        {
+            "path": "sccp-release-readiness.json",
+            "bytes": 1,
+            "sha256": "0" * 64,
+        }
+    ]
+
+    builder_notes = bundle._release_notes_attachment(report, artifacts)
+    verifier_notes = verifier._expected_release_notes_attachment(report, artifacts)
+
+    for notes in (builder_notes, verifier_notes):
+        assert "- `<invalid blockers>`" in notes
+        for copied_blocker in (
+            duplicate_blocker,
+            encoded_duplicate_blocker,
+            encoded_sensitive_blocker,
+        ):
+            assert copied_blocker not in notes
+        assert "secret-token-release-notes-blocker" not in notes
+        assert "Traceback" not in notes
+
+
 def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
     """Release-note artifact rows must not leak copied malformed metadata."""
 
@@ -4450,6 +4785,21 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
             "path": "operator|secret-token-artifact",
             "bytes": "operator secret-token-bytes",
             "sha256": "operator secret-token-hash",
+        },
+        {
+            "path": "native-prover/secret%2dtoken-artifact.bin",
+            "bytes": 128,
+            "sha256": "3" * 64,
+        },
+        {
+            "path": "native-prover/private&#95;key-artifact.bin",
+            "bytes": 128,
+            "sha256": "4" * 64,
+        },
+        {
+            "path": "native-prover/private&amp;#95;key-artifact.bin",
+            "bytes": 128,
+            "sha256": "5" * 64,
         },
         {
             "path": "sccp-release-zero-byte-artifact.json",
@@ -4481,6 +4831,9 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
         assert "`<invalid artifact.sha256>`" in notes
         assert "sccp-release-notes-attachment.md" not in notes
         assert "secret-token" not in notes
+        assert "secret%2dtoken" not in notes
+        assert "private&#95;key" not in notes
+        assert "private&amp;#95;key" not in notes
         assert "operator|" not in notes
         assert "Traceback" not in notes
     for notes in (builder_notes, verifier_notes):
@@ -4580,6 +4933,47 @@ def test_release_bundle_verifier_readiness_markdown_marks_bad_blocker_containers
     assert "- `<invalid blockers>`" in markdown
     assert "o<br>p<br>e<br>r<br>a<br>t<br>o<br>r" not in markdown
     assert "- o\n- p\n- e\n- r" not in markdown
+
+
+def test_release_bundle_verifier_readiness_markdown_status_fails_closed_for_malformed_roots(
+    tmp_path: Path,
+) -> None:
+    """Readiness Markdown status must not truthy-coerce malformed roots."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    missing_status = dict(report)
+    missing_status.pop("production_ready")
+    truthy_status = dict(report)
+    truthy_status["production_ready"] = "operator secret-token-status"
+
+    for payload in (
+        missing_status,
+        truthy_status,
+        "operator secret-token-readiness-markdown-root",
+    ):
+        markdown = verifier._expected_readiness_markdown(payload)
+
+        assert markdown.startswith("# SCCP Release Readiness Report\n\n")
+        assert "Status: NOT READY" in markdown
+        assert "Status: READY" not in markdown
+        assert "secret-token" not in markdown
+        assert "Traceback" not in markdown
+
+    scalar_markdown = verifier._expected_readiness_markdown(
+        "operator secret-token-readiness-markdown-root"
+    )
+    assert "| `<invalid path>` | `<invalid bytes>` | `<invalid sha256>` |" in (
+        scalar_markdown
+    )
+    assert "| `<invalid phase>` | `<invalid status>` | - | - |" in scalar_markdown
+    assert "| `<invalid id>` | blocked | release checklist must be an object |" in (
+        scalar_markdown
+    )
+    assert "lane summary must be an object" in scalar_markdown
 
 
 def test_release_bundle_requires_hashed_phase_evidence(tmp_path: Path) -> None:
@@ -4741,6 +5135,11 @@ def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers(
         (
             "root.duplicate",
             ["duplicate blocker", "duplicate blocker"],
+            "preflight report blockers must not contain duplicate strings",
+        ),
+        (
+            "root.encoded-duplicate",
+            ["duplicate blocker", "duplicate%20blocker"],
             "preflight report blockers must not contain duplicate strings",
         ),
         (
@@ -5101,6 +5500,7 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
                 report["operator attestation"] = "whitespace local claim"
                 report[markdown_field] = "markdown local claim"
                 report[confusable_field] = "confusable local claim"
+                report[HostilePublicKey()] = "secret-token hostile local claim"
             return report
 
         def _render_markdown(self, *args, **kwargs) -> str:
@@ -5148,6 +5548,8 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
     )
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
+    assert "hostile" not in captured.err
+    assert "__str__" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -6036,14 +6438,14 @@ def test_release_bundle_rejects_copied_artifact_hash_drift_before_render(
                 input_artifacts = report["input_artifacts"]
                 assert isinstance(input_artifacts, list)
                 first_input = dict(input_artifacts[0])
-                first_input["sha256"] = "1" * 64
+                first_input["sha256"] = "f" * 64
                 input_artifacts[0] = first_input
                 corridor = report["corridor"]
                 assert isinstance(corridor, dict)
                 phase_artifacts = corridor["evidence_artifacts"]
                 assert isinstance(phase_artifacts, dict)
                 phase_artifact = dict(phase_artifacts[phase])
-                phase_artifact["sha256"] = "1" * 64
+                phase_artifact["sha256"] = "f" * 64
                 phase_artifacts[phase] = phase_artifact
             return report
 
@@ -6365,131 +6767,213 @@ def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
     """Builder-side public recompute/render errors must not echo exceptions."""
 
     bundle = load_bundle_module()
-
-    class FakeVerifier:
-        CORRIDOR_PHASES = ("rust-sccp",)
-
-        def _expected_submission_surfaces(self, _report):
-            raise RuntimeError("secret-token submission surface detail")
-
-        def _expected_native_evm_prover_bundle_status(
-            self,
-            _bundle_dir,
-            _report,
-            _evidence,
-        ):
-            raise RuntimeError("secret-token native prover detail")
-
-        def _copied_input_summary(self, _bundle_dir, _report, _errors):
-            raise RuntimeError("secret-token copied input detail")
-
-        def _expected_release_checklist(self, _report):
-            raise RuntimeError("secret-token checklist detail")
-
-        def _phase_transcript_errors(self, _bundle_dir, _phase, _artifact):
-            raise RuntimeError("secret-token phase transcript detail")
-
-        def _readiness_markdown_invariant_errors(self, _report, _markdown):
-            return []
-
-        def _expected_readiness_markdown(self, _report):
-            raise RuntimeError("secret-token readiness Markdown detail")
-
-        def _release_notes_attachment_invariant_errors(
-            self,
-            _report,
-            _artifacts,
-            _notes,
-        ):
-            return []
-
-        def _expected_release_notes_attachment(self, _report, _artifacts):
-            raise RuntimeError("secret-token release notes detail")
-
-    monkeypatch.setattr(bundle, "_verify_module", lambda: FakeVerifier())
     report = {"evidence": {}}
 
-    errors = []
-    errors.extend(
-        bundle._submission_surface_binding_bundle_errors(
-            [],
-            report,
-            "bundled report",
-        )
-    )
-    errors.extend(
-        bundle._native_evm_prover_binding_bundle_errors(
-            {},
-            report,
-            tmp_path,
-            "bundled report",
-        )
-    )
-    errors.extend(
-        bundle._copied_evidence_binding_bundle_errors(
-            {},
-            report,
-            tmp_path,
-            "bundled report",
-        )
-    )
-    errors.extend(
-        bundle._release_checklist_binding_bundle_errors(
-            {},
-            report,
-            "bundled report",
-        )
-    )
-    errors.extend(
-        bundle._corridor_phase_transcript_bundle_errors(
-            {
-                "phases": {"rust-sccp": "passed"},
-                "evidence_artifacts": {"rust-sccp": {"path": "logs/rust-sccp.log"}},
-            },
-            tmp_path,
-            "bundled report",
-        )
-    )
-    errors.extend(
-        bundle._readiness_markdown_bundle_errors(
-            report,
-            "# SCCP Release Readiness Report\n",
-            "bundled report",
-        )
-    )
-    errors.extend(
-        bundle._release_notes_attachment_bundle_errors(
-            report,
-            [],
-            "# SCCP Public Release Notes Attachment\n",
-            "bundled report",
-        )
-    )
-    rendered_errors = "\n".join(errors)
+    for exception_type in (RuntimeError, SystemExit):
 
-    assert "bundled report.user_prover_submission_surfaces cannot be recomputed" in (
-        rendered_errors
-    )
-    assert "bundled report.native_evm_prover_bundle cannot be recomputed" in (
-        rendered_errors
-    )
-    assert (
-        "bundled report.evidence cannot be recomputed from copied inputs"
-        in rendered_errors
-    )
-    assert "bundled report.release_checklist cannot be recomputed" in rendered_errors
-    assert (
-        "bundled report.corridor phase transcript cannot be checked"
-        in rendered_errors
-    )
-    assert "bundled report.markdown cannot be rendered canonically" in rendered_errors
-    assert (
-        "bundled report.release_notes_attachment cannot be rendered"
-        in rendered_errors
-    )
-    assert "secret-token" not in rendered_errors
-    assert "phase transcript detail" not in rendered_errors
-    assert "Traceback" not in rendered_errors
+        class FakeVerifier:
+            CORRIDOR_PHASES = ("rust-sccp",)
+
+            def _fail(self, label):
+                raise exception_type(
+                    f"secret-token {exception_type.__name__} {label} detail"
+                )
+
+            def _expected_submission_surfaces(self, _report):
+                self._fail("submission surface")
+
+            def _expected_native_evm_prover_bundle_status(
+                self,
+                _bundle_dir,
+                _report,
+                _evidence,
+            ):
+                self._fail("native prover")
+
+            def _copied_input_summary(self, _bundle_dir, _report, _errors):
+                self._fail("copied input")
+
+            def _expected_release_checklist(self, _report):
+                self._fail("checklist")
+
+            def _phase_transcript_errors(self, _bundle_dir, _phase, _artifact):
+                self._fail("phase transcript")
+
+            def _readiness_markdown_invariant_errors(self, _report, _markdown):
+                return []
+
+            def _expected_readiness_markdown(self, _report):
+                self._fail("readiness Markdown")
+
+            def _release_notes_attachment_invariant_errors(
+                self,
+                _report,
+                _artifacts,
+                _notes,
+            ):
+                return []
+
+            def _expected_release_notes_attachment(self, _report, _artifacts):
+                self._fail("release notes")
+
+        monkeypatch.setattr(bundle, "_verify_module", lambda: FakeVerifier())
+
+        errors = []
+        errors.extend(
+            bundle._submission_surface_binding_bundle_errors(
+                [],
+                report,
+                "bundled report",
+            )
+        )
+        errors.extend(
+            bundle._native_evm_prover_binding_bundle_errors(
+                {},
+                report,
+                tmp_path,
+                "bundled report",
+            )
+        )
+        errors.extend(
+            bundle._copied_evidence_binding_bundle_errors(
+                {},
+                report,
+                tmp_path,
+                "bundled report",
+            )
+        )
+        errors.extend(
+            bundle._release_checklist_binding_bundle_errors(
+                {},
+                report,
+                "bundled report",
+            )
+        )
+        errors.extend(
+            bundle._corridor_phase_transcript_bundle_errors(
+                {
+                    "phases": {"rust-sccp": "passed"},
+                    "evidence_artifacts": {
+                        "rust-sccp": {"path": "logs/rust-sccp.log"}
+                    },
+                },
+                tmp_path,
+                "bundled report",
+            )
+        )
+        errors.extend(
+            bundle._readiness_markdown_bundle_errors(
+                report,
+                "# SCCP Release Readiness Report\n",
+                "bundled report",
+            )
+        )
+        errors.extend(
+            bundle._release_notes_attachment_bundle_errors(
+                report,
+                [],
+                "# SCCP Public Release Notes Attachment\n",
+                "bundled report",
+            )
+        )
+        rendered_errors = "\n".join(errors)
+
+        assert (
+            "bundled report.user_prover_submission_surfaces cannot be recomputed"
+            in rendered_errors
+        )
+        assert "bundled report.native_evm_prover_bundle cannot be recomputed" in (
+            rendered_errors
+        )
+        assert (
+            "bundled report.evidence cannot be recomputed from copied inputs"
+            in rendered_errors
+        )
+        assert (
+            "bundled report.release_checklist cannot be recomputed" in rendered_errors
+        )
+        assert (
+            "bundled report.corridor phase transcript cannot be checked"
+            in rendered_errors
+        )
+        assert (
+            "bundled report.markdown cannot be rendered canonically"
+            in rendered_errors
+        )
+        assert (
+            "bundled report.release_notes_attachment cannot be rendered"
+            in rendered_errors
+        )
+        assert "secret-token" not in rendered_errors
+        assert "phase transcript detail" not in rendered_errors
+        assert exception_type.__name__ not in rendered_errors
+        assert "Traceback" not in rendered_errors
+
+
+def test_release_bundle_redacts_public_markdown_invariant_helper_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Markdown invariant helper exits must stay category-only before rendering."""
+
+    bundle = load_bundle_module()
+    report = minimal_release_bundle_report()
+
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+
+        class FakeVerifier:
+            @staticmethod
+            def _readiness_markdown_invariant_errors(_report, _markdown):
+                raise exception_type(
+                    "secret-token readiness Markdown invariant "
+                    f"{exception_type.__name__} detail"
+                )
+
+            @staticmethod
+            def _expected_readiness_markdown(_report):
+                raise AssertionError("readiness Markdown render must not run")
+
+            @staticmethod
+            def _release_notes_attachment_invariant_errors(
+                _report,
+                _artifacts,
+                _notes,
+            ):
+                raise exception_type(
+                    "secret-token release notes invariant "
+                    f"{exception_type.__name__} detail"
+                )
+
+            @staticmethod
+            def _expected_release_notes_attachment(_report, _artifacts):
+                raise AssertionError("release notes render must not run")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(bundle, "_verify_module", lambda: FakeVerifier())
+
+            errors = [
+                *bundle._readiness_markdown_bundle_errors(
+                    report,
+                    "# SCCP Release Readiness Report\n",
+                    "bundled report",
+                ),
+                *bundle._release_notes_attachment_bundle_errors(
+                    report,
+                    [],
+                    "# SCCP Public Release Notes Attachment\n",
+                    "bundled report",
+                ),
+            ]
+            rendered_errors = "\n".join(errors)
+
+            assert "bundled report.markdown cannot be checked" in rendered_errors
+            assert (
+                "bundled report.release_notes_attachment cannot be checked"
+                in rendered_errors
+            )
+            assert "secret-token" not in rendered_errors
+            assert exception_type.__name__ not in rendered_errors
+            assert "Traceback" not in rendered_errors
 
 
 def test_release_bundle_redacts_builder_manifest_artifact_order_recompute_errors(
@@ -6509,27 +6993,33 @@ def test_release_bundle_redacts_builder_manifest_artifact_order_recompute_errors
         (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
     )
 
-    class FakeVerifier:
-        def __getattr__(self, name):
-            return getattr(verifier, name)
+    for exception_type in (RuntimeError, SystemExit):
 
-        def _expected_manifest_artifact_order(self, _report):
-            raise RuntimeError("secret-token builder manifest order detail")
+        class FakeVerifier:
+            def __getattr__(self, name):
+                return getattr(verifier, name)
 
-    monkeypatch.setattr(bundle, "_verify_module", lambda: FakeVerifier())
+            def _expected_manifest_artifact_order(self, _report):
+                raise exception_type(
+                    "secret-token builder manifest order "
+                    f"{exception_type.__name__} detail"
+                )
 
-    errors = bundle._release_bundle_manifest_errors(
-        manifest,
-        output_dir,
-        report,
-        summary,
-    )
-    rendered_errors = "\n".join(errors)
+        monkeypatch.setattr(bundle, "_verify_module", lambda: FakeVerifier())
 
-    assert "cannot compute canonical manifest artifact order" in rendered_errors
-    assert "secret-token" not in rendered_errors
-    assert "builder manifest order detail" not in rendered_errors
-    assert "Traceback" not in rendered_errors
+        errors = bundle._release_bundle_manifest_errors(
+            manifest,
+            output_dir,
+            report,
+            summary,
+        )
+        rendered_errors = "\n".join(errors)
+
+        assert "cannot compute canonical manifest artifact order" in rendered_errors
+        assert "secret-token" not in rendered_errors
+        assert "builder manifest order detail" not in rendered_errors
+        assert exception_type.__name__ not in rendered_errors
+        assert "Traceback" not in rendered_errors
 
 
 def test_release_bundle_rejects_manifest_drift_before_write(
@@ -7024,6 +7514,496 @@ def test_release_bundle_rejects_unbound_copied_crypto_evidence_before_render() -
     ) in errors
 
 
+def test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before_render() -> None:
+    """Copied public canary crypto rows must keep exact metadata before render."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    source_by_domain = bundle._route_canary_source_by_domain()
+
+    # Source-inventory marker: release bundle public crypto route-canary metadata exactness covers every message-proof launch domain
+    for domain, chain in (
+        (1, "eth"),
+        (2, "bsc"),
+        (5, "tron"),
+    ):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": fixed_hex32(0x50 + domain),
+                "route_canary_evidence_source": "operator_attestation",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": True,
+                "route_canary_raw_data_owner_matches_transaction": (
+                    True if domain == 5 else None
+                ),
+                "route_canary_signature_recovers_to_owner": (
+                    True if domain == 5 else None
+                ),
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": domain,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                "route_canary_call_data_sha256": fixed_hex32(0x60 + domain),
+                "route_canary_payload_hash": fixed_hex32(0x65 + domain),
+                "route_canary_statement_hash": fixed_hex32(0x6A + domain),
+                "route_canary_commitment_root": fixed_hex32(0x70 + domain),
+                "route_canary_finality_height": fixed_hex32(0x75 + domain),
+                "route_canary_finality_block_hash": fixed_hex32(0x7A + domain),
+            }
+        )
+        if domain in (1, 2):
+            row.update(
+                {
+                    "route_canary_transaction_hash": fixed_hex32(0x80 + domain),
+                    "route_canary_receipt_block_number": 100 + domain,
+                    "route_canary_receipt_block_hash": fixed_hex32(0x85 + domain),
+                    "route_canary_receipt_block_finalized": True,
+                    "route_canary_block_receipts_root": fixed_hex32(0x8A + domain),
+                    "route_canary_message_id": fixed_hex32(0x90 + domain),
+                }
+            )
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert (
+            f"{label} route_canary_evidence_source must be "
+            f"{source_by_domain[domain]} for message-proof route canary evidence"
+        ) in errors, domain
+        assert (
+            f"{label} route_canary_evidence_bound must be true for "
+            "message-proof route canary evidence"
+        ) in errors, domain
+
+    evm_fields = (
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    )
+    # Source-inventory marker: release bundle public crypto route-canary EVM receipt metadata exactness covers every EVM message-proof launch domain
+    for domain, chain in ((1, "eth"), (2, "bsc")):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": fixed_hex32(0x95 + domain),
+                "route_canary_evidence_source": source_by_domain[domain],
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": True,
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": domain,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                "route_canary_call_data_sha256": fixed_hex32(0xA0 + domain),
+                "route_canary_payload_hash": fixed_hex32(0xA5 + domain),
+                "route_canary_statement_hash": fixed_hex32(0xAA + domain),
+                "route_canary_commitment_root": fixed_hex32(0xB0 + domain),
+                "route_canary_finality_height": fixed_hex32(0xB5 + domain),
+                "route_canary_finality_block_hash": fixed_hex32(0xBA + domain),
+                "route_canary_receipt_block_number": 0,
+                "route_canary_receipt_block_finalized": False,
+            }
+        )
+        for field in evm_fields:
+            row[field] = ""
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        for field in evm_fields:
+            assert (
+                f"{label} {field} must be a non-zero canonical bytes32 hex "
+                "string for finalized EVM route canary evidence"
+            ) in errors, (domain, field)
+        assert (
+            f"{label} route_canary_receipt_block_number must be a positive "
+            "u32 integer for finalized EVM route canary evidence"
+        ) in errors, domain
+        assert (
+            f"{label} route_canary_receipt_block_finalized must be true for "
+            "finalized EVM route canary evidence"
+        ) in errors, domain
+
+
+def test_release_bundle_rejects_copied_crypto_snapshot_route_canary_metadata_drift_before_render() -> None:
+    """Copied Solana/TON snapshot canary rows must keep exact metadata."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    source_by_domain = bundle._route_canary_source_by_domain()
+
+    # Source-inventory marker: release bundle public crypto route-canary snapshot metadata exactness covers every snapshot launch domain
+    for domain, chain in (
+        (bundle._sccp_domain_sol(), "sol"),
+        (bundle._sccp_domain_ton(), "ton"),
+    ):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": fixed_hex32(0xC0 + domain),
+                "route_canary_evidence_source": "operator_attestation",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+            }
+        )
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert (
+            f"{label} route_canary_evidence_source must be "
+            f"{source_by_domain[domain]} for snapshot route canary evidence"
+        ) in errors, domain
+        assert (
+            f"{label} route_canary_evidence_bound must be true for snapshot "
+            "route canary evidence"
+        ) in errors, domain
+
+
+def test_release_bundle_rejects_copied_crypto_non_evm_route_canary_evm_metadata_before_render() -> None:
+    """Copied non-EVM canary rows must omit EVM receipt metadata."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    verifier = load_verify_helpers()
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+    source_by_domain = bundle._route_canary_source_by_domain()
+    evm_hash_fields = (
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    )
+    evm_null_fields = (
+        "route_canary_receipt_block_number",
+        "route_canary_receipt_block_finalized",
+    )
+
+    # Source-inventory marker: release bundle public crypto non-EVM route-canary EVM metadata null policy covers every non-EVM canary launch domain
+    for domain, chain in sorted(chain_by_domain.items()):
+        if domain in (bundle._sccp_domain_eth(), 2):
+            continue
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": fixed_hex32(0xE0 + domain),
+                "route_canary_evidence_source": source_by_domain[domain],
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": fixed_hex32(0xE0 + domain),
+                "source_adapter_gate_audit_hashes": {
+                    bundle._source_adapter_gate_hash_key_for_domain_chain(
+                        domain,
+                        chain,
+                    ): fixed_hex32(0xE0 + domain),
+                },
+            }
+        )
+        if domain == bundle._sccp_domain_tron():
+            row.update(
+                {
+                    "route_canary_message_proof_used": True,
+                    "route_canary_raw_data_owner_matches_transaction": True,
+                    "route_canary_signature_recovers_to_owner": True,
+                    "route_canary_log_index": 0,
+                    "route_canary_target_domain": domain,
+                    "route_canary_proof_version": 1,
+                    "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                    "route_canary_block_number": 1,
+                    "route_canary_block_timestamp": 2,
+                }
+            )
+            for offset, field in enumerate(
+                (
+                    "route_canary_call_data_sha256",
+                    "route_canary_payload_hash",
+                    "route_canary_statement_hash",
+                    "route_canary_commitment_root",
+                    "route_canary_finality_height",
+                    "route_canary_finality_block_hash",
+                ),
+                start=1,
+            ):
+                row[field] = fixed_hex32(0xF0 + domain + offset)
+        for offset, field in enumerate(evm_hash_fields, start=1):
+            row[field] = fixed_hex32(0xA0 + domain + offset)
+        row["route_canary_receipt_block_number"] = 1
+        row["route_canary_receipt_block_finalized"] = True
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        for field in evm_hash_fields:
+            assert (
+                f"{label} {field} must be empty for lanes without EVM "
+                "route canary evidence"
+            ) in errors, (domain, field)
+        for field in evm_null_fields:
+            assert (
+                f"{label} {field} must be null for lanes without EVM "
+                "route canary evidence"
+            ) in errors, (domain, field)
+
+
+def test_release_bundle_rejects_copied_crypto_absent_route_canary_metadata_drift_before_render() -> None:
+    """Copied public crypto rows must not imply absent canary evidence exists."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    verifier = load_verify_helpers()
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+    source_by_domain = bundle._route_canary_source_by_domain()
+
+    # Source-inventory marker: release bundle public crypto absent route-canary metadata exactness covers every launch domain
+    for domain, chain in sorted(chain_by_domain.items()):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": source_by_domain[domain],
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": fixed_hex32(0xC0 + domain),
+                "source_adapter_gate_audit_hashes": {
+                    bundle._source_adapter_gate_hash_key_for_domain_chain(
+                        domain,
+                        chain,
+                    ): fixed_hex32(0xC0 + domain),
+                },
+            }
+        )
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert (
+            f"{label} route_canary_evidence_source must be empty when "
+            "route canary evidence is absent"
+        ) in errors, domain
+        assert (
+            f"{label} route_canary_evidence_bound must be false when route "
+            "canary evidence is absent"
+        ) in errors, domain
+
+
+def test_release_bundle_rejects_copied_crypto_absent_route_canary_message_proof_flag_before_render() -> None:
+    """Copied rows without canary evidence must omit message-proof flags."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    verifier = load_verify_helpers()
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+
+    # Source-inventory marker: release bundle public crypto absent route-canary message-proof flag exactness covers every launch domain
+    for proof_used in (True, False):
+        for domain, chain in sorted(chain_by_domain.items()):
+            row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+            row.update(
+                {
+                    "domain": domain,
+                    "chain": chain,
+                    "route_canary_evidence_hash": "",
+                    "route_canary_evidence_source": "",
+                    "route_canary_evidence_bound": False,
+                    "route_canary_message_proof_used": proof_used,
+                    "source_adapter_gate_required": True,
+                    "source_adapter_gate_hash": fixed_hex32(0xC8 + domain),
+                    "source_adapter_gate_audit_hashes": {
+                        bundle._source_adapter_gate_hash_key_for_domain_chain(
+                            domain,
+                            chain,
+                        ): fixed_hex32(0xC8 + domain),
+                    },
+                }
+            )
+
+            errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+            assert (
+                f"{label} route_canary_message_proof_used must be null when "
+                "route canary evidence is absent"
+            ) in errors, (domain, proof_used)
+
+
+def test_release_bundle_rejects_copied_crypto_absent_route_canary_owner_signature_flags_before_render() -> None:
+    """Copied rows without canary evidence must omit owner/signature flags."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    verifier = load_verify_helpers()
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+    flag_fields = (
+        "route_canary_raw_data_owner_matches_transaction",
+        "route_canary_signature_recovers_to_owner",
+    )
+
+    # Source-inventory marker: release bundle public crypto absent route-canary owner/signature flag exactness covers every launch domain
+    for flag_value in (True, False):
+        for field in flag_fields:
+            for domain, chain in sorted(chain_by_domain.items()):
+                row = {
+                    field_name: None
+                    for field_name in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS
+                }
+                row.update(
+                    {
+                        "domain": domain,
+                        "chain": chain,
+                        "route_canary_evidence_hash": "",
+                        "route_canary_evidence_source": "",
+                        "route_canary_evidence_bound": False,
+                        "route_canary_message_proof_used": None,
+                        "source_adapter_gate_required": True,
+                        "source_adapter_gate_hash": fixed_hex32(0xD8 + domain),
+                        "source_adapter_gate_audit_hashes": {
+                            bundle._source_adapter_gate_hash_key_for_domain_chain(
+                                domain,
+                                chain,
+                            ): fixed_hex32(0xD8 + domain),
+                        },
+                    }
+                )
+                row[field] = flag_value
+
+                errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+                assert (
+                    f"{label} {field} must be null when route canary evidence "
+                    "is absent"
+                ) in errors, (domain, field, flag_value)
+
+
+def test_release_bundle_rejects_copied_crypto_absent_route_canary_proof_context_before_render() -> None:
+    """Copied rows without canary evidence must omit proof context."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    verifier = load_verify_helpers()
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+    scalar_fields = (
+        "route_canary_log_index",
+        "route_canary_target_domain",
+        "route_canary_proof_version",
+        "route_canary_proof_source_domain",
+    )
+    transcript_fields = (
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+        "route_canary_finality_height",
+        "route_canary_finality_block_hash",
+    )
+    tron_block_fields = (
+        "route_canary_block_number",
+        "route_canary_block_timestamp",
+    )
+
+    # Source-inventory marker: release bundle public crypto absent route-canary proof context exactness covers every launch domain
+    for domain, chain in sorted(chain_by_domain.items()):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": "",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": domain,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                "route_canary_block_number": 1,
+                "route_canary_block_timestamp": 2,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": fixed_hex32(0xE0 + domain),
+                "source_adapter_gate_audit_hashes": {
+                    bundle._source_adapter_gate_hash_key_for_domain_chain(
+                        domain,
+                        chain,
+                    ): fixed_hex32(0xE0 + domain),
+                },
+            }
+        )
+        for offset, field in enumerate(transcript_fields, start=1):
+            row[field] = fixed_hex32(0x70 + domain + offset)
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        for field in scalar_fields + transcript_fields + tron_block_fields:
+            assert (
+                f"{label} {field} must be null when route canary evidence "
+                "is absent"
+            ) in errors, (domain, field)
+
+
+def test_release_bundle_rejects_copied_crypto_absent_route_canary_evm_metadata_drift_before_render() -> None:
+    """Copied public crypto rows without canary evidence must omit EVM metadata."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    verifier = load_verify_helpers()
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+    evm_hash_fields = (
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    )
+    evm_null_fields = (
+        "route_canary_receipt_block_number",
+        "route_canary_receipt_block_finalized",
+    )
+
+    # Source-inventory marker: release bundle public crypto absent route-canary EVM metadata exactness covers every launch domain
+    for domain, chain in sorted(chain_by_domain.items()):
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": "",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": fixed_hex32(0xD0 + domain),
+                "source_adapter_gate_audit_hashes": {
+                    bundle._source_adapter_gate_hash_key_for_domain_chain(
+                        domain,
+                        chain,
+                    ): fixed_hex32(0xD0 + domain),
+                },
+            }
+        )
+        for offset, field in enumerate(evm_hash_fields, start=1):
+            row[field] = fixed_hex32(0x40 + domain + offset)
+        row["route_canary_receipt_block_number"] = 1
+        row["route_canary_receipt_block_finalized"] = True
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        for field in evm_hash_fields:
+            assert (
+                f"{label} {field} must be empty when route canary evidence "
+                "is absent"
+            ) in errors, (domain, field)
+        for field in evm_null_fields:
+            assert (
+                f"{label} {field} must be null when route canary evidence "
+                "is absent"
+            ) in errors, (domain, field)
+
+
 def test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render() -> None:
     """Copied message-proof canary rows must advertise proven message usage."""
 
@@ -7256,6 +8236,81 @@ def test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_
         f"{label} route_canary_raw_data_owner_matches_transaction must be null "
         "for non-TRON route canary evidence"
     ) in errors
+
+
+def test_release_bundle_rejects_copied_crypto_non_tron_route_canary_block_metadata_before_render() -> None:
+    """Copied non-TRON canary rows must omit TRON block metadata."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    label = "bundled report.cryptographic_evidence[0]"
+    chain_by_domain = verifier.ALL_LANES_CHAIN_BY_DOMAIN
+    source_by_domain = bundle._route_canary_source_by_domain()
+
+    # Source-inventory marker: release bundle public crypto TRON block metadata null policy covers every non-TRON launch domain
+    for domain, chain in sorted(chain_by_domain.items()):
+        if domain == bundle._sccp_domain_tron():
+            continue
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "route_canary_evidence_hash": fixed_hex32(0xB0 + domain),
+                "route_canary_evidence_source": source_by_domain[domain],
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": None,
+                "route_canary_block_number": 1,
+                "route_canary_block_timestamp": 2,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": fixed_hex32(0xC0 + domain),
+                "source_adapter_gate_audit_hashes": {
+                    bundle._source_adapter_gate_hash_key_for_domain_chain(
+                        domain,
+                        chain,
+                    ): fixed_hex32(0xC0 + domain),
+                },
+            }
+        )
+        if domain in (bundle._sccp_domain_eth(), 2):
+            row.update(
+                {
+                    "route_canary_message_proof_used": True,
+                    "route_canary_log_index": 0,
+                    "route_canary_target_domain": domain,
+                    "route_canary_proof_version": 1,
+                    "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                    "route_canary_transaction_hash": fixed_hex32(0xD0 + domain),
+                    "route_canary_receipt_block_number": 100 + domain,
+                    "route_canary_receipt_block_hash": fixed_hex32(0xD1 + domain),
+                    "route_canary_receipt_block_finalized": True,
+                    "route_canary_block_receipts_root": fixed_hex32(0xD2 + domain),
+                    "route_canary_message_id": fixed_hex32(0xD3 + domain),
+                }
+            )
+            for offset, field in enumerate(
+                (
+                    "route_canary_call_data_sha256",
+                    "route_canary_payload_hash",
+                    "route_canary_statement_hash",
+                    "route_canary_commitment_root",
+                    "route_canary_finality_height",
+                    "route_canary_finality_block_hash",
+                ),
+                start=1,
+            ):
+                row[field] = fixed_hex32(0xD4 + domain + offset)
+
+        errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert (
+            f"{label} route_canary_block_number must be null for non-TRON lanes"
+            in errors
+        ), domain
+        assert (
+            f"{label} route_canary_block_timestamp must be null for "
+            "non-TRON lanes"
+        ) in errors, domain
 
 
 def test_release_bundle_rejects_oversized_copied_crypto_evidence_receipt_before_render() -> None:
@@ -7730,6 +8785,181 @@ def test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays
             ) in verifier_gate_errors, (domain, template_field)
 
 
+def test_release_bundle_rejects_public_source_adapter_gate_templates_when_required_false() -> None:
+    """Public source-gate template hashes must not hide behind required=false."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domain = all_lanes.SCCP_DOMAIN_ETH
+    profile = all_lanes.LANE_PROFILES[domain]
+    gate_field, _audit_fields = all_lanes._source_adapter_gate_requirements(domain)
+    template_field, template_hash = next(
+        iter(all_lanes._source_material_template_hashes(profile).items())
+    )
+    template_value = "0x" + template_hash.hex()
+    label = "bundled report.cryptographic_evidence[0]"
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": domain,
+            "chain": profile.chain,
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_evidence_bound": False,
+            "route_canary_receipt_block_finalized": None,
+            "source_adapter_gate_required": False,
+            "source_adapter_gate_hash": template_value,
+            "source_adapter_gate_audit_hashes": {gate_field: template_value},
+        }
+    )
+
+    crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    assert (
+        f"{label} source_adapter_gate_required must be true for this domain"
+    ) in crypto_errors
+    assert (
+        f"{label} source_adapter_gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in crypto_errors, template_field
+    assert (
+        f"{label} source_adapter_gate_audit_hashes {gate_field} must be "
+        "deployed audit evidence, not built-in template material"
+    ) in crypto_errors, template_field
+    verifier_crypto_errors = (
+        verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+            row,
+            row["source_adapter_gate_audit_hashes"],
+        )
+    )
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in verifier_crypto_errors, template_field
+    assert (
+        "readiness report cryptographic evidence row "
+        f"source_adapter_gate_audit_hashes {gate_field} must be deployed "
+        "audit evidence, not built-in template material"
+    ) in verifier_crypto_errors, template_field
+
+    lane_label = "bundled report.evidence.lanes[0]"
+    lane = {"domain": domain, "chain": profile.chain}
+    source_gate = {
+        "required": False,
+        "ready": True,
+        "gate_hash": template_value,
+        "audit_hashes": {gate_field: template_value},
+        "blockers": [],
+    }
+    gate_errors = bundle._source_adapter_gate_semantic_errors(
+        lane_label,
+        lane,
+        source_gate,
+    )
+    assert (
+        f"{lane_label}.source_adapter_gate gate_hash must be deployed "
+        "gate evidence, not built-in template material"
+    ) in gate_errors, template_field
+    verifier_gate_errors = verifier._source_adapter_gate_coherence_errors(
+        f"{lane_label}.source_adapter_gate",
+        lane,
+        source_gate,
+    )
+    assert (
+        f"{lane_label}.source_adapter_gate audit_hashes {gate_field} must be "
+        "deployed audit evidence, not built-in template material"
+    ) in verifier_gate_errors, template_field
+
+
+def test_release_bundle_rejects_public_source_adapter_gate_templates_when_required_malformed() -> None:
+    """Public source-gate template hashes must not hide behind malformed flags."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domain = all_lanes.SCCP_DOMAIN_ETH
+    profile = all_lanes.LANE_PROFILES[domain]
+    gate_field, _audit_fields = all_lanes._source_adapter_gate_requirements(domain)
+    template_field, template_hash = next(
+        iter(all_lanes._source_material_template_hashes(profile).items())
+    )
+    template_value = "0x" + template_hash.hex()
+    label = "bundled report.cryptographic_evidence[0]"
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": domain,
+            "chain": profile.chain,
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_evidence_bound": False,
+            "route_canary_receipt_block_finalized": None,
+            "source_adapter_gate_required": "true",
+            "source_adapter_gate_hash": template_value,
+            "source_adapter_gate_audit_hashes": {gate_field: template_value},
+        }
+    )
+
+    crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    assert f"{label} source_adapter_gate_required must be true or false" in (
+        crypto_errors
+    )
+    assert (
+        f"{label} source_adapter_gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in crypto_errors, template_field
+    assert (
+        f"{label} source_adapter_gate_audit_hashes {gate_field} must be "
+        "deployed audit evidence, not built-in template material"
+    ) in crypto_errors, template_field
+    verifier_crypto_errors = (
+        verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+            row,
+            row["source_adapter_gate_audit_hashes"],
+        )
+    )
+    assert (
+        "readiness report cryptographic evidence row "
+        f"source_adapter_gate_audit_hashes {gate_field} must be deployed "
+        "audit evidence, not built-in template material"
+    ) in verifier_crypto_errors, template_field
+
+    lane_label = "bundled report.evidence.lanes[0]"
+    lane = {"domain": domain, "chain": profile.chain}
+    source_gate = {
+        "required": "true",
+        "ready": True,
+        "gate_hash": template_value,
+        "audit_hashes": {gate_field: template_value},
+        "blockers": [],
+    }
+    gate_errors = bundle._source_adapter_gate_semantic_errors(
+        lane_label,
+        lane,
+        source_gate,
+    )
+    assert (
+        f"{lane_label}.source_adapter_gate gate_hash must be deployed "
+        "gate evidence, not built-in template material"
+    ) in gate_errors, template_field
+    verifier_gate_errors = verifier._source_adapter_gate_coherence_errors(
+        f"{lane_label}.source_adapter_gate",
+        lane,
+        source_gate,
+    )
+    assert (
+        f"{lane_label}.source_adapter_gate audit_hashes {gate_field} must be "
+        "deployed audit evidence, not built-in template material"
+    ) in verifier_gate_errors, template_field
+
+
 def test_release_bundle_rejects_public_source_record_template_hash_replays() -> None:
     """Copied source-record hashes must not replay built-in templates."""
 
@@ -7784,6 +9014,692 @@ def test_release_bundle_rejects_public_source_record_template_hash_replays() -> 
                     f"{source_field} must be deployed evidence, not built-in "
                     "template material"
                 ) in verifier_errors, (domain, source_field, template_field)
+
+                audit_keys = sorted(
+                    bundle._source_adapter_gate_audit_keys_for_domain_chain(
+                        domain,
+                        profile.chain,
+                    )
+                )
+                gate_key = bundle._source_adapter_gate_hash_key_for_domain_chain(
+                    domain,
+                    profile.chain,
+                )
+                gate_hash = fixed_hex32(0xC1)
+                audit_hashes = {
+                    key: fixed_hex32(0xC2 + index)
+                    for index, key in enumerate(audit_keys)
+                }
+                audit_hashes[gate_key] = gate_hash
+                row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+                row.update(
+                    {
+                        "domain": domain,
+                        "chain": profile.chain,
+                        "evm_source_rpc_chain_id": "",
+                        "evm_source_block_tag": "",
+                        "evm_destination_rpc_chain_id": "",
+                        "evm_destination_block_tag": "",
+                        "source_verifier_material_hash": source_hashes[
+                            "source_verifier_material_hash"
+                        ],
+                        "source_adapter_engine_deployment_hash": source_hashes[
+                            "source_adapter_engine_deployment_hash"
+                        ],
+                        "route_canary_evidence_bound": False,
+                        "route_canary_receipt_block_finalized": None,
+                        "source_adapter_gate_required": True,
+                        "source_adapter_gate_hash": gate_hash,
+                        "source_adapter_gate_audit_hashes": audit_hashes,
+                    }
+                )
+                if domain == all_lanes.SCCP_DOMAIN_ETH:
+                    row["evm_source_rpc_chain_id"] = "1"
+                    row["evm_source_block_tag"] = "finalized"
+                    row["evm_destination_rpc_chain_id"] = "1"
+                    row["evm_destination_block_tag"] = "finalized"
+                elif domain == all_lanes.SCCP_DOMAIN_BSC:
+                    row["evm_source_rpc_chain_id"] = "56"
+                    row["evm_source_block_tag"] = "latest"
+                    row["evm_destination_rpc_chain_id"] = "56"
+                    row["evm_destination_block_tag"] = "latest"
+
+                # Source-inventory marker: public crypto source-record template replays hit direct row validators
+                crypto_label = "bundled report.cryptographic_evidence[0]"
+                crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+                    row,
+                    crypto_label,
+                )
+                assert (
+                    f"{crypto_label} {source_field} must be deployed evidence, "
+                    "not built-in template material"
+                ) in crypto_errors, (domain, source_field, template_field)
+
+                verifier_crypto_errors = verifier._cryptographic_evidence_row_schema_errors(
+                    row
+                )
+                assert (
+                    "readiness report cryptographic evidence row "
+                    f"{source_field} must be deployed evidence, not built-in "
+                    "template material"
+                ) in verifier_crypto_errors, (domain, source_field, template_field)
+
+
+def test_release_bundle_rejects_public_route_canary_template_hash_replays() -> None:
+    """Copied public route-canary evidence hashes must not replay templates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    )
+
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_hashes = all_lanes._source_material_template_hashes(profile)
+        for template_field, template_hash in template_hashes.items():
+            row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+            row.update(
+                {
+                    "domain": domain,
+                    "chain": profile.chain,
+                    "source_verifier_material_hash": fixed_hex32(0xB1),
+                    "source_adapter_engine_deployment_hash": fixed_hex32(0xB2),
+                    "route_canary_evidence_hash": "0x" + template_hash.hex(),
+                    "route_canary_evidence_source": (
+                        verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+                    ),
+                    "route_canary_evidence_bound": True,
+                    "route_canary_message_proof_used": (
+                        domain
+                        in (
+                            all_lanes.SCCP_DOMAIN_ETH,
+                            all_lanes.SCCP_DOMAIN_BSC,
+                            all_lanes.SCCP_DOMAIN_TRON,
+                        )
+                    ),
+                    "source_adapter_gate_required": True,
+                    "source_adapter_gate_audit_hashes": {},
+                }
+            )
+
+            crypto_label = "bundled report.cryptographic_evidence[0]"
+            crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+                row,
+                crypto_label,
+            )
+            assert (
+                f"{crypto_label} route_canary_evidence_hash must be live "
+                "evidence, not built-in template material"
+            ) in crypto_errors, (domain, template_field)
+
+            verifier_crypto_errors = verifier._cryptographic_evidence_row_schema_errors(
+                row
+            )
+            assert (
+                "readiness report cryptographic evidence row "
+                "route_canary_evidence_hash must be live evidence, "
+                "not built-in template material"
+            ) in verifier_crypto_errors, (domain, template_field)
+
+
+def test_release_bundle_rejects_public_route_canary_transcript_template_hash_replays() -> None:
+    """Copied public route-canary transcript hashes must not replay templates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    )
+    transcript_field = "route_canary_message_id"
+
+    # Source-inventory marker: public crypto route-canary transcript template replays cover every launch domain
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_hashes = all_lanes._source_material_template_hashes(profile)
+        for template_field, template_hash in template_hashes.items():
+            row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+            row.update(
+                {
+                    "domain": domain,
+                    "chain": profile.chain,
+                    "source_verifier_material_hash": fixed_hex32(0xC1),
+                    "source_adapter_engine_deployment_hash": fixed_hex32(0xC2),
+                    transcript_field: "0x" + template_hash.hex(),
+                    "source_adapter_gate_required": True,
+                    "source_adapter_gate_audit_hashes": {},
+                }
+            )
+
+            crypto_label = "bundled report.cryptographic_evidence[0]"
+            crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+                row,
+                crypto_label,
+            )
+            assert (
+                f"{crypto_label} {transcript_field} must be live evidence, "
+                "not built-in template material"
+            ) in crypto_errors, (domain, template_field)
+
+            verifier_crypto_errors = verifier._cryptographic_evidence_row_schema_errors(
+                row
+            )
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{transcript_field} must be live evidence, "
+                "not built-in template material"
+            ) in verifier_crypto_errors, (domain, template_field)
+
+
+def test_release_bundle_rejects_copied_route_canary_template_replay_before_render() -> None:
+    """Copied all-lanes route-canary evidence hashes must not replay templates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    )
+
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_hashes = all_lanes._source_material_template_hashes(profile)
+        for template_field, template_hash in template_hashes.items():
+            route_hash = fixed_hex32(0xD1)
+            lane = {
+                "domain": domain,
+                "chain": profile.chain,
+                "production_ready": True,
+                "route_allowlist": {
+                    "route_allowlist_hash": route_hash,
+                    "expected_route_allowlist_hash": route_hash,
+                    "expected_route_allowlist_hash_matches": True,
+                    "route_canary": {
+                        "evidence_hash": "0x" + template_hash.hex(),
+                    },
+                },
+            }
+            builder_label = "bundled report.evidence.lanes[0]"
+            builder_errors = bundle._all_lanes_nested_bundle_errors(
+                lane,
+                builder_label,
+            )
+            assert (
+                f"{builder_label}.route_allowlist.route_canary evidence_hash "
+                "must be live evidence, not built-in template material"
+            ) in builder_errors, (domain, template_field)
+
+            verifier_errors = verifier._all_lanes_lane_schema_errors(
+                "all-lanes summary",
+                [lane],
+            )
+            assert (
+                f"all-lanes summary lane domain {domain} route_allowlist "
+                "route_canary evidence_hash must be live evidence, "
+                "not built-in template material"
+            ) in verifier_errors, (domain, template_field)
+
+
+def test_release_bundle_rejects_copied_route_canary_transcript_template_replay_before_render() -> None:
+    """Copied all-lanes route-canary transcript hashes must not replay templates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    field_by_domain = {
+        all_lanes.SCCP_DOMAIN_ETH: "message_id",
+        all_lanes.SCCP_DOMAIN_BSC: "message_id",
+        all_lanes.SCCP_DOMAIN_TON: "ton_account_state_hash",
+        all_lanes.SCCP_DOMAIN_TRON: "transaction_id",
+    }
+
+    for domain, transcript_field in field_by_domain.items():
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_hashes = all_lanes._source_material_template_hashes(profile)
+        for template_field, template_hash in template_hashes.items():
+            route_hash = fixed_hex32(0xD2)
+            lane = {
+                "domain": domain,
+                "chain": profile.chain,
+                "production_ready": True,
+                "route_allowlist": {
+                    "route_allowlist_hash": route_hash,
+                    "expected_route_allowlist_hash": route_hash,
+                    "expected_route_allowlist_hash_matches": True,
+                    "route_canary": {
+                        transcript_field: "0x" + template_hash.hex(),
+                    },
+                },
+            }
+            builder_label = "bundled report.evidence.lanes[0]"
+            builder_errors = bundle._all_lanes_nested_bundle_errors(
+                lane,
+                builder_label,
+            )
+            assert (
+                f"{builder_label}.route_allowlist.route_canary {transcript_field} "
+                "must be live evidence, not built-in template material"
+            ) in builder_errors, (domain, transcript_field, template_field)
+
+            verifier_errors = verifier._all_lanes_lane_schema_errors(
+                "all-lanes summary",
+                [lane],
+            )
+            assert (
+                f"all-lanes summary lane domain {domain} route_allowlist "
+                f"route_canary {transcript_field} must be live evidence, "
+                "not built-in template material"
+            ) in verifier_errors, (domain, transcript_field, template_field)
+
+
+def test_release_bundle_template_loader_failures_are_bounded(monkeypatch) -> None:
+    """Template-loader failures must become fixed release blockers."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domain = all_lanes.SCCP_DOMAIN_ETH
+    profile = all_lanes.LANE_PROFILES[domain]
+
+    def broken_template_hashes(_domain):
+        raise RuntimeError("secret-token-template-loader")
+
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": domain,
+            "chain": profile.chain,
+            "source_verifier_material_hash": fixed_hex32(0xB1),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0xB2),
+            "route_canary_message_id": fixed_hex32(0xB3),
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": fixed_hex32(0xB4),
+            "source_adapter_gate_audit_hashes": {
+                "evm_source_gate_hash": fixed_hex32(0xB4)
+            },
+        }
+    )
+    route_hash = fixed_hex32(0xD3)
+    lane = {
+        "domain": domain,
+        "chain": profile.chain,
+        "production_ready": True,
+        "route_allowlist": {
+            "route_allowlist_hash": route_hash,
+            "expected_route_allowlist_hash": route_hash,
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "message_id": fixed_hex32(0xD4),
+            },
+        },
+    }
+
+    monkeypatch.setattr(
+        bundle,
+        "_source_adapter_gate_template_hashes",
+        broken_template_hashes,
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_source_adapter_gate_template_hashes",
+        broken_template_hashes,
+    )
+
+    crypto_label = "bundled report.cryptographic_evidence[0]"
+    builder_crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+        row,
+        crypto_label,
+    )
+    builder_lane_errors = bundle._all_lanes_nested_bundle_errors(
+        lane,
+        "bundled report.evidence.lanes[0]",
+    )
+    verifier_crypto_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+    verifier_lane_errors = verifier._all_lanes_lane_schema_errors(
+        "all-lanes summary",
+        [lane],
+    )
+
+    joined_errors = "\n".join(
+        builder_crypto_errors
+        + builder_lane_errors
+        + verifier_crypto_errors
+        + verifier_lane_errors
+    )
+    assert f"{crypto_label} template material validation failed" in joined_errors
+    assert (
+        "bundled report.evidence.lanes[0].route_allowlist.route_canary "
+        "template material validation failed"
+    ) in joined_errors
+    assert (
+        "readiness report cryptographic evidence row template material "
+        "validation failed"
+    ) in joined_errors
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "template material validation failed"
+    ) in joined_errors
+    assert "secret-token-template-loader" not in joined_errors
+
+
+def test_release_bundle_source_gate_requirement_failures_are_bounded(
+    monkeypatch,
+) -> None:
+    """Source-gate requirement helper failures must become fixed blockers."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    domain = 1
+
+    class BrokenAllLanesModule:
+        def _source_adapter_gate_requirements(self, _domain):
+            raise RuntimeError("secret-token-source-gate-requirements")
+
+    monkeypatch.setattr(
+        bundle,
+        "_all_lanes_module",
+        lambda: BrokenAllLanesModule(),
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_all_lanes_module",
+        lambda: BrokenAllLanesModule(),
+    )
+
+    audit_hashes = {"evm_source_gate_hash": fixed_hex32(0xB5)}
+    builder_errors = bundle._source_adapter_gate_template_audit_errors(
+        "bundled report.evidence.lanes[0].source_adapter_gate audit_hashes",
+        domain,
+        audit_hashes,
+    )
+    verifier_errors = verifier._source_adapter_gate_template_audit_errors(
+        "all-lanes summary lane domain 1 source_adapter_gate audit_hashes",
+        domain,
+        audit_hashes,
+    )
+
+    joined_errors = "\n".join(builder_errors + verifier_errors)
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate audit_hashes "
+        "source adapter gate requirement validation failed"
+    ) in joined_errors
+    assert (
+        "all-lanes summary lane domain 1 source_adapter_gate audit_hashes "
+        "source adapter gate requirement validation failed"
+    ) in joined_errors
+    assert "secret-token-source-gate-requirements" not in joined_errors
+
+
+def test_release_bundle_source_gate_audit_key_failures_are_bounded(
+    monkeypatch,
+) -> None:
+    """Source-gate audit-key helper failures must become fixed blockers."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    domain = 1
+    audit_hashes = {"evm_source_gate_hash": fixed_hex32(0xB6)}
+    payload = {
+        "domain": domain,
+        "chain": "eth",
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_hash": fixed_hex32(0xB6),
+    }
+    lane = {"domain": domain, "chain": "eth"}
+    source_gate = {
+        "required": True,
+        "ready": True,
+        "gate_hash": fixed_hex32(0xB6),
+        "audit_hashes": audit_hashes,
+        "blockers": [],
+    }
+
+    def broken_audit_keys(_domain, _chain):
+        raise RuntimeError("secret-token-source-gate-audit-keys")
+
+    monkeypatch.setattr(
+        bundle,
+        "_source_adapter_gate_audit_keys_for_domain_chain",
+        broken_audit_keys,
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_source_adapter_gate_audit_keys_for_domain_chain",
+        broken_audit_keys,
+    )
+
+    builder_crypto_errors = bundle._cryptographic_evidence_source_adapter_gate_bundle_errors(
+        "bundled report.cryptographic_evidence[0]",
+        payload,
+        audit_hashes,
+    )
+    builder_lane_errors = bundle._source_adapter_gate_semantic_errors(
+        "bundled report.evidence.lanes[0]",
+        lane,
+        source_gate,
+    )
+    verifier_crypto_errors = verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+        payload,
+        audit_hashes,
+    )
+    verifier_lane_errors = verifier._source_adapter_gate_coherence_errors(
+        "all-lanes summary lane domain 1 source_adapter_gate",
+        lane,
+        source_gate,
+    )
+
+    joined_errors = "\n".join(
+        builder_crypto_errors
+        + builder_lane_errors
+        + verifier_crypto_errors
+        + verifier_lane_errors
+    )
+    assert (
+        "bundled report.cryptographic_evidence[0] source_adapter_gate "
+        "source adapter gate audit-key validation failed"
+    ) in joined_errors
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate "
+        "source adapter gate audit-key validation failed"
+    ) in joined_errors
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate "
+        "source adapter gate audit-key validation failed"
+    ) in joined_errors
+    assert (
+        "all-lanes summary lane domain 1 source_adapter_gate "
+        "source adapter gate audit-key validation failed"
+    ) in joined_errors
+    assert "secret-token-source-gate-audit-keys" not in joined_errors
+
+
+def test_release_bundle_source_gate_hash_key_failures_are_bounded(
+    monkeypatch,
+) -> None:
+    """Source-gate hash-key helper failures must become fixed blockers."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    domain = 1
+    gate_hash = fixed_hex32(0xB7)
+    audit_hashes = {"evm_source_gate_hash": gate_hash}
+    payload = {
+        "domain": domain,
+        "chain": "eth",
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_hash": gate_hash,
+    }
+    lane = {"domain": domain, "chain": "eth"}
+    source_gate = {
+        "required": True,
+        "ready": True,
+        "gate_hash": gate_hash,
+        "audit_hashes": audit_hashes,
+        "blockers": [],
+    }
+
+    def broken_hash_key(_domain, _chain):
+        raise RuntimeError("secret-token-source-gate-hash-key")
+
+    monkeypatch.setattr(
+        bundle,
+        "_source_adapter_gate_hash_key_for_domain_chain",
+        broken_hash_key,
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_source_adapter_gate_hash_key_for_domain_chain",
+        broken_hash_key,
+    )
+
+    builder_crypto_errors = bundle._cryptographic_evidence_source_adapter_gate_bundle_errors(
+        "bundled report.cryptographic_evidence[0]",
+        payload,
+        audit_hashes,
+    )
+    builder_lane_errors = bundle._source_adapter_gate_semantic_errors(
+        "bundled report.evidence.lanes[0]",
+        lane,
+        source_gate,
+    )
+    verifier_crypto_errors = verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+        payload,
+        audit_hashes,
+    )
+    verifier_lane_errors = verifier._source_adapter_gate_coherence_errors(
+        "all-lanes summary lane domain 1 source_adapter_gate",
+        lane,
+        source_gate,
+    )
+
+    joined_errors = "\n".join(
+        builder_crypto_errors
+        + builder_lane_errors
+        + verifier_crypto_errors
+        + verifier_lane_errors
+    )
+    assert (
+        "bundled report.cryptographic_evidence[0] source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "all-lanes summary lane domain 1 source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert "secret-token-source-gate-hash-key" not in joined_errors
+
+
+def test_release_bundle_source_gate_hash_key_non_string_returns_are_bounded(
+    monkeypatch,
+) -> None:
+    """Source-gate hash-key helper drift must not stringify hostile objects."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    domain = 1
+    gate_hash = fixed_hex32(0xB8)
+    audit_hashes = {"evm_source_gate_hash": gate_hash}
+    payload = {
+        "domain": domain,
+        "chain": "eth",
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_hash": gate_hash,
+    }
+    lane = {"domain": domain, "chain": "eth"}
+    source_gate = {
+        "required": True,
+        "ready": True,
+        "gate_hash": gate_hash,
+        "audit_hashes": audit_hashes,
+        "blockers": [],
+    }
+
+    class HostileHashKey:
+        def __str__(self) -> str:
+            raise RuntimeError("secret-token-source-gate-hash-key-str")
+
+        def __repr__(self) -> str:
+            return "secret-token-source-gate-hash-key-repr"
+
+    def hostile_hash_key(_domain, _chain):
+        return HostileHashKey()
+
+    monkeypatch.setattr(
+        bundle,
+        "_source_adapter_gate_hash_key_for_domain_chain",
+        hostile_hash_key,
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_source_adapter_gate_hash_key_for_domain_chain",
+        hostile_hash_key,
+    )
+
+    builder_crypto_errors = bundle._cryptographic_evidence_source_adapter_gate_bundle_errors(
+        "bundled report.cryptographic_evidence[0]",
+        payload,
+        audit_hashes,
+    )
+    builder_lane_errors = bundle._source_adapter_gate_semantic_errors(
+        "bundled report.evidence.lanes[0]",
+        lane,
+        source_gate,
+    )
+    verifier_crypto_errors = verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+        payload,
+        audit_hashes,
+    )
+    verifier_lane_errors = verifier._source_adapter_gate_coherence_errors(
+        "all-lanes summary lane domain 1 source_adapter_gate",
+        lane,
+        source_gate,
+    )
+
+    joined_errors = "\n".join(
+        builder_crypto_errors
+        + builder_lane_errors
+        + verifier_crypto_errors
+        + verifier_lane_errors
+    )
+    assert (
+        "bundled report.cryptographic_evidence[0] source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "all-lanes summary lane domain 1 source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert "secret-token-source-gate-hash-key" not in joined_errors
 
 
 def test_release_bundle_rejects_claimed_ready_non_active_all_lanes_drift() -> None:
@@ -7970,6 +9886,7 @@ def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before
     """Copied source-gate audit diagnostics must not leak secret-like keys."""
 
     bundle = load_bundle_module()
+    verifier = load_verify_helpers()
     expected_audit_hashes = {
         "solana_tower_replay_verifier_hash": fixed_hex32(0x61),
         "solana_full_accountsdb_lattice_verifier_hash": fixed_hex32(0x62),
@@ -7995,6 +9912,7 @@ def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before
             "source_adapter_gate_audit_hashes": {
                 **expected_audit_hashes,
                 "secret-token-audit-field": fixed_hex32(0x65),
+                HostilePublicKey(): fixed_hex32(0x66),
             },
         }
     )
@@ -8005,7 +9923,32 @@ def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before
         f"{label} source_adapter_gate_audit_hashes contains unexpected field "
         "with sensitive name"
     ) in crypto_errors
+    assert (
+        f"{label} source_adapter_gate_audit_hashes contains malformed "
+        "audit field name"
+    ) in crypto_errors
     assert "secret-token-audit-field" not in crypto_errors
+    assert "hostile" not in crypto_errors
+    assert "__str__" not in crypto_errors
+
+    verifier_crypto_errors = "\n".join(
+        verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+            row,
+            row["source_adapter_gate_audit_hashes"],
+        )
+    )
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains unexpected field "
+        "with sensitive name"
+    ) in verifier_crypto_errors
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains an empty key"
+    ) in verifier_crypto_errors
+    assert "secret-token-audit-field" not in verifier_crypto_errors
+    assert "hostile" not in verifier_crypto_errors
+    assert "__str__" not in verifier_crypto_errors
 
     safe_row = {
         **row,
@@ -8034,6 +9977,7 @@ def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before
         "audit_hashes": {
             **expected_audit_hashes,
             "secret-token-audit-field": fixed_hex32(0x65),
+            HostilePublicKey(): fixed_hex32(0x66),
         },
         "blockers": [],
     }
@@ -8046,7 +9990,33 @@ def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before
         f"{lane_label}.source_adapter_gate audit_hashes contains unexpected "
         "field with sensitive name"
     ) in gate_errors
+    assert (
+        f"{lane_label}.source_adapter_gate audit_hashes contains malformed "
+        "audit field name"
+    ) in gate_errors
     assert "secret-token-audit-field" not in gate_errors
+    assert "hostile" not in gate_errors
+    assert "__str__" not in gate_errors
+
+    verifier_gate_label = "all-lanes summary lane domain 3 source_adapter_gate"
+    verifier_gate_errors = "\n".join(
+        verifier._source_adapter_gate_coherence_errors(
+            verifier_gate_label,
+            lane,
+            source_gate,
+        )
+    )
+    assert (
+        f"{verifier_gate_label} audit_hashes contains unexpected field "
+        "with sensitive name"
+    ) in verifier_gate_errors
+    assert (
+        f"{verifier_gate_label} audit_hashes contains malformed "
+        "audit field name"
+    ) in verifier_gate_errors
+    assert "secret-token-audit-field" not in verifier_gate_errors
+    assert "hostile" not in verifier_gate_errors
+    assert "__str__" not in verifier_gate_errors
 
     safe_source_gate = {
         **source_gate,
@@ -8067,6 +10037,52 @@ def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before
         f"{lane_label}.source_adapter_gate audit_hashes contains unexpected "
         "field: operator_override"
     ) in safe_gate_errors
+
+
+def test_release_bundle_verifier_expected_crypto_evidence_redacts_hostile_audit_keys() -> None:
+    """Expected crypto rows must not stringify copied hostile audit keys."""
+
+    verifier = load_verify_helpers()
+    hostile_key = HostilePublicKey()
+    expected_audit_hashes = {
+        "solana_tower_replay_verifier_hash": fixed_hex32(0x61),
+        "solana_full_accountsdb_lattice_verifier_hash": fixed_hex32(0x62),
+        "solana_bank_fork_choice_verifier_hash": fixed_hex32(0x63),
+        "solana_full_light_client_gate_hash": fixed_hex32(0x64),
+        hostile_key: fixed_hex32(0x65),
+    }
+    evidence = {
+        "lanes": [
+            {
+                "domain": verifier.SCCP_DOMAIN_SOL,
+                "chain": "solana",
+                "source_adapter_gate": {
+                    "required": True,
+                    "ready": True,
+                    "gate_hash": fixed_hex32(0x64),
+                    "audit_hashes": expected_audit_hashes,
+                    "blockers": [],
+                },
+            },
+        ],
+    }
+
+    rows = verifier._expected_cryptographic_evidence(evidence)
+    audit_hashes = rows[0]["source_adapter_gate_audit_hashes"]
+    errors = "\n".join(
+        verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+            rows[0],
+            audit_hashes,
+        )
+    )
+
+    assert audit_hashes[hostile_key] == fixed_hex32(0x65)
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains an empty key"
+    ) in errors
+    assert "hostile" not in errors
+    assert "__str__" not in errors
 
 
 def test_release_bundle_bsc_source_gate_policy_matches_verifier_before_render() -> None:
@@ -8751,6 +10767,8 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
     markdown_blocker = "operator|user-surface-blocker"
     confusable_blocker = "operator user-surface bl\u043ecker"
     sensitive_blocker = "operator secret-token-user-surface-blocker"
+    duplicate_blocker = "safe duplicated user-surface blocker"
+    encoded_duplicate_blocker = "safe%20duplicated%20user-surface%20blocker"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -8813,6 +10831,8 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
                         markdown_blocker,
                         confusable_blocker,
                         sensitive_blocker,
+                        duplicate_blocker,
+                        encoded_duplicate_blocker,
                     ],
                 }
                 sensitive_surface = dict(surface)
@@ -8963,6 +10983,10 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
         f"{label} validation_blockers contains blocker with sensitive name"
         in captured.err
     )
+    assert (
+        f"{label} validation_blockers must not contain duplicate strings"
+        in captured.err
+    )
     assert confusable_sdk not in captured.err
     assert sensitive_sdk not in captured.err
     assert confusable_phase not in captured.err
@@ -8981,6 +11005,8 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
     assert markdown_blocker not in captured.err
     assert confusable_blocker not in captured.err
     assert sensitive_blocker not in captured.err
+    assert duplicate_blocker not in captured.err
+    assert encoded_duplicate_blocker not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -12584,6 +14610,315 @@ def test_release_bundle_rejects_active_copied_source_record_template_replay_when
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_active_copied_source_gate_template_replay_when_required_false(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must not hide source-gate templates behind flags."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = ["operator pending active source-gate audit"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active source-gate audit"]
+    template_hash = next(
+        iter(
+            evidence_module._source_material_template_hashes(
+                evidence_module.LANE_PROFILES[readiness.ACTIVE_LAUNCH_DOMAIN]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field, _audit_fields = evidence_module._source_adapter_gate_requirements(
+        readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    source_gate = active_lane["source_adapter_gate"]
+    source_gate["required"] = False
+    source_gate["gate_hash"] = forged_hash
+    source_gate["audit_hashes"][gate_field] = forged_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-gate template replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active source-gate template replay reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    gate_label = f"bundled report.evidence.lanes[{active_index}].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{gate_label} gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in captured.err
+    assert (
+        f"{gate_label} audit_hashes {gate_field} must be deployed audit evidence, "
+        "not built-in template material"
+    ) in captured.err
+    assert "operator pending active source-gate audit" not in captured.err
+    assert forged_hash not in captured.err
+    assert forged_hash[2:] not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_gate_template_replay_when_required_malformed(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must not hide source-gate templates behind malformed flags."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = ["operator pending active source-gate audit"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active source-gate audit"]
+    template_hash = next(
+        iter(
+            evidence_module._source_material_template_hashes(
+                evidence_module.LANE_PROFILES[readiness.ACTIVE_LAUNCH_DOMAIN]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field, _audit_fields = evidence_module._source_adapter_gate_requirements(
+        readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    source_gate = active_lane["source_adapter_gate"]
+    source_gate["required"] = "true"
+    source_gate["gate_hash"] = forged_hash
+    source_gate["audit_hashes"][gate_field] = forged_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-gate malformed replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active source-gate malformed replay reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    gate_label = f"bundled report.evidence.lanes[{active_index}].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{gate_label} required must be true or false" in captured.err
+    assert (
+        f"{gate_label} gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in captured.err
+    assert (
+        f"{gate_label} audit_hashes {gate_field} must be deployed audit evidence, "
+        "not built-in template material"
+    ) in captured.err
+    assert "operator pending active source-gate audit" not in captured.err
+    assert forged_hash not in captured.err
+    assert forged_hash[2:] not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_active_copied_source_gate_template_replay_when_ready_malformed(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The active launch lane must not hide source-gate templates behind malformed readiness."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    active_index, active_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = False
+    active_lane["blockers"] = ["operator pending active source-gate audit"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending active source-gate audit"]
+    template_hash = next(
+        iter(
+            evidence_module._source_material_template_hashes(
+                evidence_module.LANE_PROFILES[readiness.ACTIVE_LAUNCH_DOMAIN]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field, _audit_fields = evidence_module._source_adapter_gate_requirements(
+        readiness.ACTIVE_LAUNCH_DOMAIN
+    )
+    source_gate = active_lane["source_adapter_gate"]
+    source_gate["required"] = True
+    source_gate["ready"] = "true"
+    source_gate["gate_hash"] = forged_hash
+    source_gate["audit_hashes"][gate_field] = forged_hash
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("active source-gate malformed ready replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(
+            "active source-gate malformed ready replay reached Markdown rendering"
+        )
+
+    captured = capsys.readouterr()
+    gate_label = f"bundled report.evidence.lanes[{active_index}].source_adapter_gate"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert f"{gate_label} ready must be true or false" in captured.err
+    assert (
+        f"{gate_label} gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in captured.err
+    assert (
+        f"{gate_label} audit_hashes {gate_field} must be deployed audit evidence, "
+        "not built-in template material"
+    ) in captured.err
+    assert "operator pending active source-gate audit" not in captured.err
+    assert forged_hash not in captured.err
+    assert forged_hash[2:] not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_active_copied_source_record_missing_fields_when_lane_not_ready(
     tmp_path: Path,
     monkeypatch,
@@ -14547,6 +16882,11 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
                         "operator note": "whitespace local claim",
                         markdown_field: "markdown local claim",
                         confusable_field: "confusable local claim",
+                        HostilePublicKey(): "secret-token hostile source field",
+                    },
+                    HostilePublicKey(): {
+                        "validation_status": "passed",
+                        "validation_blockers": [],
                     },
                     "operator attestation": {
                         "validation_status": "passed",
@@ -14681,6 +17021,8 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     assert confusable_gate not in captured.err
     assert secret_gate not in captured.err
     assert "secret-token gate blocker" not in captured.err
+    assert "hostile" not in captured.err
+    assert "__str__" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -15231,6 +17573,16 @@ def test_release_bundle_rejects_malformed_phase_evidence_paths_before_copy(
             "secret-token-phase.log",
         ),
         (
+            "rust-sccp=secret%2dtoken-phase.log",
+            "phase evidence path contains sensitive name",
+            "secret%2dtoken-phase.log",
+        ),
+        (
+            "rust-sccp=private&#95;key-phase.log",
+            "phase evidence path contains sensitive name",
+            "private&#95;key-phase.log",
+        ),
+        (
             "rust-sccp=phase/%2e%2e/evidence.log",
             "phase evidence path contains percent-encoded traversal segment",
             "phase/%2e%2e/evidence.log",
@@ -15261,6 +17613,68 @@ def test_release_bundle_rejects_malformed_phase_evidence_paths_before_copy(
         assert expected_error in completed.stderr
         assert leaked_path not in completed.stderr
         assert not output_dir.exists()
+
+
+def test_release_bundle_path_helpers_reject_decoded_sensitive_marker_families(
+    tmp_path: Path,
+) -> None:
+    """Bundle path validators must classify decoded secret-like marker families."""
+
+    bundle = load_bundle_module()
+    sensitive_paths = (
+        "operator/secret%20key.log",
+        "operator/private&#45;key.log",
+        "operator/password.log",
+        "operator/passphrase.log",
+        "operator/bearer.log",
+        "operator/authorization.log",
+        "operator/access%20key.log",
+        "operator/api_key.log",
+        "operator/client&#32;secret.log",
+        "operator/credentials.log",
+        "operator/auth_header.log",
+        "operator/mnemonic.log",
+        "operator/recovery%2dphrase.log",
+        "operator/seed%20phrase.log",
+        "operator/signing_key.log",
+        "operator/session.log",
+        "operator/token.log",
+    )
+    helpers = (
+        (
+            bundle._phase_evidence_path_error,
+            "phase evidence path contains sensitive name",
+        ),
+        (
+            bundle._phase_evidence_directory_path_error,
+            "phase evidence directory path contains sensitive name",
+        ),
+        (
+            bundle._output_directory_path_error,
+            "release bundle output directory path contains sensitive name",
+        ),
+    )
+
+    for helper, expected_error in helpers:
+        for path_text in sensitive_paths:
+            assert helper(path_text) == expected_error, (helper.__name__, path_text)
+        assert helper("operator/public-release-evidence.log") is None
+
+    artifact_root = tmp_path / "artifact-root"
+    for index, path_text in enumerate(sensitive_paths):
+        artifact = artifact_root.joinpath(*PurePosixPath(path_text).parts)
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(f"release evidence {index}\n", encoding="utf-8")
+
+        try:
+            bundle._artifact(artifact, artifact_root)
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(f"sensitive artifact path accepted: {path_text}")
+
+        assert "release artifact path contains sensitive name" in message
+        assert path_text not in message
 
 
 def test_release_bundle_rejects_markdown_phase_evidence_name_before_copy(
@@ -15402,6 +17816,16 @@ def test_release_bundle_rejects_malformed_phase_evidence_dir_paths_before_copy(
             "secret-token-phase-artifacts",
             "phase evidence directory path contains sensitive name",
             "secret-token-phase-artifacts",
+        ),
+        (
+            "secret%2dtoken-phase-artifacts",
+            "phase evidence directory path contains sensitive name",
+            "secret%2dtoken-phase-artifacts",
+        ),
+        (
+            "private&#95;key-phase-artifacts",
+            "phase evidence directory path contains sensitive name",
+            "private&#95;key-phase-artifacts",
         ),
         (
             "phase/%2e%2e/artifacts",
@@ -15859,6 +18283,16 @@ def test_release_bundle_rejects_non_ascii_or_sensitive_evidence_filename_before_
             "secret-token-complete.toml",
             "release bundle source filename contains sensitive name",
             "secret-token-complete.toml",
+        ),
+        (
+            "secret%2dtoken-complete.toml",
+            "release bundle source filename contains sensitive name",
+            "secret%2dtoken-complete.toml",
+        ),
+        (
+            "private&#95;key-complete.toml",
+            "release bundle source filename contains sensitive name",
+            "private&#95;key-complete.toml",
         ),
     )
     for index, (filename, expected_error, leaked_name) in enumerate(cases):
@@ -16644,27 +19078,87 @@ def test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes(
     """Native prover duplicate-key wrappers must not expose nested key payloads."""
 
     module = load_bundle_module()
-    native_bundle = tmp_path / "native-prover.json"
-    native_bundle.write_text(
-        '{"secret-token-native-duplicate": "first", '
-        '"secret-token-native-duplicate": "second"}',
-        encoding="utf-8",
+    for index, duplicate_key in enumerate(
+        (
+            "secret-token-native-duplicate",
+            "secret%20key-native-duplicate",
+            "private&#45;key-native-duplicate",
+            "password-native-duplicate",
+            "passphrase-native-duplicate",
+            "bearer-native-duplicate",
+            "authorization-native-duplicate",
+            "access%20key-native-duplicate",
+            "api_key-native-duplicate",
+            "client&#32;secret-native-duplicate",
+            "credentials-native-duplicate",
+            "auth_header-native-duplicate",
+            "mnemonic-native-duplicate",
+            "recovery%2dphrase-native-duplicate",
+            "seed%20phrase-native-duplicate",
+            "signing_key-native-duplicate",
+            "session-native-duplicate",
+            "token-native-duplicate",
+        )
+    ):
+        native_bundle = tmp_path / f"native-prover-{index}.json"
+        native_bundle.write_text(
+            f'{{"{duplicate_key}": "first", "{duplicate_key}": "second"}}',
+            encoding="utf-8",
+        )
+
+        try:
+            module._native_evm_prover_payload_sources(native_bundle)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert (
+                rendered
+                == "native EVM Groth16 prover bundle JSON contains duplicate key "
+                "with sensitive key name"
+            )
+            assert duplicate_key not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "sensitive duplicate native EVM prover key was accepted"
+            )
+
+
+def test_release_bundle_verifier_duplicate_json_key_blocker_redacts_marker_families(
+) -> None:
+    """Strict verifier duplicate-key diagnostics must decode sensitive labels."""
+
+    verifier = load_verify_helpers()
+    duplicate_keys = (
+        "secret%20key-native-duplicate",
+        "private&#45;key-native-duplicate",
+        "password-native-duplicate",
+        "bearer-native-duplicate",
+        "authorization-native-duplicate",
+        "access%20key-native-duplicate",
+        "api_key-native-duplicate",
+        "client&#32;secret-native-duplicate",
+        "credentials-native-duplicate",
+        "auth_header-native-duplicate",
+        "mnemonic-native-duplicate",
+        "recovery%2dphrase-native-duplicate",
+        "seed%20phrase-native-duplicate",
+        "signing_key-native-duplicate",
+        "token-native-duplicate",
     )
 
-    try:
-        module._native_evm_prover_payload_sources(native_bundle)
-    except ValueError as exc:
-        rendered = str(exc)
+    for duplicate_key in duplicate_keys:
+        rendered = verifier._native_evm_prover_duplicate_json_key_blocker(
+            "native EVM Groth16 prover bundle",
+            duplicate_key,
+        )
+
         assert (
             rendered
-            == "native EVM Groth16 prover bundle JSON contains duplicate key "
-            "with sensitive key name"
+            == "native EVM Groth16 prover bundle JSON contains duplicate key with "
+            "sensitive key name"
         )
-        assert "secret-token" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("sensitive duplicate native EVM prover key was accepted")
+        assert duplicate_key not in rendered
 
 
 def test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_keys(
@@ -16675,12 +19169,13 @@ def test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_key
     output_dir = build_ready_bundle(tmp_path)
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     manifest = native_path.read_text(encoding="utf-8")
+    duplicate_key = "recovery%2dphrase-native-duplicate"
     native_path.write_text(
         manifest.replace(
             "{\n",
             "{\n"
-            '  "secret-token-native-duplicate": "first",\n'
-            '  "secret-token-native-duplicate": "second",\n',
+            f'  "{duplicate_key}": "first",\n'
+            f'  "{duplicate_key}": "second",\n',
             1,
         ),
         encoding="utf-8",
@@ -16703,8 +19198,8 @@ def test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_key
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle JSON contains duplicate key with sensitive key name"
     ) in verified.stdout
-    assert "secret-token-native-duplicate" not in verified.stdout
-    assert "secret-token-native-duplicate" not in verified.stderr
+    assert duplicate_key not in verified.stdout
+    assert duplicate_key not in verified.stderr
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -17122,15 +19617,37 @@ def test_release_bundle_cli_redacts_top_level_exception_details(
 
     sensitive_messages = (
         ("secret-token /tmp/operator/private-path", ("secret-token", "private-path")),
+        ("operator secret%20key value", ("secret%20key",)),
         ("operator bearer value", ("bearer value",)),
+        ("operator authorization value", ("authorization",)),
+        ("operator access&#45;key value", ("access&#45;key",)),
+        ("operator api_key value", ("api_key",)),
+        ("operator client&#45;secret value", ("client&#45;secret",)),
+        ("operator credential value", ("credential",)),
+        ("operator auth_header value", ("auth_header",)),
+        ("operator mnemonic value", ("mnemonic",)),
         ("operator session value", ("session value",)),
         ("operator token value", ("token value",)),
+        ("operator secret%2dtoken value", ("secret%2dtoken",)),
+        ("operator private&#95;key value", ("private&#95;key",)),
+        ("operator password value", ("password",)),
+        ("operator passphrase value", ("passphrase",)),
+        ("operator recovery%2dphrase value", ("recovery%2dphrase",)),
+        ("operator seed%20phrase value", ("seed%20phrase",)),
+        ("operator signing_key value", ("signing_key",)),
         ("operator clé value", ("clé value",)),
         ("operator" + "\n" + "value", ("operator", "value")),
         ("operator" + "\t" + "value", ("operator", "value")),
     )
 
-    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        bundle.argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         for sensitive_message, leaked_markers in sensitive_messages:
 
             class FakeReportModule:
@@ -17474,6 +19991,16 @@ def test_release_bundle_rejects_non_ascii_or_sensitive_native_evm_manifest_filen
             "secret-token-native-prover.json",
             "release bundle source filename contains sensitive name",
             "secret-token-native-prover.json",
+        ),
+        (
+            "secret%2dtoken-native-prover.json",
+            "release bundle source filename contains sensitive name",
+            "secret%2dtoken-native-prover.json",
+        ),
+        (
+            "private&#95;key-native-prover.json",
+            "release bundle source filename contains sensitive name",
+            "private&#95;key-native-prover.json",
         ),
     )
     for index, (filename, expected_error, leaked_name) in enumerate(cases):
@@ -18212,6 +20739,16 @@ def test_release_bundle_rejects_malformed_output_directory_paths_before_create(
             "secret-token-output",
         ),
         (
+            "secret%2dtoken-output",
+            "release bundle output directory path contains sensitive name",
+            "secret%2dtoken-output",
+        ),
+        (
+            "private&#95;key-output",
+            "release bundle output directory path contains sensitive name",
+            "private&#95;key-output",
+        ),
+        (
             "release/%2e%2e/output",
             "release bundle output directory path contains percent-encoded traversal segment",
             "release/%2e%2e/output",
@@ -18739,6 +21276,44 @@ def test_release_bundle_verifier_rejects_tampered_native_evm_prover_bundle(
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_bundle_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Native prover bundle summaries must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["native_evm_prover_bundle"] = "operator secret-token-native-bundle-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle is not an object"
+        in verified.stdout
+    )
+    assert "secret-token-native-bundle-root" not in verified.stdout
+    assert "secret-token-native-bundle-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_native_evm_prover_bundle_rejects_boolean_type_drift(
@@ -22536,6 +25111,16 @@ def test_release_bundle_rejects_non_ascii_or_sensitive_artifact_paths(
             "release artifact path contains sensitive name",
             "secret-token-complete.toml",
         ),
+        (
+            "evidence/secret%2dtoken-complete.toml",
+            "release artifact path contains sensitive name",
+            "secret%2dtoken-complete.toml",
+        ),
+        (
+            "evidence/private&#95;key-complete.toml",
+            "release artifact path contains sensitive name",
+            "private&#95;key-complete.toml",
+        ),
     )
     for index, (relative_path, expected_error, leaked_path) in enumerate(cases):
         output_dir = tmp_path / f"bundle-artifact-path-{index}"
@@ -22629,6 +25214,16 @@ def test_release_bundle_verifier_rejects_non_ascii_or_sensitive_manifest_paths(
             "secret-token-release-readiness.md",
             "manifest artifact path contains sensitive name",
             "secret-token-release-readiness.md",
+        ),
+        (
+            "secret%2dtoken-release-readiness.md",
+            "manifest artifact path contains sensitive name",
+            "secret%2dtoken-release-readiness.md",
+        ),
+        (
+            "private&#95;key-release-readiness.md",
+            "manifest artifact path contains sensitive name",
+            "private&#95;key-release-readiness.md",
         ),
     )
     for index, (artifact_path, expected_error, leaked_path) in enumerate(cases):
@@ -23155,6 +25750,32 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "C#/.NET ETH/BSC source-material vectors"
     ) in errors
 
+    lane_cli_homoglyph_marker = "lane CLI homoglyph-secret redaction markers"
+    assert lane_cli_homoglyph_marker in markdown
+    weakened = markdown.replace(
+        lane_cli_homoglyph_marker,
+        "lane CLI secret redaction markers",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        f"release evidence marker: {lane_cli_homoglyph_marker}"
+    ) in errors
+
+    placeholder_blocker_marker = (
+        "offline placeholder or template-derived hashes keep the report blocked"
+    )
+    assert placeholder_blocker_marker in markdown
+    weakened = markdown.replace(
+        placeholder_blocker_marker,
+        "offline placeholder hashes may be reviewed later",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        f"release evidence marker: {placeholder_blocker_marker}"
+    ) in errors
+
     weakened = markdown.replace(
         "Required source-verifier evidence by lane:",
         "Required source-verifier evidence:",
@@ -23191,52 +25812,14 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
             f"release evidence marker: {lane_blocker}"
         ) in errors
 
-    weakened = markdown.replace(
-        "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# "
-        "SCCP test run filtered by `FullyQualifiedName~Sccp`, "
-        "canonical-case rejection coverage for proof-request, message-bundle, "
-        "source-proof, and optional Groth16 artifact hash fields, including "
-        "uppercase byte aliases and `0X` public-input, statement, "
-        "bundle/source-proof, proof-artifact, and proving-key hashes, the "
-        "`SCCP .NET SDK version:` marker emitted after `dotnet --version`, "
-        "phase commands in `dotnet --version`, `dotnet --info`, "
-        "`cargo build -p connect_norito_bridge`, `dotnet restore`, then strict "
-        "`dotnet test` order, "
-        "no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/"
-        "`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, "
-        "or restore/build failed markers, "
-        "exact host markers `SCCP .NET SDK OS: Windows`, "
-        "`SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and "
-        "`SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` "
-        "emitted after `dotnet --info`, "
-        "exact native bridge markers `connect_norito_bridge native bridge: "
-        "...connect_norito_bridge.dll` and "
-        "`connect_norito_bridge native bridge sha256: <64 lowercase hex>` "
-        "emitted after `cargo build -p connect_norito_bridge`, "
-        "`dotnet restore "
-        "Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, "
-        "a non-zero passed VSTest summary, "
-        "the strict `SCCP .NET SDK TRX: "
-        ".../sccp-dotnet-sdk.trx` marker, and "
-        "`SCCP .NET SDK TRX bytes: <positive integer>` emitted after the "
-        "strict `dotnet test` command, "
-        "with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` "
-        "reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a "
-        "numeric unit duration, and with a positive TRX byte count plus a "
-        "TRX marker that full-matches the direct C# test project "
-        "`TestResults/sccp-dotnet-sdk.trx` path. Canonical `.NET` SCCP "
-        "marker lines must use a single literal space after the colon; "
-        "VSTest summary label/value and number/unit separators must be "
-        "present, padding must use ordinary spaces only, and "
-        "tab/control-whitespace separators remain forged evidence. Traced "
-        "restore/test `PATH` prefixes must start with the printed "
-        "`connect_norito_bridge.dll` directory and must not contain empty "
-        "path-list segments. Named or "
-        "traversal subdirectories before or after `TestResults` remain "
-        "forged evidence and cannot satisfy release readiness. Windows backslash or "
-        "drive-qualified TRX marker paths remain forged evidence too.\n",
-        "",
+    dotnet_evidence_line = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith(
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include"
+        )
     )
+    weakened = markdown.replace(f"{dotnet_evidence_line}\n", "")
     errors = verifier._readiness_markdown_invariant_errors(report, weakened)
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -23328,8 +25911,8 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
         "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` "
-        "marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted "
-        "after the strict `dotnet test` command"
+        "marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker "
+        "each emitted exactly once after the strict `dotnet test` command"
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -23346,6 +25929,148 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "release evidence marker: "
         "full-matches the direct C# test project "
         "`TestResults/sccp-dotnet-sdk.trx` path"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: is at most 16777216 bytes"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: contains no DTD or entity declarations"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "including NUL-interleaved UTF-16 DTD/entity declarations"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `UnitTest` definition to "
+        "carry an `id` and every present `Execution` definition to carry an `id`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: uses canonical, unique TRX `UnitTest` and "
+        "`Execution` ids"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires each present `UnitTestResult` "
+        "`testId` value and each present `UnitTestResult` `executionId` value "
+        "to be canonical and unique"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: contains exactly the VSTest passed-test "
+        "count of `UnitTestResult` rows"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: direct VSTest-shaped TRX XML"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: rooted at `TestRun`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: contains exactly one `Results` section and "
+        "exactly one `TestDefinitions` section"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: keeps `Results` and `TestDefinitions` "
+        "sections directly under `TestRun`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: uses one consistent XML namespace for VSTest "
+        "elements, either no XML namespace or the VSTest 2010 XML namespace"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: `UnitTestResult` rows directly under `Results`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: `UnitTest` definitions directly under "
+        "`TestDefinitions`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: keeps `TestMethod` and `Execution` "
+        "definitions directly under `UnitTest`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires each `UnitTest` definition to "
+        "contain exactly one direct `TestMethod`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `TestMethod` definition to "
+        "carry `className` and `name`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires canonical TRX "
+        "`TestMethod className` and `TestMethod name` values"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires each `UnitTest` definition to "
+        "contain at most one direct `Execution`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: names `Hyperledger.Iroha.Sdk.Tests.dll`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: contains only `UnitTestResult` rows bound "
+        "by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` "
+        "SCCP test definitions whose actual `TestMethod className.name` pair "
+        "contains an exact `Sccp...` test token with at least one suffix "
+        "character and whose SCCP method token shares that expected assembly "
+        "evidence on the same `TestMethod` or its parent `UnitTest`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: when both TRX identifiers are present, "
+        "`testId` and `executionId` must bind the same SCCP test definition"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `UnitTestResult` `testName` "
+        "value to be present and unique"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: each `UnitTestResult` `testName` "
+        "must match the bound SCCP test definition name and carry an exact "
+        "`Sccp...` token with at least one suffix character"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: SCCP TRX test definition/result names used "
+        "for binding must be unpadded, ASCII-only, whitespace-free, "
+        "control-character-free, and must not rely on a bare `Sccp` "
+        "namespace/class segment"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: contains at least one passed SCCP "
+        "`UnitTestResult`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: contains no failed, skipped, timed-out, "
+        "or aborted SCCP `UnitTestResult`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every present `UnitTestResult` "
+        "`isExecuted` flag to be `true`"
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -23468,6 +26193,28 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
         "cryptographic row route-canary visibility"
+    ) in errors
+
+    weakened = markdown.replace(
+        "cryptographic row route-canary source whitespace suppression, ",
+        "",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row route-canary source whitespace suppression"
+    ) in errors
+
+    weakened = markdown.replace(
+        "cryptographic row renderer-visible field diagnostics, ",
+        "",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row renderer-visible field diagnostics"
     ) in errors
 
     weakened = markdown.replace("lane-readiness status visibility, ", "")
@@ -23678,6 +26425,19 @@ def test_release_bundle_required_evidence_markers_are_unique_and_generated(
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
     assert "must not contain empty path-list segments" in required_evidence
+    assert (
+        "contains exactly the VSTest passed-test count of `UnitTestResult` rows"
+        in required_evidence
+    )
+    assert (
+        "exact `Sccp...` test token with at least one suffix character"
+        in required_evidence
+    )
+    assert (
+        "carry an exact `Sccp...` token with at least one suffix character"
+        in required_evidence
+    )
+    assert "bare `Sccp` namespace/class segment" in required_evidence
 
 
 def test_release_bundle_verifier_release_notes_renderer_is_independent(
@@ -23752,6 +26512,113 @@ def test_release_bundle_verifier_release_notes_invariants_require_status_and_blo
     assert "release notes attachment missing status line: NOT READY" in errors
     assert (
         "release notes attachment missing blocker: - `<invalid blockers>`"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_encoded_blockers(
+    tmp_path: Path,
+) -> None:
+    """Release notes invariants must reject raw encoded blocker substitutions."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    duplicate_blocker = "safe duplicated release notes blocker"
+    encoded_duplicate_blocker = "safe%20duplicated%20release%20notes%20blocker"
+    encoded_sensitive_blocker = "operator secret&#45;token-release-notes-blocker"
+    report["production_ready"] = False
+    report["blockers"] = [
+        duplicate_blocker,
+        encoded_duplicate_blocker,
+        encoded_sensitive_blocker,
+    ]
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    assert "- `<invalid blockers>`" in notes
+    weakened = notes.replace(
+        "- `<invalid blockers>`",
+        "\n".join(
+            [
+                f"- {duplicate_blocker}",
+                f"- {encoded_duplicate_blocker}",
+                f"- {encoded_sensitive_blocker}",
+            ]
+        ),
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment missing blocker: - `<invalid blockers>`"
+        in errors
+    )
+    assert (
+        "release notes attachment Blocking Items section is not canonical"
+        in errors
+    )
+    rendered = "\n".join(errors)
+    for copied_blocker in (
+        duplicate_blocker,
+        encoded_duplicate_blocker,
+        encoded_sensitive_blocker,
+    ):
+        assert copied_blocker not in rendered
+    assert "secret-token-release-notes-blocker" not in rendered
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_exact_governed_blocker(
+    tmp_path: Path,
+) -> None:
+    """Release notes must not weaken the governed live-deployment blocker."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    governed_blocker = (
+        "Governed live deployment evidence for immutable destination verifiers "
+        "and source-chain verifier engines; offline placeholder or "
+        "template-derived hashes keep the report blocked."
+    )
+    report["production_ready"] = False
+    report["blockers"] = [governed_blocker]
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    assert f"- {governed_blocker}" in notes
+
+    weakened = notes.replace(
+        "offline placeholder or template-derived hashes keep the report blocked",
+        "offline placeholder hashes can be reviewed later",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment missing blocker: "
+        f"- {governed_blocker}"
+    ) in errors
+    assert (
+        "release notes attachment Blocking Items section is not canonical"
         in errors
     )
 
@@ -24400,6 +27267,53 @@ def test_release_bundle_verifier_release_notes_invariants_reject_self_artifact_r
     assert "release notes attachment must not list itself as an artifact" in errors
 
 
+def test_release_bundle_release_notes_exclude_manifest_root_artifact_rows() -> None:
+    """Release notes must not list manifest.json as a regular artifact."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    report = {"production_ready": True, "blockers": []}
+    artifacts = [
+        {"path": "manifest.json", "bytes": 77, "sha256": "11" * 32},
+        {"path": "sccp-release-readiness.json", "bytes": 88, "sha256": "22" * 32},
+        {
+            "path": "sccp-release-notes-attachment.md",
+            "bytes": 99,
+            "sha256": "33" * 32,
+        },
+    ]
+    manifest_row = f"| `manifest.json` | 77 | `{'11' * 32}` |"
+    readiness_row = f"| `sccp-release-readiness.json` | 88 | `{'22' * 32}` |"
+
+    for notes in (
+        bundle._release_notes_attachment(report, artifacts),
+        verifier._expected_release_notes_attachment(report, artifacts),
+    ):
+        assert manifest_row not in notes
+        assert readiness_row in notes
+
+    notes = verifier._expected_release_notes_attachment(report, artifacts)
+    forged = notes.replace(
+        "| --- | ---: | --- |\n",
+        f"| --- | ---: | --- |\n{manifest_row}\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        artifacts,
+        forged,
+    )
+
+    assert (
+        "release notes attachment must not list manifest.json as an artifact"
+        in errors
+    )
+    assert (
+        "release notes attachment lists unexpected artifact row: "
+        f"{manifest_row}"
+    ) in errors
+
+
 def test_release_bundle_verifier_release_notes_invariants_require_artifact_rows(
     tmp_path: Path,
 ) -> None:
@@ -24509,7 +27423,15 @@ def test_release_bundle_verifier_release_notes_redacts_sensitive_artifact_rows()
         "| `native-prover/native-prover-artifacts/secret-token-role-reuse.bin` "
         f"| 1 | `{'bb' * 32}` |"
     )
-    weakened = notes.replace(safe_row, f"{safe_row}\n{sensitive_row}", 1)
+    encoded_sensitive_row = (
+        "| `native-prover/native-prover-artifacts/private&#95;key-role-reuse.bin` "
+        f"| 1 | `{'cc' * 32}` |"
+    )
+    weakened = notes.replace(
+        safe_row,
+        f"{safe_row}\n{sensitive_row}\n{encoded_sensitive_row}",
+        1,
+    )
 
     errors = verifier._release_notes_attachment_invariant_errors(
         report,
@@ -24521,7 +27443,90 @@ def test_release_bundle_verifier_release_notes_redacts_sensitive_artifact_rows()
         "release notes attachment lists unexpected artifact row: "
         "[redacted artifact row with sensitive material]"
     ) in errors
-    assert "secret-token" not in "\n".join(errors)
+    rendered = "\n".join(errors)
+    assert "secret-token" not in rendered
+    assert "private&#95;key" not in rendered
+
+
+def test_release_bundle_verifier_release_notes_redacts_decoded_unsafe_artifact_rows() -> None:
+    """Release-note artifact-row diagnostics must not echo decoded unsafe text."""
+
+    verifier = load_verify_helpers()
+    report = {"production_ready": True, "blockers": []}
+    artifacts = [
+        {
+            "path": "safe-artifact.txt",
+            "bytes": 1,
+            "sha256": "aa" * 32,
+        }
+    ]
+    notes = verifier._expected_release_notes_attachment(report, artifacts)
+    safe_row = f"| `{artifacts[0]['path']}` | 1 | `{'aa' * 32}` |"
+    newline_row = f"| `operator%0Aartifact.json` | 1 | `{'bb' * 32}` |"
+    bidi_row = f"| `operator%E2%80%AEartifact.json` | 1 | `{'cc' * 32}` |"
+    weakened = notes.replace(
+        safe_row,
+        f"{safe_row}\n{newline_row}\n{bidi_row}",
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        artifacts,
+        weakened,
+    )
+
+    assert (
+        "release notes attachment lists unexpected artifact row: "
+        "[redacted artifact row with unsafe material]"
+    ) in errors
+    rendered = "\n".join(errors)
+    assert "operator%0Aartifact.json" not in rendered
+    assert "operator%E2%80%AEartifact.json" not in rendered
+
+
+def test_release_bundle_release_notes_mark_decoded_unsafe_artifact_paths() -> None:
+    """Expected release-note artifact rows must not echo decoded unsafe paths."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    report = {"production_ready": True, "blockers": []}
+    artifacts = [
+        {
+            "path": "operator%0Aartifact.json",
+            "bytes": 1,
+            "sha256": "bb" * 32,
+        },
+        {
+            "path": "operator%E2%80%AEartifact.json",
+            "bytes": 2,
+            "sha256": "cc" * 32,
+        },
+    ]
+
+    for notes in (
+        bundle._release_notes_attachment(report, artifacts),
+        verifier._expected_release_notes_attachment(report, artifacts),
+    ):
+        assert "operator%0Aartifact.json" not in notes
+        assert "operator%E2%80%AEartifact.json" not in notes
+        assert f"| `<invalid artifact>` | 1 | `{'bb' * 32}` |" in notes
+        assert f"| `<invalid artifact>` | 2 | `{'cc' * 32}` |" in notes
+
+    assert not bundle._release_notes_artifact_path_is_safe(
+        "operator%0Aartifact.json"
+    )
+    assert not verifier._release_notes_attachment_artifact_path_is_safe(
+        "operator%E2%80%AEartifact.json"
+    )
+    assert (
+        verifier._release_notes_attachment_invariant_errors(
+            report,
+            artifacts,
+            verifier._expected_release_notes_attachment(report, artifacts),
+        )
+        == []
+    )
 
 
 def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order(
@@ -24686,23 +27691,32 @@ def test_release_bundle_verifier_redacts_manifest_artifact_order_recompute_error
     output_dir = build_ready_bundle(tmp_path)
     verifier = load_verify_helpers()
 
-    def fail_expected_manifest_artifact_order(_report):
-        raise RuntimeError("secret-token canonical manifest order detail")
+    for exception_type in (RuntimeError, SystemExit):
 
-    monkeypatch.setattr(
-        verifier,
-        "_expected_manifest_artifact_order",
-        fail_expected_manifest_artifact_order,
-    )
+        def fail_expected_manifest_artifact_order(
+            _report,
+            exception_type=exception_type,
+        ):
+            raise exception_type(
+                "secret-token canonical manifest order detail "
+                f"{exception_type.__name__}"
+            )
 
-    summary = verifier.verify_bundle(output_dir)
-    errors = "\n".join(summary["errors"])
+        monkeypatch.setattr(
+            verifier,
+            "_expected_manifest_artifact_order",
+            fail_expected_manifest_artifact_order,
+        )
 
-    assert summary["verified"] is False
-    assert "cannot compute canonical manifest artifact order" in errors
-    assert "secret-token" not in errors
-    assert "canonical manifest order detail" not in errors
-    assert "Traceback" not in errors
+        summary = verifier.verify_bundle(output_dir)
+        errors = "\n".join(summary["errors"])
+
+        assert summary["verified"] is False
+        assert "cannot compute canonical manifest artifact order" in errors
+        assert "secret-token" not in errors
+        assert "canonical manifest order detail" not in errors
+        assert exception_type.__name__ not in errors
+        assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_rejects_noncanonical_json_serialization(
@@ -24923,6 +27937,176 @@ def test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys(
         assert decoded_key not in verified.stdout
 
 
+def test_release_bundle_verifier_redacts_hostile_public_schema_keys(
+    tmp_path: Path,
+) -> None:
+    """Strict verifier schema checks must not stringify hostile mapping keys."""
+
+    verifier = load_verify_helpers()
+    hostile_key = HostilePublicKey()
+    hex32 = "0x" + "11" * 32
+    sha256 = "22" * 32
+    artifact = {
+        "path": "evidence/00-complete.toml",
+        "bytes": 1,
+        "sha256": sha256,
+        hostile_key: "secret-token artifact note",
+    }
+    errors: list[str] = []
+
+    errors.extend(verifier._artifact_errors(tmp_path, dict(artifact)))
+    verifier._check_report_artifact(
+        errors,
+        {},
+        dict(artifact),
+        label="readiness report input",
+    )
+    errors.extend(
+        verifier._source_inventory_schema_errors(
+            {
+                hostile_key: {
+                    "validation_status": "blocked",
+                    "validation_blockers": ["operator review pending"],
+                }
+            }
+        )
+    )
+    errors.extend(
+        verifier._corridor_schema_errors(
+            {
+                "production_ready": True,
+                "require_phase_evidence": True,
+                "phases": {hostile_key: "passed"},
+                "evidence_artifacts": {hostile_key: dict(artifact)},
+                "blockers": [],
+                hostile_key: "secret-token corridor note",
+            }
+        )
+    )
+    errors.extend(
+        verifier._corridor_phase_errors(
+            {
+                "phases": {hostile_key: "passed"},
+                "evidence_artifacts": {hostile_key: dict(artifact)},
+                "blockers": [],
+            }
+        )
+    )
+    errors.extend(
+        verifier._release_checklist_schema_errors(
+            "readiness report",
+            {
+                "ready": True,
+                "items": [
+                    {
+                        "id": "source_materials",
+                        "title": "Source materials",
+                        "ready": True,
+                        "blockers": [],
+                        hostile_key: "secret-token checklist item note",
+                    }
+                ],
+                hostile_key: "secret-token checklist note",
+            },
+        )
+    )
+    errors.extend(
+        verifier._all_lanes_summary_schema_errors(
+            "all-lanes summary",
+            {
+                "production_ready": True,
+                "required_domains": [],
+                "supported_launch_domains": [],
+                "unsupported_launch_domains": [],
+                "lanes": [{hostile_key: "secret-token lane note"}],
+                "blockers": [],
+                "release_checklist": {"ready": True, "items": []},
+                hostile_key: "secret-token summary note",
+            },
+        )
+    )
+
+    native_artifact = {
+        "path": "native-prover/native-prover-artifacts/proof-artifact.bin",
+        "bytes": 1,
+        "sha256": sha256,
+        hostile_key: "secret-token native artifact note",
+    }
+    errors.extend(
+        verifier._native_evm_prover_bundle_summary_schema_errors(
+            {
+                "required": True,
+                "schema": verifier.NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
+                "bundle_id": verifier.NATIVE_EVM_PROVER_BUNDLE_ID,
+                "lanes": verifier.ACTIVE_LAUNCH_CHAIN,
+                "proof_backend": "evm-groth16-bn254-v1",
+                "artifact": dict(native_artifact),
+                "proof_artifact": dict(native_artifact),
+                "proof_artifact_hash": hex32,
+                "proving_key": dict(native_artifact),
+                "proving_key_hash": "0x" + "33" * 32,
+                "verifier_key": dict(native_artifact),
+                "verifier_key_hash": "0x" + "44" * 32,
+                "destination_binding_hash": "0x" + "55" * 32,
+                "audit_hashes": {hostile_key: "0x" + "66" * 32},
+                "cross_sdk_fixture_parity_artifact": dict(native_artifact),
+                "native_prover_self_test_artifact": dict(native_artifact),
+                "sdk_artifacts": [
+                    {
+                        "sdk": "js-sdk",
+                        "implementation": "pure-typescript",
+                        "implementation_hash": "0x" + "77" * 32,
+                        "implementation_artifact": dict(native_artifact),
+                        hostile_key: "secret-token sdk artifact note",
+                    }
+                ],
+                "validation_status": "passed",
+                "validation_blockers": [],
+                hostile_key: "secret-token native bundle note",
+            }
+        )
+    )
+
+    crypto_row = {
+        "domain": verifier.SCCP_DOMAIN_ETH,
+        "chain": "eth",
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_hash": hex32,
+        "source_adapter_gate_audit_hashes": {hostile_key: "0x" + "88" * 32},
+        hostile_key: "secret-token crypto row note",
+    }
+    errors.extend(
+        verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+            crypto_row,
+            crypto_row["source_adapter_gate_audit_hashes"],
+        )
+    )
+    errors.extend(verifier._cryptographic_evidence_row_schema_errors(crypto_row))
+
+    errors.extend(
+        verifier._submission_surface_row_schema_errors(
+            {
+                "lanes": next(iter(verifier.USER_PROVER_REQUIRED_LANE_BACKENDS)),
+                "proof_backend": next(
+                    iter(verifier.USER_PROVER_REQUIRED_LANE_BACKENDS.values())
+                ),
+                "sdk_helper_symbols": [],
+                "sdk_helper_symbols_by_sdk": {hostile_key: []},
+                "sdk_helpers": "",
+                "on_chain_submission": "operator review pending",
+                hostile_key: "secret-token submission row note",
+            }
+        )
+    )
+
+    rendered = "\n".join(errors)
+    assert errors
+    assert "malformed" in rendered
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "AssertionError" not in rendered
+
+
 def test_release_bundle_verifier_rejects_non_utf8_manifest_json(
     tmp_path: Path,
 ) -> None:
@@ -25052,40 +28236,56 @@ def test_release_bundle_verifier_redacts_public_renderer_errors(
     output_dir = build_ready_bundle(tmp_path)
     verifier = load_verify_helpers()
 
-    def fail_readiness_markdown(_report):
-        raise RuntimeError("secret-token readiness renderer detail")
+    for exception_type in (RuntimeError, SystemExit):
 
-    def fail_submission_surfaces(_report):
-        raise RuntimeError("secret-token submission surface detail")
+        def fail_readiness_markdown(_report, exception_type=exception_type):
+            raise exception_type(
+                f"secret-token readiness renderer detail {exception_type.__name__}"
+            )
 
-    def fail_release_notes(_report, _artifacts):
-        raise RuntimeError("secret-token release notes detail")
+        def fail_submission_surfaces(_report, exception_type=exception_type):
+            raise exception_type(
+                f"secret-token submission surface detail {exception_type.__name__}"
+            )
 
-    monkeypatch.setattr(
-        verifier,
-        "_expected_readiness_markdown",
-        fail_readiness_markdown,
-    )
-    monkeypatch.setattr(
-        verifier,
-        "_expected_submission_surfaces",
-        fail_submission_surfaces,
-    )
-    monkeypatch.setattr(
-        verifier,
-        "_expected_release_notes_attachment",
-        fail_release_notes,
-    )
+        def fail_release_notes(
+            _report,
+            _artifacts,
+            exception_type=exception_type,
+        ):
+            raise exception_type(
+                f"secret-token release notes detail {exception_type.__name__}"
+            )
 
-    summary = verifier.verify_bundle(output_dir)
-    errors = "\n".join(summary["errors"])
+        monkeypatch.setattr(
+            verifier,
+            "_expected_readiness_markdown",
+            fail_readiness_markdown,
+        )
+        monkeypatch.setattr(
+            verifier,
+            "_expected_submission_surfaces",
+            fail_submission_surfaces,
+        )
+        monkeypatch.setattr(
+            verifier,
+            "_expected_release_notes_attachment",
+            fail_release_notes,
+        )
 
-    assert summary["verified"] is False
-    assert "cannot render readiness report Markdown" in errors
-    assert "cannot render user prover submission surfaces" in errors
-    assert "cannot render release-notes attachment" in errors
-    assert "secret-token" not in errors
-    assert "Traceback" not in errors
+        summary = verifier.verify_bundle(output_dir)
+        errors = "\n".join(summary["errors"])
+
+        assert summary["verified"] is False
+        assert "cannot render readiness report Markdown" in errors
+        assert "cannot render user prover submission surfaces" in errors
+        assert "cannot render release-notes attachment" in errors
+        assert "secret-token" not in errors
+        assert "readiness renderer detail" not in errors
+        assert "submission surface detail" not in errors
+        assert "release notes detail" not in errors
+        assert exception_type.__name__ not in errors
+        assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_rejects_omitted_phase_artifact(
@@ -25220,7 +28420,7 @@ def test_release_bundle_verifier_recomputes_required_corridor_phases(
 
     assert verified.returncode == 1
     assert (
-        "readiness report corridor phase swift-sdk is not passed: 'skipped'"
+        "readiness report corridor phase swift-sdk status must be passed"
         in verified.stdout
     )
     assert (
@@ -27771,6 +30971,37 @@ def test_release_bundle_verifier_rejects_missing_readiness_markdown_invariants_i
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_source_inventory_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Source-inventory roots must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"] = "operator secret-token-source-inventory-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report source_inventory is not an object" in verified.stdout
+    assert "secret-token-source-inventory-root" not in verified.stdout
+    assert "secret-token-source-inventory-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_blocked_source_inventory_gate(
     tmp_path: Path,
 ) -> None:
@@ -28051,6 +31282,43 @@ def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata
     )
 
 
+def test_release_bundle_verifier_treats_missing_active_governed_blockers_as_empty(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed deployment checklist must treat missing blockers as empty."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    destination_binding = active_lane["destination_binding"]
+    source_gate = active_lane["source_adapter_gate"]
+    destination_binding["blockers"] = []
+    source_gate["blockers"] = []
+    destination_binding.pop("blockers")
+    source_gate.pop("blockers")
+
+    checklist = verifier._active_launch_release_checklist(
+        summary,
+        report["native_evm_prover_bundle"],
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    deployment_item = item_by_id["governed_deployment_evidence"]
+
+    assert checklist["ready"] is True
+    assert deployment_item["ready"] is True
+    assert deployment_item["blockers"] == []
+
+
 def test_release_bundle_verifier_recomputes_active_required_record_identity_scalars(
     tmp_path: Path,
 ) -> None:
@@ -28196,6 +31464,194 @@ def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_c
             expected_blocker in blocker
             for blocker in route_canary_item["blockers"]
         ), repr(source)
+
+
+def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_deployment_containers(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed launch checklist must classify malformed deployment roots."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
+        encoding="utf-8"
+    )
+    cases = (
+        (
+            "evm_live_metadata",
+            "operator secret-token live metadata root",
+            "active EVM live metadata summary is malformed",
+        ),
+        (
+            "source_record_hashes",
+            "operator secret-token source hash root",
+            "active source-record hash summary is malformed",
+        ),
+        (
+            "destination_binding",
+            "operator secret-token destination root",
+            "active destination binding summary is malformed",
+        ),
+        (
+            "source_adapter_gate",
+            "operator secret-token source gate root",
+            "active source adapter gate summary is malformed",
+        ),
+    )
+
+    for field, value, expected_blocker in cases:
+        summary = json.loads(summary_payload)
+        active_lane = next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+        )
+        active_lane[field] = value
+
+        checklist = verifier._active_launch_release_checklist(
+            summary,
+            report["native_evm_prover_bundle"],
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        deployment_item = item_by_id["governed_deployment_evidence"]
+        rendered = "\n".join(deployment_item["blockers"])
+
+        assert checklist["ready"] is False, field
+        assert deployment_item["ready"] is False, field
+        assert any(
+            expected_blocker in blocker
+            for blocker in deployment_item["blockers"]
+        ), field
+        assert "secret-token" not in rendered
+        assert "operator" not in rendered
+
+
+def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_route_containers(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed launch checklist must classify malformed route roots."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
+        encoding="utf-8"
+    )
+    cases = (
+        (
+            "route_allowlist",
+            "operator secret-token route root",
+            "route_allowlist_binding",
+            "active route allowlist summary is malformed",
+        ),
+        (
+            "route_allowlist.route_canary",
+            "operator secret-token canary root",
+            "live_route_canary_evidence",
+            "active route canary summary is malformed",
+        ),
+    )
+
+    for field, value, item_id, expected_blocker in cases:
+        summary = json.loads(summary_payload)
+        active_lane = next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+        )
+        if field == "route_allowlist":
+            active_lane["route_allowlist"] = value
+        elif field == "route_allowlist.route_canary":
+            active_lane["route_allowlist"]["route_canary"] = value
+        else:
+            raise AssertionError(field)
+
+        checklist = verifier._active_launch_release_checklist(
+            summary,
+            report["native_evm_prover_bundle"],
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        blockers = item_by_id[item_id]["blockers"]
+        rendered = "\n".join(blockers)
+
+        assert checklist["ready"] is False, field
+        assert item_by_id[item_id]["ready"] is False, field
+        assert any(expected_blocker in blocker for blocker in blockers), field
+        assert "secret-token" not in rendered
+        assert "operator" not in rendered
+
+
+def test_release_bundle_verifier_treats_missing_active_route_canary_blockers_as_empty(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed launch checklist must treat missing canary blockers as empty."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    canary = active_lane["route_allowlist"]["route_canary"]
+    canary["blockers"] = []
+    canary.pop("blockers")
+
+    checklist = verifier._active_launch_release_checklist(
+        summary,
+        report["native_evm_prover_bundle"],
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    route_canary_item = item_by_id["live_route_canary_evidence"]
+
+    assert checklist["ready"] is True
+    assert route_canary_item["ready"] is True
+    assert route_canary_item["blockers"] == []
+
+
+def test_release_bundle_verifier_treats_missing_active_route_allowlist_blockers_as_empty(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed route checklist must treat missing blockers as empty."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    route_allowlist = active_lane["route_allowlist"]
+    route_allowlist["blockers"] = []
+    route_allowlist.pop("blockers")
+
+    checklist = verifier._active_launch_release_checklist(
+        summary,
+        report["native_evm_prover_bundle"],
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    route_item = item_by_id["route_allowlist_binding"]
+
+    assert checklist["ready"] is True
+    assert route_item["ready"] is True
+    assert route_item["blockers"] == []
 
 
 def test_release_bundle_verifier_recomputes_active_route_canary_receipt_block_number_exactly(
@@ -28482,6 +31938,41 @@ def test_release_bundle_verifier_recomputes_active_route_canary_message_proof_us
         ), case_id
 
 
+def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_record_container(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed checklist must classify malformed active record roots."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["records"] = "operator secret-token record root"
+
+    checklist = verifier._active_launch_release_checklist(
+        summary,
+        report["native_evm_prover_bundle"],
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    records_item = item_by_id["all_required_lane_records"]
+    blockers = "\n".join(records_item["blockers"])
+
+    assert checklist["ready"] is False
+    assert records_item["ready"] is False
+    assert "active required record summary is malformed" in blockers
+    assert "secret-token" not in blockers
+    assert "operator" not in blockers
+
+
 def test_release_bundle_verifier_classifies_malformed_active_required_record_fields(
     tmp_path: Path,
 ) -> None:
@@ -28580,6 +32071,26 @@ def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(
             "domain 1 (eth): active launch lane blockers[0] must be a non-empty canonical string",
         ),
         (
+            ["operator\nlaunch hold"],
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers[0] contains control character",
+        ),
+        (
+            ["operator|launch hold"],
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers[0] contains Markdown-unsafe character",
+        ),
+        (
+            ["operator café launch hold"],
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers[0] contains non-ASCII character",
+        ),
+        (
+            ["secret-token-active-lane"],
+            category_item_ids,
+            "domain 1 (eth): active launch lane blockers[0] contains sensitive name",
+        ),
+        (
             ["route canary operator launch hold"],
             ("live_route_canary_evidence",),
             "domain 1 (eth): route canary operator launch hold",
@@ -28614,6 +32125,8 @@ def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(
                 repr(lane_blockers),
                 item_id,
             )
+            if lane_blockers == ["secret-token-active-lane"]:
+                assert "secret-token-active-lane" not in "\n".join(item["blockers"])
         if not isinstance(lane_blockers, list):
             assert "o" not in item_by_id["live_route_canary_evidence"]["blockers"]
         if lane_blockers == [duplicate_lane_blocker, duplicate_lane_blocker]:
@@ -28919,6 +32432,76 @@ def test_release_bundle_verifier_rejects_artifact_field_type_drift(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_phase_artifact_field_drift(
+    tmp_path: Path,
+) -> None:
+    """Corridor phase artifact rows must reject forged metadata claims."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    phase_artifact = report["corridor"]["evidence_artifacts"]["swift-sdk"]
+    confusable_field = "operat\u043er_attestation"
+    secret_field = "secret_token_artifact_field"
+    phase_artifact.update(
+        {
+            " operator_attestation ": "reviewed elsewhere",
+            "operator\nattestation": "reviewed elsewhere",
+            "operator attestation": "reviewed elsewhere",
+            "operator|attestation": "reviewed elsewhere",
+            confusable_field: "reviewed elsewhere",
+            secret_field: "reviewed elsewhere",
+            "operator_attestation": "reviewed elsewhere",
+            "bytes": True,
+            "sha256": ["not-a-canonical-hash"],
+        }
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    label = "readiness report phase swift-sdk artifact"
+    assert verified.returncode == 1
+    assert f"{label} contains unknown field name with surrounding whitespace" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with control character" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with whitespace" in verified.stdout
+    assert f"{label} contains unknown field name with Markdown-unsafe character" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with non-ASCII character" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field name with sensitive name" in (
+        verified.stdout
+    )
+    assert f"{label} contains unknown field: operator_attestation" in (
+        verified.stdout
+    )
+    assert f"{label} bytes must be a positive integer" in verified.stdout
+    assert f"{label} sha256 must be a canonical SHA-256 hex string" in (
+        verified.stdout
+    )
+    assert confusable_field not in verified.stdout
+    assert confusable_field not in verified.stderr
+    assert secret_field not in verified.stdout
+    assert secret_field not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_zero_artifact_byte_counts(
     tmp_path: Path,
 ) -> None:
@@ -29092,6 +32675,60 @@ def test_release_bundle_verifier_rejects_release_checklist_drift(
         "readiness report release_checklist does not match embedded evidence"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_rejects_release_checklist_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Release checklist roots must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["release_checklist"] = "operator secret-token-report-checklist-root"
+    report["evidence"]["release_checklist"] = (
+        "operator secret-token-embedded-checklist-root"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["release_checklist"] = "operator secret-token-summary-checklist-root"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report release_checklist is not an object" in verified.stdout
+    assert (
+        "readiness report embedded evidence release_checklist is not an object"
+        in verified.stdout
+    )
+    assert "all-lanes summary release_checklist is not an object" in verified.stdout
+    for leaked in (
+        "secret-token-report-checklist-root",
+        "secret-token-embedded-checklist-root",
+        "secret-token-summary-checklist-root",
+    ):
+        assert leaked not in verified.stdout
+        assert leaked not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_release_checklist_unknown_fields(
@@ -29604,19 +33241,33 @@ def test_release_bundle_verifier_redacts_copied_input_summary_errors(
     output_dir = build_ready_bundle(tmp_path)
     verifier = load_verify_helpers()
 
-    def fail_copied_input_summary(_bundle_dir, _report, _errors):
-        raise RuntimeError("secret-token copied input verifier detail")
+    for exception_type in (RuntimeError, SystemExit):
 
-    monkeypatch.setattr(verifier, "_copied_input_summary", fail_copied_input_summary)
+        def fail_copied_input_summary(
+            _bundle_dir,
+            _report,
+            _errors,
+            exception_type=exception_type,
+        ):
+            raise exception_type(
+                f"secret-token copied input verifier detail {exception_type.__name__}"
+            )
 
-    summary = verifier.verify_bundle(output_dir)
-    errors = "\n".join(summary["errors"])
+        monkeypatch.setattr(
+            verifier,
+            "_copied_input_summary",
+            fail_copied_input_summary,
+        )
 
-    assert summary["verified"] is False
-    assert "cannot recompute all-lanes summary from copied evidence" in errors
-    assert "secret-token" not in errors
-    assert "copied input verifier detail" not in errors
-    assert "Traceback" not in errors
+        summary = verifier.verify_bundle(output_dir)
+        errors = "\n".join(summary["errors"])
+
+        assert summary["verified"] is False
+        assert "cannot recompute all-lanes summary from copied evidence" in errors
+        assert "secret-token" not in errors
+        assert "copied input verifier detail" not in errors
+        assert exception_type.__name__ not in errors
+        assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_rejects_corridor_unknown_fields(
@@ -29781,6 +33432,77 @@ def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys(
     assert sensitive_phase not in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_corridor_evidence_artifacts_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Corridor phase evidence roots must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["corridor"]["evidence_artifacts"] = (
+        "operator secret-token-artifact-root"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report corridor evidence_artifacts is not an object"
+        in verified.stdout
+    )
+    assert (
+        "readiness report phase swift-sdk artifact is not an object"
+        in verified.stdout
+    )
+    assert "secret-token-artifact-root" not in verified.stdout
+    assert "secret-token-artifact-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_corridor_phase_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Corridor phase status roots must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["corridor"]["phases"] = "operator secret-token-phase-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report corridor phases is not an object" in verified.stdout
+    assert "secret-token-phase-root" not in verified.stdout
+    assert "secret-token-phase-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_corridor_blockers(
     tmp_path: Path,
 ) -> None:
@@ -29842,6 +33564,46 @@ def test_release_bundle_verifier_rejects_input_path_drift(
         "readiness report inputs do not match copied input artifacts"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_rejects_input_provenance_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Copied input provenance roots must stay list-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"] = "operator secret-token-inputs-root"
+    report["input_artifacts"] = "operator secret-token-input-artifacts-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report inputs must be a non-empty list of canonical paths"
+        in verified.stdout
+    )
+    assert "readiness report input_artifacts must be a non-empty list" in (
+        verified.stdout
+    )
+    assert "secret-token-inputs-root" not in verified.stdout
+    assert "secret-token-input-artifacts-root" not in verified.stdout
+    assert "secret-token-inputs-root" not in verified.stderr
+    assert "secret-token-input-artifacts-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_input_provenance_schema_drift(
@@ -30064,6 +33826,41 @@ def test_release_bundle_verifier_requires_non_empty_report_and_summary_json(
     assert "all-lanes summary JSON must be a non-empty object" in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_scalar_report_and_summary_json_roots(
+    tmp_path: Path,
+) -> None:
+    """Top-level public JSON roots must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "sccp-release-readiness.json").write_text(
+        json.dumps("operator secret-token-readiness-root") + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "sccp-all-lanes-summary.json").write_text(
+        json.dumps("operator secret-token-summary-root") + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report JSON must be a non-empty object" in verified.stdout
+    assert "all-lanes summary JSON must be a non-empty object" in verified.stdout
+    assert "secret-token-readiness-root" not in verified.stdout
+    assert "secret-token-summary-root" not in verified.stdout
+    assert "secret-token-readiness-root" not in verified.stderr
+    assert "secret-token-summary-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_malformed_report_sections(
     tmp_path: Path,
 ) -> None:
@@ -30106,6 +33903,92 @@ def test_release_bundle_verifier_rejects_malformed_report_sections(
         verified.stdout
     )
     assert "all-lanes summary release_checklist is not an object" in verified.stdout
+    assert "Traceback" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_malformed_all_lanes_lane_roots(
+    tmp_path: Path,
+) -> None:
+    """Copied all-lanes lane roots must stay list-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["evidence"]["lanes"] = "operator secret-token-report-lanes-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["lanes"] = "operator secret-token-summary-lanes-root"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report embedded evidence lanes must be a list" in verified.stdout
+    assert "all-lanes summary lanes must be a list" in verified.stdout
+    assert "secret-token-report-lanes-root" not in verified.stdout
+    assert "secret-token-summary-lanes-root" not in verified.stdout
+    assert "secret-token-report-lanes-root" not in verified.stderr
+    assert "secret-token-summary-lanes-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_malformed_all_lanes_lane_rows(
+    tmp_path: Path,
+) -> None:
+    """Copied all-lanes lane rows must stay object-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["evidence"]["lanes"][0] = "operator secret-token-report-lane-row"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["lanes"][0] = "operator secret-token-summary-lane-row"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report embedded evidence lane 0 is not an object" in (
+        verified.stdout
+    )
+    assert "all-lanes summary lane 0 is not an object" in verified.stdout
+    assert "secret-token-report-lane-row" not in verified.stdout
+    assert "secret-token-summary-lane-row" not in verified.stdout
+    assert "secret-token-report-lane-row" not in verified.stderr
+    assert "secret-token-summary-lane-row" not in verified.stderr
     assert "Traceback" not in verified.stderr
 
 
@@ -30552,6 +34435,73 @@ def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift(
     )
 
 
+def test_release_bundle_verifier_rejects_all_lanes_domain_list_root_drift(
+    tmp_path: Path,
+) -> None:
+    """All-lanes domain-list roots must stay list-shaped and redacted."""
+
+    def mutate_summary(summary: dict, marker: str) -> None:
+        summary["required_domains"] = f"operator secret-token-{marker}-required"
+        summary["supported_launch_domains"] = {
+            "operator": f"secret-token-{marker}-supported"
+        }
+        summary["unsupported_launch_domains"] = (
+            f"operator secret-token-{marker}-unsupported"
+        )
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_summary(report["evidence"], "report-domains")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_summary(summary, "summary-domains")
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence",
+        "all-lanes summary",
+    ):
+        for field in (
+            "required_domains",
+            "supported_launch_domains",
+            "unsupported_launch_domains",
+        ):
+            assert f"{label} {field} must be a list of integers" in verified.stdout
+    for leaked in (
+        "secret-token-report-domains-required",
+        "secret-token-report-domains-supported",
+        "secret-token-report-domains-unsupported",
+        "secret-token-summary-domains-required",
+        "secret-token-summary-domains-supported",
+        "secret-token-summary-domains-unsupported",
+    ):
+        assert leaked not in verified.stdout
+        assert leaked not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_padded_public_blocker_strings(
     tmp_path: Path,
 ) -> None:
@@ -30650,19 +34600,30 @@ def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
 ) -> None:
     """Public blocker lists must not repeat the same operator-facing blocker."""
 
-    def duplicate_blockers(summary: dict, blocker: str) -> None:
-        summary["blockers"] = [blocker, blocker]
-        summary["lanes"][0]["blockers"] = [blocker, blocker]
-        summary["release_checklist"]["items"][0]["blockers"] = [blocker, blocker]
+    def duplicate_blockers(
+        summary: dict,
+        blocker: str,
+        encoded_blocker: str,
+    ) -> None:
+        summary["blockers"] = [blocker, encoded_blocker]
+        summary["lanes"][0]["blockers"] = [blocker, encoded_blocker]
+        summary["release_checklist"]["items"][0]["blockers"] = [
+            blocker,
+            encoded_blocker,
+        ]
 
     output_dir = build_ready_bundle(tmp_path)
     blocker = "manual duplicate blocker"
+    encoded_blocker = "manual%20duplicate%20blocker"
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["blockers"] = [blocker, blocker]
-    report["corridor"]["blockers"] = [blocker, blocker]
-    report["release_checklist"]["items"][0]["blockers"] = [blocker, blocker]
-    duplicate_blockers(report["evidence"], blocker)
+    report["blockers"] = [blocker, encoded_blocker]
+    report["corridor"]["blockers"] = [blocker, encoded_blocker]
+    report["release_checklist"]["items"][0]["blockers"] = [
+        blocker,
+        encoded_blocker,
+    ]
+    duplicate_blockers(report["evidence"], blocker, encoded_blocker)
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -30670,7 +34631,7 @@ def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
 
     summary_path = output_dir / "sccp-all-lanes-summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    duplicate_blockers(summary, blocker)
+    duplicate_blockers(summary, blocker, encoded_blocker)
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -30682,7 +34643,7 @@ def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
 
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["blockers"] = [blocker, blocker]
+    manifest["blockers"] = [blocker, encoded_blocker]
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -30712,6 +34673,8 @@ def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
     )
     for fragment in expected_fragments:
         assert fragment in verified.stdout
+    assert blocker not in verified.stdout
+    assert encoded_blocker not in verified.stdout
     assert any(
         "readiness report embedded evidence lane domain " in line
         and "blockers must not contain duplicate strings" in line
@@ -30829,6 +34792,144 @@ def test_release_bundle_verifier_rejects_hostile_public_blocker_strings(
     assert "operator public blоcker" not in verifier_output
 
 
+def test_release_bundle_public_blocker_helpers_reject_decoded_unsafe_text() -> None:
+    """Bundle and verifier blocker helpers must reject decoded unsafe text."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    cases = (
+        ("safe%0Apublic-blocker", "control character"),
+        ("safe%E2%80%AEpublic-blocker", "non-ASCII character"),
+        ("safe%7Cpublic-blocker", "Markdown-unsafe character"),
+        ("safe%3Cpublic-blocker%3E", "Markdown-unsafe character"),
+    )
+
+    for blocker, issue in cases:
+        assert (
+            bundle._public_blocker_text_error(blocker, "manifest", "blockers")
+            == f"manifest blockers contains blocker with {issue}"
+        )
+        assert (
+            bundle._submission_surface_validation_blocker_text_error(
+                blocker,
+                "bundled report.user_prover_submission_surfaces[0]",
+            )
+            == "bundled report.user_prover_submission_surfaces[0] "
+            f"validation_blockers contains blocker with {issue}"
+        )
+        assert verifier._public_blocker_text_issue(blocker) == issue
+        assert (
+            verifier._public_blocker_text_blocker(
+                blocker,
+                "readiness report",
+                "blockers",
+            )
+            == f"readiness report blockers contains blocker with {issue}"
+        )
+        assert (
+            verifier._submission_surface_validation_blocker_text_blocker(
+                blocker,
+                "readiness report user_prover_submission_surfaces[0]",
+            )
+            == "readiness report user_prover_submission_surfaces[0] "
+            f"validation_blockers contains blocker with {issue}"
+        )
+        assert (
+            verifier._public_verifier_error_text_blocker(
+                blocker,
+                "strict verifier summary",
+                "errors",
+            )
+            == f"strict verifier summary errors contains blocker with {issue}"
+        )
+
+
+def test_release_bundle_public_sensitive_markers_reject_encoded_confusables() -> None:
+    """Bundle and verifier helpers must redact decoded homoglyph secrets."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    encoded_sensitive_cases = (
+        "s%D0%B5cret-token",
+        "private&amp;#95;key",
+        "client&amp;#32;secret",
+    )
+
+    for encoded_sensitive in encoded_sensitive_cases:
+        blocker = f"operator {encoded_sensitive} blocker"
+
+        assert bundle._public_text_contains_sensitive_marker(encoded_sensitive)
+        assert verifier._public_text_contains_sensitive_marker(encoded_sensitive)
+        assert (
+            bundle._native_evm_prover_duplicate_json_key_error(encoded_sensitive)
+            == "native EVM Groth16 prover bundle JSON contains duplicate key with "
+            "sensitive key name"
+        )
+        assert (
+            verifier._native_evm_prover_duplicate_json_key_blocker(
+                "readiness report native_evm_prover_bundle",
+                encoded_sensitive,
+            )
+            == "readiness report native_evm_prover_bundle JSON contains duplicate "
+            "key with sensitive key name"
+        )
+        assert (
+            bundle._public_blocker_text_error(blocker, "manifest", "blockers")
+            == "manifest blockers contains blocker with sensitive name"
+        )
+        assert verifier._public_blocker_text_issue(blocker) == "sensitive name"
+        assert (
+            verifier._public_blocker_text_blocker(
+                blocker,
+                "readiness report",
+                "blockers",
+            )
+            == "readiness report blockers contains blocker with sensitive name"
+        )
+        assert not bundle._release_notes_artifact_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
+        assert not verifier._readiness_native_evm_markdown_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
+        assert not verifier._release_notes_attachment_artifact_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
+
+    assert not bundle._release_notes_artifact_path_is_safe(
+        "artifacts/safe%0Aartifact.json"
+    )
+    assert not bundle._release_notes_artifact_path_is_safe(
+        "artifacts/safe%E2%80%AEartifact.json"
+    )
+    assert not verifier._release_notes_attachment_artifact_path_is_safe(
+        "artifacts/safe%0Aartifact.json"
+    )
+    assert not verifier._release_notes_attachment_artifact_path_is_safe(
+        "artifacts/safe%E2%80%AEartifact.json"
+    )
+
+
+def test_release_bundle_cli_error_detail_rejects_decoded_unsafe_messages() -> None:
+    """Top-level bundle CLI errors must not preserve decoded unsafe text."""
+
+    bundle = load_bundle_module()
+    fallback = "SCCP release bundle generation failed"
+
+    for detail in (
+        "safe%0Abundle detail",
+        "safe%E2%80%AEbundle detail",
+        "safe%7Cbundle detail",
+        "safe%3Cbundle detail%3E",
+    ):
+        assert bundle._cli_error_detail(RuntimeError(detail), fallback=fallback) == fallback
+
+    assert (
+        bundle._cli_error_detail(RuntimeError("safe bundle detail"), fallback=fallback)
+        == "safe bundle detail"
+    )
+
+
 def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers(
     tmp_path: Path,
 ) -> None:
@@ -30873,6 +34974,59 @@ def test_release_bundle_verifier_active_launch_blockers_reject_malformed_contain
         "domain 1 (eth): active launch lane blocker must be a non-empty canonical string",
     ], case_id
     assert " padded " not in blockers
+
+    for case_id, top_level_blockers, lane_blockers, expected_blockers in (
+        (
+            "control",
+            ["operator\nlaunch hold"],
+            ["lane\nlaunch hold"],
+            [
+                "SCCP evidence blocker contains control character",
+                "domain 1 (eth): active launch lane blocker contains control character",
+            ],
+        ),
+        (
+            "markdown",
+            ["operator|launch hold"],
+            ["lane|launch hold"],
+            [
+                "SCCP evidence blocker contains Markdown-unsafe character",
+                "domain 1 (eth): active launch lane blocker contains Markdown-unsafe character",
+            ],
+        ),
+        (
+            "nonascii",
+            ["operator café launch hold"],
+            ["lane café launch hold"],
+            [
+                "SCCP evidence blocker contains non-ASCII character",
+                "domain 1 (eth): active launch lane blocker contains non-ASCII character",
+            ],
+        ),
+        (
+            "sensitive",
+            ["secret-token-active-evidence"],
+            ["secret-token-active-lane"],
+            [
+                "SCCP evidence blocker contains sensitive name",
+                "domain 1 (eth): active launch lane blocker contains sensitive name",
+            ],
+        ),
+    ):
+        summary = json.loads(summary_payload)
+        active_lane = next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+        )
+        summary["blockers"] = top_level_blockers
+        active_lane["blockers"] = lane_blockers
+
+        blockers = verifier._active_launch_blockers(summary)
+
+        assert blockers == expected_blockers, case_id
+        if case_id == "sensitive":
+            assert "secret-token" not in "\n".join(blockers)
 
     case_id = "top_level.duplicate_root"
     summary = json.loads(summary_payload)
@@ -34846,6 +39000,50 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_lane_rows(
     assert "Traceback" not in markdown
 
 
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_lane_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed lane rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["evidence"]["lanes"][0] = "operator secret-token-markdown-lane-row"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert (
+        "| - | - | blocked | source=no, deploy=no, dest=no, route=no | "
+        "lane summary must be an object |"
+    ) in markdown
+    assert "secret-token-markdown-lane-row" not in markdown
+    assert verified.returncode == 1
+    assert "readiness report embedded evidence lane 0 is not an object" in (
+        verified.stdout
+    )
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token-markdown-lane-row" not in verified.stdout
+    assert "secret-token-markdown-lane-row" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_rows(
     tmp_path: Path,
 ) -> None:
@@ -34867,6 +39065,17 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_row
     }
     hostile_row["route_canary_evidence_source"] = "operator secret-token-source"
     hostile_row["route_canary_evidence_bound"] = True
+    whitespace_row = report["cryptographic_evidence"][2]
+    whitespace_row["route_canary_evidence_source"] = "operator review source"
+    whitespace_row["route_canary_evidence_bound"] = True
+    whitespace_row["evm_source_block_tag"] = "operator review block"
+    whitespace_row["source_verifier_material_hash"] = (
+        "operator secret-token-source-hash"
+    )
+    whitespace_row["route_canary_log_index"] = "operator secret-token-log-index"
+    whitespace_row["source_adapter_gate_audit_hashes"][
+        "solana_tower_replay_verifier_hash"
+    ] = "operator secret-token-audit-hash"
 
     markdown = verifier._render_readiness_markdown(report, max_blockers_per_lane=4)
 
@@ -34877,7 +39086,88 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_row
     assert "`<invalid source_adapter_gate_audit_hashes>`" in markdown
     assert "secret-token" not in markdown
     assert "operator|" not in markdown
+    assert "operator review source" not in markdown
+    assert "operator review block" not in markdown
     assert "Traceback" not in markdown
+
+
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_crypto_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed crypto rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cryptographic_evidence"][0] = "operator secret-token-markdown-crypto-row"
+    hostile_row = report["cryptographic_evidence"][1]
+    hostile_row["domain"] = "operator secret-token-domain"
+    hostile_row["chain"] = "operator secret-token-chain"
+    hostile_row["evm_source_rpc_chain_id"] = "operator secret-token-chain-id"
+    hostile_row["source_verifier_material_hash"] = "operator secret-token-hash"
+    hostile_row["source_adapter_gate_audit_hashes"] = {
+        "operator|secret-token-audit": "0x" + "44" * 32
+    }
+    hostile_row["route_canary_evidence_source"] = "operator secret-token-source"
+    hostile_row["route_canary_evidence_bound"] = True
+    whitespace_row = report["cryptographic_evidence"][2]
+    whitespace_row["route_canary_evidence_source"] = "operator review source"
+    whitespace_row["route_canary_evidence_bound"] = True
+    whitespace_row["evm_source_block_tag"] = "operator review block"
+    whitespace_row["source_verifier_material_hash"] = (
+        "operator secret-token-source-hash"
+    )
+    whitespace_row["route_canary_log_index"] = "operator secret-token-log-index"
+    whitespace_row["source_adapter_gate_audit_hashes"][
+        "solana_tower_replay_verifier_hash"
+    ] = "operator secret-token-audit-hash"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert (
+        "| - | - | `-` | `-` | `-` | `-` | - | - | - | - | - | - | - | "
+        "`- (unbound)` | - | - | - | - | - | - | - | - | - | - | - |"
+    ) in markdown
+    assert "`<invalid source_adapter_gate_audit_hashes>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert "operator review source" not in markdown
+    assert "operator review block" not in markdown
+    assert verified.returncode == 1
+    assert "readiness report cryptographic_evidence missing required domain: 1" in (
+        verified.stdout
+    )
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token-markdown-crypto-row" not in verified.stdout
+    assert "secret-token-markdown-crypto-row" not in verified.stderr
+    assert "secret-token-audit" not in verified.stdout
+    assert "secret-token-audit" not in verified.stderr
+    assert "operator review source" not in verified.stdout
+    assert "operator review source" not in verified.stderr
+    assert "operator review block" not in verified.stdout
+    assert "operator review block" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_input_and_corridor_rows(
@@ -34950,6 +39240,82 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_input_and_
     assert "Traceback" not in markdown
 
 
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_input_and_corridor_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed input rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["input_artifacts"][0] = "operator secret-token-markdown-input-row"
+    report["input_artifacts"].append(
+        {
+            "path": "operator|secret-token-markdown-input",
+            "bytes": "operator secret-token-markdown-bytes",
+            "sha256": "operator secret-token-markdown-hash",
+        }
+    )
+    phase = next(iter(report["corridor"]["phases"]))
+    report["corridor"]["phases"][phase] = (
+        "operator secret-token-markdown-status"
+    )
+    report["corridor"]["phases"]["operator|secret-token-markdown-phase"] = (
+        "operator secret-token-markdown-phase-status"
+    )
+    report["corridor"]["evidence_artifacts"][phase] = {
+        "path": "operator|secret-token-markdown-artifact",
+        "sha256": "operator secret-token-markdown-artifact-hash",
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert markdown.count("`<invalid path>`") >= 2
+    assert "`<invalid bytes>`" in markdown
+    assert "`<invalid sha256>`" in markdown
+    assert "`<invalid status>`" in markdown
+    assert "`<invalid evidence_artifact>`" in markdown
+    assert "`<invalid evidence_artifact.sha256>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert verified.returncode == 1
+    assert "readiness report input artifact 0 is not an object" in verified.stdout
+    assert (
+        f"readiness report corridor phase {phase} status must be passed"
+        in verified.stdout
+    )
+    assert (
+        "readiness report corridor phases contains phase with Markdown-unsafe "
+        "character"
+    ) in verified.stdout
+    assert f"readiness report phase {phase} evidence artifact path must be" in (
+        verified.stdout
+    )
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "operator|" not in verified.stdout
+    assert "operator|" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_collection_roots(
     tmp_path: Path,
 ) -> None:
@@ -35003,6 +39369,57 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_collection
     assert "Traceback" not in combined
 
 
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_collection_root_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed roots."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cryptographic_evidence"] = (
+        "operator secret-token-markdown-crypto-root"
+    )
+    report["user_prover_submission_surfaces"] = (
+        "operator secret-token-markdown-user-root"
+    )
+    report["evidence"] = "operator secret-token-markdown-evidence-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "`- (unbound)`" in markdown
+    assert "blocked: submission surface must be an object" in markdown
+    assert "lane summary must be an object" in markdown
+    assert "secret-token" not in markdown
+    assert verified.returncode == 1
+    assert "readiness report evidence is not an object" in verified.stdout
+    assert "readiness report cryptographic_evidence is missing" in verified.stdout
+    assert "readiness report user_prover_submission_surfaces is missing" in (
+        verified.stdout
+    )
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_user_prover_rows(
     tmp_path: Path,
 ) -> None:
@@ -35042,6 +39459,129 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_user_prove
     assert "secret-token" not in markdown
     assert "operator|" not in markdown
     assert "Traceback" not in markdown
+
+
+def test_release_bundle_verifier_readiness_markdown_redacts_encoded_blocker_cells(
+    tmp_path: Path,
+) -> None:
+    """Verifier Markdown blocker cells must apply decoded public-text guards."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+
+    source_blocker = "safe duplicated source markdown blocker"
+    encoded_source_blocker = "safe%20duplicated%20source%20markdown%20blocker"
+    source_gate = sorted(report["source_inventory"])[0]
+    report["source_inventory"][source_gate]["validation_status"] = "blocked"
+    report["source_inventory"][source_gate]["validation_blockers"] = [
+        source_blocker,
+        encoded_source_blocker,
+    ]
+
+    encoded_user_blocker = "operator secret&#45;token-user-surface-blocker"
+    report["user_prover_submission_surfaces"][0]["validation_status"] = "blocked"
+    report["user_prover_submission_surfaces"][0]["validation_blockers"] = [
+        encoded_user_blocker,
+    ]
+
+    native_blocker = "safe duplicated native markdown blocker"
+    encoded_native_blocker = "safe%20duplicated%20native%20markdown%20blocker"
+    report["native_evm_prover_bundle"]["validation_status"] = "blocked"
+    report["native_evm_prover_bundle"]["validation_blockers"] = [
+        native_blocker,
+        encoded_native_blocker,
+    ]
+
+    markdown = verifier._render_readiness_markdown(report, max_blockers_per_lane=4)
+
+    assert (
+        f"| `{source_gate}` | blocked | `<invalid validation_blockers>` |"
+        in markdown
+    )
+    assert "blocked: `<invalid validation_blockers>`" in markdown
+    assert markdown.count("`<invalid validation_blockers>`") >= 3
+    for copied_blocker in (
+        source_blocker,
+        encoded_source_blocker,
+        encoded_user_blocker,
+        native_blocker,
+        encoded_native_blocker,
+    ):
+        assert copied_blocker not in markdown
+    assert "secret-token-user-surface-blocker" not in markdown
+    assert "Traceback" not in markdown
+
+
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_user_prover_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed user-prover rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["user_prover_submission_surfaces"][0] = (
+        "operator secret-token-markdown-user-surface"
+    )
+    hostile_surface = report["user_prover_submission_surfaces"][1]
+    hostile_surface["lanes"] = "operator secret-token-lane"
+    hostile_surface["proof_backend"] = "operator secret-token-backend"
+    hostile_surface["on_chain_submission"] = "operator|secret-token-submission"
+    hostile_surface["required_phases"] = ["operator secret-token-phase"]
+    hostile_surface["sdk_helper_symbols_by_sdk"] = {
+        "js-sdk": ["operator|secret-token-helper"]
+    }
+    hostile_surface["validation_status"] = "operator secret-token-validation"
+    hostile_surface["validation_blockers"] = [
+        "operator secret-token-user-surface-blocker"
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert (
+        "| `<invalid lanes>` | `<invalid proof_backend>` | "
+        "`<invalid sdk_helper_symbols_by_sdk>` | "
+        "`<invalid on_chain_submission>` | `<invalid required_phases>` | "
+        "blocked: submission surface must be an object |"
+    ) in markdown
+    assert "`<invalid validation_status>`" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert verified.returncode == 1
+    assert "readiness report user prover submission surface row is not an object" in (
+        verified.stdout
+    )
+    assert (
+        "readiness report user_prover_submission_surfaces does not match corridor phases"
+        in verified.stdout
+    )
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "operator|" not in verified.stdout
+    assert "operator|" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_native_prover_bundle(
@@ -35112,6 +39652,110 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_native_pro
     assert "Traceback" not in markdown
 
 
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_native_prover_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed native rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    hostile_bundle = report["native_evm_prover_bundle"]
+    hostile_bundle["artifact"]["path"] = (
+        "operator|secret-token-markdown-native-artifact"
+    )
+    hostile_bundle["artifact"]["sha256"] = (
+        "operator secret-token-markdown-native-artifact-hash"
+    )
+    hostile_bundle["proof_artifact_hash"] = (
+        "operator secret-token-markdown-native-proof"
+    )
+    hostile_bundle["proving_key_hash"] = (
+        "operator secret-token-markdown-native-proving-key"
+    )
+    hostile_bundle["verifier_key_hash"] = (
+        "operator secret-token-markdown-native-verifier-key"
+    )
+    hostile_bundle["destination_binding_hash"] = (
+        "operator secret-token-markdown-native-destination-binding"
+    )
+    hostile_bundle["cross_sdk_fixture_parity_artifact"]["path"] = (
+        "operator|secret-token-markdown-native-parity"
+    )
+    hostile_bundle["native_prover_self_test_artifact"]["sha256"] = (
+        "operator secret-token-markdown-native-self-test"
+    )
+    hostile_bundle["sdk_artifacts"][0]["sdk"] = (
+        "operator secret-token-markdown-native-sdk"
+    )
+    hostile_bundle["validation_status"] = (
+        "operator secret-token-markdown-native-status"
+    )
+    hostile_bundle["validation_blockers"] = [
+        "operator secret-token-markdown-native-blocker"
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "`<invalid artifact>`" in markdown
+    assert "`<invalid artifact.sha256>`" in markdown
+    assert "`<invalid proof_artifact_hash>`" in markdown
+    assert "`<invalid proving_key_hash>`" in markdown
+    assert "`<invalid verifier_key_hash>`" in markdown
+    assert "`<invalid destination_binding_hash>`" in markdown
+    assert "`<invalid cross_sdk_fixture_parity_artifact>`" in markdown
+    assert "`<invalid native_prover_self_test_artifact>`" in markdown
+    assert "`<invalid sdk_artifacts>`" in markdown
+    assert "`<invalid validation_status>`" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle artifact manifest artifact path "
+        "contains Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle proof_artifact_hash must be a "
+        "canonical non-zero 32-byte hex value"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] sdk must not "
+        "contain whitespace"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle validation_blockers[0] contains "
+        "sensitive name"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "operator|" not in verified.stdout
+    assert "operator|" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_source_inventory_rows(
     tmp_path: Path,
 ) -> None:
@@ -35160,6 +39804,66 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_source_inv
     assert "Traceback" not in markdown
 
 
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_source_inventory_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed inventory rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"]["operator|secret-token-markdown-source-gate"] = {
+        "validation_status": "operator secret-token-markdown-source-status",
+        "validation_blockers": [
+            "operator secret-token-markdown-source-blocker"
+        ],
+    }
+    report["source_inventory"]["proof_request_bundle_gate"] = (
+        "operator secret-token-markdown-source-gate-payload"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "`<invalid gate>`" in markdown
+    assert "source inventory gate must be an object" in markdown
+    assert "`<invalid validation_status>`" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory contains unknown gate name with "
+        "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate must be "
+        "an object"
+    ) in verified.stdout
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "operator|" not in verified.stdout
+    assert "operator|" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_readiness_markdown_rejects_malformed_checklist_rows(
     tmp_path: Path,
 ) -> None:
@@ -35205,6 +39909,71 @@ def test_release_bundle_verifier_readiness_markdown_rejects_malformed_checklist_
     assert "secret-token" not in markdown
     assert "operator|" not in markdown
     assert "Traceback" not in markdown
+
+
+def test_release_bundle_verifier_readiness_markdown_redacts_malformed_checklist_artifact(
+    tmp_path: Path,
+) -> None:
+    """Published readiness Markdown must redact copied malformed checklist rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["release_checklist"]["items"][0] = (
+        "operator secret-token-markdown-checklist-item"
+    )
+    hostile_item = report["release_checklist"]["items"][1]
+    hostile_item["id"] = "operator|secret-token-markdown-checklist-id"
+    hostile_item["ready"] = "operator secret-token-markdown-checklist-ready"
+    hostile_item["blockers"] = [
+        "operator secret-token-markdown-checklist-blocker"
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8",
+    )
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "release checklist item must be an object" in markdown
+    assert "`<invalid id>`" in markdown
+    assert "`<invalid blockers>`" in markdown
+    assert "secret-token" not in markdown
+    assert "operator|" not in markdown
+    assert verified.returncode == 1
+    assert "readiness report release_checklist item is not an object" in (
+        verified.stdout
+    )
+    assert (
+        "readiness report release_checklist item id contains Markdown-unsafe "
+        "character"
+    ) in verified.stdout
+    assert "readiness report release_checklist item ready must be a boolean" in (
+        verified.stdout
+    )
+    assert (
+        "readiness report release_checklist item blockers contains blocker with "
+        "sensitive name"
+    ) in verified.stdout
+    assert "readiness report Markdown does not match readiness report JSON" not in (
+        verified.stdout
+    )
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+    assert "operator|" not in verified.stdout
+    assert "operator|" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_markdown_invariants_require_lane_blocker_row(
@@ -35819,6 +40588,31 @@ def test_release_bundle_verifier_expected_crypto_evidence_preserves_malformed_va
     assert active_row["source_adapter_gate_required"] == "false"
     assert active_row["source_adapter_gate_hash"] == 0
     assert active_row["source_adapter_gate_audit_hashes"] == ["not", "an", "object"]
+
+
+def test_release_bundle_verifier_expected_crypto_evidence_omits_non_evm_message_id(
+    tmp_path: Path,
+) -> None:
+    """Strict expected public crypto rows must omit non-EVM canary message ids."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_complete_evidence(tmp_path)
+    evidence_summary = report._load_evidence_summary([evidence])
+    tron_lane = next(
+        lane
+        for lane in evidence_summary["lanes"]
+        if lane["domain"] == verifier.SCCP_DOMAIN_TRON
+    )
+    assert tron_lane["route_allowlist"]["route_canary"]["message_id"]
+
+    tron_row = next(
+        row
+        for row in verifier._expected_cryptographic_evidence(evidence_summary)
+        if row["domain"] == verifier.SCCP_DOMAIN_TRON
+    )
+
+    assert tron_row["route_canary_message_id"] == ""
 
 
 def test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes(
@@ -36899,7 +41693,22 @@ def test_release_bundle_verifier_rejects_tron_crypto_profile_block_metadata_drif
             "evm_source_block_tag": "",
             "evm_destination_rpc_chain_id": "",
             "evm_destination_block_tag": "",
-            "route_canary_evidence_bound": False,
+            "route_canary_evidence_hash": fixed_hex32(0x41),
+            "route_canary_evidence_source": "tron_message_proof_accepted_transaction",
+            "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_raw_data_owner_matches_transaction": True,
+            "route_canary_signature_recovers_to_owner": True,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": verifier.SCCP_DOMAIN_TRON,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+            "route_canary_call_data_sha256": fixed_hex32(0x42),
+            "route_canary_payload_hash": fixed_hex32(0x43),
+            "route_canary_statement_hash": fixed_hex32(0x44),
+            "route_canary_commitment_root": fixed_hex32(0x45),
+            "route_canary_finality_height": fixed_hex32(0x46),
+            "route_canary_finality_block_hash": fixed_hex32(0x47),
             "route_canary_receipt_block_finalized": None,
             "route_canary_block_number": 1,
             "route_canary_block_timestamp": 0,
@@ -36951,6 +41760,505 @@ def test_release_bundle_verifier_rejects_tron_crypto_profile_block_metadata_drif
         "route_canary_block_timestamp must be null for non-TRON lanes" in error
         for error in errors
     )
+
+
+def test_release_bundle_verifier_rejects_crypto_route_canary_metadata_drift_for_all_message_proof_domains() -> None:
+    """Strict verifier must reject copied canary source/bound drift everywhere."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    base_by_domain = {
+        verifier.SCCP_DOMAIN_ETH: {
+            "chain": "eth",
+            "evm_source_rpc_chain_id": "1",
+            "evm_source_block_tag": "finalized",
+            "evm_destination_rpc_chain_id": "1",
+            "evm_destination_block_tag": "finalized",
+            "source_verifier_material_hash": hex32("11"),
+            "source_adapter_engine_deployment_hash": hex32("22"),
+            "destination_binding_hash": hex32("33"),
+            "route_allowlist_hash": hex32("44"),
+            "route_canary_transaction_hash": hex32("55"),
+            "route_canary_receipt_block_number": 1,
+            "route_canary_receipt_block_hash": hex32("66"),
+            "route_canary_receipt_block_finalized": True,
+            "route_canary_block_receipts_root": hex32("77"),
+            "route_canary_message_id": hex32("88"),
+            "route_canary_block_number": None,
+            "route_canary_block_timestamp": None,
+        },
+        verifier.SCCP_DOMAIN_BSC: {
+            "chain": "bsc",
+            "evm_source_rpc_chain_id": "56",
+            "evm_source_block_tag": "finalized",
+            "evm_destination_rpc_chain_id": "56",
+            "evm_destination_block_tag": "finalized",
+            "route_canary_transaction_hash": hex32("55"),
+            "route_canary_receipt_block_number": 1,
+            "route_canary_receipt_block_hash": hex32("66"),
+            "route_canary_receipt_block_finalized": True,
+            "route_canary_block_receipts_root": hex32("77"),
+            "route_canary_message_id": hex32("88"),
+            "route_canary_block_number": None,
+            "route_canary_block_timestamp": None,
+        },
+        verifier.SCCP_DOMAIN_TRON: {
+            "chain": "tron",
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_raw_data_owner_matches_transaction": True,
+            "route_canary_signature_recovers_to_owner": True,
+            "route_canary_block_number": 1,
+            "route_canary_block_timestamp": 0,
+        },
+    }
+
+    # Source-inventory marker: strict verifier public crypto route-canary metadata exactness covers every message-proof launch domain
+    for domain in (
+        verifier.SCCP_DOMAIN_ETH,
+        verifier.SCCP_DOMAIN_BSC,
+        verifier.SCCP_DOMAIN_TRON,
+    ):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "route_canary_evidence_hash": fixed_hex32(0x70 + domain),
+                "route_canary_evidence_source": "operator_attestation",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": True,
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": domain,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+                "route_canary_call_data_sha256": fixed_hex32(0x80 + domain),
+                "route_canary_payload_hash": fixed_hex32(0x85 + domain),
+                "route_canary_statement_hash": fixed_hex32(0x8A + domain),
+                "route_canary_commitment_root": fixed_hex32(0x90 + domain),
+                "route_canary_finality_height": fixed_hex32(0x95 + domain),
+                "route_canary_finality_block_hash": fixed_hex32(0x9A + domain),
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+        row.update(base_by_domain[domain])
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+        expected_source = verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+
+        assert any(
+            f"route_canary_evidence_source must be {expected_source}" in error
+            for error in errors
+        ), domain
+        assert any(
+            "route_canary_evidence_bound must be true" in error for error in errors
+        ), domain
+
+
+def test_release_bundle_verifier_rejects_snapshot_crypto_route_canary_metadata_drift() -> None:
+    """Strict verifier must reject copied Solana/TON snapshot metadata drift."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+
+    # Source-inventory marker: strict verifier public crypto route-canary snapshot metadata exactness covers every snapshot launch domain
+    for domain, chain in (
+        (verifier.SCCP_DOMAIN_SOL, "sol"),
+        (verifier.SCCP_DOMAIN_TON, "ton"),
+    ):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_hash": fixed_hex32(0xA0 + domain),
+                "route_canary_evidence_source": "operator_attestation",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+        expected_source = verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+
+        assert (
+            "readiness report cryptographic evidence row "
+            f"route_canary_evidence_source must be {expected_source} "
+            "for snapshot route canary evidence"
+        ) in errors, domain
+        assert (
+            "readiness report cryptographic evidence row "
+            "route_canary_evidence_bound must be true for snapshot route "
+            "canary evidence"
+        ) in errors, domain
+
+
+def test_release_bundle_verifier_rejects_non_evm_crypto_route_canary_evm_metadata() -> None:
+    """Strict verifier must reject EVM metadata on non-EVM canary rows."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    evm_hash_fields = (
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    )
+    evm_null_fields = (
+        "route_canary_receipt_block_number",
+        "route_canary_receipt_block_finalized",
+    )
+
+    # Source-inventory marker: strict verifier public crypto non-EVM route-canary EVM metadata null policy covers every non-EVM canary launch domain
+    for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+        if domain in (verifier.SCCP_DOMAIN_ETH, verifier.SCCP_DOMAIN_BSC):
+            continue
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_hash": fixed_hex32(0xB0 + domain),
+                "route_canary_evidence_source": (
+                    verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+                ),
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+        if domain == verifier.SCCP_DOMAIN_TRON:
+            row.update(
+                {
+                    "route_canary_message_proof_used": True,
+                    "route_canary_raw_data_owner_matches_transaction": True,
+                    "route_canary_signature_recovers_to_owner": True,
+                    "route_canary_log_index": 0,
+                    "route_canary_target_domain": domain,
+                    "route_canary_proof_version": 1,
+                    "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+                    "route_canary_block_number": 1,
+                    "route_canary_block_timestamp": 2,
+                }
+            )
+            for offset, field in enumerate(
+                (
+                    "route_canary_call_data_sha256",
+                    "route_canary_payload_hash",
+                    "route_canary_statement_hash",
+                    "route_canary_commitment_root",
+                    "route_canary_finality_height",
+                    "route_canary_finality_block_hash",
+                ),
+                start=1,
+            ):
+                row[field] = fixed_hex32(0xC0 + domain + offset)
+        for offset, field in enumerate(evm_hash_fields, start=1):
+            row[field] = fixed_hex32(0xD0 + domain + offset)
+        row["route_canary_receipt_block_number"] = 1
+        row["route_canary_receipt_block_finalized"] = True
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+        for field in evm_hash_fields:
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{field} must be empty for lanes without EVM route canary "
+                "evidence"
+            ) in errors, (domain, field)
+        for field in evm_null_fields:
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{field} must be null for lanes without EVM route canary "
+                "evidence"
+            ) in errors, (domain, field)
+
+
+def test_release_bundle_verifier_rejects_absent_crypto_route_canary_metadata_drift() -> None:
+    """Strict verifier must not accept metadata for absent route-canary evidence."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+
+    # Source-inventory marker: strict verifier public crypto absent route-canary metadata exactness covers every launch domain
+    for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": (
+                    verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+                ),
+                "route_canary_evidence_bound": True,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+        assert (
+            "readiness report cryptographic evidence row "
+            "route_canary_evidence_source must be empty when route canary "
+            "evidence is absent"
+        ) in errors, domain
+        assert (
+            "readiness report cryptographic evidence row "
+            "route_canary_evidence_bound must be false when route canary "
+            "evidence is absent"
+        ) in errors, domain
+
+
+def test_release_bundle_verifier_rejects_absent_crypto_route_canary_message_proof_flag() -> None:
+    """Strict verifier must reject message-proof flags without canary evidence."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+
+    # Source-inventory marker: strict verifier public crypto absent route-canary message-proof flag exactness covers every launch domain
+    for proof_used in (True, False):
+        for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+            row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+            row.update(
+                {
+                    "domain": domain,
+                    "chain": chain,
+                    "evm_source_rpc_chain_id": "",
+                    "evm_source_block_tag": "",
+                    "evm_destination_rpc_chain_id": "",
+                    "evm_destination_block_tag": "",
+                    "route_canary_evidence_hash": "",
+                    "route_canary_evidence_source": "",
+                    "route_canary_evidence_bound": False,
+                    "route_canary_message_proof_used": proof_used,
+                    "source_adapter_gate_required": True,
+                    "source_adapter_gate_hash": hex32("aa"),
+                    "source_adapter_gate_audit_hashes": {
+                        verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                            domain
+                        ]: hex32("aa")
+                    },
+                }
+            )
+
+            errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+            assert (
+                "readiness report cryptographic evidence row "
+                "route_canary_message_proof_used must be null when route "
+                "canary evidence is absent"
+            ) in errors, (domain, proof_used)
+
+
+def test_release_bundle_verifier_rejects_absent_crypto_route_canary_owner_signature_flags() -> None:
+    """Strict verifier must reject owner/signature flags without canary evidence."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    flag_fields = (
+        "route_canary_raw_data_owner_matches_transaction",
+        "route_canary_signature_recovers_to_owner",
+    )
+
+    # Source-inventory marker: strict verifier public crypto absent route-canary owner/signature flag exactness covers every launch domain
+    for flag_value in (True, False):
+        for field in flag_fields:
+            for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+                row = {field_name: None for field_name in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+                row.update(
+                    {
+                        "domain": domain,
+                        "chain": chain,
+                        "evm_source_rpc_chain_id": "",
+                        "evm_source_block_tag": "",
+                        "evm_destination_rpc_chain_id": "",
+                        "evm_destination_block_tag": "",
+                        "route_canary_evidence_hash": "",
+                        "route_canary_evidence_source": "",
+                        "route_canary_evidence_bound": False,
+                        "route_canary_message_proof_used": None,
+                        "source_adapter_gate_required": True,
+                        "source_adapter_gate_hash": hex32("aa"),
+                        "source_adapter_gate_audit_hashes": {
+                            verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                                domain
+                            ]: hex32("aa")
+                        },
+                    }
+                )
+                row[field] = flag_value
+
+                errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+                assert (
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be null when route canary evidence is absent"
+                ) in errors, (domain, field, flag_value)
+
+
+def test_release_bundle_verifier_rejects_absent_crypto_route_canary_proof_context() -> None:
+    """Strict verifier must reject proof context without canary evidence."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    scalar_fields = (
+        "route_canary_log_index",
+        "route_canary_target_domain",
+        "route_canary_proof_version",
+        "route_canary_proof_source_domain",
+    )
+    transcript_fields = (
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+        "route_canary_finality_height",
+        "route_canary_finality_block_hash",
+    )
+    tron_block_fields = (
+        "route_canary_block_number",
+        "route_canary_block_timestamp",
+    )
+
+    # Source-inventory marker: strict verifier public crypto absent route-canary proof context exactness covers every launch domain
+    for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": "",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": domain,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+                "route_canary_block_number": 1,
+                "route_canary_block_timestamp": 2,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+        for offset, field in enumerate(transcript_fields, start=1):
+            row[field] = fixed_hex32(0x80 + domain + offset)
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+        for field in scalar_fields + transcript_fields + tron_block_fields:
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{field} must be null when route canary evidence is absent"
+            ) in errors, (domain, field)
+
+
+def test_release_bundle_verifier_rejects_absent_crypto_route_canary_evm_metadata_drift() -> None:
+    """Strict verifier must reject EVM metadata without canary evidence."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    evm_hash_fields = (
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    )
+    evm_null_fields = (
+        "route_canary_receipt_block_number",
+        "route_canary_receipt_block_finalized",
+    )
+
+    # Source-inventory marker: strict verifier public crypto absent route-canary EVM metadata exactness covers every launch domain
+    for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": "",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+        for offset, field in enumerate(evm_hash_fields, start=1):
+            row[field] = fixed_hex32(0x50 + domain + offset)
+        row["route_canary_receipt_block_number"] = 1
+        row["route_canary_receipt_block_finalized"] = True
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+        for field in evm_hash_fields:
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{field} must be empty when route canary evidence is absent"
+            ) in errors, (domain, field)
+        for field in evm_null_fields:
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{field} must be null when route canary evidence is absent"
+            ) in errors, (domain, field)
 
 
 def test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift() -> None:
@@ -37239,6 +42547,37 @@ def test_release_bundle_verifier_rejects_crypto_evidence_unknown_fields(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_crypto_evidence_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic evidence roots must stay list-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cryptographic_evidence"] = "operator secret-token-crypto-root"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report cryptographic_evidence is missing" in verified.stdout
+    assert "secret-token-crypto-root" not in verified.stdout
+    assert "secret-token-crypto-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields(
     tmp_path: Path,
 ) -> None:
@@ -37321,6 +42660,42 @@ def test_release_bundle_verifier_rejects_submission_surface_drift(
         "readiness report user_prover_submission_surfaces does not match "
         "corridor phases"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_root_drift(
+    tmp_path: Path,
+) -> None:
+    """Portal/mobile submission roots must stay list-shaped and redacted."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["user_prover_submission_surfaces"] = (
+        "operator secret-token-user-surface-root"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user_prover_submission_surfaces is missing"
+        in verified.stdout
+    )
+    assert "secret-token-user-surface-root" not in verified.stdout
+    assert "secret-token-user-surface-root" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_submission_surface_unknown_fields(
@@ -37492,6 +42867,52 @@ def test_release_bundle_verifier_rejects_submission_surface_field_type_drift(
         "readiness report user prover submission surface row validation_blockers "
         "must be a list of non-empty strings"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_encoded_duplicate_validation_blockers(
+) -> None:
+    """Copied user-prover blocker duplicates must compare decoded text."""
+
+    verifier = load_verify_helpers()
+    blocker = "safe duplicated user-surface blocker"
+    encoded_blocker = "safe%20duplicated%20user-surface%20blocker"
+    errors = verifier._submission_surface_validation_blocker_list_errors(
+        [blocker, encoded_blocker],
+        "readiness report user prover submission surface row",
+    )
+    rendered = "\n".join(errors)
+
+    assert (
+        "readiness report user prover submission surface row "
+        "validation_blockers must not contain duplicate strings"
+    ) in rendered
+    assert blocker not in rendered
+    assert encoded_blocker not in rendered
+
+
+def test_release_bundle_rejects_submission_surface_encoded_recovery_phrase_blockers(
+) -> None:
+    """Copied user-prover blockers must reject decoded recovery-phrase labels."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    label = "readiness report user prover submission surface row"
+    blockers = (
+        "operator recovery%20phrase-user-surface-blocker",
+        "operator recovery&#32;phrase-user-surface-blocker",
+        "operator recovery_phrase-user-surface-blocker",
+    )
+
+    for module in (bundle, verifier):
+        for blocker in blockers:
+            errors = module._submission_surface_validation_blocker_list_errors(
+                [blocker],
+                label,
+            )
+            rendered = "\n".join(errors)
+
+            assert f"{label} validation_blockers contains blocker with sensitive name" in rendered
+            assert blocker not in rendered
 
 
 def test_release_bundle_verifier_rejects_submission_surface_helper_symbol_drift(
@@ -39967,6 +45388,60 @@ def test_release_bundle_verifier_rejects_extra_dotnet_success_before_test_comman
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_duplicate_dotnet_success_after_test_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET success markers must not repeat in the test command window."""
+
+    cases = (
+        ("passed-summary", "Passed!", "Passed!"),
+        ("trx-path", "SCCP .NET SDK TRX:", "SCCP .NET SDK TRX:"),
+        ("trx-bytes", "SCCP .NET SDK TRX bytes:", "SCCP .NET SDK TRX bytes:"),
+    )
+    for case_name, line_prefix, expected_marker in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        output_dir = build_ready_bundle(case_dir)
+        report = load_report_module()
+        lines = phase_successful_lines(report, "dotnet-sdk")
+        duplicate_index = next(
+            index for index, line in enumerate(lines) if line.startswith(line_prefix)
+        )
+        forged_lines = [
+            *lines[: duplicate_index + 1],
+            lines[duplicate_index],
+            *lines[duplicate_index + 1 :],
+        ]
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *forged_lines,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, case_name
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact success marker "
+            "appears more times than required command windows: "
+            f"{expected_marker}"
+        ) in verified.stdout, case_name
+
+
 def test_release_bundle_verifier_rejects_extra_dotnet_setup_markers_before_commands(
     tmp_path: Path,
 ) -> None:
@@ -41197,6 +46672,59 @@ def test_release_bundle_verifier_rejects_dotnet_failed_summary_transcript(
     assert (
         "readiness report phase dotnet-sdk evidence artifact is missing "
         "expected phase-block success marker: Passed!"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_extra_dotnet_malformed_summary(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject malformed summary copies."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    success_fragments = list(phase_success_lines(report, "dotnet-sdk"))
+    passed_index = next(
+        index
+        for index, fragment in enumerate(success_fragments)
+        if fragment.startswith("Passed!")
+    )
+    success_fragments.insert(
+        passed_index + 1,
+        "Passed! - Failed: 1, Passed: 42, Skipped: 0, Total: 43, "
+        "Duration: 1 s - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
+    )
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    expected_diagnostic = report._phase_diagnostic_fragment(
+        report.DOTNET_TEST_PASSED_MALFORMED_SUMMARY_ERROR_FRAGMENT
+    )
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact contains "
+        f"forbidden phase-block failure marker: {expected_diagnostic}"
     ) in verified.stdout
 
 
@@ -42502,6 +48030,63 @@ def test_release_bundle_verifier_rejects_dotnet_padded_or_tabbed_marker_separato
             ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_dotnet_hidden_success_markers(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must not hide canonical markers behind controls."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    cases = (
+        ("version-ansi", "SCCP .NET SDK version:", "\x1b[0m"),
+        ("summary-format", "Passed!", "\u200d"),
+        ("trx-bytes-control", "SCCP .NET SDK TRX bytes:", "\x00"),
+    )
+    base_lines = phase_successful_lines(report, "dotnet-sdk")
+    for case_name, marker_prefix, hidden_text in cases:
+        mutated = False
+        forged_lines: list[str] = []
+        for line in base_lines:
+            if not mutated and line.startswith(marker_prefix):
+                forged_lines.append(
+                    f"{line[: len(marker_prefix)]}{hidden_text}{line[len(marker_prefix):]}"
+                )
+                mutated = True
+            else:
+                forged_lines.append(line)
+        assert mutated, case_name
+        phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *forged_lines,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1, case_name
+        expected_diagnostic = report._phase_diagnostic_fragment(
+            report.DOTNET_HIDDEN_SUCCESS_MARKER_ERROR_FRAGMENT
+        )
+        assert (
+            "readiness report phase dotnet-sdk evidence artifact contains "
+            f"forbidden phase-block failure marker: {expected_diagnostic}"
+        ) in verified.stdout, case_name
+
+
 def test_release_bundle_verifier_rejects_inert_swift_phase_command_fragment(
     tmp_path: Path,
 ) -> None:
@@ -42819,6 +48404,143 @@ def test_release_bundle_verifier_rejects_unparseable_dotnet_command(
     assert "secret-token" not in verified.stderr
     assert "No closing quotation" not in verified.stdout
     assert "No closing quotation" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_shell_commented_dotnet_command(
+    tmp_path: Path,
+) -> None:
+    """Published .NET evidence must reject canonical commands with comment tails."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    version_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet --version")
+    )
+    forged_lines = (
+        lines[:version_index]
+        + [f"{lines[version_index]} # secret-token-hidden-comment"]
+        + lines[version_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact contains "
+        "shell-commented traced command"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_hidden_dotnet_command_trace(
+    tmp_path: Path,
+) -> None:
+    """Published .NET command traces must be raw canonical xtrace lines."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "dotnet-sdk")
+    version_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ dotnet --version")
+    )
+    forged_lines = (
+        lines[:version_index]
+        + [f"\u200b{lines[version_index]}"]
+        + lines[version_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "dotnet-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: dotnet-sdk",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "dotnet-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase dotnet-sdk evidence artifact contains "
+        "hidden-character traced command"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_hidden_non_dotnet_command_trace(
+    tmp_path: Path,
+) -> None:
+    """Published command traces must be raw canonical xtrace lines in every phase."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines = phase_successful_lines(report, "rust-sccp")
+    command_index = next(
+        index for index, line in enumerate(lines) if line.startswith("+ cargo test ")
+    )
+    forged_lines = (
+        lines[:command_index]
+        + [f"\u200b{lines[command_index]}"]
+        + lines[command_index + 1 :]
+    )
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                *forged_lines,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact contains "
+        "hidden-character traced command"
+    ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_obfuscated_dotnet_command_trace(
@@ -43511,23 +49233,34 @@ def test_release_bundle_verifier_redacts_phase_transcript_checker_errors(
     output_dir = build_ready_bundle(tmp_path)
     verifier = load_verify_helpers()
 
-    def fail_phase_transcript_errors(_bundle_dir, _phase, _artifact):
-        raise RuntimeError("secret-token phase transcript verifier detail")
+    for exception_type in (RuntimeError, SystemExit):
 
-    monkeypatch.setattr(
-        verifier,
-        "_phase_transcript_errors",
-        fail_phase_transcript_errors,
-    )
+        def fail_phase_transcript_errors(
+            _bundle_dir,
+            _phase,
+            _artifact,
+            exception_type=exception_type,
+        ):
+            raise exception_type(
+                "secret-token phase transcript verifier detail "
+                f"{exception_type.__name__}"
+            )
 
-    summary = verifier.verify_bundle(output_dir)
-    errors = "\n".join(summary["errors"])
+        monkeypatch.setattr(
+            verifier,
+            "_phase_transcript_errors",
+            fail_phase_transcript_errors,
+        )
 
-    assert summary["verified"] is False
-    assert "readiness report phase transcript cannot be checked" in errors
-    assert "secret-token" not in errors
-    assert "phase transcript verifier detail" not in errors
-    assert "Traceback" not in errors
+        summary = verifier.verify_bundle(output_dir)
+        errors = "\n".join(summary["errors"])
+
+        assert summary["verified"] is False
+        assert "readiness report phase transcript cannot be checked" in errors
+        assert "secret-token" not in errors
+        assert "phase transcript verifier detail" not in errors
+        assert exception_type.__name__ not in errors
+        assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_requires_evm_evidence_script_transcript(
@@ -45494,7 +51227,7 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "test_sccp_production_corridor_dotnet_phase_rejects_duplicate_rid",
         "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
-        "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_when_os_architecture_absent",
+        "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_fallback",
         "test_sccp_production_corridor_dotnet_phase_rejects_missing_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
@@ -45526,13 +51259,89 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "dotnet_info_field_value",
         "substr(line, length(label) + 2)",
         "exactly one canonical Windows RID from dotnet --info",
-        "exactly one canonical architecture source from dotnet --info",
+        "exactly one OS Architecture from dotnet --info",
+        "exactly one Host Architecture from dotnet --info when OS Architecture is absent",
+        "at most one Host Architecture from dotnet --info",
+        "OS Architecture and Host Architecture to agree",
         "found: X64",
+        "TRX_IDENTIFIER_RE",
+        "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "TRX_ASSEMBLY_PATH_FORBIDDEN_RE",
+        'dtd_probe = lowered_trx.replace(b"\\x00", b"")',
+        "trx_assembly_reference_problem",
+        "is_trusted_assembly_reference",
+        "requires canonical TRX assembly path values",
+        "SUMMARY_LIKE_RE",
+        "ANSI_ESCAPE_PATTERN",
+        "ASCII_CONTROL_CHARACTER_PATTERN",
+        "normalized_summary_line",
+        'unicodedata.category(character) != "Cf"',
+        "malformed_summary_lines",
+        "canonical-plus-failed-summary",
+        "canonical-plus-ansi-failed-summary",
+        "DOTNET_TEST_PASSED_SUMMARY_LIKE_PATTERN",
+        "DOTNET_TEST_PASSED_MALFORMED_SUMMARY_ERROR_FRAGMENT",
+        ".NET malformed VSTest summary marker",
+        "DOTNET_HIDDEN_SUCCESS_MARKER_ERROR_FRAGMENT",
+        ".NET hidden success marker",
+        "PHASE_HIDDEN_SUCCESS_MARKER_ERROR_FRAGMENT",
+        "hidden success marker",
+        "def _dotnet_success_marker_line_matches(",
+        "normalized_line != line and _dotnet_success_marker_line_matches(",
+        "def _phase_line_has_hidden_traced_command(",
+        "def _phase_block_has_hidden_traced_command(",
+        "contains hidden-character traced command",
+        "def _phase_output_line_has_raw_success_fragment(",
+        "return _phase_output_line_has_raw_success_fragment(line, fragment)",
+        "def _phase_line_has_hidden_success_marker(",
+        "_phase_output_line_has_raw_success_fragment(normalized_line, fragment)",
+        "or _phase_output_line_has_raw_success_fragment(line, fragment)",
+        "test_release_readiness_report_blocks_unsafe_phase_artifact_row_paths",
+        "_decoded_public_blocker_text_issue(artifact_path) is not None",
+        "_public_text_contains_sensitive_marker(artifact_path)",
+        "artifact_path != relative_path.as_posix()",
+        "test_release_readiness_report_rejects_extra_dotnet_malformed_summary",
+        "test_release_bundle_verifier_rejects_extra_dotnet_malformed_summary",
+        "def _phase_command_has_shell_comment_tail(",
+        "def _phase_block_has_shell_comment_tail(",
+        "contains shell-commented traced command",
+        "test_release_readiness_report_rejects_shell_commented_dotnet_command",
+        "test_release_bundle_verifier_rejects_shell_commented_dotnet_command",
+        "def _swift_sdk_setup_command_matches(",
+        "def _phase_command_matches_known_trace(",
+        "def _phase_block_has_unexpected_traced_command(",
+        "contains unexpected traced command",
+        "test_release_readiness_report_rejects_unexpected_phase_command",
+        "test_release_bundle_verifier_rejects_unexpected_phase_command",
+        "test_release_bundle_phase_command_matchers_allow_only_known_swift_setup",
+        "pathlike-unit-test-id",
+        "colon-execution-id",
+        "assembly-path-splice",
+        "assembly-traversal-path",
+        "assembly-url-path",
+        "assembly-xml-delimiter-path",
+        "assembly-storage-path-splice",
+        "assembly-storage-traversal-path",
+        "assembly-storage-url-path",
+        "assembly-storage-xml-delimiter-path",
+        "pathlike-result-test-id",
+        "xml-delimiter-result-execution-id",
         "direct .NET TRX TestResults path must remain the only accepted path",
         "nested .NET TRX TestResults paths must remain rejected",
         r"^SCCP \.NET SDK version: 8\.0\.[1-9][0-9]*$",
         "test_release_readiness_report_rejects_dotnet_padded_or_tabbed_marker_separators",
         "test_release_bundle_verifier_rejects_dotnet_padded_or_tabbed_marker_separators",
+        "test_release_readiness_report_rejects_dotnet_hidden_success_markers",
+        "test_release_bundle_verifier_rejects_dotnet_hidden_success_markers",
+        "test_release_readiness_report_rejects_hidden_dotnet_command_trace",
+        "test_release_bundle_verifier_rejects_hidden_dotnet_command_trace",
+        "test_release_readiness_report_rejects_hidden_non_dotnet_command_trace",
+        "test_release_bundle_verifier_rejects_hidden_non_dotnet_command_trace",
+        "test_release_readiness_report_rejects_hidden_phase_success_marker",
+        "test_release_bundle_verifier_rejects_hidden_phase_success_marker",
+        "test_release_readiness_report_rejects_decorated_phase_success_marker",
+        "test_release_bundle_verifier_rejects_decorated_phase_success_marker",
+        "test_sccp_production_corridor_dotnet_phase_rejects_utf16_dtd_trx",
     ):
         assert required_marker in inventory_markers
 
@@ -45623,7 +51432,16 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
                     "SUCCESS_OUTPUT_NEGATION_PATTERN",
                     "SUCCESS_OUTPUT_DIAGNOSTIC_PREFIX_PATTERN",
                     "SHELL_XTRACE_COMMAND_PATTERN",
+                    "def _swift_sdk_setup_command_matches(",
+                    "def _phase_command_matches_known_trace(",
+                    "def _phase_block_has_unexpected_traced_command(",
+                    "contains unexpected traced command",
                     "def _phase_output_line_has_success_fragment(",
+                    "def _phase_output_line_has_raw_success_fragment(",
+                    "return _phase_output_line_has_raw_success_fragment(line, fragment)",
+                    "PHASE_HIDDEN_SUCCESS_MARKER_ERROR_FRAGMENT",
+                    "def _phase_line_has_hidden_success_marker(",
+                    "or _phase_output_line_has_raw_success_fragment(line, fragment)",
                     "def _line_is_shell_xtrace_command(",
                     "SHELL_XTRACE_COMMAND_PATTERN.match(normalized_line)",
                     "def _phase_block_has_exact_output_line(",
@@ -45757,6 +51575,17 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
     assert any(
         "SCCP release corridor phase-transcript source inventory" in error
         and "missing marker: _phase_diagnostic_fragment(forbidden_marker)" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: def _phase_block_has_unexpected_traced_command("
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release corridor phase-transcript source inventory" in error
+        and "missing marker: contains unexpected traced command" in error
         for error in errors
     )
     assert any(
@@ -50431,6 +56260,30 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            "SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "recovery-phrase",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "recovery_phrase",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "seed-phrase",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "seed_phrase",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "mnemonic",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "def _minimal_toml_duplicate_key_detail(",
         ),
         (
@@ -50462,6 +56315,10 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
             "unsupported zk section with malformed name",
         ),
         (
+            "scripts/sccp_all_lanes_evidence.py",
+            "source_adapter_gate audit hashes use safe public key ordering before role checks",
+        ),
+        (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
         ),
@@ -50480,6 +56337,10 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_minimal_toml_sensitive_helpers_cover_marker_families",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -50515,6 +56376,14 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "recovery_phrase_duplicate_key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "mnemonic_duplicate_key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "route|operator-duplicate-key",
         ),
         (
@@ -50523,11 +56392,27 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "recovery-phrase-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "seed_phrase_section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "route|operator-section",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "secret-token-zk-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "recovery-phrase-zk-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "mnemonic-zk-section",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -51146,6 +57031,48 @@ def test_release_bundle_verifier_rejects_extra_rust_success_before_command(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_unexpected_phase_command(
+    tmp_path: Path,
+) -> None:
+    """Published phase transcripts must not carry unrelated traced commands."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "rust-sccp.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                "+ true secret-token-hidden-command",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "rust-sccp")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase rust-sccp evidence artifact contains "
+        "unexpected traced command"
+    ) in verified.stdout
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_duplicate_rust_command(
     tmp_path: Path,
 ) -> None:
@@ -51493,6 +57420,96 @@ def test_release_bundle_verifier_rejects_obfuscated_xtrace_success_marker(
     assert (
         "readiness report phase contract-smoke evidence artifact is missing "
         f"expected phase-block success marker: {success_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_hidden_phase_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase success output must be raw canonical marker text."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"][-1]
+    split_at = len(success_marker) // 2
+    hidden_success_marker = (
+        f"{success_marker[:split_at]}\u200b{success_marker[split_at:]}"
+    )
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                hidden_success_marker,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    expected_diagnostic = report._phase_diagnostic_fragment(
+        report.PHASE_HIDDEN_SUCCESS_MARKER_ERROR_FRAGMENT
+    )
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        f"forbidden phase-block failure marker: {expected_diagnostic}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_decorated_phase_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase success output must not carry hidden terminal decoration."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"][-1]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                f"{success_marker}\u200b",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    expected_diagnostic = report._phase_diagnostic_fragment(
+        report.PHASE_HIDDEN_SUCCESS_MARKER_ERROR_FRAGMENT
+    )
+    assert (
+        "readiness report phase contract-smoke evidence artifact contains "
+        f"forbidden phase-block failure marker: {expected_diagnostic}"
     ) in verified.stdout
 
 

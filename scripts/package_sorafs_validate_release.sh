@@ -251,8 +251,49 @@ stage_dir = Path(sys.argv[1])
 archive_path = Path(sys.argv[2])
 package_name = sys.argv[3]
 
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def read_open_flags():
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+def write_open_flags():
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+def validate_archive_path(path, label):
+    try:
+        if path.is_symlink():
+            fail(f"{label} `{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                fail(f"{label} parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                fail(f"{label} parent `{parent}` must be a directory when it exists")
+    except OSError as error:
+        fail(f"failed to inspect {label} `{path}`: {error}")
+
+def scan_stage_entries(root):
+    validate_archive_path(root, "release package stage root")
+    try:
+        return sorted(
+            root.rglob("*"),
+            key=lambda item: item.relative_to(root).as_posix(),
+        )
+    except OSError as error:
+        fail(f"failed to scan release package stage root `{root}`: {error}")
+
 def add_entry(tar, path, arcname):
-    source = path.stat()
+    validate_archive_path(path, "release package entry")
+    source = path.lstat()
     info = tarfile.TarInfo(arcname)
     info.uid = 0
     info.gid = 0
@@ -266,18 +307,37 @@ def add_entry(tar, path, arcname):
         tar.addfile(info)
         return
 
+    if not stat.S_ISREG(source.st_mode):
+        fail(f"release package entry `{path}` must be a regular file or directory")
     info.size = source.st_size
     info.mode = 0o755 if source.st_mode & stat.S_IXUSR else 0o644
-    with path.open("rb") as handle:
-        tar.addfile(info, handle)
+    fd = -1
+    try:
+        fd = os.open(path, read_open_flags())
+        handle = os.fdopen(fd, "rb")
+        fd = -1
+        with handle:
+            tar.addfile(info, handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
-with archive_path.open("wb") as raw:
-    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
-        with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            add_entry(tar, stage_dir, package_name)
-            for path in sorted(stage_dir.rglob("*"), key=lambda item: item.relative_to(stage_dir).as_posix()):
-                relative = path.relative_to(stage_dir).as_posix()
-                add_entry(tar, path, f"{package_name}/{relative}")
+validate_archive_path(archive_path, "release package archive")
+archive_fd = -1
+try:
+    archive_fd = os.open(archive_path, write_open_flags(), 0o666)
+    raw = os.fdopen(archive_fd, "wb")
+    archive_fd = -1
+    with raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                add_entry(tar, stage_dir, package_name)
+                for path in scan_stage_entries(stage_dir):
+                    relative = path.relative_to(stage_dir).as_posix()
+                    add_entry(tar, path, f"{package_name}/{relative}")
+finally:
+    if archive_fd >= 0:
+        os.close(archive_fd)
 PY
 archive_sha="$(sha256_file "$archive_path")"
 printf '%s  %s\n' "$archive_sha" "$(basename "$archive_path")" > "$archive_sha_path"
@@ -296,7 +356,51 @@ export SORAFS_VALIDATE_PACKAGE_SMOKE="$skip_smoke"
 python3 - "$manifest_path" <<'PY'
 import json
 import os
+from pathlib import Path
+import stat
 import sys
+
+manifest_path = Path(sys.argv[1])
+
+def write_open_flags():
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def validate_manifest_output_path(path):
+    try:
+        if path.is_symlink():
+            fail(f"release manifest output `{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                fail(f"release manifest output parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                fail(f"release manifest output parent `{parent}` must be a directory")
+    except OSError as error:
+        fail(f"failed to inspect release manifest output `{path}`: {error}")
+
+def write_manifest_no_follow(path, payload):
+    validate_manifest_output_path(path)
+    fd = -1
+    try:
+        fd = os.open(path, write_open_flags(), 0o666)
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            fail(f"release manifest output `{path}` must be a regular file")
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 stage_files = [
     {
@@ -352,9 +456,7 @@ manifest = {
     "smoke_checks": os.environ["SORAFS_VALIDATE_PACKAGE_SMOKE"] == "0",
     "smoke_outputs": smoke_checks,
 }
-with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump(manifest, handle, indent=2, sort_keys=True)
-    handle.write("\n")
+write_manifest_no_follow(manifest_path, manifest)
 PY
 manifest_sha="$(sha256_file "$manifest_path")"
 printf '%s  %s\n' "$manifest_sha" "$(basename "$manifest_path")" > "$manifest_sha_path"

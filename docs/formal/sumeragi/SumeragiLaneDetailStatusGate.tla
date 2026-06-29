@@ -281,6 +281,17 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+LaneDetailStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+LaneDetailStatusExactness ==
+  /\ LaneDetailStatusActionsMatchSpec
+
+LaneDetailStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LaneDetailStatusExactness
+
 BugLaneCommitmentsWrongReplace ==
   ImplementationActions(LaneCommitmentsReplace) =
     SpecActions(LaneCommitmentsReplace)

@@ -18,7 +18,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flate2::{Compression as FlateCompression, write::GzEncoder};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::{
-    DaTaikaiAnchor, LaneConfig as ConfigLaneConfig, TelemetryProfile,
+    DaTaikaiAnchor, LaneConfig as ConfigLaneConfig, Nexus as ConfigNexus, TelemetryProfile,
 };
 use iroha_core::{da::LaneEpoch, telemetry::Telemetry};
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
@@ -31,7 +31,10 @@ use iroha_data_model::{
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
     name::Name,
-    nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+    nexus::{
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig as ModelLaneConfig, LaneId,
+    },
     sorafs::{
         capacity::ProviderId,
         pin_registry::{ManifestAliasBinding, ManifestDigest},
@@ -1306,21 +1309,54 @@ fn sample_request() -> DaIngestRequest {
     }
 }
 
-fn lane_config_with_scheme(lane_id: LaneId, scheme: DaProofScheme) -> ConfigLaneConfig {
-    let metadata = ModelLaneConfig {
+fn lane_catalog_with_lanes(lanes: Vec<ModelLaneConfig>) -> LaneCatalog {
+    let max_lane = lanes
+        .iter()
+        .map(|lane| lane.id.as_u32())
+        .max()
+        .unwrap_or_default();
+    LaneCatalog::new(
+        NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count"),
+        lanes,
+    )
+    .expect("lane catalog")
+}
+
+fn nexus_with_catalog(lane_catalog: LaneCatalog) -> ConfigNexus {
+    let dataspace_catalog = DataSpaceCatalog::new(
+        lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.dataspace_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|id| DataSpaceMetadata {
+                id,
+                alias: format!("ds-{}", id.as_u64()),
+                description: None,
+                fault_tolerance: 1,
+            })
+            .collect(),
+    )
+    .expect("dataspace catalog");
+    ConfigNexus {
+        enabled: true,
+        lane_config: ConfigLaneConfig::from_catalog(&lane_catalog),
+        lane_catalog,
+        dataspace_catalog,
+        ..Default::default()
+    }
+}
+
+fn nexus_with_scheme(lane_id: LaneId, scheme: DaProofScheme) -> ConfigNexus {
+    let lane = ModelLaneConfig {
         id: lane_id,
         dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
         alias: format!("lane-{}", lane_id.as_u32()),
         proof_scheme: scheme,
         ..ModelLaneConfig::default()
     };
-
-    let catalog = LaneCatalog::new(
-        NonZeroU32::new(lane_id.as_u32().saturating_add(1)).expect("lane count"),
-        vec![metadata],
-    )
-    .expect("lane catalog");
-    ConfigLaneConfig::from_catalog(&catalog)
+    nexus_with_catalog(lane_catalog_with_lanes(vec![lane]))
 }
 
 #[test]
@@ -1426,10 +1462,38 @@ fn fingerprint_ignores_manifest_storage_ticket_and_timestamp() {
 #[test]
 fn lane_proof_scheme_accepts_kzg_policy() {
     let lane_id = LaneId::new(3);
-    let config = lane_config_with_scheme(lane_id, DaProofScheme::KzgBls12_381);
+    let nexus = nexus_with_scheme(lane_id, DaProofScheme::KzgBls12_381);
 
-    let scheme = lane_proof_scheme(&config, lane_id).expect("kzg lane should resolve");
+    let scheme = lane_proof_scheme(&nexus, lane_id).expect("kzg lane should resolve");
     assert_eq!(scheme, DaProofScheme::KzgBls12_381);
+}
+
+#[test]
+fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
+    let stale_lane = LaneId::new(3);
+    let authoritative_catalog = lane_catalog_with_lanes(vec![ModelLaneConfig::default()]);
+    let stale_geometry_catalog = lane_catalog_with_lanes(vec![
+        ModelLaneConfig::default(),
+        ModelLaneConfig {
+            id: stale_lane,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: "stale-ingest".to_owned(),
+            proof_scheme: DaProofScheme::KzgBls12_381,
+            ..ModelLaneConfig::default()
+        },
+    ]);
+    let mut nexus = nexus_with_catalog(authoritative_catalog);
+    nexus.lane_config = ConfigLaneConfig::from_catalog(&stale_geometry_catalog);
+    assert!(
+        nexus.lane_config.entry(stale_lane).is_some(),
+        "test must seed derived geometry for the removed lane"
+    );
+
+    let err = lane_proof_scheme(&nexus, stale_lane)
+        .expect_err("stale geometry-only lane must not resolve a proof scheme");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("active lane catalog"));
 }
 
 #[test]

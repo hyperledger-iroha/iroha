@@ -628,6 +628,10 @@ SlotTrackerStateExactness ==
   /\ SlotTrackerProposalSeenExact
   /\ SlotTrackerProposalHorizonExact
 
+SlotTrackerStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SlotTrackerStateExactness
+
 Safety ==
   SlotTrackerStateExactness
 

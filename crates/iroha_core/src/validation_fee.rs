@@ -49,6 +49,10 @@ enum ValidationFeeAdmissionError {
         expected_hash_hex: String,
         found_hash_hex: String,
     },
+    PolicyExpired {
+        expires_after_height: u64,
+        current_height: u64,
+    },
     PolicyHashFailed,
     UnsupportedExecutable,
     NonMinorUnitAmount {
@@ -63,6 +67,7 @@ enum ValidationFeeAdmissionError {
     MissingFee {
         required_minor_units: u64,
     },
+    MissingFeeInstructionCoordinate,
     DuplicateFeeInstructions {
         count: usize,
     },
@@ -150,6 +155,13 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "validation-fee policy genesis mismatch: expected {expected_hash_hex}, found {found_hash_hex}"
             ),
+            Self::PolicyExpired {
+                expires_after_height,
+                current_height,
+            } => write!(
+                f,
+                "validation-fee policy expired at height {expires_after_height}; current height is {current_height}"
+            ),
             Self::PolicyHashFailed => write!(f, "validation-fee policy hash failed"),
             Self::UnsupportedExecutable => {
                 write!(
@@ -178,6 +190,12 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "missing validation-fee transfer of {required_minor_units} minor units"
             ),
+            Self::MissingFeeInstructionCoordinate => {
+                write!(
+                    f,
+                    "missing signed validation-fee instruction coordinate metadata"
+                )
+            }
             Self::DuplicateFeeInstructions { count } => {
                 write!(f, "ambiguous validation-fee transfer count {count}")
             }
@@ -378,11 +396,31 @@ fn active_policy(
     }
     validate_policy_genesis_hash(&policy, state_transaction.block_hashes())
         .map_err(admission_rejection)?;
-    if !policy.is_active_at_height(state_transaction.block_height()) {
+    if !policy_is_active_or_unexpired(&policy, state_transaction.block_height())
+        .map_err(admission_rejection)?
+    {
         return Ok(None);
     }
 
     Ok(Some(policy))
+}
+
+fn policy_is_active_or_unexpired(
+    policy: &ValidationFeePolicyV1,
+    current_height: u64,
+) -> Result<bool, ValidationFeeAdmissionError> {
+    if current_height < policy.effective_from_height {
+        return Ok(false);
+    }
+    if let Some(expires_after_height) = policy.expires_after_height {
+        if current_height >= expires_after_height {
+            return Err(ValidationFeeAdmissionError::PolicyExpired {
+                expires_after_height,
+                current_height,
+            });
+        }
+    }
+    Ok(true)
 }
 
 fn verify_signed_policy(
@@ -469,6 +507,28 @@ fn admission_rejection(error: ValidationFeeAdmissionError) -> TransactionRejecti
     )))
 }
 
+fn policy_fee_asset_definition_id(
+    policy: &ValidationFeePolicyV1,
+) -> Result<AssetDefinitionId, ValidationFeeAdmissionError> {
+    policy.sbd_asset_id.parse().map_err(|_| {
+        ValidationFeeAdmissionError::InvalidPolicyInvariant(
+            "validation-fee policy SBD asset id is not a ledger asset definition id",
+        )
+    })
+}
+
+fn policy_treasury_account_id(
+    policy: &ValidationFeePolicyV1,
+) -> Result<AccountId, ValidationFeeAdmissionError> {
+    AccountId::parse_encoded(policy.treasury_account_id.as_str())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| {
+            ValidationFeeAdmissionError::InvalidPolicyInvariant(
+                "validation-fee policy treasury account id is not a ledger account id",
+            )
+        })
+}
+
 fn enforce_policy(
     tx: &SignedTransaction,
     policy: &ValidationFeePolicyV1,
@@ -477,10 +537,15 @@ fn enforce_policy(
         ValidationFeeChargingMode::PerQualifyingTransferInstruction => {}
     }
 
+    let fee_asset_definition_id = policy_fee_asset_definition_id(policy)?;
+    let treasury = policy_treasury_account_id(policy)?;
     let transfer_collection = collect_asset_transfers(tx.instructions(), tx.authority())?;
-    let fee_asset_transfers = collect_fee_asset_transfers(&transfer_collection.transfers, policy)?;
+    let fee_asset_transfers = collect_fee_asset_transfers(
+        &transfer_collection.transfers,
+        policy,
+        &fee_asset_definition_id,
+    )?;
     let fee_coordinate = validation_fee_coordinate(tx.metadata())?;
-    let treasury = &policy.treasury_account_id;
     let mut requires_policy_metadata = false;
 
     for (context_index, context) in transfer_collection.contexts.iter().enumerate() {
@@ -492,11 +557,13 @@ fn enforce_policy(
         requires_policy_metadata |= enforce_context_policy(
             context_index,
             &context.execution_account_id,
-            treasury,
+            &treasury,
             policy,
+            &fee_asset_definition_id,
             &transfer_collection.transfers,
             &fee_asset_transfers,
             context_fee_coordinate,
+            !context.explicit_fee_coordinate_allowed,
         )?;
     }
 
@@ -511,12 +578,14 @@ fn enforce_context_policy(
     execution_account_id: &AccountId,
     treasury: &AccountId,
     policy: &ValidationFeePolicyV1,
+    fee_asset_definition_id: &AssetDefinitionId,
     transfers: &[AssetTransferSummary],
     fee_asset_transfers: &[FeeAssetTransferSummary],
     fee_coordinate: Option<FeeInstructionCoordinate>,
+    allow_implicit_context_fee: bool,
 ) -> Result<bool, ValidationFeeAdmissionError> {
     let mut qualifying_transfer_count = 0usize;
-    let mut implicit_fee_transfers = Vec::new();
+    let mut uncoordinated_fee_candidates = Vec::new();
     let treasury_payout_exemption_enabled = treasury_payout_exemption_enabled(policy);
 
     if let Some(fee_coordinate) = fee_coordinate {
@@ -527,7 +596,7 @@ fn enforce_context_policy(
             fee_asset_transfers,
             execution_account_id,
             treasury,
-            policy,
+            fee_asset_definition_id,
         )?;
 
         for transfer in fee_asset_transfers
@@ -540,22 +609,17 @@ fn enforce_context_policy(
             if fee_coordinate.matches(transfer) {
                 continue;
             }
-            if &transfer.source_account_id == execution_account_id
-                && &transfer.destination_account_id == treasury
-            {
-                implicit_fee_transfers.push(transfer);
-            } else {
-                qualifying_transfer_count += 1;
-            }
+            qualifying_transfer_count += 1;
         }
 
         if qualifying_transfer_count == 0 {
+            if fee_transfer.amount_minor_units != 0 {
+                return Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 0,
+                    observed_minor_units: fee_transfer.amount_minor_units,
+                });
+            }
             return Ok(false);
-        }
-        if !implicit_fee_transfers.is_empty() {
-            return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
-                count: implicit_fee_transfers.len() + 1,
-            });
         }
 
         let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
@@ -576,33 +640,64 @@ fn enforce_context_policy(
         if &transfer.source_account_id == treasury && treasury_payout_exemption_enabled {
             continue;
         }
-        if &transfer.source_account_id == execution_account_id
+        if allow_implicit_context_fee
+            && &transfer.source_account_id == execution_account_id
             && &transfer.destination_account_id == treasury
         {
-            implicit_fee_transfers.push(transfer);
+            uncoordinated_fee_candidates.push(transfer);
         } else {
             qualifying_transfer_count += 1;
         }
     }
 
     if qualifying_transfer_count == 0 {
-        return Ok(false);
+        if uncoordinated_fee_candidates.is_empty() {
+            return Ok(false);
+        }
+        if uncoordinated_fee_candidates.len() > 1 {
+            return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
+                count: uncoordinated_fee_candidates.len(),
+            });
+        }
+        return Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate);
     }
 
-    let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+    if !allow_implicit_context_fee {
+        let uncoordinated_fee_candidate_count = fee_asset_transfers
+            .iter()
+            .filter(|transfer| transfer.context_index == context_index)
+            .filter(|transfer| {
+                !(&transfer.source_account_id == treasury && treasury_payout_exemption_enabled)
+            })
+            .filter(|transfer| {
+                &transfer.source_account_id == execution_account_id
+                    && &transfer.destination_account_id == treasury
+            })
+            .count();
+        if uncoordinated_fee_candidate_count > 1 {
+            return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
+                count: uncoordinated_fee_candidate_count,
+            });
+        }
+        if uncoordinated_fee_candidate_count == 1 {
+            return Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate);
+        }
+    }
 
-    if implicit_fee_transfers.is_empty() {
+    if uncoordinated_fee_candidates.is_empty() {
+        let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
         return Err(ValidationFeeAdmissionError::MissingFee {
             required_minor_units: required_fee_minor_units,
         });
     }
-    if implicit_fee_transfers.len() > 1 {
+    if uncoordinated_fee_candidates.len() > 1 {
         return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
-            count: implicit_fee_transfers.len(),
+            count: uncoordinated_fee_candidates.len(),
         });
     }
 
-    let fee_transfer = &implicit_fee_transfers[0];
+    let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+    let fee_transfer = &uncoordinated_fee_candidates[0];
     if fee_transfer.amount_minor_units != required_fee_minor_units {
         return Err(ValidationFeeAdmissionError::WrongFeeAmount {
             expected_minor_units: required_fee_minor_units,
@@ -627,7 +722,7 @@ fn validate_explicit_fee_coordinate<'a>(
     fee_asset_transfers: &'a [FeeAssetTransferSummary],
     execution_account_id: &AccountId,
     treasury: &AccountId,
-    policy: &ValidationFeePolicyV1,
+    fee_asset_definition_id: &AssetDefinitionId,
 ) -> Result<&'a FeeAssetTransferSummary, ValidationFeeAdmissionError> {
     let Some(raw_fee_transfer) = transfers.iter().find(|transfer| {
         transfer.context_index == context_index
@@ -645,7 +740,7 @@ fn validate_explicit_fee_coordinate<'a>(
             entry_index: fee_coordinate.entry_index,
         });
     }
-    if raw_fee_transfer.asset_definition_id != policy.fee_asset_definition_id {
+    if &raw_fee_transfer.asset_definition_id != fee_asset_definition_id {
         return Err(ValidationFeeAdmissionError::WrongFeeAsset {
             instruction_index: fee_coordinate.instruction_index,
             entry_index: fee_coordinate.entry_index,
@@ -833,14 +928,15 @@ fn collect_instruction_asset_transfers(
 fn collect_fee_asset_transfers(
     transfers: &[AssetTransferSummary],
     policy: &ValidationFeePolicyV1,
+    fee_asset_definition_id: &AssetDefinitionId,
 ) -> Result<Vec<FeeAssetTransferSummary>, ValidationFeeAdmissionError> {
     transfers
         .iter()
-        .filter(|transfer| transfer.asset_definition_id == policy.fee_asset_definition_id)
+        .filter(|transfer| &transfer.asset_definition_id == fee_asset_definition_id)
         .map(|transfer| {
             let amount_minor_units = numeric_to_minor_units(
                 &transfer.amount,
-                policy.fee_asset_scale,
+                policy.sbd_scale,
                 transfer.instruction_index,
             )?;
             Ok(FeeAssetTransferSummary {
@@ -909,7 +1005,7 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         isi::{InstructionBox, Transfer, TransferAssetBatchEntry},
-        transaction::TransactionBuilder,
+        transaction::{Executable, TransactionBuilder, executable::ContractInvocation},
         validation_fee::{
             SignedValidationFeePolicyV1, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
             VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
@@ -956,10 +1052,10 @@ mod tests {
             genesis_hash: [7; 32],
             policy_version: 1,
             previous_policy_hash: None,
-            fee_asset_definition_id: fee_asset(),
-            fee_asset_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            sbd_asset_id: fee_asset().to_string(),
+            sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
-            treasury_account_id: treasury.clone(),
+            treasury_account_id: treasury.to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 10,
             expires_after_height: Some(100),
@@ -974,6 +1070,10 @@ mod tests {
             .exemption_classes
             .push(VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_string());
         policy
+    }
+
+    fn policy_fee_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
+        policy.sbd_asset_id.parse().expect("policy SBD asset id")
     }
 
     fn governance_keyset(
@@ -1072,6 +1172,21 @@ mod tests {
             .sign(key_pair.private_key())
     }
 
+    fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
+        let key_pair = key_pair(authority_seed);
+        let chain: ChainId = "generic-testnet".parse().expect("chain id");
+        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "send_transfer".to_owned(),
+                payload: None,
+            }))
+            .with_metadata(metadata)
+            .sign(key_pair.private_key())
+    }
+
     fn metadata_for(policy: &ValidationFeePolicyV1) -> Metadata {
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -1090,6 +1205,15 @@ mod tests {
         instruction_index: usize,
     ) -> Metadata {
         let mut metadata = metadata_for(policy);
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY).expect("metadata key"),
+            Json::new(u64::try_from(instruction_index).expect("instruction index fits u64")),
+        );
+        metadata
+    }
+
+    fn metadata_for_fee_instruction_coordinate(instruction_index: usize) -> Metadata {
+        let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY).expect("metadata key"),
             Json::new(u64::try_from(instruction_index).expect("instruction index fits u64")),
@@ -1198,12 +1322,44 @@ mod tests {
     }
 
     #[test]
+    fn active_policy_window_rejects_expired_policy() {
+        let treasury = account(3);
+        let policy = policy(&treasury);
+
+        assert_eq!(
+            policy_is_active_or_unexpired(&policy, policy.effective_from_height - 1),
+            Ok(false)
+        );
+        assert_eq!(
+            policy_is_active_or_unexpired(&policy, policy.effective_from_height),
+            Ok(true)
+        );
+        assert_eq!(
+            policy_is_active_or_unexpired(
+                &policy,
+                policy.expires_after_height.expect("expiry height") - 1
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            policy_is_active_or_unexpired(
+                &policy,
+                policy.expires_after_height.expect("expiry height")
+            ),
+            Err(ValidationFeeAdmissionError::PolicyExpired {
+                expires_after_height: policy.expires_after_height.expect("expiry height"),
+                current_height: policy.expires_after_height.expect("expiry height"),
+            })
+        );
+    }
+
+    #[test]
     fn active_policy_requires_exact_fee_and_signed_metadata() {
         let user = account(1);
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![
@@ -1217,12 +1373,24 @@ mod tests {
     }
 
     #[test]
+    fn active_policy_rejects_contract_call_executables_fail_closed() {
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let tx = contract_call_tx(1, metadata_for(&policy));
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::UnsupportedExecutable)
+        );
+    }
+
+    #[test]
     fn missing_fee_is_rejected() {
         let user = account(1);
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![transfer(
@@ -1243,13 +1411,35 @@ mod tests {
     }
 
     #[test]
+    fn fee_bearing_transaction_requires_signed_fee_instruction_coordinate() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for(&policy),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate)
+        );
+    }
+
+    #[test]
     fn non_authority_source_transfer_requires_context_authority_fee() {
         let authority = account(1);
         let recipient = account(2);
         let treasury = account(3);
         let delegated_source = account(4);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
 
         let missing_fee_tx = tx(
             1,
@@ -1291,7 +1481,7 @@ mod tests {
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
 
         for (observed, expected_error) in [
             (
@@ -1328,7 +1518,7 @@ mod tests {
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![
@@ -1336,12 +1526,38 @@ mod tests {
                 transfer(&user, &fee_asset, minor_units(5), &treasury),
                 transfer(&user, &fee_asset, minor_units(5), &treasury),
             ],
-            metadata_for_fee_instruction(&policy, 1),
+            metadata_for(&policy),
         );
 
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::DuplicateFeeInstructions { count: 2 })
+        );
+    }
+
+    #[test]
+    fn signed_fee_coordinate_treats_additional_treasury_transfer_as_qualifying() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 20,
+                observed_minor_units: 10,
+            })
         );
     }
 
@@ -1352,7 +1568,7 @@ mod tests {
         let treasury = account(3);
         let wrong_treasury = account(4);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let xor = asset_definition("xor");
 
         let wrong_treasury_tx = tx(
@@ -1397,7 +1613,7 @@ mod tests {
         let treasury = account(3);
         let sponsor = account(4);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![
@@ -1419,17 +1635,76 @@ mod tests {
     #[test]
     fn fee_transfer_is_not_recursively_charged() {
         let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+
+        let exact_fee_tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+        enforce_policy(&exact_fee_tx, &policy).expect("fee instruction is not recursively charged");
+
+        let recursively_charged_tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(20), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+        assert_eq!(
+            enforce_policy(&recursively_charged_tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 10,
+                observed_minor_units: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn retail_transfer_to_treasury_requires_separate_signed_fee() {
+        let user = account(1);
         let treasury = account(2);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &treasury),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
 
-        let standalone_fee_like_transfer = tx(
+        enforce_policy(&tx, &policy)
+            .expect("treasury-destination principal requires a separate signed fee instruction");
+    }
+
+    #[test]
+    fn single_treasury_transfer_cannot_be_signed_as_standalone_fee() {
+        let user = account(1);
+        let treasury = account(2);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
             1,
             vec![transfer(&user, &fee_asset, minor_units(10), &treasury)],
-            Metadata::default(),
+            metadata_for_fee_instruction(&policy, 0),
         );
-        enforce_policy(&standalone_fee_like_transfer, &policy)
-            .expect("standalone treasury transfer is not recursively charged");
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 0,
+                observed_minor_units: 10,
+            })
+        );
     }
 
     #[test]
@@ -1437,7 +1712,7 @@ mod tests {
         let user = account(1);
         let treasury = account(2);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
 
         let treasury_payout = tx(
             2,
@@ -1462,7 +1737,7 @@ mod tests {
         let user = account(1);
         let treasury = account(2);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
 
         let treasury_payout = tx(
             2,
@@ -1481,7 +1756,7 @@ mod tests {
         let user = account(1);
         let treasury = account(2);
         let policy = policy_with_treasury_payout_exemption(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
 
         let treasury_payout = tx(
             2,
@@ -1502,7 +1777,7 @@ mod tests {
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![
@@ -1528,7 +1803,7 @@ mod tests {
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let instructions = || {
             vec![
                 transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
@@ -1536,7 +1811,11 @@ mod tests {
             ]
         };
 
-        let missing_metadata_tx = tx(1, instructions(), Metadata::default());
+        let missing_metadata_tx = tx(
+            1,
+            instructions(),
+            metadata_for_fee_instruction_coordinate(1),
+        );
         assert_eq!(
             enforce_policy(&missing_metadata_tx, &policy),
             Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
@@ -1563,7 +1842,7 @@ mod tests {
         let recipient = account(2);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let mut metadata = metadata_for_fee_instruction(&policy, 1);
         metadata.insert(
             Name::from_str(VALIDATION_FEE_POLICY_HASH_METADATA_KEY).expect("metadata key"),
@@ -1591,7 +1870,7 @@ mod tests {
         let recipient_b = account(3);
         let treasury = account(4);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![
@@ -1625,7 +1904,7 @@ mod tests {
         let treasury = account(3);
         let multisig = account(4);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let proposal = MultisigPropose::new(
             multisig.clone(),
             vec![transfer(
@@ -1665,8 +1944,9 @@ mod tests {
         );
         assert_eq!(
             enforce_policy(&top_level_fee, &policy),
-            Err(ValidationFeeAdmissionError::MissingFee {
-                required_minor_units: 10
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 0,
+                observed_minor_units: 10
             })
         );
     }
@@ -1677,7 +1957,7 @@ mod tests {
         let treasury = account(3);
         let multisig = account(4);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let tx = tx(
             1,
             vec![
@@ -1704,7 +1984,7 @@ mod tests {
         let treasury = account(4);
         let multisig = account(5);
         let policy = policy(&treasury);
-        let fee_asset = policy.fee_asset_definition_id.clone();
+        let fee_asset = policy_fee_asset(&policy);
         let proposal = MultisigPropose::new(
             multisig.clone(),
             vec![

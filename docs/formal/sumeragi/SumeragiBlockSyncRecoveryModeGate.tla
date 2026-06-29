@@ -191,9 +191,18 @@ Next == UNCHANGED vars
 
 TypeInvariant == checked \in Candidates
 
-Safety ==
+BlockSyncRecoveryModeActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+BlockSyncRecoveryModeExactness ==
+  /\ BlockSyncRecoveryModeActionsMatchSpec
+
+BlockSyncRecoveryModeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncRecoveryModeExactness
+
+Safety == BlockSyncRecoveryModeExactness
 
 BugStaleHeightStrict ==
   ImplementationActions(StaleEqual) = SpecActions(StaleEqual)

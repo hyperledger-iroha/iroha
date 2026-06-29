@@ -194,7 +194,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..18
 
-Safety ==
+MissingQcLivenessStatusActionsMatchSpec ==
   /\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
   /\ ImplementationActions(MissingBlockEscalationRecord) =
        SpecActions(MissingBlockEscalationRecord)
@@ -230,6 +230,16 @@ Safety ==
        SpecActions(SnapshotProjectsStuckRound)
   /\ ImplementationActions(ResetAfterRecordsClears) =
        SpecActions(ResetAfterRecordsClears)
+
+MissingQcLivenessStatusExactness ==
+  /\ MissingQcLivenessStatusActionsMatchSpec
+
+Safety ==
+  MissingQcLivenessStatusExactness
+
+MissingQcLivenessStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcLivenessStatusExactness
 
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

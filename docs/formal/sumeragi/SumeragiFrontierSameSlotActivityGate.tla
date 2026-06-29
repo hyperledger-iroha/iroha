@@ -286,17 +286,16 @@ SameSlotActivityHasExactPositiveEvidence ==
       \/ MissingPayloadDeferredExact)
 
 FrontierSameSlotActivityExactness ==
-  /\ SameSlotActivityRejectsNonExactInputs
-  /\ SameSlotActivityHasExactPositiveEvidence
-
-SafetyFast ==
   /\ PayloadProgressSafety
   /\ IngressSafety
   /\ VoteBackedSafety
   /\ MissingBlockRequestSafety
   /\ MissingCommitQcRepairSafety
   /\ MissingPayloadRecoverySafety
-  /\ FrontierSameSlotActivityExactness
+  /\ SameSlotActivityRejectsNonExactInputs
+  /\ SameSlotActivityHasExactPositiveEvidence
+
+SafetyFast == FrontierSameSlotActivityExactness
 
 PayloadProgressAnchors ==
   /\ PayloadProgressSafety
@@ -364,8 +363,7 @@ FrontierSameSlotActivitySafetyAnchors ==
 
 FrontierSameSlotActivityCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ FrontierSameSlotActivitySafetyAnchors
+  /\ FrontierSameSlotActivityExactness
 
 Safety == FrontierSameSlotActivitySafetyAnchors
 

@@ -41,6 +41,40 @@ def test_extract_status_snapshot_defaults():
     assert snapshot["txs_approved"] == 11
     assert snapshot["txs_rejected"] == 1
     assert snapshot["queue_size"] == 0
+    assert snapshot["queue_retained_bytes"] == 0
+    assert snapshot["queue_max_retained_bytes"] == 0
+    assert snapshot["queue_saturated"] is False
+
+
+def test_extract_status_snapshot_reads_sumeragi_queue_bytes():
+    payload = {
+        "queue_size": 5,
+        "sumeragi": {
+            "tx_queue_retained_bytes": 1024,
+            "tx_queue_max_retained_bytes": 2048,
+            "tx_queue_saturated": True,
+        },
+    }
+    snapshot = MODULE.extract_status_snapshot(payload)
+    assert snapshot["queue_size"] == 5
+    assert snapshot["queue_retained_bytes"] == 1024
+    assert snapshot["queue_max_retained_bytes"] == 2048
+    assert snapshot["queue_saturated"] is True
+
+
+def test_extract_status_snapshot_with_delta_keeps_saturation_fields():
+    payload = {
+        "queue_size": 9,
+        "queue_retained_bytes": 4096,
+        "queue_max_retained_bytes": 8192,
+        "queue_saturated": True,
+    }
+    snapshot, delta = MODULE.extract_status_snapshot_with_delta(payload, 4)
+
+    assert delta == 5
+    assert snapshot["queue_saturated"] is True
+    assert snapshot["queue_retained_bytes"] == 4096
+    assert snapshot["queue_max_retained_bytes"] == 8192
 
 
 def test_normalize_torii_url_adds_trailing_slash():
@@ -75,8 +109,26 @@ def test_count_rate_limit_hits_counts_status():
     assert MODULE.count_rate_limit_hits(output) == 3
 
 
+def test_is_backpressure_output_detects_queue_full():
+    output = (
+        "status: 429 Too Many Requests\n"
+        "reject code: PRTRY:QUEUE_FULL\n"
+        "queue=saturated queued=1020/262144\n"
+    )
+    assert MODULE.is_backpressure_output(output) is True
+
+
+def test_is_backpressure_output_ignores_unrelated_failure():
+    assert MODULE.is_backpressure_output("Failed to decode transaction") is False
+
+
 def test_torii_url_from_status_uses_host():
     assert (
         MODULE.torii_url_from_status("http://127.0.0.1:8080/status")
         == "http://127.0.0.1:8080/"
     )
+
+
+def test_request_with_accept_sets_header():
+    request = MODULE.request_with_accept("http://127.0.0.1:8080/status", "application/json")
+    assert request.get_header("Accept") == "application/json"

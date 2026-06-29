@@ -8,10 +8,13 @@ summary: SFM-4 implementation status for gateway denylist enforcement, GAR polic
 ## Current Status
 
 SFM-4 is partially implemented. The gateway enforcement path, denylist helpers,
-GAR policy payloads, proof-token utilities, honey-audit probing, and operator
-bundle tooling exist. The repository does not yet ship a central compliance
-controller daemon, moderation toggle service, SFM-4c transparency ledger builder,
-public receipt explorer, or full appeal-driven override workflow.
+GAR policy payloads, proof-token utilities, honey-audit probing, operator bundle
+tooling, and payload-free rollout evidence gate exist. The repository does not
+yet ship an always-on central compliance controller daemon, moderation toggle
+service, SFM-4c transparency ledger builder, public receipt explorer, or full
+appeal-driven override workflow; promotion evidence now has to prove the
+controller runtime and moderation-toggle boundaries before gateway compliance
+can be marked ready.
 
 ## Shipped Foundations
 
@@ -34,6 +37,22 @@ public receipt explorer, or full appeal-driven override workflow.
 - `cargo xtask sorafs-gateway denylist pack|diff|verify` produces and validates
   deterministic denylist bundles, Merkle roots, Norito payloads, and diff
   reports for governance evidence.
+- `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` validates
+  payload-free SFM-4 promotion evidence for feed promotion, controller runtime,
+  moderation-toggle canaries, gateway reload, enforcement probes, honey-audit
+  denial proof, appeal override, transparency publication, observability, and
+  governance approval artifacts. The companion
+  `scripts/run_sorafs_gateway_compliance_rollout_evidence.py` runner emits the
+  verifier command and dry-run collection plan from reviewed artifact paths,
+  including an `evidence_contract` map with the schema and required payload
+  fields for each selected evidence kind.
+  Controller, moderation-toggle, reload, enforcement, honey-audit, appeal,
+  transparency, observability, and governance artifacts must carry the same
+  `bundle_digest_hex` as a valid feed-promotion artifact in the same bundle, so
+  promotion evidence cannot mix probes, dashboards, approvals, or controller
+  and toggle reports from different denylist bundle runs. Bundle mismatches are
+  recorded on the offending artifact in the JSON summary before required-kind
+  validity is reported.
 - `ci/check_sorafs_gateway_denylist.sh` guards the denylist bundle tooling.
 
 ## Operator Commands
@@ -78,6 +97,34 @@ cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
   --markdown-out artifacts/sorafs_gateway/honey_audit.md
 ```
 
+Validate staged gateway compliance promotion evidence:
+
+```sh
+python3 scripts/check_sorafs_gateway_compliance_rollout_evidence.py \
+  @scripts/examples/sorafs_gateway_compliance_rollout_evidence.args.example
+```
+
+Preview the collection runner command before promotion:
+
+```sh
+python3 scripts/run_sorafs_gateway_compliance_rollout_evidence.py \
+  @scripts/examples/sorafs_gateway_compliance_rollout_collection.args.example \
+  --dry-run
+```
+
+Rollout evidence must remain payload-free. The gate rejects raw denylist feeds,
+probe response bodies, GAR receipts, appeal payloads, moderation-toggle
+payloads, signed transactions, tokens, private keys, and response bodies;
+operators should provide only digests, counts, stable labels, booleans, and
+reviewed artifact paths. Every downstream controller/toggle/reload/probe/audit/
+appeal/transparency/observability/governance artifact must bind back to the
+promoted denylist bundle with
+`bundle_digest_hex`. If that binding does not match a valid feed-promotion
+artifact, the gate marks the downstream artifact invalid in the emitted summary
+instead of only blocking the top-level status. Use the runner's dry-run
+`evidence_contract` output to review the exact payload fields before collecting
+or promoting staged gateway compliance evidence.
+
 ## Enforcement Semantics
 
 Gateway policy decisions fail closed for:
@@ -95,18 +142,25 @@ parsing response strings.
 
 ## Remaining Production Gates
 
-- Ship a central compliance controller that fetches external feeds, normalizes
-  updates, signs them, distributes them to gateways, and tracks acknowledgements.
+- Ship the always-on compliance controller daemon that fetches external feeds,
+  normalizes updates, signs them, distributes them to gateways, and tracks
+  acknowledgements. The rollout gate now requires controller-runtime evidence
+  for this boundary, but the daemon itself still needs production deployment.
 - Persist denylist/catalog state and update history through the configured
   production storage path instead of relying only on local bundle ingestion.
 - Implement moderation toggle APIs, approval workflows, expiry handling, and
-  operator audit trails.
+  operator audit trails. The rollout gate now requires moderation-toggle
+  evidence for `iroha_config` binding, approved-toggle count equality, operator
+  role enforcement, approval workflow, expiry, cache invalidation, audit trail,
+  rollback, and payload-free reporting, but the service itself still needs
+  production deployment.
 - Connect appeal outcomes to gateway policy overrides and cache invalidation.
+  The existing appeal-override canary remains required for promotion evidence,
+  but the full workflow is still production work.
 - Publish GAR receipts, proof-token indexes, and moderation events through the
   SFM-4c transparency ledger once that builder exists.
-- Add end-to-end rollout tests covering feed promotion, gateway reload,
-  enforcement, honey-audit evidence, appeal override, and transparency
-  publication.
+- Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence
+  gate before promoting gateway compliance changes to production.
 
 ## Validation
 
@@ -114,6 +168,9 @@ Focused local checks for the shipped surface are:
 
 ```sh
 ci/check_sorafs_gateway_denylist.sh
+python3 -m pytest -q \
+  scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py \
+  scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py
 cargo test -p iroha_torii sorafs::gateway
 cargo test -p sorafs_car policy
 cargo test -p sorafs_orchestrator moderation

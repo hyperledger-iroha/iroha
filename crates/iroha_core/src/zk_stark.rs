@@ -3400,6 +3400,7 @@ mod tests {
             .pop();
 
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        let witness = &material.proof_input_material.witness_material;
         for (case, envelope) in [
             ("paired auxiliary sidecars", sidecar_envelope),
             ("comp_root without comp_values", comp_root_only),
@@ -3424,6 +3425,16 @@ mod tests {
                 !verify_stark_fri_bfv_full_bootstrap_air_envelope(&auxiliary_bytes, &material),
                 "BFV native AIR verifier must reject {case}"
             );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                    &auxiliary_bytes,
+                    material.proof_input_material.statement_hash,
+                    material.arithmetic_trace_material_digest,
+                    witness.slot_index,
+                    witness.bound_mode,
+                ),
+                "BFV public-padding verifier must reject {case}"
+            );
         }
     }
 
@@ -3438,6 +3449,7 @@ mod tests {
         let envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        let witness = &material.proof_input_material.witness_material;
 
         let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
             let malformed_bytes =
@@ -3457,6 +3469,16 @@ mod tests {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
                 "BFV native AIR verifier must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                    &malformed_bytes,
+                    material.proof_input_material.statement_hash,
+                    material.arithmetic_trace_material_digest,
+                    witness.slot_index,
+                    witness.bound_mode,
+                ),
+                "BFV public-padding verifier must reject {case}"
             );
         };
 
@@ -3507,6 +3529,14 @@ mod tests {
         missing_query.proof.queries.pop();
         assert_rejected("missing FRI query chain", &missing_query);
 
+        let mut reordered_query = envelope.clone();
+        assert!(
+            reordered_query.proof.queries.len() > 1,
+            "BFV AIR test envelope has multiple FRI query chains"
+        );
+        reordered_query.proof.queries.swap(0, 1);
+        assert_rejected("reordered FRI query chains", &reordered_query);
+
         let mut missing_opening = envelope;
         missing_opening
             .proof
@@ -3529,6 +3559,7 @@ mod tests {
         let envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        let witness = &material.proof_input_material.witness_material;
 
         let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
             let malformed_bytes =
@@ -3548,6 +3579,16 @@ mod tests {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
                 "BFV native AIR verifier must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                    &malformed_bytes,
+                    material.proof_input_material.statement_hash,
+                    material.arithmetic_trace_material_digest,
+                    witness.slot_index,
+                    witness.bound_mode,
+                ),
+                "BFV public-padding verifier must reject {case}"
             );
         };
 
@@ -3663,6 +3704,7 @@ mod tests {
         let envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
         let air = envelope.proof.air.as_ref().expect("BFV AIR section");
+        let witness = &material.proof_input_material.witness_material;
 
         let mut tight_envelope_bytes = StarkVerifierLimits::default();
         tight_envelope_bytes.max_envelope_bytes = bytes.len().saturating_sub(1);
@@ -3673,6 +3715,17 @@ mod tests {
                 &material,
             ),
             "BFV native AIR verifier must honor envelope byte limits"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+                &bytes,
+                &tight_envelope_bytes,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "BFV public-padding verifier must honor envelope byte limits"
         );
 
         let mut tight_transcript_label = StarkVerifierLimits::default();
@@ -3686,6 +3739,17 @@ mod tests {
             ),
             "BFV native AIR verifier must honor transcript-label limits"
         );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+                &bytes,
+                &tight_transcript_label,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "BFV public-padding verifier must honor transcript-label limits"
+        );
 
         let mut tight_queries = StarkVerifierLimits::default();
         tight_queries.max_queries = envelope.proof.queries.len().saturating_sub(1);
@@ -3696,6 +3760,17 @@ mod tests {
                 &material,
             ),
             "BFV native AIR verifier must honor query-count limits"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+                &bytes,
+                &tight_queries,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "BFV public-padding verifier must honor query-count limits"
         );
 
         let mut tight_air_width = StarkVerifierLimits::default();
@@ -3708,6 +3783,17 @@ mod tests {
             ),
             "BFV native AIR verifier must honor AIR width limits"
         );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+                &bytes,
+                &tight_air_width,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "BFV public-padding verifier must honor AIR width limits"
+        );
 
         let mut tight_merkle_depth = StarkVerifierLimits::default();
         tight_merkle_depth.max_merkle_depth = usize::from(envelope.params.n_log2).saturating_sub(1);
@@ -3718,6 +3804,17 @@ mod tests {
                 &material,
             ),
             "BFV native AIR verifier must honor Merkle-depth limits"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+                &bytes,
+                &tight_merkle_depth,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "BFV public-padding verifier must honor Merkle-depth limits"
         );
     }
 
@@ -3732,6 +3829,7 @@ mod tests {
         let envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        let witness = &material.proof_input_material.witness_material;
 
         let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
             let malformed_bytes =
@@ -3751,6 +3849,16 @@ mod tests {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
                 "BFV native AIR verifier must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                    &malformed_bytes,
+                    material.proof_input_material.statement_hash,
+                    material.arithmetic_trace_material_digest,
+                    witness.slot_index,
+                    witness.bound_mode,
+                ),
+                "BFV public-padding verifier must reject {case}"
             );
         };
 
@@ -3860,6 +3968,25 @@ mod tests {
         assert_rejected_material(
             "drifted arithmetic AIR composition values",
             drifted_composition_values,
+        );
+
+        let mut stale_public_opening_digest = material.clone();
+        stale_public_opening_digest.public_opening_material_digest =
+            iroha_crypto::Hash::new(b"stale BFV public opening material digest");
+        assert_rejected_material(
+            "stale public opening material digest",
+            stale_public_opening_digest,
+        );
+
+        let alternate_material = bfv_full_bootstrap_stark_test_prover_input_material_for_slot(1);
+        let mut retargeted_public_opening_material = material.clone();
+        retargeted_public_opening_material.public_opening_material =
+            alternate_material.public_opening_material.clone();
+        retargeted_public_opening_material.public_opening_material_digest =
+            alternate_material.public_opening_material_digest;
+        assert_rejected_material(
+            "retargeted public opening material",
+            retargeted_public_opening_material,
         );
 
         let mut swapped_proof_keys = material;
@@ -6674,13 +6801,32 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limi
         .all(|opening| opening.composition_value == 0)
 }
 
+fn bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
+    air: &StarkAirProofV1,
+    material: &iroha_crypto::BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+) -> bool {
+    if air.openings.len() != material.opening_indices.len()
+        || air.openings.len() != material.opened_rows.len()
+        || air.openings.len() != material.opened_next_rows.len()
+    {
+        return false;
+    }
+    air.openings.iter().enumerate().all(|(position, opening)| {
+        material.opening_indices.get(position) == Some(&opening.index)
+            && material.opened_rows.get(position).map(Vec::as_slice) == Some(opening.row.as_slice())
+            && material.opened_next_rows.get(position).map(Vec::as_slice)
+                == Some(opening.next_row.as_slice())
+    })
+}
+
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof envelope with limits.
 ///
 /// Generic STARK verification is only the first stage. This BFV wrapper also
 /// requires the exact first-release BFV STARK parameters, the statement-bound
 /// domain tag, the canonical BFV circuit id, the statement hash as the public
-/// digest, the canonical opening count, and sampled public-padding rows that
-/// match the BFV statement header.
+/// digest, the canonical opening count, sampled public-padding rows that match
+/// the BFV statement header, and the typed public-opening material carried by
+/// the governed execution prover-input package.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     bytes: &[u8],
@@ -6748,6 +6894,12 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
         || air.openings.len()
             != usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1)
     {
+        return false;
+    }
+    if !bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
+        air,
+        &material.public_opening_material,
+    ) {
         return false;
     }
     let opening_indices = air

@@ -266,9 +266,19 @@ NativeAmxIngressVoteCacheExactness ==
 
 NativeAmxIngressExactness ==
   /\ NativeAmxIngressCaseGroupsComplete
-  /\ NativeAmxIngressRequestExactness
-  /\ NativeAmxIngressVoteAdmissionExactness
-  /\ NativeAmxIngressVoteCacheExactness
+  /\ RepliesMatchSpec
+  /\ InvalidRequestsFailClosed
+  /\ ValidRequestsReply
+  /\ RepliesAreWellFormed
+  /\ CachedVotesMatchSpec
+  /\ InvalidVotesFailClosed
+  /\ ValidVotesAreCached
+  /\ DuplicateSignerDoesNotDuplicateBody
+  /\ DistinctVoteBodiesRemainSeparate
+
+NativeAmxIngressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NativeAmxIngressExactness
 
 Safety ==
   NativeAmxIngressExactness

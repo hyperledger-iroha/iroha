@@ -219,7 +219,7 @@ ValuesStayInDomain ==
     /\ PrimaryHandlers(input) \subseteq Handlers
     /\ ImplementationHandlers(input) \subseteq Handlers
 
-Safety ==
+EngineHandleDispatchExactness ==
   /\ DispatchMatchesSpec
   /\ EveryInputDispatchesOnce
   /\ NoInputDropped
@@ -231,5 +231,14 @@ Safety ==
   /\ ValidationResultsDispatchOnlyToValidation
   /\ CommittedBlocksDispatchOnlyToCommitted
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineHandleDispatchExactness
+
+EngineHandleDispatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineHandleDispatchExactness
+
+SafetyFast == EngineHandleDispatchExactness
 
 ====

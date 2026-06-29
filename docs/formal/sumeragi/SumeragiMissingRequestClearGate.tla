@@ -150,8 +150,15 @@ ActualOutput ==
 MissingRequestClearOutputMatchesSpec ==
   ActualOutput = SpecOutput
 
+MissingRequestClearExactness ==
+  /\ MissingRequestClearOutputMatchesSpec
+
+MissingRequestClearCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingRequestClearExactness
+
 SafetyFast ==
-  MissingRequestClearOutputMatchesSpec
+  MissingRequestClearExactness
 
 BugClearLockedHash ==
   ActualLockedSameHash = SpecLockedSameHash

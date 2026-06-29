@@ -303,6 +303,10 @@ HighestQcDependencyDeferralExactness ==
   /\ HighestQcLockRejectedSuppressionExact
   /\ HighestQcDeferralSideEffectsExact
 
+HighestQcDependencyDeferralCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HighestQcDependencyDeferralExactness
+
 NoBugInvariant ==
   HighestQcDependencyDeferralExactness
 

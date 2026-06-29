@@ -159,9 +159,19 @@ Next ==
 TypeInvariant ==
   checked \in 0..14
 
-Safety ==
+RangePullStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+RangePullStatusExactness ==
+  /\ RangePullStatusActionsMatchSpec
+
+Safety ==
+  RangePullStatusExactness
+
+RangePullStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RangePullStatusExactness
 
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

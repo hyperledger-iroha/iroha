@@ -180,7 +180,7 @@ FirstDeliverProcesses ==
 DuplicateDeliverDoesNotProcess ==
   deliver_case = "duplicate_deliver" => ~deliver_process
 
-Safety ==
+RbcCommitProcessingExactness ==
   /\ ReadyDecisionMatchesSpec
   /\ DeliverDecisionMatchesSpec
   /\ ClearPendingProcessesReady
@@ -195,5 +195,11 @@ Safety ==
   /\ ReadyProcessRequiresSpecCause
   /\ FirstDeliverProcesses
   /\ DuplicateDeliverDoesNotProcess
+
+RbcCommitProcessingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcCommitProcessingExactness
+
+Safety == RbcCommitProcessingExactness
 
 ====

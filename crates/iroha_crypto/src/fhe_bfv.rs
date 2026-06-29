@@ -35,6 +35,7 @@
 //! multiplication/relinearization bridge with packed Galois rotation schedules
 //! plus RNS Galois/packed-rotation, target-limb basis-extension key-switch,
 //! explicit key-switch decomposition/evaluator prefix binding, and
+//! typed exact-residual and bounded-noise admission proof-input material plus
 //! bounded-noise outer-slot rotation/bootstrap-refresh bridges are available
 //! for explicitly bounded runtime metadata. Governed full-bootstrap material
 //! can now carry typed coefficient/slot diagonal transforms with exact and
@@ -62,13 +63,19 @@ type BfvBlake2b256 = Blake2b<U32>;
 
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const BOUNDED_NOISE_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.bounded_noise.v1";
-const ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.v1";
-const BOUNDED_NOISE_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.bounded_noise.v1";
+/// Seed-derivation domain for exact-lift BFV encryption and rotation refreshes.
+pub const BFV_ENCRYPT_SEED_DERIVATION_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.v1";
+/// Seed-derivation domain for bounded-noise BFV encryption and rotation refreshes.
+pub const BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.encrypt.bounded_noise.v1";
 const GALOIS_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.galois_keygen.v1";
 const BOUNDED_NOISE_GALOIS_KEYGEN_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.galois_keygen.bounded_noise.v1";
-const BOOTSTRAP_REFRESH_ROUND_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.bootstrap_refresh_round.v1";
-const BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_DOMAIN: &[u8] =
+/// Seed-derivation domain for exact-lift BFV bootstrap refresh rounds.
+pub const BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bootstrap_refresh_round.v1";
+/// Seed-derivation domain for bounded-noise BFV bootstrap refresh rounds.
+pub const BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.bootstrap_refresh_round.bounded_noise.v1";
 const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen.v1";
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
@@ -96,6 +103,34 @@ pub const BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1: u16 = 5;
 pub const BFV_CIPHERTEXT_PROOF_STATEMENT_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in BFV ciphertext proof statement material.
 pub const BFV_CIPHERTEXT_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1: u16 = 8;
+/// Version of bounded-noise BFV public-key proof input material.
+pub const BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in bounded-noise BFV public-key proof input material.
+pub const BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1: u16 = 9;
+/// Version of exact-residual BFV public-key proof input material.
+pub const BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in exact-residual BFV public-key proof input material.
+pub const BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1: u16 = 10;
+/// Version of bounded-noise BFV ciphertext proof input material.
+pub const BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in bounded-noise BFV ciphertext proof input material.
+pub const BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1: u16 = 14;
+/// Version of exact-residual BFV ciphertext proof input material.
+pub const BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in exact-residual BFV ciphertext proof input material.
+pub const BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1: u16 = 14;
+/// Domain used before hashing exact-residual BFV public-key proof input material.
+pub const BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.exact_residual_public_key_proof_input_material_digest.v1";
+/// Domain used before hashing bounded-noise BFV public-key proof input material.
+pub const BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bounded_noise_public_key_proof_input_material_digest.v1";
+/// Domain used before hashing exact-residual BFV ciphertext proof input material.
+pub const BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.exact_residual_ciphertext_proof_input_material_digest.v1";
+/// Domain used before hashing bounded-noise BFV ciphertext proof input material.
+pub const BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bounded_noise_ciphertext_proof_input_material_digest.v1";
 const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_digest.v1";
 const BFV_FULL_BOOTSTRAP_GALOIS_KEY_SET_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_galois_key_set_digest.v1";
@@ -135,11 +170,14 @@ pub const BFV_BOOTSTRAP_KEY_ZERO_REFRESH_SUMMARY_DIGEST_DOMAIN: &[u8] =
 /// Domain used before hashing indexed round-refresh ciphertext summaries for bootstrap-key proofs.
 pub const BFV_BOOTSTRAP_KEY_ROUND_REFRESH_SUMMARY_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.bootstrap_key.round_refresh_digest.v1";
-const BFV_FULL_BOOTSTRAP_CIRCUIT_MATERIAL_DIGEST_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap circuit material.
+pub const BFV_FULL_BOOTSTRAP_CIRCUIT_MATERIAL_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_circuit_material_digest.v1";
-const BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap evaluator artifact sets.
+pub const BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_evaluator_artifact_set_digest.v1";
-const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap circuit artifact bundles.
+pub const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_circuit_artifact_bundle_digest.v1";
 /// Domain used before hashing typed BFV full-bootstrap release audit evidence.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_DIGEST_DOMAIN: &[u8] =
@@ -153,38 +191,51 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_DIGEST_DOMAIN: &[u8] =
 /// Domain used before hashing BFV full-bootstrap release audit packages.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1";
-const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN: &[u8] =
+/// Domain used before hashing BFV full-bootstrap proof-key material commitments.
+pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_proof_key_material_commitment.v1";
-const BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN: &[u8] =
+/// Domain used before hashing BFV full-bootstrap proof-key pair commitments.
+pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_proof_key_pair_commitment.v1";
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_native_proof_circuit_fingerprint.v1";
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap arithmetic AIR constraint systems.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_constraint_system_digest.v1";
 const BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_native_stark_air_domain_tag.v1";
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_trace_profile_digest.v1";
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap arithmetic trace material.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_trace_material_digest.v1";
 /// Domain used before hashing typed BFV full-bootstrap AIR evaluation material.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_evaluation_material_digest.v1";
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN: &[u8] =
+/// Domain used before deriving BFV full-bootstrap arithmetic AIR composition challenges.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_composition_challenge.v1";
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_OPENING_INDEX_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_trace_opening_index.v1";
+/// Domain used before hashing typed BFV full-bootstrap public opening material.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_trace_public_opening_material_digest.v1";
 /// Domain used before hashing typed BFV full-bootstrap execution proof input material.
 pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_input_material_digest.v1";
-const BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap release-prover input material.
+pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_execution_prover_input_material_digest.v1";
+const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_DIGEST_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.full_bootstrap_release_prover_contract_digest.v1";
 /// Domain used before hashing typed BFV full-bootstrap material proof input material.
 pub const BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_input_material_digest.v1";
-const BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_STATEMENT_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap material proof statements.
+pub const BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_STATEMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_statement.v1";
-const BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN: &[u8] =
+/// Domain used before hashing typed BFV full-bootstrap execution proof statements.
+pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_statement.v1";
 /// Version of the typed BFV full-bootstrap material proof statement material.
 pub const BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_STATEMENT_MATERIAL_VERSION_V1: u16 = 1;
@@ -198,7 +249,9 @@ pub const BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1: u16 =
 pub const BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1";
 const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1: u16 = 9;
+/// Number of artifact digests bound by the BFV full-bootstrap circuit artifact bundle digest.
+pub const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1: u16 =
+    9;
 /// Version of the BFV full-bootstrap release audit evidence payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit evidence payload.
@@ -206,7 +259,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1: u16 = 23;
 /// Version of the BFV full-bootstrap release audit proof-profile payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-profile payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 44;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 58;
 /// Version of the BFV full-bootstrap release audit proof-key payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-key payload.
@@ -214,7 +267,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1: u16 = 11
 /// Version of the BFV full-bootstrap release audit signoff payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit signoff payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1: u16 = 16;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1: u16 = 18;
 /// Version of the BFV full-bootstrap release audit signoff envelope.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit signoff envelope.
@@ -232,7 +285,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1: u16 = 8;
 /// Version of the BFV full-bootstrap release audit manifest.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit manifest.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1: u16 = 21;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1: u16 = 23;
 /// Canonical scope string for BFV full-bootstrap release audit manifests.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SCOPE_V1: &str =
     "iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1";
@@ -526,6 +579,7 @@ const BFV_FULL_BOOTSTRAP_ARTIFACT_TEXT_PLACEHOLDER_MARKERS: &[&[u8]] = &[
     b"sample payload",
 ];
 const BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES: usize = 5;
+static BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKERS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 fn push_bfv_full_bootstrap_release_audit_inert_artifact_digests_v1(
     digests: &mut Vec<(Hash, &'static str)>,
@@ -611,6 +665,12 @@ fn push_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_var
             &[],
         ));
         digests.push(hash_chunks_with_optional_ascii_upper_body(
+            &[artifact_header, *prefix, &[0xff]],
+            body,
+            uppercase_body,
+            &[],
+        ));
+        digests.push(hash_chunks_with_optional_ascii_upper_body(
             &[
                 artifact_header,
                 &BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_SPACE_PADDING,
@@ -623,6 +683,12 @@ fn push_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_var
         for leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
             digests.push(hash_chunks_with_optional_ascii_upper_body(
                 &[artifact_header, *leading_prefix, *prefix],
+                body,
+                uppercase_body,
+                &[],
+            ));
+            digests.push(hash_chunks_with_optional_ascii_upper_body(
+                &[artifact_header, *leading_prefix, *prefix, &[0xff]],
                 body,
                 uppercase_body,
                 &[],
@@ -901,6 +967,16 @@ fn is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_b
         }
         if *digest
             == hash_chunks_with_optional_ascii_upper_body(
+                &[artifact_header, *prefix, &[0xff]],
+                body,
+                uppercase_body,
+                &[],
+            )
+        {
+            return true;
+        }
+        if *digest
+            == hash_chunks_with_optional_ascii_upper_body(
                 &[
                     artifact_header,
                     &BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_SPACE_PADDING,
@@ -917,6 +993,16 @@ fn is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_b
             if *digest
                 == hash_chunks_with_optional_ascii_upper_body(
                     &[artifact_header, *leading_prefix, *prefix],
+                    body,
+                    uppercase_body,
+                    &[],
+                )
+            {
+                return true;
+            }
+            if *digest
+                == hash_chunks_with_optional_ascii_upper_body(
+                    &[artifact_header, *leading_prefix, *prefix, &[0xff]],
                     body,
                     uppercase_body,
                     &[],
@@ -1089,6 +1175,12 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
             &[],
         ));
         digests.push(sha256_chunks_with_optional_ascii_upper_body(
+            &[*prefix, &[0xff]],
+            body,
+            uppercase_body,
+            &[],
+        ));
+        digests.push(sha256_chunks_with_optional_ascii_upper_body(
             &[
                 &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING,
                 *prefix,
@@ -1100,6 +1192,12 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
         for leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
             digests.push(sha256_chunks_with_optional_ascii_upper_body(
                 &[*leading_prefix, *prefix],
+                body,
+                uppercase_body,
+                &[],
+            ));
+            digests.push(sha256_chunks_with_optional_ascii_upper_body(
+                &[*leading_prefix, *prefix, &[0xff]],
                 body,
                 uppercase_body,
                 &[],
@@ -1224,6 +1322,12 @@ pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_FIELD_COUNT_V1: u16 = 8;
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap arithmetic AIR evaluation material.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1: u16 = 8;
+/// Version of the typed BFV full-bootstrap public opening material.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in the BFV full-bootstrap public opening material.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1: u16 = 13;
+const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_VERSION_V1: u16 = 1;
+const BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 /// Number of Goldilocks field elements in each BFV full-bootstrap arithmetic trace row.
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1: u16 = 34;
 /// Active arithmetic trace row marker for rows carrying BFV coefficient material.
@@ -1260,7 +1364,7 @@ pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1: u16 
 /// Version of the typed BFV full-bootstrap execution prover input material.
 pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap execution prover input material.
-pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1: u16 = 11;
+pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1: u16 = 13;
 /// Number of hash public inputs consumed by the BFV full-bootstrap proof backend.
 pub const BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1: u16 = 1;
 const _: () = assert!(Hash::LENGTH == 32);
@@ -1302,12 +1406,15 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the native BFV full-bootstrap proof-key material payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1: u16 = 21;
 const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1: u16 = 46;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 37;
-const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 = 32;
+const BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1: u16 = 49;
+/// Version of the typed BFV full-bootstrap arithmetic AIR constraint-system material.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in the BFV full-bootstrap arithmetic AIR constraint-system material.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 37;
+/// Number of digest bytes reduced into each BFV full-bootstrap arithmetic AIR composition challenge.
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 = 32;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 45;
+const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 48;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1: &str = "stark/fri";
 /// Canonical native STARK field for BFV full-bootstrap proof keys.
@@ -1335,7 +1442,7 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1: &str = "stark-fri-
 /// Version of the typed BFV full-bootstrap proof-key material envelope.
 pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap proof-key material envelope.
-pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1: u16 = 43;
+pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1: u16 = 45;
 const BFV_FULL_BOOTSTRAP_NATIVE_TRANSPARENT_PROVER_PAYLOAD_FIELD_COUNT_V1: u16 = 18;
 /// Number of top-level fields in the canonical native STARK/FRI verifier payload.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1: u16 = 18;
@@ -3007,6 +3114,43 @@ pub struct BfvFullBootstrapArithmeticAirEvaluationMaterialV1 {
     pub composition_values: Vec<u64>,
 }
 
+/// Transcript-derived public opening material for one BFV full-bootstrap trace.
+///
+/// This is the typed proof-output boundary for the first-release transparent
+/// STARK/AIR public padding openings. It carries the verifier-owned transcript
+/// inputs, the canonical opening schedule, and the opened row/next-row values
+/// that can be replayed without exposing private active trace rows.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 {
+    /// Version of this public opening material layout.
+    pub version: u16,
+    /// Number of top-level fields in this public opening material layout.
+    pub field_count: u16,
+    /// Statement hash that seeds the opening transcript.
+    pub statement_hash: Hash,
+    /// Row-major arithmetic trace material digest that seeds the opening transcript.
+    pub trace_material_digest: Hash,
+    /// Output slot index expected in each opened public padding row.
+    pub slot_index: u32,
+    /// Bound mode expected in each opened public padding row.
+    pub bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
+    /// Number of STARK/FRI openings expected by this material.
+    pub query_count: u16,
+    /// Number of Goldilocks field elements in each opened row.
+    pub row_width: u16,
+    /// Number of rows in the padded native STARK domain.
+    pub padded_row_count: u16,
+    /// Number of private active rows that must not be opened.
+    pub private_row_count: u16,
+    /// Transcript-derived public opening row indices.
+    pub opening_indices: Vec<u32>,
+    /// Opened public padding rows for each query.
+    pub opened_rows: Vec<Vec<u64>>,
+    /// Opened next rows paired with `opened_rows`.
+    pub opened_next_rows: Vec<Vec<u64>>,
+}
+
 /// Public-input schema for BFV full-bootstrap execution proofs.
 ///
 /// This is the typed payload for the proof public-input schema artifact. It
@@ -3143,6 +3287,22 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub proof_input_material_field_count: u16,
     /// Domain used before hashing the release proof input material package.
     pub proof_input_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing the release prover input material package.
+    pub prover_input_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing the release AIR evaluation material package.
+    pub air_evaluation_material_digest_domain: Vec<u8>,
+    /// Version of the transcript-derived public opening material package.
+    pub public_opening_material_version: u16,
+    /// Number of top-level fields in the public opening material package.
+    pub public_opening_material_field_count: u16,
+    /// Domain used before hashing the public opening material package.
+    pub public_opening_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing the row-major arithmetic trace material package.
+    pub arithmetic_trace_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing the arithmetic AIR constraint-system material package.
+    pub arithmetic_air_constraint_system_digest_domain: Vec<u8>,
+    /// Whether release-prover material digests use distinct transcript domains.
+    pub separates_release_prover_material_domains: bool,
     /// Whether release tooling must hash the proof input material package.
     pub hashes_proof_input_material: bool,
     /// Version of the release prover input material package.
@@ -3165,10 +3325,20 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub requires_zero_arithmetic_air_composition_values: bool,
     /// Whether release prover input must bind the arithmetic trace material digest.
     pub binds_arithmetic_trace_material_digest: bool,
+    /// Whether release prover input must validate typed transcript public openings.
+    pub validates_transcript_public_opening_material: bool,
+    /// Whether verifiers must supply their own expected arithmetic trace material digest.
+    pub requires_verifier_owned_trace_material_digest: bool,
     /// Whether release prover input must reject trace material for another proof input.
     pub binds_trace_proof_input_consistency: bool,
     /// Whether release prover input must bind the generated prover/verifier proof-key pair.
     pub binds_generated_proof_key_pair: bool,
+    /// Domain used before hashing an individual proof-key material commitment.
+    pub proof_key_material_commitment_domain: Vec<u8>,
+    /// Domain used before hashing the generated prover/verifier proof-key pair commitment.
+    pub proof_key_pair_commitment_domain: Vec<u8>,
+    /// Whether proof-key material and pair commitments use distinct transcript domains.
+    pub separates_proof_key_material_and_pair_commitments: bool,
     /// Whether release prover input must bind the caller-supplied verifier key.
     pub binds_release_prover_verifier_key: bool,
     /// Whether release prover input must be revalidated against concrete artifacts.
@@ -3185,6 +3355,46 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub supports_exact_residual_multiple: bool,
     /// Whether bounded-noise proof statements are supported.
     pub supports_bounded_noise: bool,
+}
+
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "contract material mirrors audited release-prover obligation bits"
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct BfvFullBootstrapReleaseProverContractMaterialV1 {
+    version: u16,
+    field_count: u16,
+    proof_input_material_version: u16,
+    proof_input_material_field_count: u16,
+    proof_input_material_digest_domain: Vec<u8>,
+    prover_input_material_version: u16,
+    prover_input_material_field_count: u16,
+    prover_input_material_digest_domain: Vec<u8>,
+    air_evaluation_material_version: u16,
+    air_evaluation_material_field_count: u16,
+    air_evaluation_material_digest_domain: Vec<u8>,
+    public_opening_material_version: u16,
+    public_opening_material_field_count: u16,
+    public_opening_material_digest_domain: Vec<u8>,
+    arithmetic_trace_material_digest_domain: Vec<u8>,
+    arithmetic_air_constraint_system_digest_domain: Vec<u8>,
+    separates_release_prover_material_domains: bool,
+    hashes_proof_input_material: bool,
+    binds_release_prover_arithmetic_air_constraint_system_digest: bool,
+    binds_release_prover_arithmetic_air_constraint_system_artifact_digest: bool,
+    binds_release_prover_arithmetic_air_evaluation_material_digest: bool,
+    binds_arithmetic_air_evaluation_trace_material_digest: bool,
+    requires_zero_arithmetic_air_composition_values: bool,
+    binds_arithmetic_trace_material_digest: bool,
+    validates_transcript_public_opening_material: bool,
+    requires_verifier_owned_trace_material_digest: bool,
+    binds_trace_proof_input_consistency: bool,
+    binds_generated_proof_key_pair: bool,
+    binds_release_prover_verifier_key: bool,
+    validates_artifact_bound_prover_input: bool,
+    rejects_stale_galois_key_set_replay: bool,
+    rejects_stale_proof_key_artifacts: bool,
 }
 
 /// Backend-native key material for a BFV full-bootstrap proof profile.
@@ -3257,6 +3467,10 @@ pub struct BfvFullBootstrapProofKeyV1 {
     pub bounds_opening_schedule_rejection_sampling: bool,
     /// Whether public padding openings are replayed against transcript-derived rows.
     pub validates_transcript_public_padding_openings: bool,
+    /// Whether typed transcript-derived public opening material is validated.
+    pub validates_transcript_public_opening_material: bool,
+    /// Whether native verification requires a verifier-owned trace material digest.
+    pub requires_verifier_owned_trace_material_digest: bool,
     /// Whether native verification validates every Merkle path shape.
     pub validates_merkle_path_shape: bool,
     /// Whether native verification validates Merkle paths against committed roots.
@@ -3352,6 +3566,7 @@ struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
     arithmetic_air_constraint_system_digest: Hash,
     centered_scale_round_source_chain_digest: Hash,
     proof_public_input_schema_payload_digest: Hash,
+    release_prover_contract_digest: Hash,
     hash_fn: u8,
     n_log2: u8,
     blowup_log2: u8,
@@ -3375,6 +3590,8 @@ struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
     derives_opening_schedule_from_trace_material_digest: bool,
     bounds_opening_schedule_rejection_sampling: bool,
     validates_transcript_public_padding_openings: bool,
+    validates_transcript_public_opening_material: bool,
+    requires_verifier_owned_trace_material_digest: bool,
     validates_merkle_path_shape: bool,
     validates_merkle_path_roots: bool,
     validates_fri_query_chain: bool,
@@ -3529,6 +3746,10 @@ pub struct BfvFullBootstrapProofKeyMaterialEnvelopeV1 {
     pub bounds_opening_schedule_rejection_sampling: bool,
     /// Whether public padding openings are replayed against transcript-derived rows.
     pub validates_transcript_public_padding_openings: bool,
+    /// Whether typed transcript-derived public opening material is validated.
+    pub validates_transcript_public_opening_material: bool,
+    /// Whether native verification requires a verifier-owned trace material digest.
+    pub requires_verifier_owned_trace_material_digest: bool,
     /// Whether native verification validates every Merkle path shape.
     pub validates_merkle_path_shape: bool,
     /// Whether native verification validates Merkle paths against committed roots.
@@ -3824,6 +4045,30 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     pub air_evaluation_material_version: u16,
     /// Number of top-level fields in the AIR evaluation material.
     pub air_evaluation_material_field_count: u16,
+    /// Domain used before hashing release proof input material.
+    pub proof_input_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing release prover input material.
+    pub prover_input_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing release AIR evaluation material.
+    pub air_evaluation_material_digest_domain: Vec<u8>,
+    /// Version of the transcript-derived public opening material this release audits.
+    pub public_opening_material_version: u16,
+    /// Number of top-level fields in the public opening material.
+    pub public_opening_material_field_count: u16,
+    /// Domain used before hashing release public opening material.
+    pub public_opening_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing release arithmetic trace material.
+    pub arithmetic_trace_material_digest_domain: Vec<u8>,
+    /// Domain used before hashing release arithmetic AIR constraint-system material.
+    pub arithmetic_air_constraint_system_digest_domain: Vec<u8>,
+    /// Whether release-prover material digests use distinct transcript domains.
+    pub separates_release_prover_material_domains: bool,
+    /// Domain used before hashing individual proof-key material commitments.
+    pub proof_key_material_commitment_domain: Vec<u8>,
+    /// Domain used before hashing the generated prover/verifier proof-key pair commitment.
+    pub proof_key_pair_commitment_domain: Vec<u8>,
+    /// Whether proof-key material and pair commitments use distinct transcript domains.
+    pub separates_proof_key_material_and_pair_commitments: bool,
     /// Whether this release validates the AIR evaluation material digest.
     pub validates_air_evaluation_material_digest: bool,
     /// Whether this release validates AIR evaluation material against trace material.
@@ -3848,6 +4093,10 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     pub bounds_opening_schedule_rejection_sampling: bool,
     /// Whether this release replays public padding openings against transcript-derived rows.
     pub validates_transcript_public_padding_openings: bool,
+    /// Whether this release validates typed transcript public opening material.
+    pub validates_transcript_public_opening_material: bool,
+    /// Whether this release requires verifier-owned trace material digest input.
+    pub requires_verifier_owned_trace_material_digest: bool,
     /// Whether this release requires the canonical native AIR base transcript label.
     pub requires_canonical_base_transcript_label: bool,
     /// Whether this release rejects suffixed native AIR transcript-label aliases.
@@ -3979,6 +4228,10 @@ pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
     pub prover_key_digest: Hash,
     /// Digest of the governed verifier-key artifact bytes.
     pub verifier_key_digest: Hash,
+    /// SHA-256 digest of the canonical native prover payload bytes.
+    pub prover_native_payload_digest: Hash,
+    /// SHA-256 digest of the canonical native verifier payload bytes.
+    pub verifier_native_payload_digest: Hash,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
     /// Digest of the generated native circuit body committed by the proof keys.
@@ -4076,6 +4329,10 @@ pub struct BfvFullBootstrapReleaseAuditManifestV1 {
     pub prover_key_digest: Hash,
     /// Digest of the governed verifier-key artifact bytes.
     pub verifier_key_digest: Hash,
+    /// SHA-256 digest of the canonical native prover payload bytes.
+    pub prover_native_payload_digest: Hash,
+    /// SHA-256 digest of the canonical native verifier payload bytes.
+    pub verifier_native_payload_digest: Hash,
     /// Fingerprint of the native full-bootstrap proof circuit layout.
     pub native_circuit_fingerprint: Hash,
     /// Digest of the generated native circuit body committed by the proof keys.
@@ -4438,6 +4695,10 @@ pub struct BfvFullBootstrapExecutionProverInputMaterialV1 {
     pub arithmetic_air_evaluation_material: BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
     /// Digest of the full-domain AIR evaluation material.
     pub arithmetic_air_evaluation_material_digest: Hash,
+    /// Transcript-derived public opening material for verifier-visible AIR queries.
+    pub public_opening_material: BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+    /// Digest of the transcript-derived public opening material.
+    pub public_opening_material_digest: Hash,
     /// Governed native STARK/FRI prover key for the full-bootstrap circuit.
     pub prover_key: BfvFullBootstrapProofKeyV1,
     /// Governed native STARK/FRI verifier key paired with `prover_key`.
@@ -4603,6 +4864,7 @@ struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     arithmetic_air_constraint_system_digest: Hash,
     centered_scale_round_source_chain_digest: Hash,
     proof_public_input_schema_payload_digest: Hash,
+    release_prover_contract_digest: Hash,
     public_input_hash_count: u16,
     public_input_hash_bytes: u16,
     supports_exact_residual_multiple: bool,
@@ -4611,6 +4873,8 @@ struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     derives_opening_schedule_from_trace_material_digest: bool,
     bounds_opening_schedule_rejection_sampling: bool,
     validates_transcript_public_padding_openings: bool,
+    validates_transcript_public_opening_material: bool,
+    requires_verifier_owned_trace_material_digest: bool,
     validates_merkle_path_shape: bool,
     validates_merkle_path_roots: bool,
     validates_fri_query_chain: bool,
@@ -5408,6 +5672,145 @@ pub struct BfvCiphertext {
     pub c1: Vec<u64>,
 }
 
+/// Typed prover input for exact-residual BFV public-key admission.
+///
+/// The material binds the public statement hash to the concrete public key,
+/// secret-key witness, plaintext-modulus-multiple residual polynomial, and
+/// residual multiples used by the exact evaluator bridge. It is a
+/// proof-producing boundary for exact-lift key admission; callers should not
+/// pass bare public-key statement hashes to future admission provers.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvExactResidualPublicKeyProofInputMaterialV1 {
+    /// Version of this proof input material layout.
+    pub version: u16,
+    /// Number of top-level fields in this proof input material layout.
+    pub field_count: u16,
+    /// BFV parameter set bound into the public-key proof statement.
+    pub params: BfvParameters,
+    /// BFV public key bound into the public-key proof statement.
+    pub public_key: BfvPublicKey,
+    /// Digest of `public_key` under `params`.
+    pub public_key_digest: Hash,
+    /// Secret-key witness whose residual validates `public_key`.
+    pub secret_key: BfvSecretKey,
+    /// Plaintext-modulus-multiple public-key residual `b + a*s` in `R_q`.
+    pub public_key_residual: Vec<u64>,
+    /// Signed residual multiples for `public_key_residual`.
+    pub residual_multiples: Vec<i64>,
+    /// Maximum absolute residual multiple.
+    pub max_abs_residual_multiple: u128,
+    /// Canonical exact public-key statement hash exposed as public input.
+    pub statement_hash: Hash,
+}
+
+/// Typed prover input for exact-residual BFV ciphertext admission.
+///
+/// The material binds the public statement hash to the concrete public key,
+/// ciphertext, declared residual bound, secret-key witness, decoded plaintext,
+/// decrypted scaled coefficients, and exact residual multiples. It is the
+/// proof-producing boundary for first-release exact-lift ciphertext admission.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvExactResidualCiphertextProofInputMaterialV1 {
+    /// Version of this proof input material layout.
+    pub version: u16,
+    /// Number of top-level fields in this proof input material layout.
+    pub field_count: u16,
+    /// BFV parameter set bound into the ciphertext proof statement.
+    pub params: BfvParameters,
+    /// BFV public key bound into the ciphertext proof statement.
+    pub public_key: BfvPublicKey,
+    /// Digest of `public_key` under `params`.
+    pub public_key_digest: Hash,
+    /// BFV ciphertext bound into the ciphertext proof statement.
+    pub ciphertext: BfvCiphertext,
+    /// Digest of `ciphertext` under `params`.
+    pub ciphertext_digest: Hash,
+    /// Secret-key witness paired with `public_key`.
+    pub secret_key: BfvSecretKey,
+    /// Exact-lift plaintext decoded from `scaled_coefficients`.
+    pub plaintext: Vec<u64>,
+    /// Secret-key decryption result `c0 + c1*s` in `R_q`.
+    pub scaled_coefficients: Vec<u64>,
+    /// Signed exact residual multiples for `scaled_coefficients`.
+    pub residual_multiples: Vec<i64>,
+    /// Claimed exact residual-multiple bound from the public statement.
+    pub declared_bound: u128,
+    /// Maximum absolute exact residual multiple.
+    pub actual_max_abs_residual_multiple: u128,
+    /// Canonical exact ciphertext statement hash exposed as public input.
+    pub statement_hash: Hash,
+}
+
+/// Typed prover input for bounded-noise BFV public-key admission.
+///
+/// The material binds the public statement hash to the concrete public key,
+/// secret-key witness, and centered public-key residual polynomial. It is a
+/// proof-producing boundary for bounded-noise key admission; callers should not
+/// pass bare public-key statement hashes to future admission provers.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvBoundedNoisePublicKeyProofInputMaterialV1 {
+    /// Version of this proof input material layout.
+    pub version: u16,
+    /// Number of top-level fields in this proof input material layout.
+    pub field_count: u16,
+    /// BFV parameter set bound into the public-key proof statement.
+    pub params: BfvParameters,
+    /// BFV public key bound into the public-key proof statement.
+    pub public_key: BfvPublicKey,
+    /// Digest of `public_key` under `params`.
+    pub public_key_digest: Hash,
+    /// Secret-key witness whose residual validates `public_key`.
+    pub secret_key: BfvSecretKey,
+    /// Centered public-key residual `b + a*s` in `R_q`.
+    pub public_key_noise: Vec<u64>,
+    /// Maximum absolute centered coefficient in `public_key_noise`.
+    pub max_abs_noise: u128,
+    /// Canonical bounded-noise public-key statement hash exposed as public input.
+    pub statement_hash: Hash,
+}
+
+/// Typed prover input for bounded-noise BFV ciphertext admission.
+///
+/// The material binds the public statement hash to the concrete public key,
+/// ciphertext, declared centered-noise bound, secret-key witness, decoded
+/// plaintext, decrypted scaled coefficients, and centered noise polynomial. It
+/// is the proof-producing boundary for bounded-noise ciphertext admission.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvBoundedNoiseCiphertextProofInputMaterialV1 {
+    /// Version of this proof input material layout.
+    pub version: u16,
+    /// Number of top-level fields in this proof input material layout.
+    pub field_count: u16,
+    /// BFV parameter set bound into the ciphertext proof statement.
+    pub params: BfvParameters,
+    /// BFV public key bound into the ciphertext proof statement.
+    pub public_key: BfvPublicKey,
+    /// Digest of `public_key` under `params`.
+    pub public_key_digest: Hash,
+    /// BFV ciphertext bound into the ciphertext proof statement.
+    pub ciphertext: BfvCiphertext,
+    /// Digest of `ciphertext` under `params`.
+    pub ciphertext_digest: Hash,
+    /// Secret-key witness paired with `public_key`.
+    pub secret_key: BfvSecretKey,
+    /// Rounded plaintext decoded from `scaled_coefficients`.
+    pub plaintext: Vec<u64>,
+    /// Secret-key decryption result `c0 + c1*s` in `R_q`.
+    pub scaled_coefficients: Vec<u64>,
+    /// Centered rounded-noise polynomial in `R_q`.
+    pub noise_polynomial: Vec<u64>,
+    /// Claimed centered-noise bound from the public statement.
+    pub declared_bound: u128,
+    /// Maximum absolute centered coefficient in `noise_polynomial`.
+    pub actual_max_abs_noise: u128,
+    /// Canonical bounded-noise ciphertext statement hash exposed as public input.
+    pub statement_hash: Hash,
+}
+
 /// Secret-key diagnostic for the first-release exact BFV residual.
 ///
 /// This is not a bounded-RLWE noise estimate. It decomposes each centered
@@ -5912,6 +6315,799 @@ fn bfv_ciphertext_proof_statement_digest_for_mode(
     ]))
 }
 
+/// Build exact-residual BFV public-key proof input material.
+///
+/// The returned material is fully validated and carries the same statement hash
+/// produced by [`bfv_public_key_proof_statement_digest`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the key material is malformed, `secret_key` does
+/// not witness `public_key` under the exact residual policy, the key residual
+/// is zero, or canonical statement hashing fails.
+pub fn bfv_exact_residual_public_key_proof_input_material_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    public_key: &BfvPublicKey,
+) -> Result<BfvExactResidualPublicKeyProofInputMaterialV1, BfvError> {
+    validate_public_key_secret_consistency(params, secret_key, public_key)?;
+    let public_key_digest = bfv_public_key_digest(params, public_key)?;
+    let public_key_residual = poly_add_mod(
+        params,
+        &public_key.b,
+        &poly_mul_mod(params, &public_key.a, &secret_key.s),
+    );
+    let residual_profile = exact_residual_profile_from_scaled(params, &public_key_residual);
+    let statement_hash = bfv_public_key_proof_statement_digest(params, public_key)?;
+    let material = BfvExactResidualPublicKeyProofInputMaterialV1 {
+        version: BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_VERSION_V1,
+        field_count: BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
+        params: *params,
+        public_key: public_key.clone(),
+        public_key_digest,
+        secret_key: secret_key.clone(),
+        public_key_residual,
+        residual_multiples: exact_residual_multiples_i64(&residual_profile.residual_multiples)?,
+        max_abs_residual_multiple: residual_profile.max_abs_residual_multiple,
+        statement_hash,
+    };
+    validate_bfv_exact_residual_public_key_proof_input_material_v1(&material)?;
+    Ok(material)
+}
+
+/// Validate exact-residual BFV public-key proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when any embedded field is malformed or stale with
+/// respect to the public statement, key witness, exact public-key residual, or
+/// zero-residual witness rejection.
+pub fn validate_bfv_exact_residual_public_key_proof_input_material_v1(
+    material: &BfvExactResidualPublicKeyProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material version mismatch".to_owned(),
+        ));
+    }
+    if material.field_count != BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1 {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material field count mismatch".to_owned(),
+        ));
+    }
+    validate_public_key_secret_consistency(
+        &material.params,
+        &material.secret_key,
+        &material.public_key,
+    )?;
+    let expected_public_key_digest = bfv_public_key_digest(&material.params, &material.public_key)?;
+    if material.public_key_digest != expected_public_key_digest {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material public-key digest mismatch"
+                .to_owned(),
+        ));
+    }
+    let expected_residual = poly_add_mod(
+        &material.params,
+        &material.public_key.b,
+        &poly_mul_mod(
+            &material.params,
+            &material.public_key.a,
+            &material.secret_key.s,
+        ),
+    );
+    if material.public_key_residual != expected_residual {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material residual mismatch".to_owned(),
+        ));
+    }
+    validate_plaintext_multiple_residual_bound(
+        &material.params,
+        &material.public_key_residual,
+        &zero_poly(&material.params),
+        "exact-residual BFV public-key proof input residual",
+    )?;
+    let expected_profile =
+        exact_residual_profile_from_scaled(&material.params, &material.public_key_residual);
+    let expected_residual_multiples =
+        exact_residual_multiples_i64(&expected_profile.residual_multiples)?;
+    if material.residual_multiples != expected_residual_multiples {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material residual multiples mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.max_abs_residual_multiple != expected_profile.max_abs_residual_multiple {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material max residual mismatch".to_owned(),
+        ));
+    }
+    if material.max_abs_residual_multiple == 0 {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material must carry nonzero residual"
+                .to_owned(),
+        ));
+    }
+    let expected_statement_hash =
+        bfv_public_key_proof_statement_digest(&material.params, &material.public_key)?;
+    validate_nonzero_material_digest(
+        "exact-residual BFV public-key proof input statement hash",
+        &material.statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "exact-residual BFV public-key proof input statement hash",
+        &material.statement_hash,
+    )?;
+    if material.statement_hash != expected_statement_hash {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV public-key proof input material statement hash mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Build exact-residual BFV ciphertext proof input material.
+///
+/// The returned material is fully validated and carries the same statement hash
+/// produced by [`bfv_ciphertext_exact_residual_proof_statement_digest`].
+///
+/// # Errors
+/// Returns [`BfvError`] when key/ciphertext material is malformed, the secret
+/// key does not witness the public key, the ciphertext residual is zero,
+/// exceeds `declared_bound`, or canonical statement hashing fails.
+pub fn bfv_exact_residual_ciphertext_proof_input_material_v1(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    declared_bound: u128,
+) -> Result<BfvExactResidualCiphertextProofInputMaterialV1, BfvError> {
+    validate_public_key_secret_consistency(params, secret_key, public_key)?;
+    let witness = derive_bfv_exact_residual_ciphertext_proof_input_witness(
+        params,
+        secret_key,
+        ciphertext,
+        declared_bound,
+        "",
+    )?;
+    let public_key_digest = bfv_public_key_digest(params, public_key)?;
+    let ciphertext_digest = bfv_ciphertext_digest(params, ciphertext)?;
+    let statement_hash = bfv_ciphertext_exact_residual_proof_statement_digest(
+        params,
+        public_key,
+        ciphertext,
+        declared_bound,
+    )?;
+    let material = BfvExactResidualCiphertextProofInputMaterialV1 {
+        version: BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_VERSION_V1,
+        field_count: BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
+        params: *params,
+        public_key: public_key.clone(),
+        public_key_digest,
+        ciphertext: ciphertext.clone(),
+        ciphertext_digest,
+        secret_key: secret_key.clone(),
+        plaintext: witness.profile.plaintext,
+        scaled_coefficients: witness.scaled_coefficients,
+        residual_multiples: exact_residual_multiples_i64(&witness.profile.residual_multiples)?,
+        declared_bound,
+        actual_max_abs_residual_multiple: witness.profile.max_abs_residual_multiple,
+        statement_hash,
+    };
+    validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&material)?;
+    Ok(material)
+}
+
+struct BfvExactResidualCiphertextProofInputWitness {
+    profile: BfvExactResidualProfile,
+    scaled_coefficients: Polynomial,
+}
+
+fn derive_bfv_exact_residual_ciphertext_proof_input_witness(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    declared_bound: u128,
+    label: &str,
+) -> Result<BfvExactResidualCiphertextProofInputWitness, BfvError> {
+    let profile = validate_ciphertext_exact_residual_multiple_bound(
+        params,
+        secret_key,
+        ciphertext,
+        declared_bound,
+        label,
+    )?;
+    let scaled_coefficients = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
+    Ok(BfvExactResidualCiphertextProofInputWitness {
+        profile,
+        scaled_coefficients,
+    })
+}
+
+fn exact_residual_multiples_i64(residual_multiples: &[i128]) -> Result<Vec<i64>, BfvError> {
+    residual_multiples
+        .iter()
+        .map(|&multiple| {
+            i64::try_from(multiple).map_err(|_| {
+                BfvError::InvalidParameters(
+                    "exact-residual BFV proof input residual multiple exceeds i64 material range"
+                        .to_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Validate exact-residual BFV ciphertext proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when any embedded field is malformed or stale with
+/// respect to the public statement, key witness, ciphertext, plaintext, or
+/// exact residual bound, or carries a zero residual witness.
+pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_v1(
+    material: &BfvExactResidualCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_exact_residual_ciphertext_proof_input_material_header(material)?;
+    validate_public_key_secret_consistency(
+        &material.params,
+        &material.secret_key,
+        &material.public_key,
+    )?;
+    validate_bfv_exact_residual_ciphertext_proof_input_material_digests(material)?;
+    let witness = derive_bfv_exact_residual_ciphertext_proof_input_witness(
+        &material.params,
+        &material.secret_key,
+        &material.ciphertext,
+        material.declared_bound,
+        "exact-residual BFV ciphertext proof input",
+    )?;
+    validate_bfv_exact_residual_ciphertext_proof_input_material_witness(material, &witness)?;
+    validate_bfv_exact_residual_ciphertext_proof_input_material_statement(material)
+}
+
+fn validate_bfv_exact_residual_ciphertext_proof_input_material_header(
+    material: &BfvExactResidualCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material version mismatch".to_owned(),
+        ));
+    }
+    if material.field_count != BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1 {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material field count mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_exact_residual_ciphertext_proof_input_material_digests(
+    material: &BfvExactResidualCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    let expected_public_key_digest = bfv_public_key_digest(&material.params, &material.public_key)?;
+    if material.public_key_digest != expected_public_key_digest {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material public-key digest mismatch"
+                .to_owned(),
+        ));
+    }
+    let expected_ciphertext_digest = bfv_ciphertext_digest(&material.params, &material.ciphertext)?;
+    if material.ciphertext_digest != expected_ciphertext_digest {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material ciphertext digest mismatch"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_exact_residual_ciphertext_proof_input_material_witness(
+    material: &BfvExactResidualCiphertextProofInputMaterialV1,
+    witness: &BfvExactResidualCiphertextProofInputWitness,
+) -> Result<(), BfvError> {
+    if material.plaintext != witness.profile.plaintext {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material plaintext mismatch".to_owned(),
+        ));
+    }
+    if material.scaled_coefficients != witness.scaled_coefficients {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material scaled coefficients mismatch"
+                .to_owned(),
+        ));
+    }
+    let expected_residual_multiples =
+        exact_residual_multiples_i64(&witness.profile.residual_multiples)?;
+    if material.residual_multiples != expected_residual_multiples {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material residual multiples mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.actual_max_abs_residual_multiple != witness.profile.max_abs_residual_multiple {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material actual residual mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.actual_max_abs_residual_multiple == 0 {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material must carry nonzero residual"
+                .to_owned(),
+        ));
+    }
+    validate_exact_residual_bound_within_centered_capacity(
+        &material.params,
+        material.declared_bound,
+        "exact-residual BFV ciphertext proof input declared bound",
+    )?;
+    if material.actual_max_abs_residual_multiple > material.declared_bound {
+        return Err(BfvError::InvalidParameters(format!(
+            "exact-residual BFV ciphertext proof input actual residual {} exceeds declared bound {}",
+            material.actual_max_abs_residual_multiple, material.declared_bound
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_exact_residual_ciphertext_proof_input_material_statement(
+    material: &BfvExactResidualCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    let expected_statement_hash = bfv_ciphertext_exact_residual_proof_statement_digest(
+        &material.params,
+        &material.public_key,
+        &material.ciphertext,
+        material.declared_bound,
+    )?;
+    validate_nonzero_material_digest(
+        "exact-residual BFV ciphertext proof input statement hash",
+        &material.statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "exact-residual BFV ciphertext proof input statement hash",
+        &material.statement_hash,
+    )?;
+    if material.statement_hash != expected_statement_hash {
+        return Err(BfvError::InvalidParameters(
+            "exact-residual BFV ciphertext proof input material statement hash mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Build bounded-noise BFV public-key proof input material.
+///
+/// The returned material is fully validated and carries the same statement hash
+/// produced by [`bfv_bounded_noise_public_key_proof_statement_digest`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the key material is malformed, `secret_key` does
+/// not witness `public_key` under the bounded-noise residual policy, the key
+/// noise is zero, or canonical statement hashing fails.
+pub fn bfv_bounded_noise_public_key_proof_input_material_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    public_key: &BfvPublicKey,
+) -> Result<BfvBoundedNoisePublicKeyProofInputMaterialV1, BfvError> {
+    validate_bounded_noise_public_key_secret_consistency(params, secret_key, public_key)?;
+    let public_key_digest = bfv_public_key_digest(params, public_key)?;
+    let public_key_noise = poly_add_mod(
+        params,
+        &public_key.b,
+        &poly_mul_mod(params, &public_key.a, &secret_key.s),
+    );
+    let max_abs_noise = centered_polynomial_max_abs(
+        params,
+        &public_key_noise,
+        "bounded-noise public-key proof input residual",
+    )?;
+    let statement_hash = bfv_bounded_noise_public_key_proof_statement_digest(params, public_key)?;
+    let material = BfvBoundedNoisePublicKeyProofInputMaterialV1 {
+        version: BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_VERSION_V1,
+        field_count: BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
+        params: *params,
+        public_key: public_key.clone(),
+        public_key_digest,
+        secret_key: secret_key.clone(),
+        public_key_noise,
+        max_abs_noise,
+        statement_hash,
+    };
+    validate_bfv_bounded_noise_public_key_proof_input_material_v1(&material)?;
+    Ok(material)
+}
+
+/// Validate bounded-noise BFV public-key proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when any embedded field is malformed or stale with
+/// respect to the public statement, key witness, bounded-noise residual, or
+/// zero-noise witness rejection.
+pub fn validate_bfv_bounded_noise_public_key_proof_input_material_v1(
+    material: &BfvBoundedNoisePublicKeyProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material version mismatch".to_owned(),
+        ));
+    }
+    if material.field_count != BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material field count mismatch".to_owned(),
+        ));
+    }
+    validate_bounded_noise_public_key_secret_consistency(
+        &material.params,
+        &material.secret_key,
+        &material.public_key,
+    )?;
+    let expected_public_key_digest = bfv_public_key_digest(&material.params, &material.public_key)?;
+    if material.public_key_digest != expected_public_key_digest {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material public-key digest mismatch"
+                .to_owned(),
+        ));
+    }
+    let expected_noise = poly_add_mod(
+        &material.params,
+        &material.public_key.b,
+        &poly_mul_mod(
+            &material.params,
+            &material.public_key.a,
+            &material.secret_key.s,
+        ),
+    );
+    if material.public_key_noise != expected_noise {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material residual mismatch".to_owned(),
+        ));
+    }
+    validate_centered_noise_bound(
+        &material.params,
+        &material.public_key_noise,
+        u128::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND),
+        "bounded-noise BFV public-key proof input residual",
+    )?;
+    let expected_max_abs_noise = centered_polynomial_max_abs(
+        &material.params,
+        &material.public_key_noise,
+        "bounded-noise BFV public-key proof input residual",
+    )?;
+    if material.max_abs_noise != expected_max_abs_noise {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material max noise mismatch".to_owned(),
+        ));
+    }
+    if material.max_abs_noise == 0 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material must carry nonzero noise".to_owned(),
+        ));
+    }
+    let expected_statement_hash = bfv_bounded_noise_public_key_proof_statement_digest(
+        &material.params,
+        &material.public_key,
+    )?;
+    validate_nonzero_material_digest(
+        "bounded-noise BFV public-key proof input statement hash",
+        &material.statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "bounded-noise BFV public-key proof input statement hash",
+        &material.statement_hash,
+    )?;
+    if material.statement_hash != expected_statement_hash {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV public-key proof input material statement hash mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Build bounded-noise BFV ciphertext proof input material.
+///
+/// The returned material is fully validated and carries the same statement hash
+/// produced by [`bfv_bounded_noise_ciphertext_proof_statement_digest`].
+///
+/// # Errors
+/// Returns [`BfvError`] when key/ciphertext material is malformed, the secret
+/// key does not witness the public key, the ciphertext noise is zero, exceeds
+/// `declared_bound`, or canonical statement hashing fails.
+pub fn bfv_bounded_noise_ciphertext_proof_input_material_v1(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    declared_bound: u128,
+) -> Result<BfvBoundedNoiseCiphertextProofInputMaterialV1, BfvError> {
+    validate_bounded_noise_public_key_secret_consistency(params, secret_key, public_key)?;
+    let witness = derive_bfv_bounded_noise_ciphertext_proof_input_witness(
+        params,
+        secret_key,
+        ciphertext,
+        declared_bound,
+        "",
+    )?;
+    let public_key_digest = bfv_public_key_digest(params, public_key)?;
+    let ciphertext_digest = bfv_ciphertext_digest(params, ciphertext)?;
+    let statement_hash = bfv_bounded_noise_ciphertext_proof_statement_digest(
+        params,
+        public_key,
+        ciphertext,
+        declared_bound,
+    )?;
+    let material = BfvBoundedNoiseCiphertextProofInputMaterialV1 {
+        version: BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_VERSION_V1,
+        field_count: BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
+        params: *params,
+        public_key: public_key.clone(),
+        public_key_digest,
+        ciphertext: ciphertext.clone(),
+        ciphertext_digest,
+        secret_key: secret_key.clone(),
+        plaintext: witness.profile.plaintext,
+        scaled_coefficients: witness.scaled_coefficients,
+        noise_polynomial: witness.noise_polynomial,
+        declared_bound,
+        actual_max_abs_noise: witness.profile.max_abs_noise,
+        statement_hash,
+    };
+    validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&material)?;
+    Ok(material)
+}
+
+struct BfvBoundedNoiseCiphertextProofInputWitness {
+    profile: BfvBoundedNoiseProfile,
+    scaled_coefficients: Polynomial,
+    noise_polynomial: Polynomial,
+}
+
+fn derive_bfv_bounded_noise_ciphertext_proof_input_witness(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvCiphertext,
+    declared_bound: u128,
+    label: &str,
+) -> Result<BfvBoundedNoiseCiphertextProofInputWitness, BfvError> {
+    let profile =
+        validate_ciphertext_bounded_noise(params, secret_key, ciphertext, declared_bound, label)?;
+    let scaled_coefficients =
+        decrypt_bounded_noise_scaled_coefficients(params, secret_key, ciphertext)?;
+    let encoded_plaintext = encode_rounded_plaintext(params, &profile.plaintext)?;
+    let noise_polynomial =
+        bounded_noise_polynomial_from_scaled(params, &scaled_coefficients, &encoded_plaintext);
+    Ok(BfvBoundedNoiseCiphertextProofInputWitness {
+        profile,
+        scaled_coefficients,
+        noise_polynomial,
+    })
+}
+
+fn bounded_noise_polynomial_from_scaled(
+    params: &BfvParameters,
+    scaled_coefficients: &[u64],
+    encoded_plaintext: &[u64],
+) -> Polynomial {
+    scaled_coefficients
+        .iter()
+        .zip(encoded_plaintext)
+        .map(|(&coefficient, &encoded)| {
+            sub_mod_u64(coefficient, encoded, params.ciphertext_modulus)
+        })
+        .collect()
+}
+
+/// Validate bounded-noise BFV ciphertext proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when any embedded field is malformed or stale with
+/// respect to the public statement, key witness, ciphertext, plaintext, or
+/// centered-noise bound, or carries a zero-noise witness.
+pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(
+    material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_bounded_noise_ciphertext_proof_input_material_header(material)?;
+    validate_bounded_noise_public_key_secret_consistency(
+        &material.params,
+        &material.secret_key,
+        &material.public_key,
+    )?;
+    validate_bfv_bounded_noise_ciphertext_proof_input_material_digests(material)?;
+    let witness = derive_bfv_bounded_noise_ciphertext_proof_input_witness(
+        &material.params,
+        &material.secret_key,
+        &material.ciphertext,
+        material.declared_bound,
+        "bounded-noise BFV ciphertext proof input",
+    )?;
+    validate_bfv_bounded_noise_ciphertext_proof_input_material_witness(material, &witness)?;
+    validate_bfv_bounded_noise_ciphertext_proof_input_material_statement(material)
+}
+
+fn validate_bfv_bounded_noise_ciphertext_proof_input_material_header(
+    material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material version mismatch".to_owned(),
+        ));
+    }
+    if material.field_count != BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material field count mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_bounded_noise_ciphertext_proof_input_material_digests(
+    material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    let expected_public_key_digest = bfv_public_key_digest(&material.params, &material.public_key)?;
+    if material.public_key_digest != expected_public_key_digest {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material public-key digest mismatch"
+                .to_owned(),
+        ));
+    }
+    let expected_ciphertext_digest = bfv_ciphertext_digest(&material.params, &material.ciphertext)?;
+    if material.ciphertext_digest != expected_ciphertext_digest {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material ciphertext digest mismatch"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_bounded_noise_ciphertext_proof_input_material_witness(
+    material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
+    witness: &BfvBoundedNoiseCiphertextProofInputWitness,
+) -> Result<(), BfvError> {
+    if material.plaintext != witness.profile.plaintext {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material plaintext mismatch".to_owned(),
+        ));
+    }
+    if material.scaled_coefficients != witness.scaled_coefficients {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material scaled coefficients mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.noise_polynomial != witness.noise_polynomial {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material noise polynomial mismatch"
+                .to_owned(),
+        ));
+    }
+    let expected_actual_max_abs_noise = centered_polynomial_max_abs(
+        &material.params,
+        &material.noise_polynomial,
+        "bounded-noise BFV ciphertext proof input noise",
+    )?;
+    if material.actual_max_abs_noise != expected_actual_max_abs_noise
+        || material.actual_max_abs_noise != witness.profile.max_abs_noise
+    {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material actual noise mismatch".to_owned(),
+        ));
+    }
+    if material.actual_max_abs_noise == 0 {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material must carry nonzero noise".to_owned(),
+        ));
+    }
+    validate_bounded_noise_bound_within_decoding_capacity(
+        &material.params,
+        material.declared_bound,
+        "bounded-noise BFV ciphertext proof input declared bound",
+    )?;
+    if material.actual_max_abs_noise > material.declared_bound {
+        return Err(BfvError::InvalidParameters(format!(
+            "bounded-noise BFV ciphertext proof input actual noise {} exceeds declared bound {}",
+            material.actual_max_abs_noise, material.declared_bound
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_bounded_noise_ciphertext_proof_input_material_statement(
+    material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    let expected_statement_hash = bfv_bounded_noise_ciphertext_proof_statement_digest(
+        &material.params,
+        &material.public_key,
+        &material.ciphertext,
+        material.declared_bound,
+    )?;
+    validate_nonzero_material_digest(
+        "bounded-noise BFV ciphertext proof input statement hash",
+        &material.statement_hash,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "bounded-noise BFV ciphertext proof input statement hash",
+        &material.statement_hash,
+    )?;
+    if material.statement_hash != expected_statement_hash {
+        return Err(BfvError::InvalidParameters(
+            "bounded-noise BFV ciphertext proof input material statement hash mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Hash exact-residual BFV public-key proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when material validation or canonical Norito encoding
+/// fails.
+pub fn bfv_exact_residual_public_key_proof_input_material_digest_v1(
+    material: &BfvExactResidualPublicKeyProofInputMaterialV1,
+) -> Result<Hash, BfvError> {
+    validate_bfv_exact_residual_public_key_proof_input_material_v1(material)?;
+    bfv_admission_proof_input_material_digest_v1(
+        "exact-residual BFV public-key proof input material",
+        BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+        material,
+    )
+}
+
+/// Hash bounded-noise BFV public-key proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when material validation or canonical Norito encoding
+/// fails.
+pub fn bfv_bounded_noise_public_key_proof_input_material_digest_v1(
+    material: &BfvBoundedNoisePublicKeyProofInputMaterialV1,
+) -> Result<Hash, BfvError> {
+    validate_bfv_bounded_noise_public_key_proof_input_material_v1(material)?;
+    bfv_admission_proof_input_material_digest_v1(
+        "bounded-noise BFV public-key proof input material",
+        BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+        material,
+    )
+}
+
+/// Hash exact-residual BFV ciphertext proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when material validation or canonical Norito encoding
+/// fails.
+pub fn bfv_exact_residual_ciphertext_proof_input_material_digest_v1(
+    material: &BfvExactResidualCiphertextProofInputMaterialV1,
+) -> Result<Hash, BfvError> {
+    validate_bfv_exact_residual_ciphertext_proof_input_material_v1(material)?;
+    bfv_admission_proof_input_material_digest_v1(
+        "exact-residual BFV ciphertext proof input material",
+        BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+        material,
+    )
+}
+
+/// Hash bounded-noise BFV ciphertext proof input material.
+///
+/// # Errors
+/// Returns [`BfvError`] when material validation or canonical Norito encoding
+/// fails.
+pub fn bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(
+    material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
+) -> Result<Hash, BfvError> {
+    validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(material)?;
+    bfv_admission_proof_input_material_digest_v1(
+        "bounded-noise BFV ciphertext proof input material",
+        BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+        material,
+    )
+}
+
+fn bfv_admission_proof_input_material_digest_v1<T: Encode>(
+    label: &str,
+    domain: &[u8],
+    material: &T,
+) -> Result<Hash, BfvError> {
+    let bytes = norito::to_bytes(material)
+        .map_err(|err| BfvError::InvalidParameters(format!("{label} encoding failed: {err}")))?;
+    Ok(Hash::new_from_chunks(&[domain, bytes.as_slice()]))
+}
+
 fn validate_public_key_not_all_zero(public_key: &BfvPublicKey) -> Result<(), BfvError> {
     if !public_key.b.is_empty() && public_key.b.iter().all(|&coefficient| coefficient == 0) {
         return Err(BfvError::InvalidParameters(
@@ -6028,7 +7224,7 @@ pub fn keygen_from_seed(
     let secret = sample_nonzero_secret_poly(params, &mut rng);
     let (b, a) = loop {
         let a = sample_nonzero_uniform_poly(params, &mut rng);
-        let e = sample_error_poly(params, &mut rng);
+        let e = sample_nonzero_error_poly(params, &mut rng);
         let as_product = poly_mul_mod(params, &a, &secret);
         let b = poly_sub_mod(params, &poly_neg_mod(params, &as_product), &e);
         if b.iter().any(|&coefficient| coefficient != 0) {
@@ -6125,7 +7321,7 @@ pub fn keygen_bounded_noise_with_relinearization_from_seed(
     let secret = sample_nonzero_secret_poly(params, &mut rng);
     let (b, a) = loop {
         let a = sample_nonzero_uniform_poly(params, &mut rng);
-        let e = sample_bounded_noise_poly(params, &mut rng);
+        let e = sample_nonzero_bounded_noise_poly(params, &mut rng);
         let as_product = poly_mul_mod(params, &a, &secret);
         let b = poly_sub_mod(params, &poly_neg_mod(params, &as_product), &e);
         if b.iter().any(|&coefficient| coefficient != 0) {
@@ -6242,10 +7438,10 @@ pub fn encrypt_from_seed(
     validate_public_key_not_all_zero(public_key)?;
 
     let encoded_plaintext = encode_plaintext(params, plaintext);
-    let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
+    let mut rng = derive_rng(BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
     let u = sample_nonzero_small_poly(params, &mut rng);
-    let e1 = sample_error_poly(params, &mut rng);
-    let e2 = sample_error_poly(params, &mut rng);
+    let e1 = sample_nonzero_error_poly(params, &mut rng);
+    let e2 = sample_nonzero_error_poly(params, &mut rng);
     let c0 = poly_add_mod(
         params,
         &poly_add_mod(params, &poly_mul_mod(params, &public_key.b, &u), &e1),
@@ -6278,10 +7474,10 @@ pub fn encrypt_bounded_noise_from_seed(
     validate_public_key_not_all_zero(public_key)?;
 
     let encoded_plaintext = encode_rounded_plaintext(params, plaintext)?;
-    let mut rng = derive_rng(BOUNDED_NOISE_ENCRYPT_DOMAIN, seed);
+    let mut rng = derive_rng(BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
     let u = sample_nonzero_small_poly(params, &mut rng);
-    let e1 = sample_bounded_noise_poly(params, &mut rng);
-    let e2 = sample_bounded_noise_poly(params, &mut rng);
+    let e1 = sample_nonzero_bounded_noise_poly(params, &mut rng);
+    let e2 = sample_nonzero_bounded_noise_poly(params, &mut rng);
     let c0 = poly_add_mod(
         params,
         &poly_add_mod(params, &poly_mul_mod(params, &public_key.b, &u), &e1),
@@ -7362,10 +8558,11 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
         "BFV bootstrap key",
     )?;
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
             let round_seed = bootstrap_refresh_round_seed(
-                BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+                BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN,
                 &key_id,
                 max_refresh_rounds,
                 seed,
@@ -7443,10 +8640,11 @@ pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
         "BFV bounded-noise bootstrap key",
     )?;
     validate_public_key(params, public_key)?;
+    validate_public_key_not_all_zero(public_key)?;
     let round_refreshes = (0..max_refresh_rounds)
         .map(|round_index| {
             let round_seed = bootstrap_refresh_round_seed(
-                BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+                BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN,
                 &key_id,
                 max_refresh_rounds,
                 seed,
@@ -8561,6 +9759,38 @@ pub fn encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
     Ok(bytes)
 }
 
+fn validate_full_bootstrap_artifact_payload_canonical_bytes_v1<T: Encode>(
+    label: &str,
+    payload: &[u8],
+    value: &T,
+) -> Result<(), BfvError> {
+    let canonical_payload = norito::to_bytes(value).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
+    })?;
+    if payload != canonical_payload {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must use canonical v1 bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(
+    label: &str,
+    bytes: &[u8],
+    artifact: &BfvFullBootstrapCircuitArtifactPayloadV1,
+) -> Result<(), BfvError> {
+    let canonical_bytes = norito::to_bytes(artifact).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} canonical envelope encoding failed: {err}"))
+    })?;
+    if bytes != canonical_bytes {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use canonical v1 envelope bytes"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate a typed packed-slot linear transform for full-bootstrap material.
 ///
 /// # Errors
@@ -8702,6 +9932,11 @@ pub fn decode_bfv_full_bootstrap_linear_transform_artifact_v1(
         ))
     })?;
     validate_bfv_full_bootstrap_linear_transform_v1(params, &transform)?;
+    validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
+        label,
+        &artifact.payload,
+        &transform,
+    )?;
     Ok(transform)
 }
 
@@ -8915,6 +10150,7 @@ pub fn decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
             "BFV full-bootstrap blind-rotation key accumulator digest does not match governed accumulator artifact".to_owned(),
         ));
     }
+    validate_full_bootstrap_artifact_payload_canonical_bytes_v1(label, &artifact.payload, &key)?;
     Ok(key)
 }
 
@@ -9026,6 +10262,11 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
     match norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionV1>(&artifact.payload) {
         Ok(sample_extraction) => {
             validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+            validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
+                label,
+                &artifact.payload,
+                &sample_extraction,
+            )?;
             Ok(sample_extraction)
         }
         Err(sample_err) => {
@@ -9039,6 +10280,11 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
                     ))
                 })?;
             validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
+            validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
+                label,
+                &artifact.payload,
+                &switch_key,
+            )?;
             Ok(switch_key.sample_extraction)
         }
     }
@@ -9101,6 +10347,11 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
             ))
         })?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
+    validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
+        label,
+        &artifact.payload,
+        &switch_key,
+    )?;
     Ok(switch_key)
 }
 
@@ -9977,6 +11228,11 @@ pub fn decode_bfv_full_bootstrap_accumulator_artifact_v1(
             ))
         })?;
     validate_bfv_full_bootstrap_accumulator_v1(params, &accumulator)?;
+    validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
+        label,
+        &artifact.payload,
+        &accumulator,
+    )?;
     Ok(accumulator)
 }
 
@@ -10171,6 +11427,12 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(
             "BFV full-bootstrap arithmetic trace profile must forbid duplicate openings".to_owned(),
         ));
     }
+    validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(profile)
+}
+
+fn validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(
+    profile: &BfvFullBootstrapArithmeticTraceProfileV1,
+) -> Result<(), BfvError> {
     for (label, is_bound) in [
         (
             "coefficient-to-slot output",
@@ -10787,6 +12049,21 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
         proof_input_material_digest_domain:
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        prover_input_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        air_evaluation_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        public_opening_material_version:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1,
+        public_opening_material_field_count:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1,
+        public_opening_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        arithmetic_trace_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        arithmetic_air_constraint_system_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN.to_vec(),
+        separates_release_prover_material_domains: true,
         hashes_proof_input_material: true,
         prover_input_material_version:
             BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1,
@@ -10802,8 +12079,15 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
         binds_arithmetic_air_evaluation_trace_material_digest: true,
         requires_zero_arithmetic_air_composition_values: true,
         binds_arithmetic_trace_material_digest: true,
+        validates_transcript_public_opening_material: true,
+        requires_verifier_owned_trace_material_digest: true,
         binds_trace_proof_input_consistency: true,
         binds_generated_proof_key_pair: true,
+        proof_key_material_commitment_domain:
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN.to_vec(),
+        proof_key_pair_commitment_domain: BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN
+            .to_vec(),
+        separates_proof_key_material_and_pair_commitments: true,
         binds_release_prover_verifier_key: true,
         validates_artifact_bound_prover_input: true,
         rejects_stale_galois_key_set_replay: true,
@@ -10813,6 +12097,325 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
         supports_exact_residual_multiple: true,
         supports_bounded_noise: true,
     }
+}
+
+fn bfv_full_bootstrap_release_prover_contract_material_v1()
+-> BfvFullBootstrapReleaseProverContractMaterialV1 {
+    BfvFullBootstrapReleaseProverContractMaterialV1 {
+        version: BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_VERSION_V1,
+        field_count: BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_FIELD_COUNT_V1,
+        proof_input_material_version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1,
+        proof_input_material_field_count:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1,
+        proof_input_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        prover_input_material_version:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1,
+        prover_input_material_field_count:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1,
+        prover_input_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        air_evaluation_material_version:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1,
+        air_evaluation_material_field_count:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1,
+        air_evaluation_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        public_opening_material_version:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1,
+        public_opening_material_field_count:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1,
+        public_opening_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        arithmetic_trace_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        arithmetic_air_constraint_system_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN.to_vec(),
+        separates_release_prover_material_domains: true,
+        hashes_proof_input_material: true,
+        binds_release_prover_arithmetic_air_constraint_system_digest: true,
+        binds_release_prover_arithmetic_air_constraint_system_artifact_digest: true,
+        binds_release_prover_arithmetic_air_evaluation_material_digest: true,
+        binds_arithmetic_air_evaluation_trace_material_digest: true,
+        requires_zero_arithmetic_air_composition_values: true,
+        binds_arithmetic_trace_material_digest: true,
+        validates_transcript_public_opening_material: true,
+        requires_verifier_owned_trace_material_digest: true,
+        binds_trace_proof_input_consistency: true,
+        binds_generated_proof_key_pair: true,
+        binds_release_prover_verifier_key: true,
+        validates_artifact_bound_prover_input: true,
+        rejects_stale_galois_key_set_replay: true,
+        rejects_stale_proof_key_artifacts: true,
+    }
+}
+
+fn bfv_full_bootstrap_release_prover_contract_digest_v1() -> Result<Hash, BfvError> {
+    let material = bfv_full_bootstrap_release_prover_contract_material_v1();
+    validate_bfv_full_bootstrap_release_prover_contract_material_v1(&material)?;
+    let bytes = norito::to_bytes(&material).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release-prover contract material encoding failed: {err}"
+        ))
+    })?;
+    Ok(Hash::new_from_chunks(&[
+        BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_DIGEST_DOMAIN,
+        bytes.as_slice(),
+    ]))
+}
+
+fn validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
+    label: &str,
+    digest: &Hash,
+) -> Result<(), BfvError> {
+    validate_nonzero_material_digest(label, digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
+    let expected = bfv_full_bootstrap_release_prover_contract_digest_v1()?;
+    if *digest != expected {
+        return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_prover_contract_material_v1(
+    material: &BfvFullBootstrapReleaseProverContractMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_release_prover_contract_material_layout_v1(material)?;
+    validate_bfv_full_bootstrap_release_prover_contract_material_domains_v1(material)?;
+    validate_bfv_full_bootstrap_release_prover_contract_material_obligations_v1(material)
+}
+
+fn validate_bfv_full_bootstrap_release_prover_contract_material_layout_v1(
+    material: &BfvFullBootstrapReleaseProverContractMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract material version mismatch".to_owned(),
+        ));
+    }
+    if material.field_count != BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_MATERIAL_FIELD_COUNT_V1 {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract material field count mismatch".to_owned(),
+        ));
+    }
+    if material.proof_input_material_version
+        != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract proof input material version mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.proof_input_material_field_count
+        != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract proof input material field count mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.prover_input_material_version
+        != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract prover input material version mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.prover_input_material_field_count
+        != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract prover input material field count mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.air_evaluation_material_version
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract AIR evaluation material version mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.air_evaluation_material_field_count
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract AIR evaluation material field count mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.public_opening_material_version
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract public opening material version mismatch"
+                .to_owned(),
+        ));
+    }
+    if material.public_opening_material_field_count
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract public opening material field count mismatch"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_prover_contract_material_domains_v1(
+    material: &BfvFullBootstrapReleaseProverContractMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release-prover contract proof input material digest domain",
+        &material.proof_input_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release-prover contract prover input material digest domain",
+        &material.prover_input_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release-prover contract AIR evaluation material digest domain",
+        &material.air_evaluation_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release-prover contract public opening material digest domain",
+        &material.public_opening_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release-prover contract arithmetic trace material digest domain",
+        &material.arithmetic_trace_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release-prover contract arithmetic AIR constraint-system digest domain",
+        &material.arithmetic_air_constraint_system_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN,
+    )?;
+    if !material.separates_release_prover_material_domains {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release-prover contract must separate material digest domains"
+                .to_owned(),
+        ));
+    }
+    let domains = [
+        (
+            "proof input material",
+            material.proof_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "prover input material",
+            material.prover_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "AIR evaluation material",
+            material.air_evaluation_material_digest_domain.as_slice(),
+        ),
+        (
+            "public opening material",
+            material.public_opening_material_digest_domain.as_slice(),
+        ),
+        (
+            "arithmetic trace material",
+            material.arithmetic_trace_material_digest_domain.as_slice(),
+        ),
+        (
+            "arithmetic AIR constraint-system",
+            material
+                .arithmetic_air_constraint_system_digest_domain
+                .as_slice(),
+        ),
+    ];
+    for (left_index, (left_label, left_domain)) in domains.iter().enumerate() {
+        for (right_label, right_domain) in domains.iter().skip(left_index + 1) {
+            if left_domain == right_domain {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap release-prover contract material digest domains for {left_label} and {right_label} must be distinct"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_prover_contract_material_obligations_v1(
+    material: &BfvFullBootstrapReleaseProverContractMaterialV1,
+) -> Result<(), BfvError> {
+    for (label, is_bound) in [
+        (
+            "proof input material hashing",
+            material.hashes_proof_input_material,
+        ),
+        (
+            "release prover arithmetic AIR constraint-system digest",
+            material.binds_release_prover_arithmetic_air_constraint_system_digest,
+        ),
+        (
+            "release prover arithmetic AIR artifact digest",
+            material.binds_release_prover_arithmetic_air_constraint_system_artifact_digest,
+        ),
+        (
+            "release prover arithmetic AIR evaluation material digest",
+            material.binds_release_prover_arithmetic_air_evaluation_material_digest,
+        ),
+        (
+            "arithmetic AIR evaluation trace material digest",
+            material.binds_arithmetic_air_evaluation_trace_material_digest,
+        ),
+        (
+            "zero arithmetic AIR composition values",
+            material.requires_zero_arithmetic_air_composition_values,
+        ),
+        (
+            "arithmetic trace material digest",
+            material.binds_arithmetic_trace_material_digest,
+        ),
+        (
+            "transcript public opening material",
+            material.validates_transcript_public_opening_material,
+        ),
+        (
+            "verifier-owned trace material digest",
+            material.requires_verifier_owned_trace_material_digest,
+        ),
+        (
+            "trace/proof-input consistency",
+            material.binds_trace_proof_input_consistency,
+        ),
+        (
+            "generated prover/verifier proof-key pair",
+            material.binds_generated_proof_key_pair,
+        ),
+        (
+            "release prover verifier key",
+            material.binds_release_prover_verifier_key,
+        ),
+        (
+            "artifact-bound release prover input validation",
+            material.validates_artifact_bound_prover_input,
+        ),
+        (
+            "stale Galois-key set replay rejection",
+            material.rejects_stale_galois_key_set_replay,
+        ),
+        (
+            "stale proof-key artifact replay rejection",
+            material.rejects_stale_proof_key_artifacts,
+        ),
+    ] {
+        if !is_bound {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release-prover contract must bind {label}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Validate a typed BFV full-bootstrap proof public-input schema.
@@ -11170,6 +12773,33 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_layouts_
         &schema.proof_input_material_digest_domain,
         BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
     )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema prover input material digest domain",
+        &schema.prover_input_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema AIR evaluation material digest domain",
+        &schema.air_evaluation_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_public_opening_material_contract_v1(
+        schema,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema arithmetic trace material digest domain",
+        &schema.arithmetic_trace_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema arithmetic AIR constraint-system digest domain",
+        &schema.arithmetic_air_constraint_system_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_domain_separation_v1(
+        schema,
+    )?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_proof_key_commitment_domains_v1(schema)?;
     if !schema.hashes_proof_input_material {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap proof public-input schema must hash proof input material"
@@ -11215,6 +12845,112 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_layouts_
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_proof_public_input_schema_public_opening_material_contract_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema public opening material digest domain",
+        &schema.public_opening_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    if schema.public_opening_material_version
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema public opening material version {} does not match canonical version {}",
+            schema.public_opening_material_version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+        )));
+    }
+    if schema.public_opening_material_field_count
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema public opening material field count {} does not match canonical count {}",
+            schema.public_opening_material_field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_proof_public_input_schema_proof_key_commitment_domains_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema proof-key material commitment domain",
+        &schema.proof_key_material_commitment_domain,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap proof public-input schema proof-key pair commitment domain",
+        &schema.proof_key_pair_commitment_domain,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN,
+    )?;
+    if !schema.separates_proof_key_material_and_pair_commitments {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema must separate proof-key material and pair commitment domains"
+                .to_owned(),
+        ));
+    }
+    if schema.proof_key_material_commitment_domain == schema.proof_key_pair_commitment_domain {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema proof-key material and pair commitment domains must be distinct"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_domain_separation_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
+    if !schema.separates_release_prover_material_domains {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema must separate release-prover material digest domains"
+                .to_owned(),
+        ));
+    }
+    let domains = [
+        (
+            "proof input material",
+            schema.proof_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "prover input material",
+            schema.prover_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "AIR evaluation material",
+            schema.air_evaluation_material_digest_domain.as_slice(),
+        ),
+        (
+            "public opening material",
+            schema.public_opening_material_digest_domain.as_slice(),
+        ),
+        (
+            "arithmetic trace material",
+            schema.arithmetic_trace_material_digest_domain.as_slice(),
+        ),
+        (
+            "arithmetic AIR constraint-system",
+            schema
+                .arithmetic_air_constraint_system_digest_domain
+                .as_slice(),
+        ),
+    ];
+    for (left_index, (left_label, left_domain)) in domains.iter().enumerate() {
+        for (right_label, right_domain) in domains.iter().skip(left_index + 1) {
+            if left_domain == right_domain {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap proof public-input schema release-prover material digest domains for {left_label} and {right_label} must be distinct"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_binding_flags_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -11242,6 +12978,14 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_binding_
         (
             "arithmetic trace material digest",
             schema.binds_arithmetic_trace_material_digest,
+        ),
+        (
+            "transcript public opening material",
+            schema.validates_transcript_public_opening_material,
+        ),
+        (
+            "verifier-owned trace material digest",
+            schema.requires_verifier_owned_trace_material_digest,
         ),
         (
             "trace/proof-input consistency",
@@ -11412,6 +13156,14 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
                 ))
             })?;
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
+    let canonical_payload = norito::to_bytes(&schema).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
+    })?;
+    if artifact.payload != canonical_payload {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must use canonical v1 bytes"
+        )));
+    }
     Ok(schema)
 }
 
@@ -11471,6 +13223,14 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
         ))
     })?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
+    let canonical_payload = norito::to_bytes(&air_material).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
+    })?;
+    if artifact.payload != canonical_payload {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must use canonical v1 bytes"
+        )));
+    }
     let expected_content_digest =
         bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&air_material)?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
@@ -11607,6 +13367,16 @@ pub fn decode_bfv_full_bootstrap_native_proof_key_material_v1(
             ))
         })?;
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(&material)?;
+    let canonical_material = norito::to_bytes(&material).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap native proof key material canonical encoding failed: {err}"
+        ))
+    })?;
+    if bytes != canonical_material.as_slice() {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap native proof key material must use canonical v1 bytes".to_owned(),
+        ));
+    }
     Ok(material)
 }
 
@@ -11700,6 +13470,8 @@ pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
         derives_opening_schedule_from_trace_material_digest: true,
         bounds_opening_schedule_rejection_sampling: true,
         validates_transcript_public_padding_openings: true,
+        validates_transcript_public_opening_material: true,
+        requires_verifier_owned_trace_material_digest: true,
         validates_merkle_path_shape: true,
         validates_merkle_path_roots: true,
         validates_fri_query_chain: true,
@@ -11824,8 +13596,8 @@ pub fn validate_bfv_full_bootstrap_proof_key_v1(
 ///
 /// # Errors
 /// Returns [`BfvError`] when the key does not declare a prover/verifier role,
-/// the proof profile is malformed, or the key material is inert/non-production
-/// placeholder bytes.
+/// the proof profile is malformed, or the key material is inert, opaque,
+/// non-production placeholder bytes, or not the canonical envelope for the key.
 pub fn bfv_full_bootstrap_proof_key_material_commitment_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<Hash, BfvError> {
@@ -11835,6 +13607,7 @@ pub fn bfv_full_bootstrap_proof_key_material_commitment_v1(
         "BFV full-bootstrap proof key material",
         &key.key_material,
     )?;
+    decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(key)?;
     let parameter_digest: [u8; Hash::LENGTH] = key.parameter_digest.into();
     let rns_modulus_chain_digest: [u8; Hash::LENGTH] = key.rns_modulus_chain_digest.into();
     let key_switch_decomposition_chain_digest: [u8; Hash::LENGTH] =
@@ -12060,6 +13833,8 @@ pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
         derives_opening_schedule_from_trace_material_digest: true,
         bounds_opening_schedule_rejection_sampling: true,
         validates_transcript_public_padding_openings: true,
+        validates_transcript_public_opening_material: true,
+        requires_verifier_owned_trace_material_digest: true,
         validates_merkle_path_shape: true,
         validates_merkle_path_roots: true,
         validates_fri_query_chain: true,
@@ -12241,6 +14016,7 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
             "{label} max bootstrap depth does not match requested full-bootstrap material"
         )));
     }
+    validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(label, bytes, &artifact)?;
     let key = norito::decode_from_bytes::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
         |err| {
             BfvError::InvalidParameters(format!(
@@ -12262,6 +14038,14 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
     )?;
     validate_bfv_full_bootstrap_proof_key_registered_profile_v1(params, max_bootstrap_depth, &key)?;
     validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(role, &key)?;
+    let canonical_payload = norito::to_bytes(&key).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
+    })?;
+    if artifact.payload != canonical_payload {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must use canonical v1 bytes"
+        )));
+    }
     Ok(key)
 }
 
@@ -12334,6 +14118,14 @@ pub fn decode_bfv_full_bootstrap_proof_key_artifact_v1(
         },
     )?;
     validate_bfv_full_bootstrap_proof_key_v1(material, role, &key)?;
+    let canonical_payload = norito::to_bytes(&key).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
+    })?;
+    if artifact.payload != canonical_payload {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} payload must use canonical v1 bytes"
+        )));
+    }
     Ok(key)
 }
 
@@ -12771,6 +14563,42 @@ fn validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(
     )
 }
 
+fn decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1<T>(
+    label: &str,
+    bytes: &[u8],
+    validate: impl FnOnce(&T) -> Result<(), BfvError>,
+) -> Result<T, BfvError>
+where
+    T: Decode + Encode,
+{
+    if bytes.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all-zero"
+        )));
+    }
+    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
+    let value = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "{label} must be a Norito-encoded release-audit object: {err}"
+        ))
+    })?;
+    validate(&value)?;
+    let canonical_bytes = norito::to_bytes(&value).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
+    })?;
+    if bytes != canonical_bytes {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use canonical v1 bytes"
+        )));
+    }
+    Ok(value)
+}
+
 /// Return the digest of typed BFV full-bootstrap release audit evidence.
 ///
 /// # Errors
@@ -12789,6 +14617,33 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest_v1(
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
+}
+
+/// Decode canonical BFV full-bootstrap release audit evidence bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` is not a well-formed release-audit
+/// evidence object, fails evidence validation, or is not the canonical v1
+/// Norito encoding of the decoded evidence.
+pub fn decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapReleaseAuditEvidenceV1, BfvError> {
+    decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1(
+        "BFV full-bootstrap release audit evidence bytes",
+        bytes,
+        validate_bfv_full_bootstrap_release_audit_evidence_v1,
+    )
+}
+
+/// Return the digest of canonical BFV full-bootstrap release audit evidence bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
+pub fn bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let evidence = decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(bytes)?;
+    bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)
 }
 
 /// Derive and digest deterministic BFV full-bootstrap release audit evidence.
@@ -12840,6 +14695,10 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
         proof_key_pair_commitment: evidence.proof_key_pair_commitment,
         prover_key_digest: evidence.prover_key.key_digest,
         verifier_key_digest: evidence.verifier_key.key_digest,
+        prover_native_payload_digest: Hash::prehashed(evidence.prover_key.native_payload_digest),
+        verifier_native_payload_digest: Hash::prehashed(
+            evidence.verifier_key.native_payload_digest,
+        ),
         native_circuit_fingerprint: evidence.prover_key.native_circuit_fingerprint,
         generated_circuit_body_digest: Hash::prehashed(
             evidence.prover_key.generated_circuit_body_digest,
@@ -12996,6 +14855,22 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(signoff, &evidence)
 }
 
+/// Decode canonical BFV full-bootstrap release audit signoff bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` is not a well-formed signed release-audit
+/// signoff, fails signoff validation, or is not the canonical v1 Norito
+/// encoding of the decoded signoff.
+pub fn decode_bfv_full_bootstrap_release_audit_signoff_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapReleaseAuditSignoffV1, BfvError> {
+    decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1(
+        "BFV full-bootstrap release audit signoff bytes",
+        bytes,
+        validate_bfv_full_bootstrap_release_audit_signoff_v1,
+    )
+}
+
 /// Build a publishable BFV full-bootstrap release audit record.
 ///
 /// # Errors
@@ -13138,6 +15013,33 @@ pub fn bfv_full_bootstrap_release_audit_record_digest_v1(
     ]))
 }
 
+/// Decode canonical BFV full-bootstrap release audit record bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` is not a well-formed release-audit record,
+/// fails record validation, or is not the canonical v1 Norito encoding of the
+/// decoded record.
+pub fn decode_bfv_full_bootstrap_release_audit_record_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapReleaseAuditRecordV1, BfvError> {
+    decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1(
+        "BFV full-bootstrap release audit record bytes",
+        bytes,
+        validate_bfv_full_bootstrap_release_audit_record_v1,
+    )
+}
+
+/// Return the digest of canonical BFV full-bootstrap release audit record bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
+pub fn bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let record = decode_bfv_full_bootstrap_release_audit_record_bytes_v1(bytes)?;
+    bfv_full_bootstrap_release_audit_record_digest_v1(&record)
+}
+
 /// Build a machine-checkable BFV full-bootstrap release audit manifest.
 ///
 /// # Errors
@@ -13164,6 +15066,8 @@ pub fn bfv_full_bootstrap_release_audit_manifest_v1(
         proof_key_pair_commitment: payload.proof_key_pair_commitment,
         prover_key_digest: payload.prover_key_digest,
         verifier_key_digest: payload.verifier_key_digest,
+        prover_native_payload_digest: payload.prover_native_payload_digest,
+        verifier_native_payload_digest: payload.verifier_native_payload_digest,
         native_circuit_fingerprint: payload.native_circuit_fingerprint,
         generated_circuit_body_digest: Hash::prehashed(
             record.evidence.prover_key.generated_circuit_body_digest,
@@ -13258,6 +15162,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         "BFV full-bootstrap release audit manifest verifier-key digest",
         &manifest.verifier_key_digest,
     )?;
+    validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+        "BFV full-bootstrap release audit manifest prover native payload digest",
+        &manifest.circuit_id,
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+        &manifest.prover_native_payload_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+        "BFV full-bootstrap release audit manifest verifier native payload digest",
+        &manifest.circuit_id,
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+        &manifest.verifier_native_payload_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_native_circuit_fingerprint_v1(
         "BFV full-bootstrap release audit manifest native circuit fingerprint",
         &manifest.circuit_id,
@@ -13302,6 +15218,14 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         ),
         ("prover-key digest", &manifest.prover_key_digest),
         ("verifier-key digest", &manifest.verifier_key_digest),
+        (
+            "prover native payload digest",
+            &manifest.prover_native_payload_digest,
+        ),
+        (
+            "verifier native payload digest",
+            &manifest.verifier_native_payload_digest,
+        ),
         (
             "native circuit fingerprint",
             &manifest.native_circuit_fingerprint,
@@ -13421,6 +15345,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(
             "BFV full-bootstrap release audit manifest verifier-key digest mismatch".to_owned(),
         ));
     }
+    if manifest.prover_native_payload_digest != payload.prover_native_payload_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit manifest prover native payload digest mismatch"
+                .to_owned(),
+        ));
+    }
+    if manifest.verifier_native_payload_digest != payload.verifier_native_payload_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit manifest verifier native payload digest mismatch"
+                .to_owned(),
+        ));
+    }
     if manifest.native_circuit_fingerprint != payload.native_circuit_fingerprint {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit manifest native circuit fingerprint mismatch"
@@ -13477,6 +15413,33 @@ pub fn bfv_full_bootstrap_release_audit_manifest_digest_v1(
     ]))
 }
 
+/// Decode canonical BFV full-bootstrap release audit manifest bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` is not a well-formed release-audit
+/// manifest, fails manifest validation, or is not the canonical v1 Norito
+/// encoding of the decoded manifest.
+pub fn decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapReleaseAuditManifestV1, BfvError> {
+    decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1(
+        "BFV full-bootstrap release audit manifest bytes",
+        bytes,
+        validate_bfv_full_bootstrap_release_audit_manifest_v1,
+    )
+}
+
+/// Return the digest of canonical BFV full-bootstrap release audit manifest bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
+pub fn bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let manifest = decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(bytes)?;
+    bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)
+}
+
 /// Build canonical BFV full-bootstrap release-audit report bytes from a report body.
 ///
 /// The returned bytes are prefixed with the v1 report header and can be passed
@@ -13517,13 +15480,17 @@ pub fn bfv_full_bootstrap_release_audit_archive_bytes_v1(body: &[u8]) -> Result<
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "release-audit archive inventory intentionally enumerates signed evidence fields"
+)]
 fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
     generated_circuit_body: &[u8],
     native_prover_payload: &[u8],
     native_verifier_payload: &[u8],
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
-) -> String {
+) -> Result<String, BfvError> {
     let mut archive_body =
         "machine-generated BFV full-bootstrap release evidence archive inventory v1".to_owned();
     bfv_full_bootstrap_release_audit_append_field(
@@ -13559,27 +15526,10 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
             evidence.arithmetic_air_constraint_system_digest,
         )),
     );
-    bfv_full_bootstrap_release_audit_append_field(
+    bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
         &mut archive_body,
-        "proof-profile-field-count",
-        &evidence.proof_profile.field_count.to_string(),
-    );
-    bfv_full_bootstrap_release_audit_append_field(
-        &mut archive_body,
-        "proof-profile-requires-canonical-base-transcript-label",
-        &evidence
-            .proof_profile
-            .requires_canonical_base_transcript_label
-            .to_string(),
-    );
-    bfv_full_bootstrap_release_audit_append_field(
-        &mut archive_body,
-        "proof-profile-rejects-suffixed-transcript-label-aliases",
-        &evidence
-            .proof_profile
-            .rejects_suffixed_transcript_label_aliases
-            .to_string(),
-    );
+        &evidence.proof_profile,
+    )?;
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
         "generated-circuit-body-sha256",
@@ -13606,8 +15556,22 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     );
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
+        "prover-native-payload-digest",
+        &hex::encode(<[u8; Hash::LENGTH]>::from(Hash::prehashed(
+            evidence.prover_key.native_payload_digest,
+        ))),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        &mut archive_body,
         "native-verifier-payload-hex",
         &hex::encode(native_verifier_payload),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        &mut archive_body,
+        "verifier-native-payload-digest",
+        &hex::encode(<[u8; Hash::LENGTH]>::from(Hash::prehashed(
+            evidence.verifier_key.native_payload_digest,
+        ))),
     );
     bfv_full_bootstrap_release_audit_append_field(
         &mut archive_body,
@@ -13633,7 +15597,7 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
         "verifier-key-digest",
         &hex::encode(<[u8; Hash::LENGTH]>::from(evidence.verifier_key.key_digest)),
     );
-    archive_body
+    Ok(archive_body)
 }
 
 fn bfv_full_bootstrap_release_audit_append_governed_artifact_hex_fields_v1(
@@ -13720,6 +15684,9 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
     let proof_key_pair_commitment_hex = hex::encode(<[u8; Hash::LENGTH]>::from(
         evidence.proof_key_pair_commitment,
     ));
+    let prover_native_payload_digest = Hash::prehashed(evidence.prover_key.native_payload_digest);
+    let verifier_native_payload_digest =
+        Hash::prehashed(evidence.verifier_key.native_payload_digest);
     let native_payload_circuit_id = &evidence.prover_key.native_payload_circuit_id;
     let generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
@@ -13731,24 +15698,20 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
         encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
             native_payload_circuit_id,
         )?;
-    let proof_profile_field_count = evidence.proof_profile.field_count;
-    let proof_profile_requires_canonical_base_transcript_label = evidence
-        .proof_profile
-        .requires_canonical_base_transcript_label;
-    let proof_profile_rejects_suffixed_transcript_label_aliases = evidence
-        .proof_profile
-        .rejects_suffixed_transcript_label_aliases;
-
-    let report_body = format!(
-        "machine-generated BFV full-bootstrap release audit report inventory v1; release-evidence-digest={evidence_digest_hex}; generated-circuit-body-sha256={generated_circuit_body_digest_hex}; proof-key-pair-commitment={proof_key_pair_commitment_hex}; proof-profile-field-count={proof_profile_field_count}; proof-profile-requires-canonical-base-transcript-label={proof_profile_requires_canonical_base_transcript_label}; proof-profile-rejects-suffixed-transcript-label-aliases={proof_profile_rejects_suffixed_transcript_label_aliases}"
+    let mut report_body = format!(
+        "machine-generated BFV full-bootstrap release audit report inventory v1; release-evidence-digest={evidence_digest_hex}; generated-circuit-body-sha256={generated_circuit_body_digest_hex}; proof-key-pair-commitment={proof_key_pair_commitment_hex}"
     );
+    bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
+        &mut report_body,
+        &evidence.proof_profile,
+    )?;
     let archive_body = bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
         &evidence,
         &generated_circuit_body,
         &native_prover_payload,
         &native_verifier_payload,
         artifacts,
-    );
+    )?;
 
     let report_bytes = bfv_full_bootstrap_release_audit_report_bytes_v1(report_body.as_bytes())?;
     let archive_bytes = bfv_full_bootstrap_release_audit_archive_bytes_v1(archive_body.as_bytes())?;
@@ -13784,6 +15747,8 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
         proof_profile: &evidence.proof_profile,
         prover_key_digest: &evidence.prover_key.key_digest,
         verifier_key_digest: &evidence.verifier_key.key_digest,
+        prover_native_payload_digest: &prover_native_payload_digest,
+        verifier_native_payload_digest: &verifier_native_payload_digest,
     };
     validate_bfv_full_bootstrap_release_audit_archive_binds_signed_commitments_v1(
         &archive_bytes,
@@ -14127,6 +16092,8 @@ fn validate_bfv_full_bootstrap_release_audit_package_report_and_archive_v1(
         proof_profile: &package.record.evidence.proof_profile,
         prover_key_digest: &signoff_payload.prover_key_digest,
         verifier_key_digest: &signoff_payload.verifier_key_digest,
+        prover_native_payload_digest: &signoff_payload.prover_native_payload_digest,
+        verifier_native_payload_digest: &signoff_payload.verifier_native_payload_digest,
     };
     validate_bfv_full_bootstrap_release_audit_archive_binds_signed_commitments_v1(
         &package.audit_evidence_archive_bytes,
@@ -14660,6 +16627,14 @@ fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distin
         ("signed prover-key digest", &payload.prover_key_digest),
         ("signed verifier-key digest", &payload.verifier_key_digest),
         (
+            "signed prover native payload digest",
+            &payload.prover_native_payload_digest,
+        ),
+        (
+            "signed verifier native payload digest",
+            &payload.verifier_native_payload_digest,
+        ),
+        (
             "signed native circuit fingerprint",
             &payload.native_circuit_fingerprint,
         ),
@@ -14700,6 +16675,68 @@ pub fn bfv_full_bootstrap_release_audit_package_digest_v1(
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
+}
+
+/// Decode canonical BFV full-bootstrap release audit package bytes.
+///
+/// This is the byte-admission companion to
+/// [`validate_bfv_full_bootstrap_release_audit_package_v1`]. It rejects
+/// structurally decodable alternate Norito framing before returning the package
+/// object, so callers do not accidentally accept package bytes that differ from
+/// the bytes used by the canonical package digest.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` is empty, all-zero, placeholder-looking,
+/// not a release-audit package, malformed, or not the canonical v1 Norito
+/// encoding of the decoded package.
+pub fn decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapReleaseAuditPackageV1, BfvError> {
+    if bytes.is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit package bytes must not be empty".to_owned(),
+        ));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit package bytes must not be all-zero".to_owned(),
+        ));
+    }
+    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+        "BFV full-bootstrap release audit package bytes",
+        bytes,
+    )?;
+    let package =
+        norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditPackageV1>(bytes).map_err(
+            |err| {
+                BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap release audit package bytes must be a Norito-encoded package: {err}"
+                ))
+            },
+        )?;
+    validate_bfv_full_bootstrap_release_audit_package_v1(&package)?;
+    let canonical_bytes = norito::to_bytes(&package).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit package canonical encoding failed: {err}"
+        ))
+    })?;
+    if bytes != canonical_bytes {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit package bytes must use canonical v1 bytes".to_owned(),
+        ));
+    }
+    Ok(package)
+}
+
+/// Return the digest of canonical BFV full-bootstrap release audit package bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
+pub fn bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let package = decode_bfv_full_bootstrap_release_audit_package_bytes_v1(bytes)?;
+    bfv_full_bootstrap_release_audit_package_digest_v1(&package)
 }
 
 fn bfv_full_bootstrap_release_audit_artifact_digest_v1(
@@ -14757,6 +16794,186 @@ fn bfv_full_bootstrap_release_audit_append_field(body: &mut String, label: &str,
     body.push_str(label);
     body.push('=');
     body.push_str(value);
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "release-audit inventory output lists each signed proof-profile field explicitly"
+)]
+fn bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
+    body: &mut String,
+    proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-field-count",
+        &proof_profile.field_count.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-public-opening-material-version",
+        &proof_profile.public_opening_material_version.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-public-opening-material-field-count",
+        &proof_profile
+            .public_opening_material_field_count
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-hash-fn",
+        &proof_profile.hash_fn.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-n-log2",
+        &proof_profile.n_log2.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-blowup-log2",
+        &proof_profile.blowup_log2.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-fold-arity",
+        &proof_profile.fold_arity.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-queries",
+        &proof_profile.queries.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-merkle-arity",
+        &proof_profile.merkle_arity.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-requires-canonical-base-transcript-label",
+        &proof_profile
+            .requires_canonical_base_transcript_label
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-rejects-suffixed-transcript-label-aliases",
+        &proof_profile
+            .rejects_suffixed_transcript_label_aliases
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-requires-verifier-owned-trace-material-digest",
+        &proof_profile
+            .requires_verifier_owned_trace_material_digest
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-validates-transcript-public-opening-material",
+        &proof_profile
+            .validates_transcript_public_opening_material
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-validates-merkle-path-shape",
+        &proof_profile.validates_merkle_path_shape.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-validates-merkle-path-roots",
+        &proof_profile.validates_merkle_path_roots.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-validates-fri-query-chain",
+        &proof_profile.validates_fri_query_chain.to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-binds-first-fri-values-to-opened-air-values",
+        &proof_profile
+            .binds_first_fri_values_to_opened_air_values
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-binds-fri-queries-to-air-commitment-roots",
+        &proof_profile
+            .binds_fri_queries_to_air_commitment_roots
+            .to_string(),
+    );
+    for (label, value) in [
+        (
+            "proof-profile-proof-input-material-digest-domain",
+            proof_profile.proof_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "proof-profile-prover-input-material-digest-domain",
+            proof_profile.prover_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "proof-profile-air-evaluation-material-digest-domain",
+            proof_profile
+                .air_evaluation_material_digest_domain
+                .as_slice(),
+        ),
+        (
+            "proof-profile-public-opening-material-digest-domain",
+            proof_profile
+                .public_opening_material_digest_domain
+                .as_slice(),
+        ),
+        (
+            "proof-profile-arithmetic-trace-material-digest-domain",
+            proof_profile
+                .arithmetic_trace_material_digest_domain
+                .as_slice(),
+        ),
+        (
+            "proof-profile-arithmetic-air-constraint-system-digest-domain",
+            proof_profile
+                .arithmetic_air_constraint_system_digest_domain
+                .as_slice(),
+        ),
+        (
+            "proof-profile-proof-key-material-commitment-domain",
+            proof_profile
+                .proof_key_material_commitment_domain
+                .as_slice(),
+        ),
+        (
+            "proof-profile-proof-key-pair-commitment-domain",
+            proof_profile.proof_key_pair_commitment_domain.as_slice(),
+        ),
+    ] {
+        let value = std::str::from_utf8(value).map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit proof profile {label} is not UTF-8: {err}"
+            ))
+        })?;
+        bfv_full_bootstrap_release_audit_append_field(body, label, value);
+    }
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-separates-release-prover-material-domains",
+        &proof_profile
+            .separates_release_prover_material_domains
+            .to_string(),
+    );
+    bfv_full_bootstrap_release_audit_append_field(
+        body,
+        "proof-profile-separates-proof-key-material-and-pair-commitments",
+        &proof_profile
+            .separates_proof_key_material_and_pair_commitments
+            .to_string(),
+    );
+    Ok(())
 }
 
 fn bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
@@ -14917,9 +17134,10 @@ fn validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_diges
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
     )?;
+    let report_fields = bfv_full_bootstrap_release_audit_field_index_v1(report_body);
     let digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(*release_audit_evidence_digest));
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        report_body,
+    if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+        &report_fields,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_RELEASE_EVIDENCE_LABEL_ALIASES,
         &[digest_hex.as_bytes()],
     ) {
@@ -14944,13 +17162,14 @@ fn validate_bfv_full_bootstrap_release_audit_report_binds_generated_artifact_com
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
     )?;
+    let report_fields = bfv_full_bootstrap_release_audit_field_index_v1(report_body);
     let signed_generated_digest_hex =
         hex::encode(<[u8; Hash::LENGTH]>::from(*generated_circuit_body_digest));
     let raw_generated_digest_hex = hex::encode(sha256(
         bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?,
     ));
-    if !bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        report_body,
+    if !bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+        &report_fields,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES,
         &[
             signed_generated_digest_hex.as_bytes(),
@@ -14959,31 +17178,31 @@ fn validate_bfv_full_bootstrap_release_audit_report_binds_generated_artifact_com
     ) {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit report body must contain the canonical generated circuit body digest"
-                .to_owned(),
+            .to_owned(),
         ));
     }
-    validate_bfv_full_bootstrap_release_audit_report_contains_hash_v1(
-        report_body,
+    validate_bfv_full_bootstrap_release_audit_report_field_index_contains_hash_v1(
+        &report_fields,
         "proof-key pair commitment",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_KEY_PAIR_LABEL_ALIASES,
         proof_key_pair_commitment,
     )?;
-    validate_bfv_full_bootstrap_release_audit_body_binds_proof_profile_obligations_v1(
-        report_body,
+    validate_bfv_full_bootstrap_release_audit_field_index_binds_proof_profile_obligations_v1(
+        &report_fields,
         "report",
         proof_profile,
     )
 }
 
-fn validate_bfv_full_bootstrap_release_audit_report_contains_hash_v1(
-    report_body: &[u8],
+fn validate_bfv_full_bootstrap_release_audit_report_field_index_contains_hash_v1(
+    report_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
     label_aliases: &[&[u8]],
     digest: &Hash,
 ) -> Result<(), BfvError> {
     let digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(*digest));
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        report_body,
+    if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+        report_fields,
         label_aliases,
         &[digest_hex.as_bytes()],
     ) {
@@ -14994,44 +17213,278 @@ fn validate_bfv_full_bootstrap_release_audit_report_contains_hash_v1(
     )))
 }
 
-fn validate_bfv_full_bootstrap_release_audit_body_binds_proof_profile_obligations_v1(
-    body: &[u8],
+fn validate_bfv_full_bootstrap_release_audit_field_index_binds_proof_profile_obligations_v1(
+    fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     artifact_label: &str,
     proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
-    let field_count = proof_profile.field_count.to_string();
-    if !bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        body,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_LABEL_ALIASES,
-        &[field_count.as_bytes()],
-    ) {
-        return Err(BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit {artifact_label} body must contain the signed proof profile field count"
-        )));
+    validate_bfv_full_bootstrap_release_audit_field_index_binds_scalar_proof_profile_obligations_v1(
+        fields,
+        artifact_label,
+        proof_profile,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_field_index_binds_domain_proof_profile_obligations_v1(
+        fields,
+        artifact_label,
+        proof_profile,
+    )
+}
+
+struct BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+    missing_label: &'static str,
+    aliases: &'static [&'static [u8]],
+    value: String,
+}
+
+struct BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1<'a> {
+    label: &'static str,
+    aliases: &'static [&'static [u8]],
+    value: &'a [u8],
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "release-audit proof-profile scalar obligations intentionally enumerate audited fields"
+)]
+fn bfv_full_bootstrap_release_audit_proof_profile_scalar_obligations_v1(
+    proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> [BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1; 20] {
+    [
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof profile field count",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_LABEL_ALIASES,
+            value: proof_profile.field_count.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile public opening material version",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_VERSION_LABEL_ALIASES,
+            value: proof_profile.public_opening_material_version.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile public opening material field count",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_FIELD_COUNT_LABEL_ALIASES,
+            value: proof_profile
+                .public_opening_material_field_count
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile STARK hash selector",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_HASH_FN_LABEL_ALIASES,
+            value: proof_profile.hash_fn.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile STARK n_log2",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_N_LOG2_LABEL_ALIASES,
+            value: proof_profile.n_log2.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile STARK blowup log2",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_BLOWUP_LOG2_LABEL_ALIASES,
+            value: proof_profile.blowup_log2.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile FRI fold arity",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FOLD_ARITY_LABEL_ALIASES,
+            value: proof_profile.fold_arity.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile FRI query count",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_QUERIES_LABEL_ALIASES,
+            value: proof_profile.queries.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile Merkle arity",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_MERKLE_ARITY_LABEL_ALIASES,
+            value: proof_profile.merkle_arity.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "canonical base transcript-label proof-profile obligation",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_BASE_LABEL_ALIASES,
+            value: proof_profile
+                .requires_canonical_base_transcript_label
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "suffixed transcript-label proof-profile obligation",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REJECTS_SUFFIXED_LABEL_ALIASES,
+            value: proof_profile
+                .rejects_suffixed_transcript_label_aliases
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "verifier-owned trace-material digest proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_VERIFIER_TRACE_DIGEST_LABEL_ALIASES,
+            value: proof_profile
+                .requires_verifier_owned_trace_material_digest
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "transcript public-opening material proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_PUBLIC_OPENING_MATERIAL_LABEL_ALIASES,
+            value: proof_profile
+                .validates_transcript_public_opening_material
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "Merkle path shape proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_MERKLE_PATH_SHAPE_LABEL_ALIASES,
+            value: proof_profile.validates_merkle_path_shape.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "Merkle path root proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_MERKLE_PATH_ROOTS_LABEL_ALIASES,
+            value: proof_profile.validates_merkle_path_roots.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "FRI query-chain proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_FRI_QUERY_CHAIN_LABEL_ALIASES,
+            value: proof_profile.validates_fri_query_chain.to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "first-FRI/opened-AIR proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_BINDS_FIRST_FRI_VALUES_LABEL_ALIASES,
+            value: proof_profile
+                .binds_first_fri_values_to_opened_air_values
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "FRI query AIR-root proof-profile obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_BINDS_FRI_QUERIES_TO_AIR_ROOTS_LABEL_ALIASES,
+            value: proof_profile
+                .binds_fri_queries_to_air_commitment_roots
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile release-prover domain-separation obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_RELEASE_PROVER_DOMAINS_LABEL_ALIASES,
+            value: proof_profile
+                .separates_release_prover_material_domains
+                .to_string(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
+            missing_label: "proof-profile proof-key commitment-domain separation obligation",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_PROOF_KEY_COMMITMENTS_LABEL_ALIASES,
+            value: proof_profile
+                .separates_proof_key_material_and_pair_commitments
+                .to_string(),
+        },
+    ]
+}
+
+fn bfv_full_bootstrap_release_audit_proof_profile_domain_obligations_v1(
+    proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> [BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1<'_>; 8] {
+    [
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "proof input material digest domain",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_INPUT_DOMAIN_LABEL_ALIASES,
+            value: proof_profile.proof_input_material_digest_domain.as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "prover input material digest domain",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROVER_INPUT_DOMAIN_LABEL_ALIASES,
+            value: proof_profile.prover_input_material_digest_domain.as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "AIR evaluation material digest domain",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_EVALUATION_DOMAIN_LABEL_ALIASES,
+            value: proof_profile
+                .air_evaluation_material_digest_domain
+                .as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "public opening material digest domain",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_DOMAIN_LABEL_ALIASES,
+            value: proof_profile
+                .public_opening_material_digest_domain
+                .as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "arithmetic trace material digest domain",
+            aliases: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_TRACE_MATERIAL_DOMAIN_LABEL_ALIASES,
+            value: proof_profile
+                .arithmetic_trace_material_digest_domain
+                .as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "arithmetic AIR constraint-system digest domain",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_CONSTRAINT_DOMAIN_LABEL_ALIASES,
+            value: proof_profile
+                .arithmetic_air_constraint_system_digest_domain
+                .as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "proof-key material commitment domain",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_MATERIAL_DOMAIN_LABEL_ALIASES,
+            value: proof_profile
+                .proof_key_material_commitment_domain
+                .as_slice(),
+        },
+        BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1 {
+            label: "proof-key pair commitment domain",
+            aliases:
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_PAIR_DOMAIN_LABEL_ALIASES,
+            value: proof_profile.proof_key_pair_commitment_domain.as_slice(),
+        },
+    ]
+}
+
+fn validate_bfv_full_bootstrap_release_audit_field_index_binds_scalar_proof_profile_obligations_v1(
+    fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
+    artifact_label: &str,
+    proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
+    for obligation in
+        bfv_full_bootstrap_release_audit_proof_profile_scalar_obligations_v1(proof_profile)
+    {
+        if !bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+            fields,
+            obligation.aliases,
+            &[obligation.value.as_bytes()],
+        ) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit {artifact_label} body must contain the signed {}",
+                obligation.missing_label
+            )));
+        }
     }
-    let requires_base = proof_profile
-        .requires_canonical_base_transcript_label
-        .to_string();
-    if !bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        body,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_BASE_LABEL_ALIASES,
-        &[requires_base.as_bytes()],
-    ) {
-        return Err(BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit {artifact_label} body must contain the signed canonical base transcript-label proof-profile obligation"
-        )));
-    }
-    let rejects_suffixed = proof_profile
-        .rejects_suffixed_transcript_label_aliases
-        .to_string();
-    if !bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        body,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REJECTS_SUFFIXED_LABEL_ALIASES,
-        &[rejects_suffixed.as_bytes()],
-    ) {
-        return Err(BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit {artifact_label} body must contain the signed suffixed transcript-label proof-profile obligation"
-        )));
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_field_index_binds_domain_proof_profile_obligations_v1(
+    fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
+    artifact_label: &str,
+    proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
+    for obligation in
+        bfv_full_bootstrap_release_audit_proof_profile_domain_obligations_v1(proof_profile)
+    {
+        if !bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+            fields,
+            obligation.aliases,
+            &[obligation.value],
+        ) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit {artifact_label} body must contain the signed proof-profile {}",
+                obligation.label
+            )));
+        }
     }
     Ok(())
 }
@@ -15055,6 +17508,132 @@ struct BfvFullBootstrapReleaseAuditArchiveSignedCommitmentsV1<'a> {
     proof_profile: &'a BfvFullBootstrapReleaseAuditProofProfileV1,
     prover_key_digest: &'a Hash,
     verifier_key_digest: &'a Hash,
+    prover_native_payload_digest: &'a Hash,
+    verifier_native_payload_digest: &'a Hash,
+}
+
+#[derive(Clone, Copy)]
+struct BfvFullBootstrapReleaseAuditIndexedFieldV1<'a> {
+    label: &'a [u8],
+    value: &'a [u8],
+}
+
+struct BfvFullBootstrapReleaseAuditFieldIndexV1<'a> {
+    fields: Vec<BfvFullBootstrapReleaseAuditIndexedFieldV1<'a>>,
+}
+
+fn bfv_full_bootstrap_release_audit_field_index_v1(
+    body: &[u8],
+) -> BfvFullBootstrapReleaseAuditFieldIndexV1<'_> {
+    let mut fields = Vec::new();
+    let mut field_start = 0;
+    for (index, byte) in body.iter().copied().enumerate() {
+        if matches!(byte, b';' | b'\n' | b'\r') {
+            bfv_full_bootstrap_release_audit_push_indexed_field_v1(
+                &mut fields,
+                &body[field_start..index],
+            );
+            field_start = index + 1;
+        }
+    }
+    bfv_full_bootstrap_release_audit_push_indexed_field_v1(&mut fields, &body[field_start..]);
+    BfvFullBootstrapReleaseAuditFieldIndexV1 { fields }
+}
+
+fn bfv_full_bootstrap_release_audit_push_indexed_field_v1<'a>(
+    fields: &mut Vec<BfvFullBootstrapReleaseAuditIndexedFieldV1<'a>>,
+    field: &'a [u8],
+) {
+    let field = bfv_full_bootstrap_release_audit_field_without_leading_label_padding_v1(field);
+    let Some(equals_index) = field.iter().position(|byte| *byte == b'=') else {
+        return;
+    };
+    let label = bfv_full_bootstrap_release_audit_value_without_trailing_whitespace_v1(
+        &field[..equals_index],
+    );
+    if label.is_empty() {
+        return;
+    }
+    let value =
+        bfv_full_bootstrap_release_audit_value_region_after_equals_v1(&field[equals_index + 1..]);
+    fields.push(BfvFullBootstrapReleaseAuditIndexedFieldV1 { label, value });
+}
+
+fn bfv_full_bootstrap_release_audit_field_without_leading_label_padding_v1(field: &[u8]) -> &[u8] {
+    let mut index = 0;
+    while index < field.len() && matches!(field[index], b' ' | b'\t' | 0x0b | 0x0c) {
+        index += 1;
+    }
+    &field[index..]
+}
+
+fn bfv_full_bootstrap_release_audit_value_region_after_equals_v1(value: &[u8]) -> &[u8] {
+    let mut index = 0;
+    while index < value.len() && value[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    &value[index..]
+}
+
+fn bfv_full_bootstrap_release_audit_indexed_value_for_label_v1<'a>(
+    fields: &'a BfvFullBootstrapReleaseAuditFieldIndexV1<'a>,
+    label: &str,
+    label_aliases: &[&[u8]],
+) -> Result<&'a [u8], BfvError> {
+    let mut matching_label_count = 0_usize;
+    let mut indexed_value = None;
+    for field in &fields.fields {
+        if !label_aliases
+            .iter()
+            .copied()
+            .any(|alias| !alias.is_empty() && field.label == alias)
+        {
+            continue;
+        }
+        matching_label_count += 1;
+        if matching_label_count > 1 {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit evidence archive body must contain exactly one canonical {label} hex label"
+            )));
+        }
+        indexed_value = Some(field.value);
+    }
+    indexed_value.ok_or_else(|| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
+        ))
+    })
+}
+
+fn bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+    fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
+    label_aliases: &[&[u8]],
+    values: &[&[u8]],
+) -> bool {
+    let mut matching_label_count = 0_usize;
+    for field in &fields.fields {
+        if !label_aliases
+            .iter()
+            .copied()
+            .any(|label| !label.is_empty() && field.label == label)
+        {
+            continue;
+        }
+        matching_label_count += 1;
+        if matching_label_count > 1 {
+            return false;
+        }
+        if !values.iter().any(|value| {
+            !value.is_empty()
+                && bfv_full_bootstrap_release_audit_value_region_starts_with_value_v1(
+                    field.value,
+                    value,
+                )
+        }) {
+            return false;
+        }
+    }
+    matching_label_count == 1
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_binds_signed_commitments_v1(
@@ -15068,139 +17647,150 @@ fn validate_bfv_full_bootstrap_release_audit_archive_binds_signed_commitments_v1
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    let archive_fields = bfv_full_bootstrap_release_audit_field_index_v1(archive_body);
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "artifact bundle digest",
         commitments.artifact_bundle_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "evaluator artifact set digest",
         commitments.evaluator_artifact_set_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "centered scale-round source-chain digest",
         commitments.centered_scale_round_source_chain_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_digest_v1(
-        archive_body,
+        &archive_fields,
         circuit_id,
         commitments.generated_circuit_body_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "native circuit fingerprint",
         commitments.native_circuit_fingerprint,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "proof-key pair commitment",
         commitments.proof_key_pair_commitment,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "prover-key digest",
         commitments.prover_key_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "verifier-key digest",
         commitments.verifier_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
-        archive_body,
+        &archive_fields,
         circuit_id,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
-        archive_body,
+        &archive_fields,
         circuit_id,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
-        archive_body,
+        &archive_fields,
         circuit_id,
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
-        archive_body,
+        &archive_fields,
         circuit_id,
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_digests_v1(
-        archive_body,
+        &archive_fields,
         commitments,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "arithmetic trace profile digest",
         commitments.arithmetic_trace_profile_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
         "arithmetic AIR constraint-system digest",
         commitments.arithmetic_air_constraint_system_digest,
     )?;
-    validate_bfv_full_bootstrap_release_audit_body_binds_proof_profile_obligations_v1(
-        archive_body,
+    validate_bfv_full_bootstrap_release_audit_field_index_binds_proof_profile_obligations_v1(
+        &archive_fields,
         "evidence archive",
         commitments.proof_profile,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
+        "prover native payload digest",
+        commitments.prover_native_payload_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+        &archive_fields,
+        "verifier native payload digest",
+        commitments.verifier_native_payload_digest,
     )
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_digests_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     commitments: &BfvFullBootstrapReleaseAuditArchiveSignedCommitmentsV1<'_>,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "prover-key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROVER_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.prover_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "verifier-key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_VERIFIER_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.verifier_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "proof public-input schema artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROOF_SCHEMA_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.proof_public_input_schema_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "arithmetic AIR constraint-system artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ARITHMETIC_AIR_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.arithmetic_air_constraint_system_artifact_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "coefficient-to-slot key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_COEFFICIENT_TO_SLOT_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.coefficient_to_slot_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "slot-to-coefficient key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_SLOT_TO_COEFFICIENT_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.slot_to_coefficient_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "blind-rotation key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BLIND_ROTATION_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.blind_rotation_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "sample-extraction key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_SAMPLE_EXTRACTION_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.sample_extraction_key_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-        archive_body,
+        archive_fields,
         "accumulator artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
         commitments.accumulator_digest,
@@ -15208,7 +17798,7 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_diges
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_digest_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
     generated_circuit_body_digest: &Hash,
 ) -> Result<(), BfvError> {
@@ -15216,8 +17806,8 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
     let raw_generated_digest_hex = hex::encode(sha256(
         bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?,
     ));
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        archive_body,
+    if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+        archive_fields,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES,
         &[
             signed_digest_hex.as_bytes(),
@@ -15233,7 +17823,7 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
 ) -> Result<(), BfvError> {
     let generated_circuit_body = bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?;
@@ -15244,8 +17834,8 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
         ));
     }
     let generated_circuit_body_len = generated_circuit_body.len().to_string();
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        archive_body,
+    if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+        archive_fields,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_LENGTH_LABEL_ALIASES,
         &[generated_circuit_body_len.as_bytes()],
     ) {
@@ -15258,7 +17848,7 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
 ) -> Result<(), BfvError> {
     let generated_circuit_body = bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?;
@@ -15268,22 +17858,23 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
                 .to_owned(),
         ));
     }
-    let generated_circuit_body_hex = hex::encode(generated_circuit_body);
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        archive_body,
-        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_HEX_LABEL_ALIASES,
-        &[generated_circuit_body_hex.as_bytes()],
-    ) {
+    let archive_generated_circuit_body =
+        bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+            archive_fields,
+            "generated circuit body",
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_HEX_LABEL_ALIASES,
+        )?;
+    if archive_generated_circuit_body.as_slice() == generated_circuit_body.as_slice() {
         return Ok(());
     }
     Err(BfvError::InvalidParameters(
-        "BFV full-bootstrap release audit evidence archive body must contain the canonical generated circuit body hex"
+        "BFV full-bootstrap release audit evidence archive generated circuit body hex does not match the canonical generated circuit body bytes"
             .to_owned(),
     ))
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
     role: BfvFullBootstrapCircuitArtifactRoleV1,
 ) -> Result<(), BfvError> {
@@ -15309,27 +17900,28 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex
             "BFV full-bootstrap release audit evidence archive {label} must be non-empty"
         )));
     }
-    let payload_hex = hex::encode(payload);
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        archive_body,
-        aliases,
-        &[payload_hex.as_bytes()],
-    ) {
+    let archive_payload =
+        bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+            archive_fields,
+            label,
+            aliases,
+        )?;
+    if archive_payload.as_slice() == payload.as_slice() {
         return Ok(());
     }
     Err(BfvError::InvalidParameters(format!(
-        "BFV full-bootstrap release audit evidence archive body must contain the canonical {label} hex"
+        "BFV full-bootstrap release audit evidence archive {label} hex does not match the canonical {label} bytes"
     )))
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
     label_aliases: &[&[u8]],
     expected_digest: &Hash,
 ) -> Result<(), BfvError> {
-    let artifact_bytes = bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_v1(
-        archive_body,
+    let artifact_bytes = bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+        archive_fields,
         label,
         label_aliases,
     )?;
@@ -15342,13 +17934,13 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-    archive_body: &[u8],
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
     label_aliases: &[&[u8]],
     expected_artifact_bytes: &[u8],
 ) -> Result<(), BfvError> {
-    let artifact_bytes = bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_v1(
-        archive_body,
+    let artifact_bytes = bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+        archive_fields,
         label,
         label_aliases,
     )?;
@@ -15360,76 +17952,32 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex
     Ok(())
 }
 
-fn bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_v1(
-    archive_body: &[u8],
+fn bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
     label_aliases: &[&[u8]],
 ) -> Result<Vec<u8>, BfvError> {
-    let mut found_matching_label = false;
-    let mut matching_label_count = 0_usize;
-    let mut artifact_bytes = None;
-    for label_alias in label_aliases
-        .iter()
-        .copied()
-        .filter(|label| !label.is_empty())
+    let value = bfv_full_bootstrap_release_audit_indexed_value_for_label_v1(
+        archive_fields,
+        label,
+        label_aliases,
+    )?;
+    let value = bfv_full_bootstrap_release_audit_value_without_trailing_whitespace_v1(value);
+    if value.is_empty()
+        || !value.len().is_multiple_of(2)
+        || !value
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
     {
-        for (index, window) in archive_body.windows(label_alias.len()).enumerate() {
-            if window != label_alias
-                || !bfv_full_bootstrap_release_audit_label_has_boundaries_v1(
-                    archive_body,
-                    index,
-                    label_alias,
-                )
-            {
-                continue;
-            }
-            found_matching_label = true;
-            matching_label_count += 1;
-            if matching_label_count > 1 {
-                return Err(BfvError::InvalidParameters(format!(
-                    "BFV full-bootstrap release audit evidence archive body must contain exactly one canonical {label} hex label"
-                )));
-            }
-            let label_end = index + label_alias.len();
-            let field_end = archive_body[label_end..]
-                .iter()
-                .position(|byte| matches!(*byte, b';' | b'\n' | b'\r'))
-                .map_or(archive_body.len(), |offset| label_end + offset);
-            let Some(value_region) = bfv_full_bootstrap_release_audit_label_value_region_v1(
-                archive_body,
-                label_end,
-                field_end,
-            ) else {
-                return Err(BfvError::InvalidParameters(format!(
-                    "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
-                )));
-            };
-            let value =
-                bfv_full_bootstrap_release_audit_value_without_trailing_whitespace_v1(value_region);
-            if value.is_empty()
-                || !value.len().is_multiple_of(2)
-                || !value
-                    .iter()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-            {
-                return Err(BfvError::InvalidParameters(format!(
-                    "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
-                )));
-            }
-            let decoded_artifact_bytes = hex::decode(value).map_err(|err| {
-                BfvError::InvalidParameters(format!(
-                    "BFV full-bootstrap release audit evidence archive {label} hex is invalid: {err}"
-                ))
-            })?;
-            artifact_bytes = Some(decoded_artifact_bytes);
-        }
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
+        )));
     }
-    if found_matching_label && let Some(artifact_bytes) = artifact_bytes {
-        return Ok(artifact_bytes);
-    }
-    Err(BfvError::InvalidParameters(format!(
-        "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
-    )))
+    hex::decode(value).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit evidence archive {label} hex is invalid: {err}"
+        ))
+    })
 }
 
 fn validate_bfv_full_bootstrap_release_audit_archive_binds_governed_artifacts_v1(
@@ -15442,70 +17990,71 @@ fn validate_bfv_full_bootstrap_release_audit_archive_binds_governed_artifacts_v1
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
     )?;
+    let archive_fields = bfv_full_bootstrap_release_audit_field_index_v1(archive_body);
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "prover-key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROVER_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.prover_key,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "verifier-key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_VERIFIER_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.verifier_key,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "proof public-input schema artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROOF_SCHEMA_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.proof_public_input_schema,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "arithmetic AIR constraint-system artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ARITHMETIC_AIR_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.arithmetic_air_constraint_system,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "coefficient-to-slot key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_COEFFICIENT_TO_SLOT_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.coefficient_to_slot_key,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "slot-to-coefficient key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_SLOT_TO_COEFFICIENT_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.slot_to_coefficient_key,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "blind-rotation key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BLIND_ROTATION_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.blind_rotation_key,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "sample-extraction key artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_SAMPLE_EXTRACTION_KEY_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.sample_extraction_key,
     )?;
     validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
-        archive_body,
+        &archive_fields,
         "accumulator artifact",
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
         &artifacts.accumulator,
     )
 }
 
-fn validate_bfv_full_bootstrap_release_audit_archive_contains_hash_v1(
-    archive_body: &[u8],
+fn validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+    archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
     digest: &Hash,
 ) -> Result<(), BfvError> {
     let digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(*digest));
-    if bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
-        archive_body,
+    if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+        archive_fields,
         bfv_full_bootstrap_release_audit_archive_label_aliases_v1(label),
         &[digest_hex.as_bytes()],
     ) {
@@ -15640,8 +18189,48 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROVER_KEY_DIGEST_LABEL_ALIASES: 
     &[b"prover-key-digest", b"prover key digest"];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_VERIFIER_KEY_DIGEST_LABEL_ALIASES: &[&[u8]] =
     &[b"verifier-key-digest", b"verifier key digest"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROVER_NATIVE_PAYLOAD_DIGEST_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"prover-native-payload-digest",
+    b"prover native payload digest",
+    b"native-prover-payload-digest",
+    b"native prover payload digest",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_VERIFIER_NATIVE_PAYLOAD_DIGEST_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"verifier-native-payload-digest",
+    b"verifier native payload digest",
+    b"native-verifier-payload-digest",
+    b"native verifier payload digest",
+];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_LABEL_ALIASES: &[&[u8]] =
     &[b"proof-profile-field-count", b"proof profile field count"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_VERSION_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-public-opening-material-version",
+    b"proof profile public opening material version",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_FIELD_COUNT_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-public-opening-material-field-count",
+    b"proof profile public opening material field count",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_HASH_FN_LABEL_ALIASES: &[&[u8]] = &[
+    b"proof-profile-hash-fn",
+    b"proof profile hash fn",
+    b"proof-profile-hash-selector",
+    b"proof profile hash selector",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_N_LOG2_LABEL_ALIASES: &[&[u8]] =
+    &[b"proof-profile-n-log2", b"proof profile n log2"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_BLOWUP_LOG2_LABEL_ALIASES: &[&[u8]] =
+    &[b"proof-profile-blowup-log2", b"proof profile blowup log2"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FOLD_ARITY_LABEL_ALIASES: &[&[u8]] =
+    &[b"proof-profile-fold-arity", b"proof profile fold arity"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_QUERIES_LABEL_ALIASES: &[&[u8]] =
+    &[b"proof-profile-queries", b"proof profile queries"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_MERKLE_ARITY_LABEL_ALIASES: &[&[u8]] =
+    &[b"proof-profile-merkle-arity", b"proof profile merkle arity"];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_BASE_LABEL_ALIASES: &[&[u8]] = &[
     b"proof-profile-requires-canonical-base-transcript-label",
     b"proof profile requires canonical base transcript label",
@@ -15649,6 +18238,91 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_BASE_LABEL_ALIASES
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REJECTS_SUFFIXED_LABEL_ALIASES: &[&[u8]] = &[
     b"proof-profile-rejects-suffixed-transcript-label-aliases",
     b"proof profile rejects suffixed transcript-label aliases",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_VERIFIER_TRACE_DIGEST_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-requires-verifier-owned-trace-material-digest",
+    b"proof profile requires verifier-owned trace material digest",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_PUBLIC_OPENING_MATERIAL_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-validates-transcript-public-opening-material",
+    b"proof profile validates transcript public opening material",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_MERKLE_PATH_SHAPE_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-validates-merkle-path-shape",
+    b"proof profile validates merkle path shape",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_MERKLE_PATH_ROOTS_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-validates-merkle-path-roots",
+    b"proof profile validates merkle path roots",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_FRI_QUERY_CHAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-validates-fri-query-chain",
+    b"proof profile validates fri query chain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_BINDS_FIRST_FRI_VALUES_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-binds-first-fri-values-to-opened-air-values",
+    b"proof profile binds first fri values to opened air values",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_BINDS_FRI_QUERIES_TO_AIR_ROOTS_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-binds-fri-queries-to-air-commitment-roots",
+    b"proof profile binds fri queries to air commitment roots",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_INPUT_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-proof-input-material-digest-domain",
+    b"proof profile proof input material digest domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROVER_INPUT_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-prover-input-material-digest-domain",
+    b"proof profile prover input material digest domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_EVALUATION_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-air-evaluation-material-digest-domain",
+    b"proof profile AIR evaluation material digest domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-public-opening-material-digest-domain",
+    b"proof profile public opening material digest domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_TRACE_MATERIAL_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-arithmetic-trace-material-digest-domain",
+    b"proof profile arithmetic trace material digest domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_CONSTRAINT_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-arithmetic-air-constraint-system-digest-domain",
+    b"proof profile arithmetic AIR constraint-system digest domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_RELEASE_PROVER_DOMAINS_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-separates-release-prover-material-domains",
+    b"proof profile separates release-prover material domains",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_MATERIAL_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-proof-key-material-commitment-domain",
+    b"proof profile proof-key material commitment domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_PAIR_DOMAIN_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-proof-key-pair-commitment-domain",
+    b"proof profile proof-key pair commitment domain",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_PROOF_KEY_COMMITMENTS_LABEL_ALIASES:
+    &[&[u8]] = &[
+    b"proof-profile-separates-proof-key-material-and-pair-commitments",
+    b"proof profile separates proof-key material and pair commitments",
 ];
 
 fn bfv_full_bootstrap_release_audit_archive_label_aliases_v1(
@@ -15682,10 +18356,17 @@ fn bfv_full_bootstrap_release_audit_archive_label_aliases_v1(
         "verifier-key digest" => {
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_VERIFIER_KEY_DIGEST_LABEL_ALIASES
         }
+        "prover native payload digest" => {
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_PROVER_NATIVE_PAYLOAD_DIGEST_LABEL_ALIASES
+        }
+        "verifier native payload digest" => {
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_VERIFIER_NATIVE_PAYLOAD_DIGEST_LABEL_ALIASES
+        }
         _ => &[],
     }
 }
 
+#[cfg(test)]
 fn bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
     body: &[u8],
     label_aliases: &[&[u8]],
@@ -15731,6 +18412,7 @@ fn bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
     matching_label_count == 1
 }
 
+#[cfg(test)]
 fn bfv_full_bootstrap_release_audit_label_value_region_v1(
     body: &[u8],
     label_end: usize,
@@ -15773,6 +18455,7 @@ fn bfv_full_bootstrap_release_audit_value_region_starts_with_value_v1(
         .all(u8::is_ascii_whitespace)
 }
 
+#[cfg(test)]
 fn bfv_full_bootstrap_release_audit_label_has_boundaries_v1(
     body: &[u8],
     label_start: usize,
@@ -15785,6 +18468,7 @@ fn bfv_full_bootstrap_release_audit_label_has_boundaries_v1(
             .is_none_or(|byte| !bfv_full_bootstrap_release_audit_label_join_byte_v1(*byte))
 }
 
+#[cfg(test)]
 fn bfv_full_bootstrap_release_audit_label_start_has_field_boundary_v1(
     body: &[u8],
     label_start: usize,
@@ -15899,55 +18583,73 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(
     Ok(())
 }
 
+fn bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(bytes: &[u8]) -> bool {
+    bytes.iter().any(|byte| {
+        matches!(
+            byte.to_ascii_lowercase(),
+            b'a' | b'c' | b'd' | b'e' | b'f' | b'm' | b'n' | b'p' | b'r' | b's' | b't' | b'y'
+        )
+    })
+}
+
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_TEXT_TOKENS: &[&[u8]] = &[
+    b"placeholder",
+    b"replace-before-production",
+    b"replace before production",
+    b"replace_before_production",
+    b"replace-me",
+    b"replace me",
+    b"replace_me",
+    b"changeme",
+    b"change-me",
+    b"change me",
+    b"change_me",
+    b"test-only",
+    b"test only",
+    b"test_only",
+    b"your-",
+    b"your_",
+    b"your audit",
+    b"your_audit",
+    b"your proof",
+    b"your_proof",
+    b"not for production",
+    b"not-for-production",
+    b"not_for_production",
+    b"not production ready",
+    b"not-production-ready",
+    b"not_production_ready",
+    b"draft",
+    b"draft-only",
+    b"draft only",
+    b"draft_only",
+    b"todo",
+    b"dummy",
+    b"fake",
+    b"stub",
+    b"mock",
+    b"fixture",
+    b"sample",
+    b"template",
+    b"example",
+];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PENDING_AUDIT_TOKENS: &[&[u8]] = &[b"pending", b"audit"];
+static BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_COLLAPSED_PLACEHOLDER_TEXT_TOKENS: OnceLock<Vec<Vec<u8>>> =
+    OnceLock::new();
+
 fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u8]) -> bool {
-    let tokens = [
-        b"placeholder".as_slice(),
-        b"replace-before-production".as_slice(),
-        b"replace before production".as_slice(),
-        b"replace_before_production".as_slice(),
-        b"replace-me".as_slice(),
-        b"replace me".as_slice(),
-        b"replace_me".as_slice(),
-        b"changeme".as_slice(),
-        b"change-me".as_slice(),
-        b"change me".as_slice(),
-        b"change_me".as_slice(),
-        b"test-only".as_slice(),
-        b"test only".as_slice(),
-        b"test_only".as_slice(),
-        b"your-".as_slice(),
-        b"your_".as_slice(),
-        b"your audit".as_slice(),
-        b"your_audit".as_slice(),
-        b"your proof".as_slice(),
-        b"your_proof".as_slice(),
-        b"not for production".as_slice(),
-        b"not-for-production".as_slice(),
-        b"not_for_production".as_slice(),
-        b"not production ready".as_slice(),
-        b"not-production-ready".as_slice(),
-        b"not_production_ready".as_slice(),
-        b"draft".as_slice(),
-        b"draft-only".as_slice(),
-        b"draft only".as_slice(),
-        b"draft_only".as_slice(),
-        b"todo".as_slice(),
-        b"dummy".as_slice(),
-        b"fake".as_slice(),
-        b"stub".as_slice(),
-        b"mock".as_slice(),
-        b"fixture".as_slice(),
-        b"sample".as_slice(),
-        b"template".as_slice(),
-        b"example".as_slice(),
-    ];
-    if tokens.iter().any(|token| {
-        bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(bytes, token)
-    }) || ([b"pending".as_slice(), b"audit".as_slice()]
+    if !bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(bytes) {
+        return false;
+    }
+
+    if ascii_case_insensitive_contains_any_token(
+        bytes,
+        BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_TEXT_TOKENS,
+    ) || BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PENDING_AUDIT_TOKENS
         .iter()
         .all(|token| {
             bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(bytes, token)
-        }))
+        })
     {
         return true;
     }
@@ -15960,27 +18662,63 @@ fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u
 
     let collapsed_body = ascii_lower_alnum_collapsed(bytes);
     !collapsed_body.is_empty()
-        && (tokens.iter().any(|token| {
-            let collapsed_token = ascii_alnum_collapsed(token);
-            collapsed_token.len() >= BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES
-                && ascii_windows_contains(&collapsed_body, &collapsed_token)
-        }) || [b"pending".as_slice(), b"audit".as_slice()]
+        && (bfv_full_bootstrap_release_audit_collapsed_placeholder_text_tokens()
             .iter()
-            .all(|token| {
-                let collapsed_token = ascii_alnum_collapsed(token);
-                ascii_windows_contains(&collapsed_body, &collapsed_token)
-            }))
+            .any(|token| ascii_windows_contains(&collapsed_body, token))
+            || BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PENDING_AUDIT_TOKENS
+                .iter()
+                .all(|token| ascii_windows_contains(&collapsed_body, token)))
+}
+
+fn bfv_full_bootstrap_release_audit_collapsed_placeholder_text_tokens() -> &'static [Vec<u8>] {
+    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_COLLAPSED_PLACEHOLDER_TEXT_TOKENS
+        .get_or_init(|| {
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_TEXT_TOKENS
+                .iter()
+                .filter_map(|token| {
+                    let collapsed_token = ascii_alnum_collapsed(token);
+                    (collapsed_token.len()
+                        >= BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES)
+                        .then_some(collapsed_token)
+                })
+                .collect()
+        })
+        .as_slice()
 }
 
 fn bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
     body: &[u8],
     token: &[u8],
 ) -> bool {
-    if token.is_empty() {
+    ascii_case_insensitive_contains_any_token(body, &[token])
+}
+
+fn ascii_case_insensitive_contains_any_token(body: &[u8], tokens: &[&[u8]]) -> bool {
+    if tokens.iter().any(|token| token.is_empty()) {
         return true;
     }
-    body.windows(token.len())
-        .any(|window| window.eq_ignore_ascii_case(token))
+    let mut candidate_first_bytes = [false; 256];
+    for token in tokens {
+        candidate_first_bytes[usize::from(token[0].to_ascii_lowercase())] = true;
+    }
+    for (index, byte) in body.iter().copied().enumerate() {
+        let lower_byte = byte.to_ascii_lowercase();
+        if !candidate_first_bytes[usize::from(lower_byte)] {
+            continue;
+        }
+        for token in tokens {
+            if lower_byte != token[0].to_ascii_lowercase() {
+                continue;
+            }
+            let Some(window) = body.get(index..index.saturating_add(token.len())) else {
+                continue;
+            };
+            if window.eq_ignore_ascii_case(token) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn ascii_contains_separator_spelled_token(bytes: &[u8], token: &[u8]) -> bool {
@@ -16027,9 +18765,11 @@ fn ascii_lower_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn bfv_full_bootstrap_release_audit_body_after_leading_whitespace_v1(body: &[u8]) -> &[u8] {
-    body.iter()
+    let first_non_whitespace = body
+        .iter()
         .position(|byte| !byte.is_ascii_whitespace())
-        .map_or(&[][..], |index| &body[index..])
+        .unwrap_or(body.len());
+    &body[first_non_whitespace..]
 }
 
 fn bfv_full_bootstrap_release_audit_body_without_edge_whitespace_v1(body: &[u8]) -> &[u8] {
@@ -16176,6 +18916,28 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1,
         air_evaluation_material_field_count:
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1,
+        proof_input_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        prover_input_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        air_evaluation_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        public_opening_material_version:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1,
+        public_opening_material_field_count:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1,
+        public_opening_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        arithmetic_trace_material_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN.to_vec(),
+        arithmetic_air_constraint_system_digest_domain:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN.to_vec(),
+        separates_release_prover_material_domains: true,
+        proof_key_material_commitment_domain:
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN.to_vec(),
+        proof_key_pair_commitment_domain: BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN
+            .to_vec(),
+        separates_proof_key_material_and_pair_commitments: true,
         validates_air_evaluation_material_digest: true,
         validates_air_evaluation_trace_material_digest: true,
         requires_zero_air_composition_values: true,
@@ -16191,6 +18953,10 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
         bounds_opening_schedule_rejection_sampling: key.bounds_opening_schedule_rejection_sampling,
         validates_transcript_public_padding_openings: key
             .validates_transcript_public_padding_openings,
+        validates_transcript_public_opening_material: key
+            .validates_transcript_public_opening_material,
+        requires_verifier_owned_trace_material_digest: key
+            .requires_verifier_owned_trace_material_digest,
         requires_canonical_base_transcript_label: key.requires_canonical_base_transcript_label,
         rejects_suffixed_transcript_label_aliases: key.rejects_suffixed_transcript_label_aliases,
         validates_merkle_path_shape: key.validates_merkle_path_shape,
@@ -16204,6 +18970,10 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
     Ok(profile)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "signoff validation lists each signed release-audit commitment explicitly"
+)]
 fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
     payload: &BfvFullBootstrapReleaseAuditSignoffPayloadV1,
 ) -> Result<(), BfvError> {
@@ -16234,6 +19004,18 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit signoff verifier-key digest",
         &payload.verifier_key_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+        "BFV full-bootstrap release audit signoff prover native payload digest",
+        &payload.circuit_id,
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+        &payload.prover_native_payload_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+        "BFV full-bootstrap release audit signoff verifier native payload digest",
+        &payload.circuit_id,
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+        &payload.verifier_native_payload_digest,
     )?;
     validate_bfv_full_bootstrap_release_audit_native_circuit_fingerprint_v1(
         "BFV full-bootstrap release audit signoff native circuit fingerprint",
@@ -16278,6 +19060,14 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
         ),
         ("prover-key digest", &payload.prover_key_digest),
         ("verifier-key digest", &payload.verifier_key_digest),
+        (
+            "prover native payload digest",
+            &payload.prover_native_payload_digest,
+        ),
+        (
+            "verifier native payload digest",
+            &payload.verifier_native_payload_digest,
+        ),
         (
             "native circuit fingerprint",
             &payload.native_circuit_fingerprint,
@@ -16377,6 +19167,22 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
             "BFV full-bootstrap release audit signoff verifier-key digest mismatch".to_owned(),
         ));
     }
+    if payload.prover_native_payload_digest
+        != Hash::prehashed(evidence.prover_key.native_payload_digest)
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit signoff prover native payload digest mismatch"
+                .to_owned(),
+        ));
+    }
+    if payload.verifier_native_payload_digest
+        != Hash::prehashed(evidence.verifier_key.native_payload_digest)
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit signoff verifier native payload digest mismatch"
+                .to_owned(),
+        ));
+    }
     if payload.native_circuit_fingerprint != evidence.prover_key.native_circuit_fingerprint
         || payload.native_circuit_fingerprint != evidence.verifier_key.native_circuit_fingerprint
     {
@@ -16420,11 +19226,35 @@ fn validate_bfv_full_bootstrap_release_audit_generated_circuit_body_digest_v1(
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(label, digest)?;
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
+    validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
+        label,
+        &<[u8; Hash::LENGTH]>::from(*digest),
+    )?;
     let expected_generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)
             .map_err(|err| BfvError::InvalidParameters(format!("{label} mismatch: {err}")))?;
     let expected_digest = Hash::prehashed(sha256(&expected_generated_circuit_body));
     if *digest != expected_digest {
+        return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+    label: &str,
+    circuit_id: &str,
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+    digest: &Hash,
+) -> Result<(), BfvError> {
+    validate_nonzero_material_digest(label, digest)?;
+    validate_no_bfv_full_bootstrap_inert_sha256_digest(
+        label,
+        &<[u8; Hash::LENGTH]>::from(*digest),
+    )?;
+    let expected_digest = bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
+        label, role, circuit_id,
+    )?;
+    if *digest != Hash::prehashed(expected_digest) {
         return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
     }
     Ok(())
@@ -17151,6 +19981,7 @@ fn validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -17180,6 +20011,19 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
         profile.queries,
         profile.merkle_arity,
     )?;
+    validate_bfv_full_bootstrap_release_audit_proof_profile_layout_v1(profile)?;
+    validate_bfv_full_bootstrap_release_audit_proof_profile_release_prover_domains_v1(profile)?;
+    validate_bfv_full_bootstrap_release_audit_proof_profile_proof_key_commitment_domains_v1(
+        profile,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_proof_profile_advertised_obligations_v1(profile)?;
+    validate_bfv_full_bootstrap_release_audit_proof_profile_native_air_envelope_v1(profile)?;
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_proof_profile_layout_v1(
+    profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
     if profile.statement_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1
         || profile.statement_material_field_count
@@ -17214,6 +20058,22 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
                 .to_owned(),
         ));
     }
+    if profile.public_opening_material_version
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+        || profile.public_opening_material_field_count
+            != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile public opening material layout mismatch"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_proof_profile_advertised_obligations_v1(
+    profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
     if !profile.validates_air_evaluation_material_digest
         || !profile.validates_air_evaluation_trace_material_digest
         || !profile.requires_zero_air_composition_values
@@ -17242,15 +20102,123 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
         || !profile.derives_opening_schedule_from_trace_material_digest
         || !profile.bounds_opening_schedule_rejection_sampling
         || !profile.validates_transcript_public_padding_openings
+        || !profile.validates_transcript_public_opening_material
+        || !profile.requires_verifier_owned_trace_material_digest
         || !profile.requires_canonical_base_transcript_label
         || !profile.rejects_suffixed_transcript_label_aliases
     {
         return Err(BfvError::InvalidParameters(
-            "BFV full-bootstrap release audit proof profile must advertise transcript-bound opening schedule, public-padding replay, and canonical base transcript-label enforcement"
+            "BFV full-bootstrap release audit proof profile must advertise transcript-bound opening schedule, public-padding replay, typed public-opening material validation, verifier-owned trace material digest input, and canonical base transcript-label enforcement"
                 .to_owned(),
         ));
     }
-    validate_bfv_full_bootstrap_release_audit_proof_profile_native_air_envelope_v1(profile)?;
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_proof_profile_release_prover_domains_v1(
+    profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile proof input material digest domain",
+        &profile.proof_input_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile prover input material digest domain",
+        &profile.prover_input_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile AIR evaluation material digest domain",
+        &profile.air_evaluation_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile public opening material digest domain",
+        &profile.public_opening_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile arithmetic trace material digest domain",
+        &profile.arithmetic_trace_material_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile arithmetic AIR constraint-system digest domain",
+        &profile.arithmetic_air_constraint_system_digest_domain,
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN,
+    )?;
+    if !profile.separates_release_prover_material_domains {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile must separate release-prover material digest domains"
+                .to_owned(),
+        ));
+    }
+    let domains = [
+        (
+            "proof input material",
+            profile.proof_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "prover input material",
+            profile.prover_input_material_digest_domain.as_slice(),
+        ),
+        (
+            "AIR evaluation material",
+            profile.air_evaluation_material_digest_domain.as_slice(),
+        ),
+        (
+            "public opening material",
+            profile.public_opening_material_digest_domain.as_slice(),
+        ),
+        (
+            "arithmetic trace material",
+            profile.arithmetic_trace_material_digest_domain.as_slice(),
+        ),
+        (
+            "arithmetic AIR constraint-system",
+            profile
+                .arithmetic_air_constraint_system_digest_domain
+                .as_slice(),
+        ),
+    ];
+    for (left_index, (left_label, left_domain)) in domains.iter().enumerate() {
+        for (right_label, right_domain) in domains.iter().skip(left_index + 1) {
+            if left_domain == right_domain {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap release audit proof profile release-prover material digest domains for {left_label} and {right_label} must be distinct"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_proof_profile_proof_key_commitment_domains_v1(
+    profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile proof-key material commitment domain",
+        &profile.proof_key_material_commitment_domain,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN,
+    )?;
+    validate_bfv_full_bootstrap_canonical_bytes_label(
+        "BFV full-bootstrap release audit proof profile proof-key pair commitment domain",
+        &profile.proof_key_pair_commitment_domain,
+        BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN,
+    )?;
+    if !profile.separates_proof_key_material_and_pair_commitments {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile must separate proof-key material and pair commitment domains"
+                .to_owned(),
+        ));
+    }
+    if profile.proof_key_material_commitment_domain == profile.proof_key_pair_commitment_domain {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile proof-key material and pair commitment domains must be distinct"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -17312,6 +20280,31 @@ fn bfv_full_bootstrap_release_audit_expected_native_payload_kind_v1(
             "{label} release audit key evidence role is not a proof-key role"
         ))),
     }
+}
+
+fn bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
+    label: &str,
+    expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
+    native_payload_circuit_id: &str,
+) -> Result<[u8; Hash::LENGTH], BfvError> {
+    let payload = match expected_role {
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
+            encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                native_payload_circuit_id,
+            )?
+        }
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+                native_payload_circuit_id,
+            )?
+        }
+        _ => {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} release audit key evidence role is not a proof-key role"
+            )));
+        }
+    };
+    Ok(sha256(&payload))
 }
 
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
@@ -17400,6 +20393,17 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         &evidence.native_payload_kind,
         expected_payload_kind,
     )?;
+    let expected_native_payload_digest =
+        bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
+            label,
+            expected_role,
+            &evidence.native_payload_circuit_id,
+        )?;
+    if evidence.native_payload_digest != expected_native_payload_digest {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} release audit native payload digest mismatch"
+        )));
+    }
     Ok(())
 }
 
@@ -19091,6 +22095,286 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_op
     Ok(())
 }
 
+/// Build typed transcript-derived public opening material.
+///
+/// # Errors
+/// Returns [`BfvError`] when the statement or trace digest is invalid, the
+/// canonical opening schedule cannot be derived, or the resulting material
+/// fails replay validation.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcript_v1(
+    statement_hash: Hash,
+    trace_material_digest: Hash,
+    slot_index: u32,
+    bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
+) -> Result<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, BfvError> {
+    let opening_indices =
+        bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+            statement_hash,
+            trace_material_digest,
+        )?;
+    let padded_row_count =
+        u32::from(canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1());
+    let opened_rows = opening_indices
+        .iter()
+        .map(|&opening_index| {
+            bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                opening_index,
+                statement_hash,
+                slot_index,
+                bound_mode,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let opened_next_rows = opening_indices
+        .iter()
+        .map(|&opening_index| {
+            bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
+                (opening_index + 1) % padded_row_count,
+                statement_hash,
+                slot_index,
+                bound_mode,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let material = BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 {
+        version: BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1,
+        field_count: BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1,
+        statement_hash,
+        trace_material_digest,
+        slot_index,
+        bound_mode,
+        query_count: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
+        row_width: BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1,
+        padded_row_count: canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1(),
+        private_row_count: BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1,
+        opening_indices,
+        opened_rows,
+        opened_next_rows,
+    };
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
+    Ok(material)
+}
+
+/// Validate typed transcript-derived public opening material.
+///
+/// # Errors
+/// Returns [`BfvError`] when layout metadata is stale, the opening schedule is
+/// not the canonical transcript-derived schedule, or any opened public padding
+/// row does not match the canonical row for its query.
+pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+    material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material version {} does not match canonical version {}",
+            material.version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+        )));
+    }
+    if material.field_count
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material field count {} does not match canonical count {}",
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+        )));
+    }
+    if material.query_count != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material query count {} does not match canonical count {}",
+            material.query_count, BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1
+        )));
+    }
+    if material.row_width != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material row width {} does not match canonical width {}",
+            material.row_width, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
+        )));
+    }
+    let expected_padded_row_count =
+        canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
+    if material.padded_row_count != expected_padded_row_count {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material padded row count {} does not match canonical count {expected_padded_row_count}",
+            material.padded_row_count
+        )));
+    }
+    if material.private_row_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material private row count {} does not match canonical count {}",
+            material.private_row_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
+        )));
+    }
+    if material.opening_indices.len() != usize::from(material.query_count) {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material opening count {} does not match query count {}",
+            material.opening_indices.len(),
+            material.query_count
+        )));
+    }
+    validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
+        &material.opening_indices,
+        &material.opened_rows,
+        &material.opened_next_rows,
+        material.statement_hash,
+        material.trace_material_digest,
+        material.slot_index,
+        material.bound_mode,
+    )
+}
+
+/// Build typed public opening material for a validated arithmetic trace.
+///
+/// # Errors
+/// Returns [`BfvError`] when trace material validation, trace digesting, or
+/// transcript opening material construction fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+) -> Result<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, BfvError> {
+    validate_bfv_full_bootstrap_arithmetic_trace_material_v1(trace_material)?;
+    let trace_material_digest =
+        bfv_full_bootstrap_arithmetic_trace_material_digest_v1(trace_material)?;
+    bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcript_v1(
+        trace_material.proof_input_material.statement_hash,
+        trace_material_digest,
+        trace_material
+            .proof_input_material
+            .witness_material
+            .slot_index,
+        trace_material
+            .proof_input_material
+            .witness_material
+            .bound_mode,
+    )
+}
+
+/// Validate typed public opening material against its source trace material.
+///
+/// # Errors
+/// Returns [`BfvError`] when either material is invalid or the public opening
+/// material is not the canonical transcript-derived material for the trace.
+pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+    material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_arithmetic_trace_material_v1(trace_material)?;
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(material)?;
+    let expected =
+        bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(trace_material)?;
+    if material != &expected {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap arithmetic trace public opening material does not match trace material"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Hash typed transcript-derived public opening material.
+///
+/// # Errors
+/// Returns [`BfvError`] when material validation or canonical Norito encoding
+/// fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
+    material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+) -> Result<Hash, BfvError> {
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(material)?;
+    let bytes = norito::to_bytes(material).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic trace public opening material encoding failed: {err}"
+        ))
+    })?;
+    Ok(Hash::new_from_chunks(&[
+        BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
+        bytes.as_slice(),
+    ]))
+}
+
+/// Decode canonical transcript-derived public opening material bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// not valid Norito public opening material, fail public-opening validation, or
+/// are not the canonical v1 Norito encoding of the decoded material.
+pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, BfvError> {
+    let label = "BFV full-bootstrap arithmetic trace public opening material bytes";
+    if bytes.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all-zero"
+        )));
+    }
+    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
+    let material =
+        norito::decode_from_bytes::<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1>(bytes)
+            .map_err(|err| {
+                BfvError::InvalidParameters(format!(
+                    "{label} must be Norito-encoded public opening material: {err}"
+                ))
+            })?;
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
+    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
+    })?;
+    if bytes != canonical_bytes {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use canonical v1 bytes"
+        )));
+    }
+    Ok(material)
+}
+
+/// Hash canonical transcript-derived public opening material bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission fails or material digesting fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let material =
+        decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(bytes)?;
+    bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(&material)
+}
+
+/// Hash typed public opening material after checking it belongs to a trace.
+///
+/// # Errors
+/// Returns [`BfvError`] when trace-bound validation or material digesting fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_trace_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+    material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+) -> Result<Hash, BfvError> {
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+        trace_material,
+        material,
+    )?;
+    bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(material)
+}
+
+/// Hash canonical public opening material bytes after checking they belong to a trace.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission, trace-bound validation, or material
+/// digesting fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let material =
+        decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(bytes)?;
+    bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_trace_v1(
+        trace_material,
+        &material,
+    )
+}
+
 fn validate_bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     row_label: &str,
     row: &[u64],
@@ -19505,6 +22789,15 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_v1(
             &arithmetic_trace_material,
             &arithmetic_air_evaluation_material,
         )?;
+    let public_opening_material =
+        bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+            &arithmetic_trace_material,
+        )?;
+    let public_opening_material_digest =
+        bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_trace_v1(
+            &arithmetic_trace_material,
+            &public_opening_material,
+        )?;
     let material = BfvFullBootstrapExecutionProverInputMaterialV1 {
         version: BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1,
@@ -19517,6 +22810,8 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_v1(
             .arithmetic_air_constraint_system_artifact_digest,
         arithmetic_air_evaluation_material,
         arithmetic_air_evaluation_material_digest,
+        public_opening_material,
+        public_opening_material_digest,
         prover_key: prover_key.clone(),
         verifier_key: verifier_key.clone(),
     };
@@ -19524,16 +22819,9 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_v1(
     Ok(material)
 }
 
-/// Validate typed release-prover input material for a BFV full-bootstrap proof.
-///
-/// # Errors
-/// Returns [`BfvError`] when layout metadata is stale, the arithmetic trace is
-/// not the canonical trace for the embedded proof input, the trace digest, AIR
-/// binding, or AIR evaluation material is stale, or the prover/verifier proof
-/// keys are not the governed generated pair for the full-bootstrap material.
-pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+fn validate_bfv_full_bootstrap_execution_prover_input_layout_and_trace_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
-) -> Result<(), BfvError> {
+) -> Result<&BfvFullBootstrapCircuitMaterialV1, BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1 {
         return Err(BfvError::InvalidParameters(format!(
             "BFV full-bootstrap execution prover input material version {} does not match canonical version {}",
@@ -19571,9 +22859,21 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
                 .to_owned(),
         ));
     }
-    let governed_material = full_bootstrap_material_from_key(
-        &material.proof_input_material.witness_material.bootstrap_key,
-    )?;
+    full_bootstrap_material_from_key(&material.proof_input_material.witness_material.bootstrap_key)
+}
+
+/// Validate typed release-prover input material for a BFV full-bootstrap proof.
+///
+/// # Errors
+/// Returns [`BfvError`] when layout metadata is stale, the arithmetic trace is
+/// not the canonical trace for the embedded proof input, the trace digest, AIR
+/// binding, or AIR evaluation material is stale, or the prover/verifier proof
+/// keys are not the governed generated pair for the full-bootstrap material.
+pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+    material: &BfvFullBootstrapExecutionProverInputMaterialV1,
+) -> Result<(), BfvError> {
+    let governed_material =
+        validate_bfv_full_bootstrap_execution_prover_input_layout_and_trace_v1(material)?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
         "BFV full-bootstrap execution prover input material arithmetic AIR constraint-system digest",
         &material.arithmetic_air_constraint_system_digest,
@@ -19610,6 +22910,25 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
     if material.arithmetic_air_evaluation_material_digest != expected_air_evaluation_digest {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap execution prover input material arithmetic AIR evaluation material digest mismatch"
+                .to_owned(),
+        ));
+    }
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap execution prover input public opening material digest",
+        &material.public_opening_material_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap execution prover input public opening material digest",
+        &material.public_opening_material_digest,
+    )?;
+    let expected_public_opening_digest =
+        bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_trace_v1(
+            &material.arithmetic_trace_material,
+            &material.public_opening_material,
+        )?;
+    if material.public_opening_material_digest != expected_public_opening_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap execution prover input material public opening material digest mismatch"
                 .to_owned(),
         ));
     }
@@ -24613,6 +27932,19 @@ fn validate_exact_residual_bound_within_centered_capacity(
     Ok(())
 }
 
+fn centered_polynomial_max_abs(
+    params: &BfvParameters,
+    polynomial: &[u64],
+    label: &str,
+) -> Result<u128, BfvError> {
+    validate_poly(params, polynomial, label)?;
+    Ok(polynomial
+        .iter()
+        .map(|&coefficient| center_lift(coefficient, params.ciphertext_modulus).unsigned_abs())
+        .max()
+        .unwrap_or(0))
+}
+
 fn validate_centered_noise_bound(
     params: &BfvParameters,
     polynomial: &[u64],
@@ -25470,9 +28802,10 @@ fn multiply_ciphertexts_bounded_noise_rns_basis_extension_with_scale_round_sourc
         evaluator_chain,
         "bounded-noise RNS relinearization decomposition",
     )?;
-    validate_rns_centered_scale_round_source_chain(
+    validate_rns_centered_scale_round_basis_extension_chains(
         params,
         scale_round_source_chain,
+        evaluator_chain,
         "bounded-noise RNS centered scale-round source",
     )?;
     validate_key_switch_entry_count(
@@ -26727,14 +30060,27 @@ fn push_bfv_full_bootstrap_placeholder_material_digests_v1(
     preimage: &[u8],
 ) {
     digests.push(Hash::new(preimage));
+    digests.push(Hash::new_from_chunks(&[b"\xff", preimage]));
     for &prefix in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES {
         digests.push(Hash::new_from_chunks(&[prefix, preimage]));
+        digests.push(Hash::new_from_chunks(&[prefix, b"\xff", preimage]));
         for &leading_prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
             digests.push(Hash::new_from_chunks(&[leading_prefix, prefix, preimage]));
+            digests.push(Hash::new_from_chunks(&[
+                leading_prefix,
+                prefix,
+                b"\xff",
+                preimage,
+            ]));
         }
     }
     digests.push(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+        preimage,
+    ]));
+    digests.push(Hash::new_from_chunks(&[
+        BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+        b"\xff",
         preimage,
     ]));
 }
@@ -26954,6 +30300,7 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
         canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()?;
     let proof_public_input_schema_payload_digest =
         canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()?;
+    let release_prover_contract_digest = bfv_full_bootstrap_release_prover_contract_digest_v1()?;
     Ok(BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
         version: BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1,
@@ -26969,6 +30316,7 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
             canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
         centered_scale_round_source_chain_digest,
         proof_public_input_schema_payload_digest,
+        release_prover_contract_digest,
         hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
@@ -26997,6 +30345,8 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
         derives_opening_schedule_from_trace_material_digest: true,
         bounds_opening_schedule_rejection_sampling: true,
         validates_transcript_public_padding_openings: true,
+        validates_transcript_public_opening_material: true,
+        requires_verifier_owned_trace_material_digest: true,
         validates_merkle_path_shape: true,
         validates_merkle_path_roots: true,
         validates_fri_query_chain: true,
@@ -27023,6 +30373,7 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
         canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()?;
     let proof_public_input_schema_payload_digest =
         canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()?;
+    let release_prover_contract_digest = bfv_full_bootstrap_release_prover_contract_digest_v1()?;
     let air_body = norito::to_bytes(&air_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native generated circuit body AIR material encoding failed: {err}"
@@ -27043,6 +30394,7 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
             canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
         centered_scale_round_source_chain_digest,
         proof_public_input_schema_payload_digest,
+        release_prover_contract_digest,
         hash_fn: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
         n_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
         blowup_log2: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
@@ -27071,6 +30423,8 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
         derives_opening_schedule_from_trace_material_digest: true,
         bounds_opening_schedule_rejection_sampling: true,
         validates_transcript_public_padding_openings: true,
+        validates_transcript_public_opening_material: true,
+        requires_verifier_owned_trace_material_digest: true,
         validates_merkle_path_shape: true,
         validates_merkle_path_roots: true,
         validates_fri_query_chain: true,
@@ -27281,10 +30635,6 @@ fn validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "proof-key layout validation intentionally checks every public-input field explicitly"
-)]
 fn validate_bfv_full_bootstrap_proof_key_public_input_layout_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -27407,6 +30757,14 @@ fn validate_bfv_full_bootstrap_proof_key_native_verifier_obligations_v1(
             key.validates_transcript_public_padding_openings,
         ),
         (
+            "typed transcript public-opening material validation",
+            key.validates_transcript_public_opening_material,
+        ),
+        (
+            "verifier-owned trace material digest",
+            key.requires_verifier_owned_trace_material_digest,
+        ),
+        (
             "Merkle path shape validation",
             key.validates_merkle_path_shape,
         ),
@@ -27455,12 +30813,14 @@ fn validate_bfv_full_bootstrap_proof_key_native_verifier_obligations_v1(
 
 fn bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(
     key: &BfvFullBootstrapProofKeyV1,
-) -> [u8; 14] {
+) -> [u8; 16] {
     [
         u8::from(key.derives_opening_schedule_from_statement_hash),
         u8::from(key.derives_opening_schedule_from_trace_material_digest),
         u8::from(key.bounds_opening_schedule_rejection_sampling),
         u8::from(key.validates_transcript_public_padding_openings),
+        u8::from(key.validates_transcript_public_opening_material),
+        u8::from(key.requires_verifier_owned_trace_material_digest),
         u8::from(key.validates_merkle_path_shape),
         u8::from(key.validates_merkle_path_roots),
         u8::from(key.validates_fri_query_chain),
@@ -27637,14 +30997,14 @@ fn validate_bfv_full_bootstrap_canonical_bytes_label(
         )));
     }
     validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, value)?;
-    if value.first().is_some_and(|byte| byte.is_ascii_whitespace())
-        || value.last().is_some_and(|byte| byte.is_ascii_whitespace())
+    if value.first().is_some_and(u8::is_ascii_whitespace)
+        || value.last().is_some_and(u8::is_ascii_whitespace)
     {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must be canonical without surrounding whitespace"
         )));
     }
-    if !value.iter().all(|byte| byte.is_ascii_graphic()) {
+    if !value.iter().all(u8::is_ascii_graphic) {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must contain only printable ASCII bytes without whitespace"
         )));
@@ -27779,6 +31139,16 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
             "{label} generated circuit body is invalid"
         )));
     };
+    let canonical_body = norito::to_bytes(&body).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "{label} generated circuit body canonical encoding failed: {err}"
+        ))
+    })?;
+    if generated_circuit_body != canonical_body {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body must use canonical v1 bytes"
+        )));
+    }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         &format!("{label} generated circuit body circuit id"),
         &body.circuit_id,
@@ -27807,6 +31177,16 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
         ))
     })?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
+    let canonical_air_material = norito::to_bytes(&air_material).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "{label} generated circuit body AIR material canonical encoding failed: {err}"
+        ))
+    })?;
+    if body.arithmetic_air_constraint_system_body != canonical_air_material {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} generated circuit body AIR material must use canonical v1 bytes"
+        )));
+    }
     let embedded_air_digest =
         bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&air_material)?;
     if body.arithmetic_air_constraint_system_digest != embedded_air_digest {
@@ -27865,6 +31245,10 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
     validate_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1(
         &format!("{label} generated circuit body proof public-input schema payload digest"),
         &body.proof_public_input_schema_payload_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
+        &format!("{label} generated circuit body release-prover contract digest"),
+        &body.release_prover_contract_digest,
     )?;
     validate_bfv_full_bootstrap_native_generated_circuit_body_public_input_layout_v1(label, body)?;
     validate_bfv_full_bootstrap_native_generated_circuit_body_obligations_v1(label, body)
@@ -28003,6 +31387,14 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_obligations_v1(
             body.validates_transcript_public_padding_openings,
         ),
         (
+            "typed transcript public-opening material validation",
+            body.validates_transcript_public_opening_material,
+        ),
+        (
+            "verifier-owned trace material digest",
+            body.requires_verifier_owned_trace_material_digest,
+        ),
+        (
             "Merkle path shape validation",
             body.validates_merkle_path_shape,
         ),
@@ -28127,7 +31519,17 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         native_payload_circuit_id,
         &payload.generated_circuit_body_digest,
         &payload.generated_circuit_body,
-    )
+    )?;
+    let expected_bytes = encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+        native_payload_circuit_id,
+    )?;
+    if bytes != expected_bytes.as_slice() {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap native transparent prover payload must use canonical v1 bytes"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate canonical native STARK/FRI verifier-key payload bytes for BFV full-bootstrap proofs.
@@ -28212,7 +31614,16 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
         native_payload_circuit_id,
         &payload.generated_circuit_body_digest,
         &payload.generated_circuit_body,
-    )
+    )?;
+    let expected_bytes = encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+        native_payload_circuit_id,
+    )?;
+    if bytes != expected_bytes.as_slice() {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap native verifier payload must use canonical v1 bytes".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -28378,6 +31789,16 @@ fn decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
         ))
     })?;
     validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(key, &envelope)?;
+    let canonical_envelope = norito::to_bytes(&envelope).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key material envelope canonical encoding failed: {err}"
+        ))
+    })?;
+    if key.key_material != canonical_envelope {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof key material envelope must use canonical v1 bytes".to_owned(),
+        ));
+    }
     Ok(envelope)
 }
 
@@ -28509,6 +31930,14 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(
     expect_envelope_field_match!(
         validates_transcript_public_padding_openings,
         "transcript public-padding opening replay"
+    );
+    expect_envelope_field_match!(
+        validates_transcript_public_opening_material,
+        "typed transcript public-opening material validation"
+    );
+    expect_envelope_field_match!(
+        requires_verifier_owned_trace_material_digest,
+        "verifier-owned trace material digest"
     );
     expect_envelope_field_match!(validates_merkle_path_shape, "Merkle path shape validation");
     expect_envelope_field_match!(validates_merkle_path_roots, "Merkle path root validation");
@@ -28691,6 +32120,14 @@ fn validate_bfv_full_bootstrap_proof_key_pair_profile_match_v1(
     expect_pair_field_match!(
         validates_transcript_public_padding_openings,
         "transcript public-padding opening replay"
+    );
+    expect_pair_field_match!(
+        validates_transcript_public_opening_material,
+        "typed transcript public-opening material validation"
+    );
+    expect_pair_field_match!(
+        requires_verifier_owned_trace_material_digest,
+        "verifier-owned trace material digest"
     );
     expect_pair_field_match!(validates_merkle_path_shape, "Merkle path shape validation");
     expect_pair_field_match!(validates_merkle_path_roots, "Merkle path root validation");
@@ -28992,6 +32429,7 @@ fn decode_full_bootstrap_artifact_payload(
         expected_role,
         &artifact,
     )?;
+    validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(label, bytes, &artifact)?;
     Ok(artifact)
 }
 
@@ -29082,17 +32520,13 @@ fn validate_bfv_full_bootstrap_binary_decorated_placeholder_text(
     if bytes.iter().all(is_text_byte) {
         return Ok(());
     }
-    let Some(start) = bytes.iter().position(is_text_byte) else {
-        return Ok(());
-    };
-    let Some(end) = bytes.iter().rposition(is_text_byte).map(|index| index + 1) else {
-        return Ok(());
-    };
-    let decorated_text = &bytes[start..end];
-    if decorated_text.iter().all(is_text_byte)
-        && !decorated_text.iter().all(u8::is_ascii_whitespace)
-    {
-        validate_bfv_full_bootstrap_bytes_do_not_contain_placeholder_marker(label, decorated_text)?;
+    for decorated_text in bytes.split(|byte| !is_text_byte(byte)) {
+        if !decorated_text.is_empty() && !decorated_text.iter().all(u8::is_ascii_whitespace) {
+            validate_bfv_full_bootstrap_bytes_do_not_contain_placeholder_marker(
+                label,
+                decorated_text,
+            )?;
+        }
     }
     Ok(())
 }
@@ -29116,13 +32550,25 @@ fn bfv_full_bootstrap_ascii_text_contains_placeholder_marker(normalized: &[u8]) 
     if collapsed_text.is_empty() {
         return false;
     }
-    BFV_FULL_BOOTSTRAP_ARTIFACT_TEXT_PLACEHOLDER_MARKERS
+    bfv_full_bootstrap_collapsed_placeholder_markers()
         .iter()
-        .any(|marker| {
-            let collapsed_marker = ascii_alnum_collapsed(marker);
-            collapsed_marker.len() >= BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES
-                && ascii_windows_contains(&collapsed_text, &collapsed_marker)
+        .any(|marker| ascii_windows_contains(&collapsed_text, marker))
+}
+
+fn bfv_full_bootstrap_collapsed_placeholder_markers() -> &'static [Vec<u8>] {
+    BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKERS
+        .get_or_init(|| {
+            BFV_FULL_BOOTSTRAP_ARTIFACT_TEXT_PLACEHOLDER_MARKERS
+                .iter()
+                .filter_map(|marker| {
+                    let collapsed_marker = ascii_alnum_collapsed(marker);
+                    (collapsed_marker.len()
+                        >= BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES)
+                        .then_some(collapsed_marker)
+                })
+                .collect()
         })
+        .as_slice()
 }
 
 fn ascii_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
@@ -29134,10 +32580,26 @@ fn ascii_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn ascii_windows_contains(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty()
-        && haystack
-            .windows(needle.len())
-            .any(|window| window == needle)
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    if needle.len() == 1 {
+        return haystack.contains(&needle[0]);
+    }
+    let first = needle[0];
+    let mut offset = 0;
+    while let Some(relative_index) = haystack[offset..].iter().position(|byte| *byte == first) {
+        let index = offset + relative_index;
+        let end = index + needle.len();
+        if end > haystack.len() {
+            return false;
+        }
+        if &haystack[index..end] == needle {
+            return true;
+        }
+        offset = index + 1;
+    }
+    false
 }
 
 fn validate_full_bootstrap_artifact_payload_profile(
@@ -29714,6 +33176,26 @@ fn validate_rns_centered_scale_round_source_chain(
     if product < required {
         return Err(BfvError::InvalidParameters(format!(
             "{label} RNS chain product {product} does not cover centered scale-round product-sum bound {required}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_rns_centered_scale_round_basis_extension_chains(
+    params: &BfvParameters,
+    source_chain: &BfvRnsModulusChain,
+    evaluator_chain: &BfvRnsModulusChain,
+    label: &str,
+) -> Result<(), BfvError> {
+    validate_rns_exact_evaluator_chain(params, evaluator_chain)?;
+    validate_rns_centered_scale_round_source_chain(params, source_chain, label)?;
+    if !evaluator_chain
+        .moduli
+        .as_slice()
+        .starts_with(source_chain.moduli.as_slice())
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} RNS source chain must be a prefix of the evaluator chain"
         )));
     }
     Ok(())
@@ -30587,6 +34069,15 @@ fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
         .collect()
 }
 
+fn sample_nonzero_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
+    loop {
+        let polynomial = sample_error_poly(params, rng);
+        if polynomial.iter().any(|&coefficient| coefficient != 0) {
+            return polynomial;
+        }
+    }
+}
+
 fn sample_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(
@@ -30597,6 +34088,15 @@ fn sample_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> P
             },
         )
         .collect()
+}
+
+fn sample_nonzero_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
+    loop {
+        let polynomial = sample_bounded_noise_poly(params, rng);
+        if polynomial.iter().any(|&coefficient| coefficient != 0) {
+            return polynomial;
+        }
+    }
 }
 
 fn sample_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
@@ -30828,7 +34328,7 @@ fn key_switch_entries_from_rng(
     for _ in 0..digits {
         let entry = loop {
             let key_a = sample_nonzero_uniform_poly(params, rng);
-            let key_e = sample_error_poly(params, rng);
+            let key_e = sample_nonzero_error_poly(params, rng);
             let scaled_target = poly_scalar_mul_mod(params, target_secret, scale);
             let key_b = poly_add_mod(
                 params,
@@ -30862,7 +34362,7 @@ fn key_switch_entries_bounded_noise_from_rng(
     for _ in 0..digits {
         let entry = loop {
             let key_a = sample_nonzero_uniform_poly(params, rng);
-            let key_e = sample_bounded_noise_poly(params, rng);
+            let key_e = sample_nonzero_bounded_noise_poly(params, rng);
             let scaled_target = poly_scalar_mul_mod(params, target_secret, scale);
             let key_b = poly_add_mod(
                 params,
@@ -31667,13 +35167,14 @@ mod tests {
         );
     }
 
+    #[track_caller]
     fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
         let Err(err) = result else {
             panic!("{context}");
         };
         assert!(
             err.to_string().contains(expected),
-            "expected `{expected}` in `{err}`"
+            "{context}: expected `{expected}` in `{err}`"
         );
     }
 
@@ -32014,6 +35515,39 @@ mod tests {
     }
 
     #[test]
+    fn release_audit_placeholder_scan_prefilter_preserves_marker_detection() {
+        let punctuation_body = b"0123456789:;=+-_./ \n\t\xff";
+        assert!(
+            !bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(
+                punctuation_body
+            ),
+            "release-audit placeholder prefilter must skip bodies without any marker starts"
+        );
+        assert!(
+            !bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(punctuation_body),
+            "release-audit placeholder scan must not reject marker-free punctuation bodies"
+        );
+
+        for body in [
+            b"\xffPLACEHOLDER external audit report".as_slice(),
+            b"p.l.a.c.e.h.o.l.d.e.r external audit report".as_slice(),
+            b"pending independent audit evidence".as_slice(),
+            b"TODO pending external audit archive".as_slice(),
+        ] {
+            assert!(
+                bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(body),
+                "release-audit placeholder prefilter must admit marker body {}",
+                String::from_utf8_lossy(body)
+            );
+            assert!(
+                bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(body),
+                "release-audit placeholder scan must still reject marker body {}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
     fn release_audit_placeholder_artifact_digest_predicate_matches_known_shapes() {
         let direct_placeholder_digest = Hash::new_from_chunks(&[
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
@@ -32038,6 +35572,20 @@ mod tests {
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
             ),
             "release-audit predicate must reject delayed placeholder archive digests"
+        );
+
+        let delayed_binary_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+            b"\xff",
+            b"TODO pending external audit archive",
+        ]);
+        assert!(
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &delayed_binary_placeholder_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            ),
+            "release-audit predicate must reject delayed binary-framed placeholder archive digests"
         );
 
         for sentinel in [
@@ -32098,6 +35646,21 @@ mod tests {
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
             ),
             "release-audit predicate must reject leading-whitespace delayed placeholder archive digests"
+        );
+
+        let leading_whitespace_delayed_binary_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b" \n\t",
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+            b"\xff",
+            b"TODO pending external audit archive",
+        ]);
+        assert!(
+            is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
+                &leading_whitespace_delayed_binary_placeholder_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            ),
+            "release-audit predicate must reject leading-whitespace delayed binary-framed placeholder archive digests"
         );
 
         let uppercase_placeholder_digest = Hash::new_from_chunks(&[
@@ -32224,6 +35787,38 @@ mod tests {
             ),
             "native payload predicate must reject leading-whitespace delayed placeholder digests"
         );
+        let delayed_binary_placeholder_digest = sha256_chunks_with_optional_ascii_upper_body(
+            &[
+                BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+                b"\xff",
+            ],
+            b"TODO pending BFV full-bootstrap native proof key payload",
+            false,
+            &[],
+        );
+        assert!(
+            is_bfv_full_bootstrap_native_payload_inert_digest_v1(
+                &delayed_binary_placeholder_digest,
+            ),
+            "native payload predicate must reject delayed binary-framed placeholder digests"
+        );
+        let leading_whitespace_delayed_binary_placeholder_digest =
+            sha256_chunks_with_optional_ascii_upper_body(
+                &[
+                    b" \n\t",
+                    BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES[0],
+                    b"\xff",
+                ],
+                b"TODO pending BFV full-bootstrap native proof key payload",
+                false,
+                &[],
+            );
+        assert!(
+            is_bfv_full_bootstrap_native_payload_inert_digest_v1(
+                &leading_whitespace_delayed_binary_placeholder_digest,
+            ),
+            "native payload predicate must reject leading-whitespace delayed binary-framed placeholder digests"
+        );
 
         for len in [2_usize, 4, 8, 16, 128] {
             let digest = sha256(vec![0_u8; len]);
@@ -32297,6 +35892,12 @@ mod tests {
         let generated_circuit_body =
             bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
                 .expect("canonical generated circuit body");
+        let canonical_native_prover_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native prover payload");
+        let canonical_native_prover_payload_digest = sha256(&canonical_native_prover_payload);
         let mut key_evidence = BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
             version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1,
             field_count: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1,
@@ -32312,7 +35913,7 @@ mod tests {
                 BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
             )
             .expect("canonical native circuit fingerprint"),
-            native_payload_digest: sha256(b"reviewed native prover payload for release v1"),
+            native_payload_digest: canonical_native_prover_payload_digest,
             generated_circuit_body_digest: sha256(&generated_circuit_body),
         };
         validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
@@ -32343,8 +35944,7 @@ mod tests {
             );
         }
 
-        key_evidence.native_payload_digest =
-            sha256(b"reviewed native prover payload for release v1");
+        key_evidence.native_payload_digest = canonical_native_prover_payload_digest;
         for sentinel in [
             b"p-l-a-c-e-h-o-l-d-e-r BFV full-bootstrap native proof key payload".as_slice(),
             b"t-o-d-o pending BFV full-bootstrap native proof key payload".as_slice(),
@@ -32386,6 +35986,405 @@ mod tests {
     }
 
     #[test]
+    fn release_audit_archive_native_payload_hex_requires_canonical_label_and_value() {
+        for (role, label, aliases, payload) in [
+            (
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                "native prover payload",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_NATIVE_PROVER_PAYLOAD_HEX_LABEL_ALIASES,
+                encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                )
+                .expect("encode canonical native prover payload"),
+            ),
+            (
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                "native verifier payload",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_NATIVE_VERIFIER_PAYLOAD_HEX_LABEL_ALIASES,
+                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                )
+                .expect("encode canonical native verifier payload"),
+            ),
+        ] {
+            let canonical_label = aliases
+                .first()
+                .copied()
+                .expect("native payload label alias");
+            let payload_hex = hex::encode(&payload);
+            let canonical_body = [canonical_label, b"=", payload_hex.as_bytes()].concat();
+            let canonical_fields = bfv_full_bootstrap_release_audit_field_index_v1(&canonical_body);
+            validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
+                &canonical_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                role,
+            )
+            .expect("canonical release-audit native payload hex validates");
+
+            let uppercase_label = canonical_label.to_ascii_uppercase();
+            let uppercase_label_body =
+                [uppercase_label.as_slice(), b"=", payload_hex.as_bytes()].concat();
+            let uppercase_label_fields =
+                bfv_full_bootstrap_release_audit_field_index_v1(&uppercase_label_body);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
+                    &uppercase_label_fields,
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    role,
+                ),
+                label,
+                "release-audit native payload hex labels must be canonical lowercase",
+            );
+
+            let uppercase_payload_hex = payload_hex.to_ascii_uppercase();
+            let uppercase_value_body =
+                [canonical_label, b"=", uppercase_payload_hex.as_bytes()].concat();
+            let uppercase_value_fields =
+                bfv_full_bootstrap_release_audit_field_index_v1(&uppercase_value_body);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
+                    &uppercase_value_fields,
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    role,
+                ),
+                label,
+                "release-audit native payload hex values must be canonical lowercase",
+            );
+
+            let raw_payload_body = [canonical_label, b"=", payload.as_slice()].concat();
+            let raw_payload_fields =
+                bfv_full_bootstrap_release_audit_field_index_v1(&raw_payload_body);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
+                    &raw_payload_fields,
+                    BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    role,
+                ),
+                label,
+                "release-audit native payload hex fields must reject raw native bytes",
+            );
+        }
+    }
+
+    #[test]
+    fn release_audit_commitment_fields_reject_standalone_digest_tokens() {
+        let release_evidence_digest = Hash::new(b"release-audit-standalone-value-token-evidence");
+        let release_evidence_digest_hex =
+            hex::encode(<[u8; Hash::LENGTH]>::from(release_evidence_digest));
+        let report_prefix = b"external-review-approved: independent BFV full-bootstrap release audit report v1; reviewed canonical arithmetic artifacts and signed commitments; ";
+
+        let canonical_report = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            report_prefix,
+            b"release evidence digest = ".as_slice(),
+            release_evidence_digest_hex.as_bytes(),
+        ]
+        .concat();
+        validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_digest_v1(
+            &canonical_report,
+            &release_evidence_digest,
+        )
+        .expect("canonical spaced release-evidence label validates");
+
+        for (body, context) in [
+            (
+                [
+                    report_prefix,
+                    b"release-evidence-digest: ".as_slice(),
+                    release_evidence_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "colon-separated report release-evidence labels",
+            ),
+            (
+                [
+                    report_prefix,
+                    b"reviewed release evidence digest ".as_slice(),
+                    release_evidence_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "standalone report release-evidence digest values",
+            ),
+            (
+                [
+                    report_prefix,
+                    b"release-evidence-digest=".as_slice(),
+                    release_evidence_digest_hex.as_bytes(),
+                    b".copied".as_slice(),
+                ]
+                .concat(),
+                "same-field punctuation-suffixed report release-evidence values",
+            ),
+        ] {
+            let report = [
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                body.as_slice(),
+            ]
+            .concat();
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_digest_v1(
+                    &report,
+                    &release_evidence_digest,
+                ),
+                "release evidence digest",
+                context,
+            );
+        }
+
+        let artifact_bundle_digest = Hash::new(b"release-audit-standalone-value-token-artifact");
+        let artifact_bundle_digest_hex =
+            hex::encode(<[u8; Hash::LENGTH]>::from(artifact_bundle_digest));
+        let archive_aliases =
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ARTIFACT_BUNDLE_LABEL_ALIASES;
+        let canonical_archive_body = [
+            b"artifact bundle digest = ".as_slice(),
+            artifact_bundle_digest_hex.as_bytes(),
+        ]
+        .concat();
+        validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+            &bfv_full_bootstrap_release_audit_field_index_v1(&canonical_archive_body),
+            "artifact bundle digest",
+            &artifact_bundle_digest,
+        )
+        .expect("canonical spaced archive artifact-bundle label validates");
+
+        for (archive_body, context) in [
+            (
+                [
+                    b"artifact-bundle-digest: ".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "colon-separated archive artifact-bundle labels",
+            ),
+            (
+                [
+                    b"reviewed artifact bundle digest ".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "standalone archive artifact-bundle digest values",
+            ),
+            (
+                [
+                    archive_aliases
+                        .first()
+                        .copied()
+                        .expect("artifact bundle digest alias"),
+                    b"=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                    b".copied".as_slice(),
+                ]
+                .concat(),
+                "same-field punctuation-suffixed archive artifact-bundle values",
+            ),
+        ] {
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
+                    &bfv_full_bootstrap_release_audit_field_index_v1(&archive_body),
+                    "artifact bundle digest",
+                    &artifact_bundle_digest,
+                ),
+                "artifact bundle digest",
+                context,
+            );
+        }
+    }
+
+    #[test]
+    fn release_audit_archive_generated_circuit_body_hex_requires_canonical_label_and_value() {
+        let generated_circuit_body =
+            bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
+                .expect("canonical generated circuit body");
+        let generated_circuit_body_hex = hex::encode(&generated_circuit_body);
+        let canonical_label =
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_HEX_LABEL_ALIASES
+                .first()
+                .copied()
+                .expect("generated circuit body hex label alias");
+        let canonical_body =
+            [canonical_label, b"=", generated_circuit_body_hex.as_bytes()].concat();
+        let canonical_fields = bfv_full_bootstrap_release_audit_field_index_v1(&canonical_body);
+        validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
+            &canonical_fields,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("canonical release-audit generated circuit body hex validates");
+
+        let uppercase_label = canonical_label.to_ascii_uppercase();
+        let uppercase_label_body = [
+            uppercase_label.as_slice(),
+            b"=",
+            generated_circuit_body_hex.as_bytes(),
+        ]
+        .concat();
+        let uppercase_label_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&uppercase_label_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
+                &uppercase_label_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "generated circuit body hex",
+            "release-audit generated circuit body hex labels must be canonical lowercase",
+        );
+
+        let uppercase_generated_body_hex = generated_circuit_body_hex.to_ascii_uppercase();
+        assert_ne!(
+            uppercase_generated_body_hex, generated_circuit_body_hex,
+            "generated circuit body hex fixture must contain lowercase alpha nybbles"
+        );
+        let uppercase_value_body = [
+            canonical_label,
+            b"=",
+            uppercase_generated_body_hex.as_bytes(),
+        ]
+        .concat();
+        let uppercase_value_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&uppercase_value_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
+                &uppercase_value_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "generated circuit body hex",
+            "release-audit generated circuit body hex values must be canonical lowercase",
+        );
+
+        let raw_generated_body =
+            [canonical_label, b"=", generated_circuit_body.as_slice()].concat();
+        let raw_generated_body_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&raw_generated_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
+                &raw_generated_body_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "generated circuit body hex",
+            "release-audit generated circuit body hex fields must reject raw generated body bytes",
+        );
+    }
+
+    #[test]
+    fn release_audit_archive_governed_artifact_hex_requires_canonical_label_value_and_uniqueness() {
+        let artifact_bytes =
+            b"canonical governed accumulator artifact bytes for release-audit archive v1";
+        let artifact_hex = hex::encode(artifact_bytes);
+        let artifact_digest = Hash::new(artifact_bytes);
+        let canonical_label =
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES
+                .first()
+                .copied()
+                .expect("accumulator artifact hex label alias");
+
+        let canonical_body = [canonical_label, b"=", artifact_hex.as_bytes()].concat();
+        let canonical_fields = bfv_full_bootstrap_release_audit_field_index_v1(&canonical_body);
+        validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
+            &canonical_fields,
+            "accumulator artifact",
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
+            &artifact_digest,
+        )
+        .expect("canonical governed artifact hex validates");
+
+        let uppercase_label = canonical_label.to_ascii_uppercase();
+        let uppercase_label_body =
+            [uppercase_label.as_slice(), b"=", artifact_hex.as_bytes()].concat();
+        let uppercase_label_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&uppercase_label_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
+                &uppercase_label_fields,
+                "accumulator artifact",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
+                &artifact_digest,
+            ),
+            "accumulator artifact hex",
+            "governed artifact hex labels must be canonical lowercase",
+        );
+
+        let uppercase_artifact_hex = artifact_hex.to_ascii_uppercase();
+        assert_ne!(
+            uppercase_artifact_hex, artifact_hex,
+            "artifact hex fixture must contain lowercase alpha nybbles"
+        );
+        let uppercase_value_body =
+            [canonical_label, b"=", uppercase_artifact_hex.as_bytes()].concat();
+        let uppercase_value_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&uppercase_value_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
+                &uppercase_value_fields,
+                "accumulator artifact",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
+                &artifact_digest,
+            ),
+            "accumulator artifact hex",
+            "governed artifact hex values must be canonical lowercase",
+        );
+
+        let colon_separated_value_body = [canonical_label, b"=", b"aa:bb:cc".as_slice()].concat();
+        let colon_separated_value_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&colon_separated_value_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
+                &colon_separated_value_fields,
+                "accumulator artifact",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
+                &artifact_digest,
+            ),
+            "accumulator artifact hex",
+            "governed artifact hex values must reject separator-delimited byte text",
+        );
+
+        let raw_artifact_body = [
+            canonical_label,
+            b"=",
+            b"\x01raw governed artifact bytes".as_slice(),
+        ]
+        .concat();
+        let raw_artifact_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&raw_artifact_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
+                &raw_artifact_fields,
+                "accumulator artifact",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
+                &artifact_digest,
+            ),
+            "accumulator artifact hex",
+            "governed artifact hex fields must reject raw artifact bytes",
+        );
+
+        let duplicate_alias =
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES
+                .last()
+                .copied()
+                .expect("accumulator artifact hex duplicate alias");
+        let duplicate_body = [
+            canonical_label,
+            b"=",
+            artifact_hex.as_bytes(),
+            b"; ",
+            duplicate_alias,
+            b"=",
+            artifact_hex.as_bytes(),
+        ]
+        .concat();
+        let duplicate_fields = bfv_full_bootstrap_release_audit_field_index_v1(&duplicate_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
+                &duplicate_fields,
+                "accumulator artifact",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_ACCUMULATOR_ARTIFACT_HEX_LABEL_ALIASES,
+                &artifact_digest,
+            ),
+            "exactly one canonical accumulator artifact hex label",
+            "governed artifact hex fields must reject same-value duplicate aliases",
+        );
+    }
+
+    #[test]
     fn full_bootstrap_material_placeholder_digest_predicate_matches_separator_obfuscation() {
         for sentinel in [
             b"p-l-a-c-e-h-o-l-d-e-r BFV full-bootstrap native proof key payload".as_slice(),
@@ -32420,6 +36419,26 @@ mod tests {
                 "placeholder",
                 "material digest validation must reject delayed separator-obfuscated placeholder preimages",
             );
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(
+                    "binary-framed full-bootstrap digest",
+                    &Hash::new_from_chunks(&[b"\xff", sentinel]),
+                ),
+                "placeholder",
+                "material digest validation must reject binary-framed placeholder preimages",
+            );
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(
+                    "delayed binary-framed full-bootstrap digest",
+                    &Hash::new_from_chunks(&[
+                        BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+                        b"\xff",
+                        sentinel,
+                    ]),
+                ),
+                "placeholder",
+                "material digest validation must reject delayed binary-framed placeholder preimages",
+            );
         }
 
         for sentinel in [
@@ -32438,6 +36457,18 @@ mod tests {
                 ),
                 "placeholder",
                 "material digest validation must reject internal evaluator-artifact transient digests",
+            );
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(
+                    "binary-framed internal transient full-bootstrap digest",
+                    &Hash::new_from_chunks(&[
+                        BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+                        b"\xff",
+                        sentinel,
+                    ]),
+                ),
+                "placeholder",
+                "material digest validation must reject binary-framed internal evaluator-artifact transient digests",
             );
         }
 
@@ -32478,6 +36509,29 @@ mod tests {
             ),
             "placeholder",
             "release audit manifests must reject placeholder generated circuit body digests before canonical mismatch",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_generated_circuit_body_digest_v1(
+                "BFV full-bootstrap release audit manifest generated circuit body digest",
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                &Hash::prehashed(sha256(
+                    b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD",
+                )),
+            ),
+            "inert or placeholder generated circuit body material",
+            "release audit manifests must reject SHA-encoded placeholder generated circuit body digests before canonical mismatch",
+        );
+        let mut binary_decorated_placeholder_body = Vec::from([0xff]);
+        binary_decorated_placeholder_body
+            .extend_from_slice(b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_generated_circuit_body_digest_v1(
+                "BFV full-bootstrap release audit signoff generated circuit body digest",
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                &Hash::prehashed(sha256(&binary_decorated_placeholder_body)),
+            ),
+            "inert or placeholder generated circuit body material",
+            "release audit signoffs must reject binary-decorated SHA placeholder generated circuit body digests before canonical mismatch",
         );
     }
 
@@ -32564,6 +36618,16 @@ mod tests {
         let generated_circuit_body =
             bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
                 .expect("canonical generated circuit body");
+        let native_prover_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native prover payload");
+        let native_verifier_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native verifier payload");
         let audit_report_body =
             b"reviewed BFV full-bootstrap release audit report body for v1 manifest binding";
         let audit_archive_body =
@@ -32598,6 +36662,8 @@ mod tests {
             verifier_key_digest: Hash::new(
                 b"reviewed bfv release audit manifest verifier-key digest v1",
             ),
+            prover_native_payload_digest: Hash::prehashed(sha256(&native_prover_payload)),
+            verifier_native_payload_digest: Hash::prehashed(sha256(&native_verifier_payload)),
             native_circuit_fingerprint: bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
                 BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
             )
@@ -32645,6 +36711,19 @@ mod tests {
             bfv_full_bootstrap_release_audit_manifest_digest_v1(&stale_generated_body_manifest),
             "generated circuit body digest mismatch",
             "release audit manifest digesting must reject stale generated circuit body digests",
+        );
+        let mut stale_native_payload_manifest = manifest.clone();
+        stale_native_payload_manifest.prover_native_payload_digest =
+            Hash::new(b"stale-release-audit-manifest-native-prover-payload-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(&stale_native_payload_manifest),
+            "prover native payload digest mismatch",
+            "standalone release audit manifests must reject stale native prover payload digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(&stale_native_payload_manifest),
+            "prover native payload digest mismatch",
+            "release audit manifest digesting must reject stale native prover payload digests",
         );
 
         for (field_label, is_report_digest, header, sentinel) in
@@ -32696,6 +36775,16 @@ mod tests {
         let generated_circuit_body =
             bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
                 .expect("canonical generated circuit body");
+        let native_prover_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native prover payload");
+        let native_verifier_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native verifier payload");
         let audit_report_body =
             b"reviewed BFV full-bootstrap release audit report body for v1 signoff binding";
         let audit_archive_body =
@@ -32725,6 +36814,8 @@ mod tests {
             verifier_key_digest: Hash::new(
                 b"reviewed bfv release audit signoff verifier-key digest v1",
             ),
+            prover_native_payload_digest: Hash::prehashed(sha256(&native_prover_payload)),
+            verifier_native_payload_digest: Hash::prehashed(sha256(&native_verifier_payload)),
             native_circuit_fingerprint: bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
                 BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
             )
@@ -32794,6 +36885,34 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_signoff_v1(&stale_generated_body_signoff),
             "generated circuit body digest mismatch",
             "standalone release audit signoffs must reject well-signed stale generated circuit body digests",
+        );
+        let mut stale_native_payload_digest_payload = payload.clone();
+        stale_native_payload_digest_payload.verifier_native_payload_digest =
+            Hash::new(b"stale-release-audit-signoff-native-verifier-payload-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &stale_native_payload_digest_payload,
+            ),
+            "verifier native payload digest mismatch",
+            "standalone release audit signoff payloads must reject stale native verifier payload digests",
+        );
+        let stale_native_payload_digest_signature = SignatureOf::try_new(
+            reviewer_key_pair.private_key(),
+            &stale_native_payload_digest_payload,
+        )
+        .expect("fixture reviewer signs stale native verifier payload digest signoff payload");
+        let stale_native_payload_digest_signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
+            version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1,
+            field_count: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_FIELD_COUNT_V1,
+            payload: stale_native_payload_digest_payload,
+            signature: stale_native_payload_digest_signature,
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(
+                &stale_native_payload_digest_signoff,
+            ),
+            "verifier native payload digest mismatch",
+            "standalone release audit signoffs must reject well-signed stale native verifier payload digests",
         );
 
         for (field_label, is_report_digest, header, sentinel) in
@@ -32912,6 +37031,75 @@ mod tests {
                 .iter()
                 .any(|&coefficient| coefficient != 0),
             "bounded keygen must not emit inert all-zero secret material"
+        );
+    }
+
+    #[test]
+    fn deterministic_bfv_noise_samplers_resample_inert_candidates() {
+        let exact_params = rns_exact_params();
+        let mut exact_case = None;
+        for candidate in 0_u32..10_000 {
+            let seed = format!("bfv-exact-zero-error-candidate-{candidate}");
+            let mut raw_rng =
+                derive_rng(b"bfv-exact-zero-error-sampler-regression", seed.as_bytes());
+            let raw_error = sample_error_poly(&exact_params, &mut raw_rng);
+            if raw_error.iter().any(|&coefficient| coefficient != 0) {
+                continue;
+            }
+            let mut resampling_rng =
+                derive_rng(b"bfv-exact-zero-error-sampler-regression", seed.as_bytes());
+            let nonzero_error = sample_nonzero_error_poly(&exact_params, &mut resampling_rng);
+            exact_case = Some((raw_error, nonzero_error));
+            break;
+        }
+        let (raw_error, nonzero_error) =
+            exact_case.expect("test must find an all-zero exact error sample");
+        assert!(
+            raw_error.iter().all(|&coefficient| coefficient == 0),
+            "regression seed must start with an inert exact error sample"
+        );
+        assert!(
+            nonzero_error.iter().any(|&coefficient| coefficient != 0),
+            "exact error sampler must resample nonzero proof-generating noise"
+        );
+
+        let bounded_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 60,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        validate_bfv_bounded_noise_encryption_capacity(&bounded_params)
+            .expect("bounded-noise small profile has enough capacity");
+        let mut bounded_case = None;
+        for candidate in 0_u32..10_000 {
+            let seed = format!("bfv-bounded-zero-noise-candidate-{candidate}");
+            let mut raw_rng = derive_rng(
+                b"bfv-bounded-zero-noise-sampler-regression",
+                seed.as_bytes(),
+            );
+            let raw_noise = sample_bounded_noise_poly(&bounded_params, &mut raw_rng);
+            if raw_noise.iter().any(|&coefficient| coefficient != 0) {
+                continue;
+            }
+            let mut resampling_rng = derive_rng(
+                b"bfv-bounded-zero-noise-sampler-regression",
+                seed.as_bytes(),
+            );
+            let nonzero_noise =
+                sample_nonzero_bounded_noise_poly(&bounded_params, &mut resampling_rng);
+            bounded_case = Some((raw_noise, nonzero_noise));
+            break;
+        }
+        let (raw_noise, nonzero_noise) =
+            bounded_case.expect("test must find an all-zero bounded-noise sample");
+        assert!(
+            raw_noise.iter().all(|&coefficient| coefficient == 0),
+            "regression seed must start with an inert bounded-noise sample"
+        );
+        assert!(
+            nonzero_noise.iter().any(|&coefficient| coefficient != 0),
+            "bounded-noise sampler must resample nonzero proof-generating noise"
         );
     }
 
@@ -33081,11 +37269,11 @@ mod tests {
         );
 
         let exact_mask = {
-            let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
+            let mut rng = derive_rng(BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
             sample_nonzero_small_poly(&params, &mut rng)
         };
         let bounded_mask = {
-            let mut rng = derive_rng(BOUNDED_NOISE_ENCRYPT_DOMAIN, seed);
+            let mut rng = derive_rng(BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
             sample_nonzero_small_poly(&params, &mut rng)
         };
         assert_ne!(
@@ -33184,18 +37372,59 @@ mod tests {
         let key_id = "bfv-bootstrap-round-domain-separation";
         let seed = b"bfv-bootstrap-round-domain-separation-seed";
 
-        let exact_round_seed =
-            bootstrap_refresh_round_seed(BOOTSTRAP_REFRESH_ROUND_DOMAIN, key_id, 2, seed, 0);
-        let bounded_round_seed = bootstrap_refresh_round_seed(
-            BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_DOMAIN,
+        let exact_round_seed = bootstrap_refresh_round_seed(
+            BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN,
             key_id,
             2,
             seed,
             0,
         );
+        let bounded_round_seed = bootstrap_refresh_round_seed(
+            BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN,
+            key_id,
+            2,
+            seed,
+            0,
+        );
+        let exact_round_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+            BFV_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN,
+            key_id.as_bytes(),
+            &2_u16.to_le_bytes(),
+            seed,
+            &0_u16.to_le_bytes(),
+        ])
+        .into();
+        let bounded_round_seed_transcript: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+            BFV_BOUNDED_NOISE_BOOTSTRAP_REFRESH_ROUND_SEED_DERIVATION_DOMAIN,
+            key_id.as_bytes(),
+            &2_u16.to_le_bytes(),
+            seed,
+            &0_u16.to_le_bytes(),
+        ])
+        .into();
+        let exact_rotation_seed_transcript: [u8; Hash::LENGTH] =
+            Hash::new_from_chunks(&[BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, seed]).into();
+        let bounded_rotation_seed_transcript: [u8; Hash::LENGTH] =
+            Hash::new_from_chunks(&[BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN, seed]).into();
+        assert_eq!(
+            exact_round_seed, exact_round_seed_transcript,
+            "exact bootstrap refresh round seed must bind the explicit round transcript"
+        );
+        assert_eq!(
+            bounded_round_seed, bounded_round_seed_transcript,
+            "bounded bootstrap refresh round seed must bind the explicit round transcript"
+        );
         assert_ne!(
             exact_round_seed, bounded_round_seed,
             "exact and bounded bootstrap refreshes must not reuse the same per-round seed",
+        );
+        assert_ne!(
+            exact_round_seed, exact_rotation_seed_transcript,
+            "exact bootstrap round seed must be separated from rotation seed derivation",
+        );
+        assert_ne!(
+            bounded_round_seed, bounded_rotation_seed_transcript,
+            "bounded bootstrap round seed must be separated from rotation seed derivation",
         );
 
         let (_exact_secret_key, exact_public_key, _) =
@@ -33465,7 +37694,7 @@ mod tests {
         plaintext: &[u64],
         seed: &[u8],
     ) -> Option<BfvCiphertext> {
-        let mut rng = derive_rng(ENCRYPT_DOMAIN, seed);
+        let mut rng = derive_rng(BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
         let u = sample_small_poly(params, &mut rng);
         if u.iter().any(|&coefficient| coefficient != 0) {
             return None;
@@ -33483,7 +37712,7 @@ mod tests {
         plaintext: &[u64],
         seed: &[u8],
     ) -> Option<BfvCiphertext> {
-        let mut rng = derive_rng(BOUNDED_NOISE_ENCRYPT_DOMAIN, seed);
+        let mut rng = derive_rng(BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
         let u = sample_small_poly(params, &mut rng);
         if u.iter().any(|&coefficient| coefficient != 0) {
             return None;
@@ -33526,7 +37755,7 @@ mod tests {
         }
         let (exact_seed, old_exact_ciphertext, exact_ciphertext) =
             exact_case.expect("test must find an exact seed with an all-zero first mask");
-        let mut exact_rng = derive_rng(ENCRYPT_DOMAIN, &exact_seed);
+        let mut exact_rng = derive_rng(BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, &exact_seed);
         assert!(
             sample_small_poly(&exact_params, &mut exact_rng)
                 .iter()
@@ -33586,7 +37815,10 @@ mod tests {
         }
         let (bounded_seed, old_bounded_ciphertext, bounded_ciphertext) =
             bounded_case.expect("test must find a bounded seed with an all-zero first mask");
-        let mut bounded_rng = derive_rng(BOUNDED_NOISE_ENCRYPT_DOMAIN, &bounded_seed);
+        let mut bounded_rng = derive_rng(
+            BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN,
+            &bounded_seed,
+        );
         assert!(
             sample_small_poly(&bounded_params, &mut bounded_rng)
                 .iter()
@@ -33821,6 +38053,91 @@ mod tests {
         .expect("sample external-review release audit package and digest")
     }
 
+    #[test]
+    fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
+        let material = sample_full_bootstrap_circuit_material_for_artifacts(&params, &artifacts);
+        let reviewer_key_pair =
+            crate::KeyPair::try_from_seed(vec![0xA7; 32], crate::Algorithm::Ed25519)
+                .expect("fixture seed derives reviewer Ed25519 keypair");
+        let reviewer_id = "sora-zk-audit-wg-2026";
+        let (package, package_digest) = sample_external_review_release_audit_package_and_digest(
+            &params,
+            &material,
+            &artifacts,
+            reviewer_id,
+            reviewer_key_pair.private_key(),
+        );
+
+        assert_eq!(
+            package_digest,
+            bfv_full_bootstrap_release_audit_package_digest_v1(&package)
+                .expect("externally reviewed package digest"),
+            "external-review package-and-digest builder must pin the returned bytes"
+        );
+        validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+            &params,
+            &material,
+            &artifacts,
+            &package,
+            package_digest,
+            reviewer_id,
+            reviewer_key_pair.public_key(),
+        )
+        .expect("externally reviewed package validates with its pinned digest");
+
+        let mut tampered_report_package = package.clone();
+        tampered_report_package
+            .audit_report_bytes
+            .extend_from_slice(b"; post-signature report byte tamper");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &tampered_report_package,
+                package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit report bytes digest mismatch",
+            "production-pinned release audit packages must reject report bytes mutated after package digest production",
+        );
+
+        let mut tampered_archive_package = package.clone();
+        tampered_archive_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; post-signature archive byte tamper");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &tampered_archive_package,
+                package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit evidence archive bytes digest mismatch",
+            "production-pinned release audit packages must reject evidence archive bytes mutated after package digest production",
+        );
+
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &package,
+                Hash::new(b"stale external-review package digest"),
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "package digest mismatch",
+            "production-pinned release audit packages must reject stale caller-pinned package digests for otherwise valid reviewed bytes",
+        );
+    }
+
     fn sample_full_bootstrap_artifact_payload(
         params: &BfvParameters,
         role: BfvFullBootstrapCircuitArtifactRoleV1,
@@ -33994,6 +38311,20 @@ mod tests {
         )
         .expect("matching prover key/native material derives a release-audit proof profile");
         assert!(profile.validates_merkle_path_roots);
+        assert_eq!(
+            profile.public_opening_material_version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+        );
+        assert_eq!(
+            profile.public_opening_material_field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+        );
+        assert_eq!(
+            profile.public_opening_material_digest_domain.as_slice(),
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN
+        );
+        assert!(profile.validates_transcript_public_opening_material);
+        assert!(profile.requires_verifier_owned_trace_material_digest);
         assert!(profile.requires_canonical_base_transcript_label);
         assert!(profile.rejects_suffixed_transcript_label_aliases);
         let expected_centered_source_digest =
@@ -34024,6 +38355,56 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&stale_profile),
             "canonical base transcript-label",
             "release-audit proof profiles must advertise suffixed transcript-label alias rejection",
+        );
+        let mut stale_profile = profile.clone();
+        stale_profile.requires_verifier_owned_trace_material_digest = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&stale_profile),
+            "verifier-owned trace material digest",
+            "release-audit proof profiles must advertise verifier-owned trace material digest input",
+        );
+        let mut stale_profile = profile.clone();
+        stale_profile.public_opening_material_version = stale_profile
+            .public_opening_material_version
+            .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&stale_profile),
+            "public opening material layout",
+            "release-audit proof profiles must pin public-opening material versions",
+        );
+        let mut stale_profile = profile.clone();
+        stale_profile.public_opening_material_field_count = stale_profile
+            .public_opening_material_field_count
+            .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&stale_profile),
+            "public opening material layout",
+            "release-audit proof profiles must pin public-opening material field counts",
+        );
+        let mut stale_profile = profile.clone();
+        stale_profile.public_opening_material_digest_domain =
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN.to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&stale_profile),
+            "canonical bytes",
+            "release-audit proof profiles must pin public-opening material digest domains",
+        );
+        let mut stale_profile = profile.clone();
+        stale_profile.validates_transcript_public_opening_material = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&stale_profile),
+            "typed public-opening material",
+            "release-audit proof profiles must advertise typed public-opening material validation",
+        );
+        let mut downgraded_key = prover_key.clone();
+        downgraded_key.requires_verifier_owned_trace_material_digest = false;
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
+                &downgraded_key,
+                &prover_native,
+            ),
+            "verifier-owned trace material digest",
+            "release-audit proof-profile construction must not mask downgraded key verifier-owned trace material digest obligations",
         );
         let mut downgraded_key = prover_key.clone();
         downgraded_key.requires_canonical_base_transcript_label = false;
@@ -34370,6 +38751,15 @@ mod tests {
             "native prover payload must reject generated circuit bodies that omit bounded-noise support before opaque body mismatch"
         );
 
+        let mut missing_verifier_owned_trace_digest = decoded_generated_body.clone();
+        missing_verifier_owned_trace_digest.requires_verifier_owned_trace_material_digest = false;
+        expect_generated_body_profile_rejects!(
+            missing_verifier_owned_trace_digest,
+            "verifier-owned trace material digest",
+            "native verifier material must reject generated circuit bodies that omit verifier-owned trace material digest input before opaque body mismatch",
+            "native prover payload must reject generated circuit bodies that omit verifier-owned trace material digest input before opaque body mismatch"
+        );
+
         let mut stale_trace_with_malformed_air = decoded_generated_body.clone();
         stale_trace_with_malformed_air.arithmetic_trace_profile_digest =
             Hash::new(b"stale generated body trace digest before malformed AIR");
@@ -34443,6 +38833,9 @@ mod tests {
         let expected_schema_payload_digest =
             canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()
                 .expect("derive proof public-input schema payload digest");
+        let expected_release_prover_contract_digest =
+            bfv_full_bootstrap_release_prover_contract_digest_v1()
+                .expect("derive release-prover contract digest");
         assert_eq!(
             decoded_prover.native_circuit_fingerprint,
             expected_circuit_fingerprint
@@ -34497,6 +38890,73 @@ mod tests {
         let decoded_verifier_payload: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
             norito::decode_from_bytes(&decoded_verifier.native_payload)
                 .expect("decode native verifier payload");
+        validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+            circuit_id,
+            &decoded_prover.native_payload,
+        )
+        .expect("canonical native transparent prover payload must validate");
+        validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+            circuit_id,
+            &decoded_verifier.native_payload,
+        )
+        .expect("canonical native verifier payload must validate");
+        let compressed_prover_material = norito::to_compressed_bytes(
+            &decoded_prover,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed native prover material");
+        assert_ne!(
+            compressed_prover_material, prover_material,
+            "compressed native prover material framing must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapNativeProofKeyMaterialV1 =
+            norito::decode_from_bytes(&compressed_prover_material)
+                .expect("compressed native prover material must remain structurally decodable");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&compressed_prover_material),
+            "canonical v1 bytes",
+            "native proof-key material decoding must reject noncanonical compressed Norito framing",
+        );
+        let compressed_prover_payload = norito::to_compressed_bytes(
+            &decoded_prover_payload,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed native prover payload");
+        assert_ne!(
+            compressed_prover_payload, decoded_prover.native_payload,
+            "compressed prover payload framing must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 =
+            norito::decode_from_bytes(&compressed_prover_payload)
+                .expect("compressed native prover payload must remain structurally decodable");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                circuit_id,
+                &compressed_prover_payload,
+            ),
+            "canonical v1 bytes",
+            "native prover payload validation must reject noncanonical compressed Norito framing",
+        );
+        let compressed_verifier_payload = norito::to_compressed_bytes(
+            &decoded_verifier_payload,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed native verifier payload");
+        assert_ne!(
+            compressed_verifier_payload, decoded_verifier.native_payload,
+            "compressed verifier payload framing must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+            norito::decode_from_bytes(&compressed_verifier_payload)
+                .expect("compressed native verifier payload must remain structurally decodable");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &compressed_verifier_payload,
+            ),
+            "canonical v1 bytes",
+            "native verifier payload validation must reject noncanonical compressed Norito framing",
+        );
         assert_eq!(
             decoded_prover_payload.centered_scale_round_source_chain_digest,
             expected_centered_source_digest
@@ -34527,13 +38987,58 @@ mod tests {
         let expected_generated_circuit_body =
             bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)
                 .expect("canonical generated circuit body");
+        let expected_generated_circuit_body_digest = sha256(&expected_generated_circuit_body);
         assert_eq!(
             decoded_verifier_payload.generated_circuit_body, expected_generated_circuit_body,
             "native verifier payload must carry the canonical generated circuit body"
         );
+        assert_eq!(
+            decoded_prover_payload.generated_circuit_body, expected_generated_circuit_body,
+            "native prover payload must carry the canonical generated circuit body"
+        );
+        assert_eq!(
+            decoded_verifier_payload.generated_circuit_body_digest,
+            expected_generated_circuit_body_digest,
+            "native verifier payload generated circuit body digest must commit to canonical body bytes"
+        );
+        assert_eq!(
+            decoded_prover_payload.generated_circuit_body_digest,
+            expected_generated_circuit_body_digest,
+            "native prover payload generated circuit body digest must commit to canonical body bytes"
+        );
+        assert_ne!(
+            decoded_verifier_payload.generated_circuit_body_digest,
+            <[u8; Hash::LENGTH]>::from(Hash::new(&expected_generated_circuit_body)),
+            "generated circuit body digest must not use Iroha Hash::new semantics"
+        );
         let decoded_generated_body: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
             norito::decode_from_bytes(&decoded_verifier_payload.generated_circuit_body)
                 .expect("decode canonical generated circuit body");
+        let expected_air_material =
+            bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1();
+        let expected_air_body =
+            norito::to_bytes(&expected_air_material).expect("encode canonical AIR material");
+        assert_eq!(
+            decoded_generated_body.arithmetic_air_constraint_system_body, expected_air_body,
+            "generated circuit body must embed the canonical AIR material bytes"
+        );
+        let decoded_embedded_air: BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 =
+            norito::decode_from_bytes(
+                &decoded_generated_body.arithmetic_air_constraint_system_body,
+            )
+            .expect("decode embedded generated-body AIR material");
+        assert_eq!(
+            decoded_embedded_air, expected_air_material,
+            "generated circuit body must decode to the canonical AIR material"
+        );
+        assert_eq!(
+            decoded_generated_body.arithmetic_air_constraint_system_digest,
+            bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(
+                &decoded_embedded_air
+            )
+            .expect("derive embedded AIR digest"),
+            "generated circuit body AIR digest must commit to embedded AIR material"
+        );
         assert_eq!(
             decoded_generated_body.field_count,
             BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1
@@ -34545,6 +39050,10 @@ mod tests {
         assert_eq!(
             decoded_generated_body.proof_public_input_schema_payload_digest,
             expected_schema_payload_digest
+        );
+        assert_eq!(
+            decoded_generated_body.release_prover_contract_digest,
+            expected_release_prover_contract_digest
         );
         let stale_centered_source_digest =
             Hash::new(b"stale-native-centered-scale-round-source-chain");
@@ -34634,6 +39143,14 @@ mod tests {
             "generated circuit body must bind transcript public-padding opening replay"
         );
         assert!(
+            decoded_generated_body.validates_transcript_public_opening_material,
+            "generated circuit body must bind typed transcript public-opening material validation"
+        );
+        assert!(
+            decoded_generated_body.requires_verifier_owned_trace_material_digest,
+            "generated circuit body must bind verifier-owned trace material digest input"
+        );
+        assert!(
             decoded_generated_body.validates_merkle_path_shape,
             "generated circuit body must bind Merkle path shape validation"
         );
@@ -34711,6 +39228,14 @@ mod tests {
             "native verifier material must reject generated bodies that omit public-opening replay policy"
         );
         expect_generated_body_policy_bound!(
+            validates_transcript_public_opening_material,
+            "native verifier material must reject generated bodies that omit typed public-opening material validation"
+        );
+        expect_generated_body_policy_bound!(
+            requires_verifier_owned_trace_material_digest,
+            "native verifier material must reject generated bodies that omit verifier-owned trace material digest input"
+        );
+        expect_generated_body_policy_bound!(
             validates_merkle_path_shape,
             "native verifier material must reject generated bodies that omit Merkle path shape validation"
         );
@@ -34786,6 +39311,14 @@ mod tests {
         expect_prover_generated_body_policy_bound!(
             validates_transcript_public_padding_openings,
             "native prover payload must reject generated bodies that omit public-opening replay policy"
+        );
+        expect_prover_generated_body_policy_bound!(
+            validates_transcript_public_opening_material,
+            "native prover payload must reject generated bodies that omit typed public-opening material validation"
+        );
+        expect_prover_generated_body_policy_bound!(
+            requires_verifier_owned_trace_material_digest,
+            "native prover payload must reject generated bodies that omit verifier-owned trace material digest input"
         );
         expect_prover_generated_body_policy_bound!(
             validates_merkle_path_shape,
@@ -34907,6 +39440,28 @@ mod tests {
             }};
         }
 
+        let compressed_embedded_air_body = norito::to_compressed_bytes(
+            &expected_air_material,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed generated-body AIR material");
+        assert_ne!(
+            compressed_embedded_air_body, expected_air_body,
+            "compressed generated-body AIR material must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 =
+            norito::decode_from_bytes(&compressed_embedded_air_body)
+                .expect("compressed generated-body AIR material must decode structurally");
+        let mut generated_body_with_compressed_air = decoded_generated_body.clone();
+        generated_body_with_compressed_air.arithmetic_air_constraint_system_body =
+            compressed_embedded_air_body;
+        expect_generated_body_preflight_rejects!(
+            generated_body_with_compressed_air,
+            "generated circuit body AIR material must use canonical v1 bytes",
+            "native verifier material must reject generated bodies with noncanonical embedded AIR material before opaque body mismatch",
+            "native prover payload must reject generated bodies with noncanonical embedded AIR material before opaque body mismatch"
+        );
+
         let mut generated_body_with_stale_air_digest = decoded_generated_body.clone();
         generated_body_with_stale_air_digest.arithmetic_air_constraint_system_digest =
             Hash::new(b"stale generated circuit body AIR digest");
@@ -34935,6 +39490,16 @@ mod tests {
             "proof public-input schema payload digest",
             "native verifier material must reject generated bodies whose proof public-input schema payload digest drifts before opaque body mismatch",
             "native prover payload must reject generated bodies whose proof public-input schema payload digest drifts before opaque body mismatch"
+        );
+
+        let mut generated_body_with_stale_release_prover_contract = decoded_generated_body.clone();
+        generated_body_with_stale_release_prover_contract.release_prover_contract_digest =
+            Hash::new(b"stale generated circuit body release-prover contract digest");
+        expect_generated_body_preflight_rejects!(
+            generated_body_with_stale_release_prover_contract,
+            "release-prover contract digest",
+            "native verifier material must reject generated bodies whose release-prover contract digest drifts before opaque body mismatch",
+            "native prover payload must reject generated bodies whose release-prover contract digest drifts before opaque body mismatch"
         );
         macro_rules! expect_raw_generated_body_payload_rejects {
             ($generated_body:expr, $needle:literal, $verifier_context:literal, $prover_context:literal) => {{
@@ -34971,6 +39536,25 @@ mod tests {
                 );
             }};
         }
+
+        let compressed_generated_circuit_body = norito::to_compressed_bytes(
+            &decoded_generated_body,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed generated circuit body");
+        assert_ne!(
+            compressed_generated_circuit_body, expected_generated_circuit_body,
+            "compressed generated circuit body must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
+            norito::decode_from_bytes(&compressed_generated_circuit_body)
+                .expect("compressed generated circuit body must decode structurally");
+        expect_raw_generated_body_payload_rejects!(
+            compressed_generated_circuit_body,
+            "generated circuit body must use canonical v1 bytes",
+            "native verifier material must reject noncanonical generated circuit body framing before opaque body mismatch",
+            "native prover payload must reject noncanonical generated circuit body framing before opaque body mismatch"
+        );
 
         expect_raw_generated_body_payload_rejects!(
             Vec::new(),
@@ -35187,6 +39771,24 @@ mod tests {
             ),
             "placeholder text",
             "raw native prover payload validation must reject binary-decorated placeholder payloads before decode",
+        );
+        let binary_fragmented_placeholder_native_payload =
+            b"native verifier metadata\xffoperator your.proof payload".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &binary_fragmented_placeholder_native_payload,
+            ),
+            "placeholder text",
+            "raw native verifier payload validation must reject binary-fragmented placeholder payloads before decode",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                circuit_id,
+                &binary_fragmented_placeholder_native_payload,
+            ),
+            "placeholder text",
+            "raw native prover payload validation must reject binary-fragmented placeholder payloads before decode",
         );
         let mut oversized_placeholder_native_payload =
             b"placeholder BFV full-bootstrap native proof key payload".to_vec();
@@ -39117,6 +43719,37 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_refresh_key_constructors_reject_all_zero_public_key_material() {
+        let params = params();
+        let all_zero_public_key = BfvPublicKey {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        assert_error_contains(
+            bootstrap_key_with_max_refresh_rounds_from_seed(
+                &params,
+                &all_zero_public_key,
+                "exact-all-zero-public-key-refresh",
+                1,
+                b"bfv-exact-all-zero-public-key-refresh",
+            ),
+            "all zero",
+            "exact bootstrap refresh construction must reject inert public-key material",
+        );
+        assert_error_contains(
+            bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+                &params,
+                &all_zero_public_key,
+                "bounded-all-zero-public-key-refresh",
+                1,
+                b"bfv-bounded-all-zero-public-key-refresh",
+            ),
+            "all zero",
+            "bounded bootstrap refresh construction must reject inert public-key material",
+        );
+    }
+
+    #[test]
     fn bootstrap_refresh_keys_reject_overbudget_round_capacity() {
         let exact_one_round_params = BfvParameters {
             polynomial_degree: 2,
@@ -40008,14 +44641,18 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let zero_a_entry = BfvRelinearizationKeyEntry {
+        let entry_without_a_component = BfvRelinearizationKeyEntry {
             b: vec![1; params.degree()],
             a: zero_poly(&params),
         };
-        let mut zero_a_entries = vec![valid_entry.clone(); expected_entries];
-        zero_a_entries[0] = zero_a_entry;
-        let err = validate_key_switch_entries(&params, &zero_a_entries, "test key-switch entry")
-            .expect_err("key-switch entries must reject all-zero a components");
+        let mut entries_without_a_component = vec![valid_entry.clone(); expected_entries];
+        entries_without_a_component[0] = entry_without_a_component;
+        let err = validate_key_switch_entries(
+            &params,
+            &entries_without_a_component,
+            "test key-switch entry",
+        )
+        .expect_err("key-switch entries must reject all-zero a components");
         assert!(
             err.to_string().contains("a component"),
             "unexpected error: {err}"
@@ -40070,6 +44707,14 @@ mod tests {
         let bounded_digest =
             bfv_bounded_noise_public_key_proof_statement_digest(&params, &public_key)
                 .expect("bounded public-key proof statement digest");
+        assert_eq!(
+            bounded_digest,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ]),
+            "bounded public-key statement digest must hash the same typed material under the bounded domain"
+        );
         assert_ne!(
             digest, bounded_digest,
             "exact-lift and bounded-noise public-key proof statements must be domain-separated"
@@ -40185,6 +44830,14 @@ mod tests {
             declared_bound,
         )
         .expect("bounded ciphertext proof statement digest");
+        assert_eq!(
+            bounded_digest,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ]),
+            "bounded ciphertext statement digest must hash the same typed material under the bounded domain"
+        );
         assert_ne!(
             exact_digest, bounded_digest,
             "exact-lift and bounded-noise ciphertext proof statements must be domain-separated"
@@ -40305,6 +44958,668 @@ mod tests {
             ),
             "bounded-noise bound",
             "bounded ciphertext statements must reject unrepresentable declared bounds",
+        );
+    }
+
+    #[test]
+    fn exact_residual_public_key_proof_input_material_binds_secret_witness_and_statement() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-exact-public-key-proof-input-keygen")
+                .expect("exact keygen");
+        let material = bfv_exact_residual_public_key_proof_input_material_v1(
+            &params,
+            &secret_key,
+            &public_key,
+        )
+        .expect("exact public-key proof input material");
+
+        assert_eq!(
+            material.statement_hash,
+            bfv_public_key_proof_statement_digest(&params, &public_key)
+                .expect("exact public-key statement hash"),
+            "proof input material must carry the public statement hash"
+        );
+        assert!(
+            material.max_abs_residual_multiple <= u128::from(BFV_ERROR_MULTIPLE_BOUND),
+            "exact public-key residual must fit the keygen error profile"
+        );
+        validate_bfv_exact_residual_public_key_proof_input_material_v1(&material)
+            .expect("fresh exact public-key proof input material validates");
+
+        let zero_residual_public_key = BfvPublicKey {
+            b: poly_neg_mod(
+                &params,
+                &poly_mul_mod(&params, &public_key.a, &secret_key.s),
+            ),
+            a: public_key.a.clone(),
+        };
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_v1(
+                &params,
+                &secret_key,
+                &zero_residual_public_key,
+            ),
+            "nonzero residual",
+            "exact public-key proof input material must reject zero-residual witnesses",
+        );
+
+        let mut stale_statement = material.clone();
+        stale_statement.statement_hash = Hash::new(b"stale exact public-key statement");
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_v1(&stale_statement),
+            "statement hash mismatch",
+            "exact public-key proof input material must reject stale statement hashes",
+        );
+
+        let mut stale_digest = material.clone();
+        stale_digest.public_key_digest = Hash::new(b"stale exact public-key digest");
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_v1(&stale_digest),
+            "public-key digest mismatch",
+            "exact public-key proof input material must reject stale public-key digests",
+        );
+
+        let mut stale_residual = material.clone();
+        stale_residual.public_key_residual[0] = add_mod_u64(
+            stale_residual.public_key_residual[0],
+            params.plaintext_modulus,
+            params.ciphertext_modulus,
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_v1(&stale_residual),
+            "residual mismatch",
+            "exact public-key proof input material must reject stale residual polynomials",
+        );
+
+        let mut stale_multiples = material.clone();
+        stale_multiples.residual_multiples[0] += 1;
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_v1(&stale_multiples),
+            "residual multiples mismatch",
+            "exact public-key proof input material must reject stale residual multiples",
+        );
+
+        let mut stale_max = material.clone();
+        stale_max.max_abs_residual_multiple += 1;
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_v1(&stale_max),
+            "max residual mismatch",
+            "exact public-key proof input material must reject stale residual maxima",
+        );
+
+        let (wrong_secret_key, _, _) =
+            keygen_from_seed(&params, b"bfv-exact-public-key-proof-input-wrong-key")
+                .expect("exact keygen for wrong secret");
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_v1(
+                &params,
+                &wrong_secret_key,
+                &public_key,
+            ),
+            "public key",
+            "exact public-key proof input material must reject unrelated secret-key witnesses",
+        );
+    }
+
+    #[test]
+    fn exact_residual_ciphertext_proof_input_material_binds_witness_and_statement() {
+        let params = params();
+        let (secret_key, public_key, _) =
+            keygen_from_seed(&params, b"bfv-exact-ciphertext-proof-input-keygen")
+                .expect("exact keygen");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &[17, 88, 0, 144],
+            b"bfv-exact-ciphertext-proof-input-encrypt",
+        )
+        .expect("exact encrypt");
+        let declared_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("fresh bound");
+        let material = bfv_exact_residual_ciphertext_proof_input_material_v1(
+            &params,
+            &public_key,
+            &secret_key,
+            &ciphertext,
+            declared_bound,
+        )
+        .expect("exact ciphertext proof input material");
+
+        assert_eq!(
+            material.statement_hash,
+            bfv_ciphertext_exact_residual_proof_statement_digest(
+                &params,
+                &public_key,
+                &ciphertext,
+                declared_bound,
+            )
+            .expect("exact ciphertext statement hash"),
+            "proof input material must carry the public ciphertext statement hash"
+        );
+        assert!(
+            material.actual_max_abs_residual_multiple > 0,
+            "sample exact ciphertext should carry nonzero residual multiples"
+        );
+        assert!(
+            material.actual_max_abs_residual_multiple <= declared_bound,
+            "sample exact ciphertext must fit the declared bound"
+        );
+        validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&material)
+            .expect("fresh exact ciphertext proof input material validates");
+
+        let zero_residual_ciphertext = BfvCiphertext {
+            c0: encode_plaintext(&params, &[17, 88, 0, 144]),
+            c1: zero_poly(&params),
+        };
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_v1(
+                &params,
+                &public_key,
+                &secret_key,
+                &zero_residual_ciphertext,
+                declared_bound,
+            ),
+            "nonzero residual",
+            "exact ciphertext proof input material must reject zero-residual witnesses",
+        );
+
+        let mut stale_statement = material.clone();
+        stale_statement.statement_hash = Hash::new(b"stale exact ciphertext statement");
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&stale_statement),
+            "statement hash mismatch",
+            "exact ciphertext proof input material must reject stale statement hashes",
+        );
+
+        let mut stale_ciphertext_digest = material.clone();
+        stale_ciphertext_digest.ciphertext_digest = Hash::new(b"stale exact ciphertext digest");
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_v1(
+                &stale_ciphertext_digest,
+            ),
+            "ciphertext digest mismatch",
+            "exact ciphertext proof input material must reject stale ciphertext digests",
+        );
+
+        let mut stale_plaintext = material.clone();
+        stale_plaintext.plaintext[0] =
+            (stale_plaintext.plaintext[0] + 1) % params.plaintext_modulus;
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&stale_plaintext),
+            "plaintext mismatch",
+            "exact ciphertext proof input material must reject stale plaintext witnesses",
+        );
+
+        let mut stale_scaled = material.clone();
+        stale_scaled.scaled_coefficients[0] = add_mod_u64(
+            stale_scaled.scaled_coefficients[0],
+            params.plaintext_modulus,
+            params.ciphertext_modulus,
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&stale_scaled),
+            "scaled coefficients mismatch",
+            "exact ciphertext proof input material must reject stale scaled coefficients",
+        );
+
+        let mut stale_multiples = material.clone();
+        stale_multiples.residual_multiples[0] += 1;
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&stale_multiples),
+            "residual multiples mismatch",
+            "exact ciphertext proof input material must reject stale residual multiples",
+        );
+
+        let mut stale_actual_residual = material.clone();
+        stale_actual_residual.actual_max_abs_residual_multiple += 1;
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&stale_actual_residual),
+            "actual residual mismatch",
+            "exact ciphertext proof input material must reject stale residual maxima",
+        );
+
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_v1(
+                &params,
+                &public_key,
+                &secret_key,
+                &ciphertext,
+                material.actual_max_abs_residual_multiple - 1,
+            ),
+            "exact residual bound",
+            "exact ciphertext proof input material must reject understated declared bounds",
+        );
+
+        let (wrong_secret_key, _, _) =
+            keygen_from_seed(&params, b"bfv-exact-ciphertext-proof-input-wrong-key")
+                .expect("exact keygen for wrong secret");
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_v1(
+                &params,
+                &public_key,
+                &wrong_secret_key,
+                &ciphertext,
+                declared_bound,
+            ),
+            "public key",
+            "exact ciphertext proof input material must reject unrelated secret-key witnesses",
+        );
+    }
+
+    #[test]
+    fn bounded_noise_public_key_proof_input_material_binds_secret_witness_and_statement() {
+        let params = params();
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-bounded-public-key-proof-input-keygen")
+                .expect("bounded keygen");
+        let material =
+            bfv_bounded_noise_public_key_proof_input_material_v1(&params, &secret_key, &public_key)
+                .expect("bounded public-key proof input material");
+
+        assert_eq!(
+            material.statement_hash,
+            bfv_bounded_noise_public_key_proof_statement_digest(&params, &public_key)
+                .expect("bounded public-key statement hash"),
+            "proof input material must carry the public statement hash"
+        );
+        validate_centered_noise_bound(
+            &params,
+            &material.public_key_noise,
+            u128::from(BFV_BOUNDED_NOISE_COEFFICIENT_BOUND),
+            "test public-key proof input residual",
+        )
+        .expect("public-key residual stays within bounded-noise keygen policy");
+        validate_bfv_bounded_noise_public_key_proof_input_material_v1(&material)
+            .expect("fresh bounded public-key proof input material validates");
+
+        let zero_noise_public_key = BfvPublicKey {
+            b: poly_neg_mod(
+                &params,
+                &poly_mul_mod(&params, &public_key.a, &secret_key.s),
+            ),
+            a: public_key.a.clone(),
+        };
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_v1(
+                &params,
+                &secret_key,
+                &zero_noise_public_key,
+            ),
+            "nonzero noise",
+            "bounded public-key proof input material must reject zero-noise witnesses",
+        );
+
+        let mut stale_statement = material.clone();
+        stale_statement.statement_hash = Hash::new(b"stale bounded public-key statement");
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_v1(&stale_statement),
+            "statement hash mismatch",
+            "bounded public-key proof input material must reject stale statement hashes",
+        );
+
+        let mut stale_digest = material.clone();
+        stale_digest.public_key_digest = Hash::new(b"stale bounded public-key digest");
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_v1(&stale_digest),
+            "public-key digest mismatch",
+            "bounded public-key proof input material must reject stale public-key digests",
+        );
+
+        let mut stale_noise = material.clone();
+        stale_noise.public_key_noise[0] = add_mod_u64(
+            stale_noise.public_key_noise[0],
+            1,
+            params.ciphertext_modulus,
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_v1(&stale_noise),
+            "residual mismatch",
+            "bounded public-key proof input material must reject stale residual polynomials",
+        );
+
+        let mut stale_max = material.clone();
+        stale_max.max_abs_noise += 1;
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_v1(&stale_max),
+            "max noise mismatch",
+            "bounded public-key proof input material must reject stale residual maxima",
+        );
+
+        let (wrong_secret_key, _) = keygen_bounded_noise_from_seed(
+            &params,
+            b"bfv-bounded-public-key-proof-input-wrong-key",
+        )
+        .expect("bounded keygen for wrong secret");
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_v1(
+                &params,
+                &wrong_secret_key,
+                &public_key,
+            ),
+            "exceeds bound",
+            "bounded public-key proof input material must reject unrelated secret-key witnesses",
+        );
+    }
+
+    #[test]
+    fn bounded_noise_ciphertext_proof_input_material_binds_witness_noise_and_statement() {
+        let params = params();
+        let (secret_key, public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-bounded-ciphertext-proof-input-keygen")
+                .expect("bounded keygen");
+        let ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            &[17, 88, 0, 144],
+            b"bfv-bounded-ciphertext-proof-input-encrypt",
+        )
+        .expect("bounded encrypt");
+        let declared_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bound");
+        let material = bfv_bounded_noise_ciphertext_proof_input_material_v1(
+            &params,
+            &public_key,
+            &secret_key,
+            &ciphertext,
+            declared_bound,
+        )
+        .expect("bounded ciphertext proof input material");
+
+        assert_eq!(
+            material.statement_hash,
+            bfv_bounded_noise_ciphertext_proof_statement_digest(
+                &params,
+                &public_key,
+                &ciphertext,
+                declared_bound,
+            )
+            .expect("bounded ciphertext statement hash"),
+            "proof input material must carry the public ciphertext statement hash"
+        );
+        assert!(
+            material.actual_max_abs_noise > 0,
+            "sample bounded ciphertext should carry nonzero centered noise"
+        );
+        assert!(
+            material.actual_max_abs_noise <= declared_bound,
+            "sample bounded ciphertext must fit the declared bound"
+        );
+        validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&material)
+            .expect("fresh bounded ciphertext proof input material validates");
+
+        let zero_noise_ciphertext = BfvCiphertext {
+            c0: encode_rounded_plaintext(&params, &[17, 88, 0, 144])
+                .expect("rounded direct plaintext encoding"),
+            c1: zero_poly(&params),
+        };
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_v1(
+                &params,
+                &public_key,
+                &secret_key,
+                &zero_noise_ciphertext,
+                declared_bound,
+            ),
+            "nonzero noise",
+            "bounded ciphertext proof input material must reject zero-noise witnesses",
+        );
+
+        let mut stale_statement = material.clone();
+        stale_statement.statement_hash = Hash::new(b"stale bounded ciphertext statement");
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&stale_statement),
+            "statement hash mismatch",
+            "bounded ciphertext proof input material must reject stale statement hashes",
+        );
+
+        let mut stale_ciphertext_digest = material.clone();
+        stale_ciphertext_digest.ciphertext_digest = Hash::new(b"stale bounded ciphertext digest");
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&stale_ciphertext_digest),
+            "ciphertext digest mismatch",
+            "bounded ciphertext proof input material must reject stale ciphertext digests",
+        );
+
+        let mut stale_plaintext = material.clone();
+        stale_plaintext.plaintext[0] =
+            (stale_plaintext.plaintext[0] + 1) % params.plaintext_modulus;
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&stale_plaintext),
+            "plaintext mismatch",
+            "bounded ciphertext proof input material must reject stale plaintext witnesses",
+        );
+
+        let mut stale_scaled = material.clone();
+        stale_scaled.scaled_coefficients[0] = add_mod_u64(
+            stale_scaled.scaled_coefficients[0],
+            1,
+            params.ciphertext_modulus,
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&stale_scaled),
+            "scaled coefficients mismatch",
+            "bounded ciphertext proof input material must reject stale scaled coefficients",
+        );
+
+        let mut stale_noise = material.clone();
+        stale_noise.noise_polynomial[0] = add_mod_u64(
+            stale_noise.noise_polynomial[0],
+            1,
+            params.ciphertext_modulus,
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&stale_noise),
+            "noise polynomial mismatch",
+            "bounded ciphertext proof input material must reject stale noise polynomials",
+        );
+
+        let mut stale_actual_noise = material.clone();
+        stale_actual_noise.actual_max_abs_noise += 1;
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&stale_actual_noise),
+            "actual noise mismatch",
+            "bounded ciphertext proof input material must reject stale noise maxima",
+        );
+
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_v1(
+                &params,
+                &public_key,
+                &secret_key,
+                &ciphertext,
+                material.actual_max_abs_noise - 1,
+            ),
+            "rounded noise",
+            "bounded ciphertext proof input material must reject understated declared bounds",
+        );
+
+        let (wrong_secret_key, _) = keygen_bounded_noise_from_seed(
+            &params,
+            b"bfv-bounded-ciphertext-proof-input-wrong-key",
+        )
+        .expect("bounded keygen for wrong secret");
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_v1(
+                &params,
+                &public_key,
+                &wrong_secret_key,
+                &ciphertext,
+                declared_bound,
+            ),
+            "exceeds bound",
+            "bounded ciphertext proof input material must reject unrelated secret-key witnesses",
+        );
+    }
+
+    #[test]
+    fn admission_proof_input_material_digests_hash_self_describing_material() {
+        let params = params();
+        let (exact_secret_key, exact_public_key, _) =
+            keygen_from_seed(&params, b"bfv-exact-admission-proof-input-digest-keygen")
+                .expect("exact keygen");
+        let exact_ciphertext = encrypt_from_seed(
+            &params,
+            &exact_public_key,
+            &[1, 2, 3, 4],
+            b"bfv-exact-admission-proof-input-digest-encrypt",
+        )
+        .expect("exact encrypt");
+        let exact_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("exact bound");
+        let exact_public_key_material = bfv_exact_residual_public_key_proof_input_material_v1(
+            &params,
+            &exact_secret_key,
+            &exact_public_key,
+        )
+        .expect("exact public-key proof input material");
+        let exact_ciphertext_material = bfv_exact_residual_ciphertext_proof_input_material_v1(
+            &params,
+            &exact_public_key,
+            &exact_secret_key,
+            &exact_ciphertext,
+            exact_bound,
+        )
+        .expect("exact ciphertext proof input material");
+
+        let (bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
+            &params,
+            b"bfv-bounded-admission-proof-input-digest-keygen",
+        )
+        .expect("bounded keygen");
+        let bounded_ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &bounded_public_key,
+            &[5, 6, 7, 8],
+            b"bfv-bounded-admission-proof-input-digest-encrypt",
+        )
+        .expect("bounded encrypt");
+        let bounded_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("bounded bound");
+        let bounded_public_key_material = bfv_bounded_noise_public_key_proof_input_material_v1(
+            &params,
+            &bounded_secret_key,
+            &bounded_public_key,
+        )
+        .expect("bounded public-key proof input material");
+        let bounded_ciphertext_material = bfv_bounded_noise_ciphertext_proof_input_material_v1(
+            &params,
+            &bounded_public_key,
+            &bounded_secret_key,
+            &bounded_ciphertext,
+            bounded_bound,
+        )
+        .expect("bounded ciphertext proof input material");
+
+        let exact_public_key_digest = bfv_exact_residual_public_key_proof_input_material_digest_v1(
+            &exact_public_key_material,
+        )
+        .expect("exact public-key proof input digest");
+        let exact_public_key_bytes =
+            norito::to_bytes(&exact_public_key_material).expect("encode exact public-key material");
+        assert_eq!(
+            exact_public_key_digest,
+            Hash::new_from_chunks(&[
+                BFV_EXACT_RESIDUAL_PUBLIC_KEY_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+                exact_public_key_bytes.as_slice(),
+            ]),
+            "exact public-key proof input digest must hash self-describing material"
+        );
+
+        let bounded_public_key_digest =
+            bfv_bounded_noise_public_key_proof_input_material_digest_v1(
+                &bounded_public_key_material,
+            )
+            .expect("bounded public-key proof input digest");
+        let bounded_public_key_bytes = norito::to_bytes(&bounded_public_key_material)
+            .expect("encode bounded public-key material");
+        assert_eq!(
+            bounded_public_key_digest,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+                bounded_public_key_bytes.as_slice(),
+            ]),
+            "bounded public-key proof input digest must hash self-describing material"
+        );
+        assert_ne!(
+            exact_public_key_digest, bounded_public_key_digest,
+            "exact and bounded public-key proof input digests must be domain-separated"
+        );
+
+        let exact_ciphertext_digest = bfv_exact_residual_ciphertext_proof_input_material_digest_v1(
+            &exact_ciphertext_material,
+        )
+        .expect("exact ciphertext proof input digest");
+        let exact_ciphertext_bytes =
+            norito::to_bytes(&exact_ciphertext_material).expect("encode exact ciphertext material");
+        assert_eq!(
+            exact_ciphertext_digest,
+            Hash::new_from_chunks(&[
+                BFV_EXACT_RESIDUAL_CIPHERTEXT_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+                exact_ciphertext_bytes.as_slice(),
+            ]),
+            "exact ciphertext proof input digest must hash self-describing material"
+        );
+
+        let bounded_ciphertext_digest =
+            bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(
+                &bounded_ciphertext_material,
+            )
+            .expect("bounded ciphertext proof input digest");
+        let bounded_ciphertext_bytes = norito::to_bytes(&bounded_ciphertext_material)
+            .expect("encode bounded ciphertext material");
+        assert_eq!(
+            bounded_ciphertext_digest,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+                bounded_ciphertext_bytes.as_slice(),
+            ]),
+            "bounded ciphertext proof input digest must hash self-describing material"
+        );
+        assert_ne!(
+            exact_ciphertext_digest, bounded_ciphertext_digest,
+            "exact and bounded ciphertext proof input digests must be domain-separated"
+        );
+        assert_ne!(
+            exact_public_key_digest, exact_ciphertext_digest,
+            "public-key and ciphertext proof input digests must be role-separated"
+        );
+        assert_ne!(
+            bounded_public_key_digest, bounded_ciphertext_digest,
+            "bounded public-key and ciphertext proof input digests must be role-separated"
+        );
+
+        let mut stale_exact_public_key = exact_public_key_material.clone();
+        stale_exact_public_key.version += 1;
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_digest_v1(&stale_exact_public_key),
+            "version mismatch",
+            "exact public-key proof input digesting must validate material layout",
+        );
+
+        let mut stale_exact_ciphertext = exact_ciphertext_material.clone();
+        stale_exact_ciphertext.field_count += 1;
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_digest_v1(&stale_exact_ciphertext),
+            "field count mismatch",
+            "exact ciphertext proof input digesting must validate material layout",
+        );
+
+        let mut stale_bounded_public_key = bounded_public_key_material.clone();
+        stale_bounded_public_key.statement_hash =
+            Hash::new(b"stale bounded public-key proof input digest");
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_digest_v1(&stale_bounded_public_key),
+            "statement hash mismatch",
+            "bounded public-key proof input digesting must reject stale statement hashes",
+        );
+
+        let mut stale_bounded_ciphertext = bounded_ciphertext_material.clone();
+        stale_bounded_ciphertext.statement_hash = Hash::new(b"stale bounded proof input digest");
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(&stale_bounded_ciphertext),
+            "statement hash mismatch",
+            "bounded ciphertext proof input digesting must reject stale statement hashes",
         );
     }
 
@@ -40674,6 +45989,14 @@ mod tests {
             &bootstrap_key,
         )
         .expect("bounded bootstrap proof statement digest");
+        assert_eq!(
+            bounded_digest,
+            Hash::new_from_chunks(&[
+                BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ]),
+            "bounded bootstrap-key statement digest must hash the same typed material under the bounded domain"
+        );
         assert_ne!(
             digest, bounded_digest,
             "exact-lift and bounded-noise proof statements must be domain-separated"
@@ -40951,6 +46274,26 @@ mod tests {
                 .expect("bootstrap key is present")
         );
         assert_error_contains(
+            bundle.validate_bounded_noise_refresh_transcripts(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            ),
+            "deterministic encrypted-zero transcript",
+            "bounded transcript validation must reject exact refresh masks",
+        );
+        assert_error_contains(
+            bundle.bounded_noise_refresh_transcript_digest(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            ),
+            "deterministic encrypted-zero transcript",
+            "bounded transcript digesting must reject exact refresh masks",
+        );
+        assert_error_contains(
             bundle.bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
                 &material.params,
                 &material.public_key,
@@ -41204,6 +46547,16 @@ mod tests {
             digest,
             bfv_full_bootstrap_circuit_material_digest(&params, &material)
                 .expect("repeat full-bootstrap material digest")
+        );
+        let material_bytes =
+            norito::to_bytes(&material).expect("encode full-bootstrap circuit material");
+        assert_eq!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_CIRCUIT_MATERIAL_DIGEST_DOMAIN,
+                material_bytes.as_slice(),
+            ]),
+            "full-bootstrap circuit material digest must hash self-describing typed material"
         );
 
         let mut wrong_circuit = material.clone();
@@ -41645,7 +46998,7 @@ mod tests {
             .expect("report helper output has an extractable canonical body"),
             report_body
         );
-        bfv_full_bootstrap_release_audit_artifact_digest_v1(
+        let report_digest = bfv_full_bootstrap_release_audit_artifact_digest_v1(
             "BFV full-bootstrap release audit report bytes",
             &report_bytes,
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
@@ -41653,6 +47006,16 @@ mod tests {
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
         )
         .expect("report helper output hashes as canonical artifact bytes");
+        assert_eq!(
+            report_digest,
+            Hash::new(&report_bytes),
+            "release audit report digest must hash the canonical headered bytes"
+        );
+        assert_ne!(
+            report_digest,
+            Hash::new(report_body),
+            "release audit report digest must not omit the canonical header"
+        );
 
         let archive_body =
             b"external-review-evidence-archive: generated prover verifier evidence v1";
@@ -41663,7 +47026,7 @@ mod tests {
             &archive_bytes[BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1.len()..],
             archive_body
         );
-        bfv_full_bootstrap_release_audit_artifact_digest_v1(
+        let archive_digest = bfv_full_bootstrap_release_audit_artifact_digest_v1(
             "BFV full-bootstrap release audit evidence archive bytes",
             &archive_bytes,
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
@@ -41671,6 +47034,16 @@ mod tests {
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
         )
         .expect("archive helper output hashes as canonical artifact bytes");
+        assert_eq!(
+            archive_digest,
+            Hash::new(&archive_bytes),
+            "release audit archive digest must hash the canonical headered bytes"
+        );
+        assert_ne!(
+            archive_digest,
+            Hash::new(archive_body),
+            "release audit archive digest must not omit the canonical header"
+        );
 
         assert_error_contains(
             bfv_full_bootstrap_release_audit_report_bytes_v1(&[]),
@@ -42406,9 +47779,6 @@ mod tests {
         let mut downgraded_prover_key =
             decode_sample_full_bootstrap_proof_key_artifact(&artifacts.prover_key);
         downgraded_prover_key.validates_merkle_path_roots = false;
-        downgraded_prover_key.key_material_commitment =
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&downgraded_prover_key)
-                .expect("derive downgraded prover-key material commitment");
         let downgraded_prover_key_payload =
             norito::to_bytes(&downgraded_prover_key).expect("encode downgraded prover key");
         downgraded_key_artifacts.prover_key = sample_full_bootstrap_artifact_payload(
@@ -42773,6 +48143,37 @@ mod tests {
             evidence.prover_key.native_payload_digest, evidence.verifier_key.native_payload_digest,
             "release audit evidence must keep prover/verifier native payload digests distinct"
         );
+        let mut stale_prover_native_payload_digest_evidence = evidence.clone();
+        stale_prover_native_payload_digest_evidence
+            .prover_key
+            .native_payload_digest =
+            sha256(b"audited release native prover payload bytes with wrong digest v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_prover_native_payload_digest_evidence,
+            ),
+            "native payload digest mismatch",
+            "release audit evidence must reject stale canonical native prover payload digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_evidence_digest_v1(
+                &stale_prover_native_payload_digest_evidence,
+            ),
+            "native payload digest mismatch",
+            "release audit evidence digesting must reject stale canonical native prover payload digests",
+        );
+        let mut stale_verifier_native_payload_digest_evidence = evidence.clone();
+        stale_verifier_native_payload_digest_evidence
+            .verifier_key
+            .native_payload_digest =
+            sha256(b"audited release native verifier payload bytes with wrong digest v1");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_verifier_native_payload_digest_evidence,
+            ),
+            "native payload digest mismatch",
+            "release audit evidence must reject stale canonical native verifier payload digests",
+        );
         assert_eq!(
             evidence.proof_profile.backend,
             BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1
@@ -42788,6 +48189,65 @@ mod tests {
         assert_eq!(
             evidence.proof_profile.air_evaluation_material_field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .proof_input_material_digest_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .prover_input_material_digest_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .air_evaluation_material_digest_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .arithmetic_trace_material_digest_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .arithmetic_air_constraint_system_digest_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN
+        );
+        assert!(
+            evidence
+                .proof_profile
+                .separates_release_prover_material_domains
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .proof_key_material_commitment_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN
+        );
+        assert_eq!(
+            evidence
+                .proof_profile
+                .proof_key_pair_commitment_domain
+                .as_slice(),
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN
+        );
+        assert!(
+            evidence
+                .proof_profile
+                .separates_proof_key_material_and_pair_commitments
         );
         assert!(
             evidence
@@ -42825,6 +48285,11 @@ mod tests {
                 .proof_profile
                 .validates_transcript_public_padding_openings
         );
+        assert!(
+            evidence
+                .proof_profile
+                .requires_verifier_owned_trace_material_digest
+        );
         assert!(evidence.proof_profile.validates_merkle_path_shape);
         assert!(evidence.proof_profile.validates_merkle_path_roots);
         assert!(evidence.proof_profile.validates_fri_query_chain);
@@ -42844,8 +48309,20 @@ mod tests {
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditEvidenceV1>(&evidence_bytes)
                 .expect("decode audit evidence");
         assert_eq!(decoded, evidence);
+        let safely_decoded_evidence =
+            decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(&evidence_bytes)
+                .expect("safe canonical release audit evidence decode");
+        assert_eq!(safely_decoded_evidence, evidence);
         let digest = bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)
             .expect("release audit evidence digest");
+        assert_eq!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_DIGEST_DOMAIN,
+                evidence_bytes.as_slice(),
+            ]),
+            "release audit evidence digest must hash self-describing typed evidence"
+        );
         assert_eq!(
             digest,
             bfv_full_bootstrap_release_audit_evidence_digest_v1(&decoded)
@@ -42855,6 +48332,36 @@ mod tests {
             digest,
             bfv_full_bootstrap_release_audit_evidence_digest(&params, &material, &artifacts)
                 .expect("derive and digest release audit evidence")
+        );
+        assert_eq!(
+            digest,
+            bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(&evidence_bytes)
+                .expect("canonical release audit evidence byte digest"),
+            "safe byte digesting must hash the canonical release audit evidence"
+        );
+        let compressed_evidence_bytes =
+            norito::to_compressed_bytes(&evidence, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed release audit evidence");
+        assert_ne!(
+            compressed_evidence_bytes, evidence_bytes,
+            "compressed release audit evidence must differ from canonical v1 bytes"
+        );
+        let decoded_compressed_evidence = norito::decode_from_bytes::<
+            BfvFullBootstrapReleaseAuditEvidenceV1,
+        >(&compressed_evidence_bytes)
+        .expect("compressed release audit evidence must decode structurally");
+        assert_eq!(decoded_compressed_evidence, evidence);
+        assert_error_contains(
+            decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(&compressed_evidence_bytes),
+            "canonical v1 bytes",
+            "safe release audit evidence byte admission must reject noncanonical compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(
+                &compressed_evidence_bytes,
+            ),
+            "canonical v1 bytes",
+            "safe release audit evidence byte digesting must reject noncanonical compressed Norito framing before hashing",
         );
 
         let reviewer_key_pair =
@@ -42882,6 +48389,9 @@ mod tests {
             evidence.prover_key.native_payload_digest
         );
         let native_prover_payload_hex = hex::encode(&native_prover_payload);
+        let prover_native_payload_digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(
+            Hash::prehashed(evidence.prover_key.native_payload_digest),
+        ));
         let native_verifier_payload =
             encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
                 BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
@@ -42892,6 +48402,9 @@ mod tests {
             evidence.verifier_key.native_payload_digest
         );
         let native_verifier_payload_hex = hex::encode(&native_verifier_payload);
+        let verifier_native_payload_digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(
+            Hash::prehashed(evidence.verifier_key.native_payload_digest),
+        ));
         let artifact_bundle_digest_hex =
             hex::encode(<[u8; Hash::LENGTH]>::from(evidence.artifact_bundle_digest));
         let evaluator_artifact_set_digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(
@@ -42913,6 +48426,20 @@ mod tests {
             evidence.proof_key_pair_commitment,
         ));
         let proof_profile_field_count = evidence.proof_profile.field_count.to_string();
+        let proof_profile_public_opening_material_version = evidence
+            .proof_profile
+            .public_opening_material_version
+            .to_string();
+        let proof_profile_public_opening_material_field_count = evidence
+            .proof_profile
+            .public_opening_material_field_count
+            .to_string();
+        let proof_profile_hash_fn = evidence.proof_profile.hash_fn.to_string();
+        let proof_profile_n_log2 = evidence.proof_profile.n_log2.to_string();
+        let proof_profile_blowup_log2 = evidence.proof_profile.blowup_log2.to_string();
+        let proof_profile_fold_arity = evidence.proof_profile.fold_arity.to_string();
+        let proof_profile_queries = evidence.proof_profile.queries.to_string();
+        let proof_profile_merkle_arity = evidence.proof_profile.merkle_arity.to_string();
         let proof_profile_requires_canonical_base_transcript_label = evidence
             .proof_profile
             .requires_canonical_base_transcript_label
@@ -42921,6 +48448,38 @@ mod tests {
             .proof_profile
             .rejects_suffixed_transcript_label_aliases
             .to_string();
+        let proof_profile_requires_verifier_owned_trace_material_digest = evidence
+            .proof_profile
+            .requires_verifier_owned_trace_material_digest
+            .to_string();
+        let proof_profile_validates_transcript_public_opening_material = evidence
+            .proof_profile
+            .validates_transcript_public_opening_material
+            .to_string();
+        let proof_profile_validates_merkle_path_shape = evidence
+            .proof_profile
+            .validates_merkle_path_shape
+            .to_string();
+        let proof_profile_validates_merkle_path_roots = evidence
+            .proof_profile
+            .validates_merkle_path_roots
+            .to_string();
+        let proof_profile_validates_fri_query_chain =
+            evidence.proof_profile.validates_fri_query_chain.to_string();
+        let proof_profile_binds_first_fri_values = evidence
+            .proof_profile
+            .binds_first_fri_values_to_opened_air_values
+            .to_string();
+        let proof_profile_binds_fri_queries_to_air_roots = evidence
+            .proof_profile
+            .binds_fri_queries_to_air_commitment_roots
+            .to_string();
+        let mut proof_profile_fields_fragment = String::new();
+        bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
+            &mut proof_profile_fields_fragment,
+            &evidence.proof_profile,
+        )
+        .expect("proof-profile release-audit fixture fields");
         let audit_report_bytes = [
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
             b"external-review-approved: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap release audit report v1; release-evidence-digest=".as_slice(),
@@ -42929,12 +48488,7 @@ mod tests {
             generated_circuit_body_digest_hex.as_bytes(),
             b"; proof-key-pair-commitment=".as_slice(),
             proof_key_pair_commitment_hex.as_bytes(),
-            b"; proof-profile-field-count=".as_slice(),
-            proof_profile_field_count.as_bytes(),
-            b"; proof-profile-requires-canonical-base-transcript-label=".as_slice(),
-            proof_profile_requires_canonical_base_transcript_label.as_bytes(),
-            b"; proof-profile-rejects-suffixed-transcript-label-aliases=".as_slice(),
-            proof_profile_rejects_suffixed_transcript_label_aliases.as_bytes(),
+            proof_profile_fields_fragment.as_bytes(),
         ]
         .concat();
         let prover_key_digest_hex =
@@ -42963,12 +48517,7 @@ mod tests {
             arithmetic_trace_profile_digest_hex.as_bytes(),
             b"; arithmetic-air-constraint-system-digest=".as_slice(),
             arithmetic_air_constraint_system_digest_hex.as_bytes(),
-            b"; proof-profile-field-count=".as_slice(),
-            proof_profile_field_count.as_bytes(),
-            b"; proof-profile-requires-canonical-base-transcript-label=".as_slice(),
-            proof_profile_requires_canonical_base_transcript_label.as_bytes(),
-            b"; proof-profile-rejects-suffixed-transcript-label-aliases=".as_slice(),
-            proof_profile_rejects_suffixed_transcript_label_aliases.as_bytes(),
+            proof_profile_fields_fragment.as_bytes(),
             b"; generated-circuit-body-sha256=".as_slice(),
             generated_circuit_body_digest_hex.as_bytes(),
             b"; generated-circuit-body-byte-length=".as_slice(),
@@ -42991,8 +48540,12 @@ mod tests {
             arithmetic_air_constraint_system_artifact_hex.as_bytes(),
             b"; native-prover-payload-hex=".as_slice(),
             native_prover_payload_hex.as_bytes(),
+            b"; prover-native-payload-digest=".as_slice(),
+            prover_native_payload_digest_hex.as_bytes(),
             b"; native-verifier-payload-hex=".as_slice(),
             native_verifier_payload_hex.as_bytes(),
+            b"; verifier-native-payload-digest=".as_slice(),
+            verifier_native_payload_digest_hex.as_bytes(),
             b"; prover-key-artifact-hex=".as_slice(),
             prover_key_artifact_hex.as_bytes(),
             b"; verifier-key-artifact-hex=".as_slice(),
@@ -43100,6 +48653,16 @@ mod tests {
             Hash::prehashed(evidence.verifier_key.generated_circuit_body_digest),
             "release audit signoff payload generated-body digest must match verifier-key evidence"
         );
+        assert_eq!(
+            signoff.payload.prover_native_payload_digest,
+            Hash::prehashed(evidence.prover_key.native_payload_digest),
+            "release audit signoff payload must bind the native prover payload digest"
+        );
+        assert_eq!(
+            signoff.payload.verifier_native_payload_digest,
+            Hash::prehashed(evidence.verifier_key.native_payload_digest),
+            "release audit signoff payload must bind the native verifier payload digest"
+        );
         let mut stale_source_chain_signoff_payload = signoff.payload.clone();
         stale_source_chain_signoff_payload.centered_scale_round_source_chain_digest =
             Hash::new(b"stale-release-audit-signoff-centered-source-chain-digest");
@@ -43167,6 +48730,35 @@ mod tests {
             ),
             "generated circuit body digest mismatch",
             "release audit signoff/evidence binding must reject well-signed generated-body digest drift",
+        );
+        let mut stale_native_payload_digest_signoff_payload = signoff.payload.clone();
+        stale_native_payload_digest_signoff_payload.prover_native_payload_digest =
+            Hash::new(b"stale-release-audit-signoff-prover-native-payload-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
+                &stale_native_payload_digest_signoff_payload,
+                &evidence,
+            ),
+            "prover native payload digest mismatch",
+            "release audit signoff payloads must reject native prover payload digest drift against evidence",
+        );
+        let stale_native_payload_digest_signature = SignatureOf::try_new(
+            reviewer_key_pair.private_key(),
+            &stale_native_payload_digest_signoff_payload,
+        )
+        .expect("fixture reviewer signs stale native payload digest signoff payload");
+        let stale_native_payload_digest_signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
+            payload: stale_native_payload_digest_signoff_payload,
+            signature: stale_native_payload_digest_signature,
+            ..signoff.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(
+                &stale_native_payload_digest_signoff,
+                &evidence,
+            ),
+            "prover native payload digest mismatch",
+            "release audit signoff/evidence binding must reject well-signed native payload digest drift",
         );
         validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
             &params, &material, &artifacts, &signoff,
@@ -43359,11 +48951,32 @@ mod tests {
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditSignoffV1>(&signoff_bytes)
                 .expect("decode audit signoff");
         assert_eq!(decoded_signoff, signoff);
+        let safely_decoded_signoff =
+            decode_bfv_full_bootstrap_release_audit_signoff_bytes_v1(&signoff_bytes)
+                .expect("safe canonical release audit signoff decode");
+        assert_eq!(safely_decoded_signoff, signoff);
         validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(
             &decoded_signoff,
             &evidence,
         )
         .expect("decoded signed release audit signoff matches evidence");
+        let compressed_signoff_bytes =
+            norito::to_compressed_bytes(&signoff, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed release audit signoff");
+        assert_ne!(
+            compressed_signoff_bytes, signoff_bytes,
+            "compressed release audit signoff must differ from canonical v1 bytes"
+        );
+        let decoded_compressed_signoff = norito::decode_from_bytes::<
+            BfvFullBootstrapReleaseAuditSignoffV1,
+        >(&compressed_signoff_bytes)
+        .expect("compressed release audit signoff must decode structurally");
+        assert_eq!(decoded_compressed_signoff, signoff);
+        assert_error_contains(
+            decode_bfv_full_bootstrap_release_audit_signoff_bytes_v1(&compressed_signoff_bytes),
+            "canonical v1 bytes",
+            "safe release audit signoff byte admission must reject noncanonical compressed Norito framing",
+        );
 
         let record = bfv_full_bootstrap_release_audit_record_v1(
             &params,
@@ -43451,6 +49064,10 @@ mod tests {
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditRecordV1>(&record_bytes)
                 .expect("decode audit record");
         assert_eq!(decoded_record, record);
+        let safely_decoded_record =
+            decode_bfv_full_bootstrap_release_audit_record_bytes_v1(&record_bytes)
+                .expect("safe canonical release audit record decode");
+        assert_eq!(safely_decoded_record, record);
         validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1(
             &params,
             &material,
@@ -43462,9 +49079,45 @@ mod tests {
             .expect("release audit record digest");
         assert_eq!(
             record_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_DIGEST_DOMAIN,
+                record_bytes.as_slice(),
+            ]),
+            "release audit record digest must hash self-describing typed record"
+        );
+        assert_eq!(
+            record_digest,
             bfv_full_bootstrap_release_audit_record_digest_v1(&decoded_record)
                 .expect("decoded release audit record digest"),
             "release audit record digest must survive canonical roundtrip"
+        );
+        assert_eq!(
+            record_digest,
+            bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(&record_bytes)
+                .expect("canonical release audit record byte digest"),
+            "safe byte digesting must hash the canonical release audit record"
+        );
+        let compressed_record_bytes =
+            norito::to_compressed_bytes(&record, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed release audit record");
+        assert_ne!(
+            compressed_record_bytes, record_bytes,
+            "compressed release audit record must differ from canonical v1 bytes"
+        );
+        let decoded_compressed_record = norito::decode_from_bytes::<
+            BfvFullBootstrapReleaseAuditRecordV1,
+        >(&compressed_record_bytes)
+        .expect("compressed release audit record must decode structurally");
+        assert_eq!(decoded_compressed_record, record);
+        assert_error_contains(
+            decode_bfv_full_bootstrap_release_audit_record_bytes_v1(&compressed_record_bytes),
+            "canonical v1 bytes",
+            "safe release audit record byte admission must reject noncanonical compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(&compressed_record_bytes),
+            "canonical v1 bytes",
+            "safe release audit record byte digesting must reject noncanonical compressed Norito framing before hashing",
         );
         assert_ne!(
             record_digest, digest,
@@ -43513,12 +49166,7 @@ mod tests {
             generated_circuit_body_digest_hex.as_bytes(),
             b"; proof-key-pair-commitment=".as_slice(),
             proof_key_pair_commitment_hex.as_bytes(),
-            b"; proof-profile-field-count=".as_slice(),
-            proof_profile_field_count.as_bytes(),
-            b"; proof-profile-requires-canonical-base-transcript-label=".as_slice(),
-            proof_profile_requires_canonical_base_transcript_label.as_bytes(),
-            b"; proof-profile-rejects-suffixed-transcript-label-aliases=".as_slice(),
-            proof_profile_rejects_suffixed_transcript_label_aliases.as_bytes(),
+            proof_profile_fields_fragment.as_bytes(),
         ]
         .concat();
         let generic_reviewer_archive_body = [
@@ -43532,12 +49180,7 @@ mod tests {
             arithmetic_trace_profile_digest_hex.as_bytes(),
             b"; arithmetic-air-constraint-system-digest=".as_slice(),
             arithmetic_air_constraint_system_digest_hex.as_bytes(),
-            b"; proof-profile-field-count=".as_slice(),
-            proof_profile_field_count.as_bytes(),
-            b"; proof-profile-requires-canonical-base-transcript-label=".as_slice(),
-            proof_profile_requires_canonical_base_transcript_label.as_bytes(),
-            b"; proof-profile-rejects-suffixed-transcript-label-aliases=".as_slice(),
-            proof_profile_rejects_suffixed_transcript_label_aliases.as_bytes(),
+            proof_profile_fields_fragment.as_bytes(),
             b"; generated-circuit-body-sha256=".as_slice(),
             generated_circuit_body_digest_hex.as_bytes(),
             b"; generated-circuit-body-byte-length=".as_slice(),
@@ -43560,8 +49203,12 @@ mod tests {
             arithmetic_air_constraint_system_artifact_hex.as_bytes(),
             b"; native-prover-payload-hex=".as_slice(),
             native_prover_payload_hex.as_bytes(),
+            b"; prover-native-payload-digest=".as_slice(),
+            prover_native_payload_digest_hex.as_bytes(),
             b"; native-verifier-payload-hex=".as_slice(),
             native_verifier_payload_hex.as_bytes(),
+            b"; verifier-native-payload-digest=".as_slice(),
+            verifier_native_payload_digest_hex.as_bytes(),
             b"; prover-key-artifact-hex=".as_slice(),
             prover_key_artifact_hex.as_bytes(),
             b"; verifier-key-artifact-hex=".as_slice(),
@@ -43664,6 +49311,113 @@ mod tests {
             ),
             "generated report must advertise suffixed transcript-label alias rejection"
         );
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_report_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_VERIFIER_TRACE_DIGEST_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated report must advertise verifier-owned trace material digest input"
+        );
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_report_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_PUBLIC_OPENING_MATERIAL_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated report must advertise typed public-opening material validation"
+        );
+        for (label, aliases, value) in [
+            (
+                "proof input material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_INPUT_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .proof_input_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "prover input material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROVER_INPUT_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .prover_input_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "AIR evaluation material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_EVALUATION_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .air_evaluation_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "public opening material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .public_opening_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "arithmetic trace material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_TRACE_MATERIAL_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .arithmetic_trace_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "arithmetic AIR constraint-system digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_CONSTRAINT_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .arithmetic_air_constraint_system_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "proof-key material commitment domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_MATERIAL_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .proof_key_material_commitment_domain
+                    .as_slice(),
+            ),
+            (
+                "proof-key pair commitment domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_PAIR_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .proof_key_pair_commitment_domain
+                    .as_slice(),
+            ),
+        ] {
+            assert!(
+                bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                    generated_report_body,
+                    aliases,
+                    &[value],
+                ),
+                "generated report must advertise proof-profile {label}"
+            );
+        }
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_report_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_RELEASE_PROVER_DOMAINS_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated report must advertise release-prover digest-domain separation"
+        );
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_report_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_PROOF_KEY_COMMITMENTS_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated report must advertise proof-key commitment-domain separation"
+        );
         let generated_archive_body = bfv_full_bootstrap_release_audit_artifact_body_v1(
             "generated BFV full-bootstrap release audit archive",
             &generated_audit_evidence_archive_bytes,
@@ -43694,6 +49448,113 @@ mod tests {
                 &[b"true".as_slice()],
             ),
             "generated archive must advertise suffixed transcript-label alias rejection"
+        );
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_archive_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_REQUIRES_VERIFIER_TRACE_DIGEST_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated archive must advertise verifier-owned trace material digest input"
+        );
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_archive_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VALIDATES_PUBLIC_OPENING_MATERIAL_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated archive must advertise typed public-opening material validation"
+        );
+        for (label, aliases, value) in [
+            (
+                "proof input material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_INPUT_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .proof_input_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "prover input material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROVER_INPUT_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .prover_input_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "AIR evaluation material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_EVALUATION_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .air_evaluation_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "public opening material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PUBLIC_OPENING_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .public_opening_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "arithmetic trace material digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_TRACE_MATERIAL_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .arithmetic_trace_material_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "arithmetic AIR constraint-system digest domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_AIR_CONSTRAINT_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .arithmetic_air_constraint_system_digest_domain
+                    .as_slice(),
+            ),
+            (
+                "proof-key material commitment domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_MATERIAL_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .proof_key_material_commitment_domain
+                    .as_slice(),
+            ),
+            (
+                "proof-key pair commitment domain",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_PROOF_KEY_PAIR_DOMAIN_LABEL_ALIASES,
+                evidence
+                    .proof_profile
+                    .proof_key_pair_commitment_domain
+                    .as_slice(),
+            ),
+        ] {
+            assert!(
+                bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                    generated_archive_body,
+                    aliases,
+                    &[value],
+                ),
+                "generated archive must advertise proof-profile {label}"
+            );
+        }
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_archive_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_RELEASE_PROVER_DOMAINS_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated archive must advertise release-prover digest-domain separation"
+        );
+        assert!(
+            bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
+                generated_archive_body,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_PROOF_KEY_COMMITMENTS_LABEL_ALIASES,
+                &[b"true".as_slice()],
+            ),
+            "generated archive must advertise proof-key commitment-domain separation"
         );
         assert!(
             bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
@@ -44677,7 +50538,91 @@ mod tests {
             "production-pinned release audit packages must reject archive markers copied into prose",
         );
         let line_delimited_release_audit_package = |delimiter: &[u8], context: &str| {
-            let line_delimited_audit_report_bytes = [
+            let append_line_delimited_proof_profile_domain_fields = |body: &mut Vec<u8>| {
+                for (label, value) in [
+                    (
+                        b"proof profile proof input material digest domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .proof_input_material_digest_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile prover input material digest domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .prover_input_material_digest_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile AIR evaluation material digest domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .air_evaluation_material_digest_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile public opening material digest domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .public_opening_material_digest_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile arithmetic trace material digest domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .arithmetic_trace_material_digest_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile arithmetic AIR constraint-system digest domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .arithmetic_air_constraint_system_digest_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile proof-key material commitment domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .proof_key_material_commitment_domain
+                            .as_slice(),
+                    ),
+                    (
+                        b"proof profile proof-key pair commitment domain".as_slice(),
+                        evidence
+                            .proof_profile
+                            .proof_key_pair_commitment_domain
+                            .as_slice(),
+                    ),
+                ] {
+                    body.extend_from_slice(delimiter);
+                    body.extend_from_slice(b" ");
+                    body.extend_from_slice(label);
+                    body.extend_from_slice(b"=");
+                    body.extend_from_slice(value);
+                }
+                let separates_release_prover = evidence
+                    .proof_profile
+                    .separates_release_prover_material_domains
+                    .to_string();
+                body.extend_from_slice(delimiter);
+                body.extend_from_slice(
+                    b" proof profile separates release-prover material domains=",
+                );
+                body.extend_from_slice(separates_release_prover.as_bytes());
+                let separates_proof_key = evidence
+                    .proof_profile
+                    .separates_proof_key_material_and_pair_commitments
+                    .to_string();
+                body.extend_from_slice(delimiter);
+                body.extend_from_slice(
+                    b" proof profile separates proof-key material and pair commitments=",
+                );
+                body.extend_from_slice(separates_proof_key.as_bytes());
+            };
+            let mut line_delimited_audit_report_bytes = [
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
                 b"external-review-approved: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap release audit report v1"
                     .as_slice(),
@@ -44694,14 +50639,62 @@ mod tests {
                 b" proof profile field count=".as_slice(),
                 proof_profile_field_count.as_bytes(),
                 delimiter,
+                b" proof profile public opening material version=".as_slice(),
+                proof_profile_public_opening_material_version.as_bytes(),
+                delimiter,
+                b" proof profile public opening material field count=".as_slice(),
+                proof_profile_public_opening_material_field_count.as_bytes(),
+                delimiter,
+                b" proof profile hash fn=".as_slice(),
+                proof_profile_hash_fn.as_bytes(),
+                delimiter,
+                b" proof profile n log2=".as_slice(),
+                proof_profile_n_log2.as_bytes(),
+                delimiter,
+                b" proof profile blowup log2=".as_slice(),
+                proof_profile_blowup_log2.as_bytes(),
+                delimiter,
+                b" proof profile fold arity=".as_slice(),
+                proof_profile_fold_arity.as_bytes(),
+                delimiter,
+                b" proof profile queries=".as_slice(),
+                proof_profile_queries.as_bytes(),
+                delimiter,
+                b" proof profile merkle arity=".as_slice(),
+                proof_profile_merkle_arity.as_bytes(),
+                delimiter,
                 b" proof profile requires canonical base transcript label=".as_slice(),
                 proof_profile_requires_canonical_base_transcript_label.as_bytes(),
                 delimiter,
                 b" proof profile rejects suffixed transcript-label aliases=".as_slice(),
                 proof_profile_rejects_suffixed_transcript_label_aliases.as_bytes(),
+                delimiter,
+                b" proof profile requires verifier-owned trace material digest=".as_slice(),
+                proof_profile_requires_verifier_owned_trace_material_digest.as_bytes(),
+                delimiter,
+                b" proof profile validates transcript public opening material=".as_slice(),
+                proof_profile_validates_transcript_public_opening_material.as_bytes(),
+                delimiter,
+                b" proof profile validates merkle path shape=".as_slice(),
+                proof_profile_validates_merkle_path_shape.as_bytes(),
+                delimiter,
+                b" proof profile validates merkle path roots=".as_slice(),
+                proof_profile_validates_merkle_path_roots.as_bytes(),
+                delimiter,
+                b" proof profile validates fri query chain=".as_slice(),
+                proof_profile_validates_fri_query_chain.as_bytes(),
+                delimiter,
+                b" proof profile binds first fri values to opened air values=".as_slice(),
+                proof_profile_binds_first_fri_values.as_bytes(),
+                delimiter,
+                b" proof profile binds fri queries to air commitment roots=".as_slice(),
+                proof_profile_binds_fri_queries_to_air_roots.as_bytes(),
             ]
             .concat();
-            let line_delimited_audit_evidence_archive_body = [
+            append_line_delimited_proof_profile_domain_fields(
+                &mut line_delimited_audit_report_bytes,
+            );
+            let mut line_delimited_audit_evidence_archive_body = [
                 b"external-review-evidence-archive: reviewer-id=sora-zk-audit-wg-2026 BFV full-bootstrap prover verifier evidence v1"
                     .as_slice(),
                 delimiter,
@@ -44723,11 +50716,56 @@ mod tests {
                 b" proof profile field count=".as_slice(),
                 proof_profile_field_count.as_bytes(),
                 delimiter,
+                b" proof profile public opening material version=".as_slice(),
+                proof_profile_public_opening_material_version.as_bytes(),
+                delimiter,
+                b" proof profile public opening material field count=".as_slice(),
+                proof_profile_public_opening_material_field_count.as_bytes(),
+                delimiter,
+                b" proof profile hash fn=".as_slice(),
+                proof_profile_hash_fn.as_bytes(),
+                delimiter,
+                b" proof profile n log2=".as_slice(),
+                proof_profile_n_log2.as_bytes(),
+                delimiter,
+                b" proof profile blowup log2=".as_slice(),
+                proof_profile_blowup_log2.as_bytes(),
+                delimiter,
+                b" proof profile fold arity=".as_slice(),
+                proof_profile_fold_arity.as_bytes(),
+                delimiter,
+                b" proof profile queries=".as_slice(),
+                proof_profile_queries.as_bytes(),
+                delimiter,
+                b" proof profile merkle arity=".as_slice(),
+                proof_profile_merkle_arity.as_bytes(),
+                delimiter,
                 b" proof profile requires canonical base transcript label=".as_slice(),
                 proof_profile_requires_canonical_base_transcript_label.as_bytes(),
                 delimiter,
                 b" proof profile rejects suffixed transcript-label aliases=".as_slice(),
                 proof_profile_rejects_suffixed_transcript_label_aliases.as_bytes(),
+                delimiter,
+                b" proof profile requires verifier-owned trace material digest=".as_slice(),
+                proof_profile_requires_verifier_owned_trace_material_digest.as_bytes(),
+                delimiter,
+                b" proof profile validates transcript public opening material=".as_slice(),
+                proof_profile_validates_transcript_public_opening_material.as_bytes(),
+                delimiter,
+                b" proof profile validates merkle path shape=".as_slice(),
+                proof_profile_validates_merkle_path_shape.as_bytes(),
+                delimiter,
+                b" proof profile validates merkle path roots=".as_slice(),
+                proof_profile_validates_merkle_path_roots.as_bytes(),
+                delimiter,
+                b" proof profile validates fri query chain=".as_slice(),
+                proof_profile_validates_fri_query_chain.as_bytes(),
+                delimiter,
+                b" proof profile binds first fri values to opened air values=".as_slice(),
+                proof_profile_binds_first_fri_values.as_bytes(),
+                delimiter,
+                b" proof profile binds fri queries to air commitment roots=".as_slice(),
+                proof_profile_binds_fri_queries_to_air_roots.as_bytes(),
                 delimiter,
                 b" generated circuit body digest=".as_slice(),
                 generated_circuit_body_digest_hex.as_bytes(),
@@ -44762,8 +50800,14 @@ mod tests {
                 b" native prover payload hex=".as_slice(),
                 native_prover_payload_hex.as_bytes(),
                 delimiter,
+                b" prover native payload digest=".as_slice(),
+                prover_native_payload_digest_hex.as_bytes(),
+                delimiter,
                 b" native verifier payload hex=".as_slice(),
                 native_verifier_payload_hex.as_bytes(),
+                delimiter,
+                b" verifier native payload digest=".as_slice(),
+                verifier_native_payload_digest_hex.as_bytes(),
                 delimiter,
                 b" prover key artifact hex=".as_slice(),
                 prover_key_artifact_hex.as_bytes(),
@@ -44784,6 +50828,9 @@ mod tests {
                 verifier_key_digest_hex.as_bytes(),
             ]
             .concat();
+            append_line_delimited_proof_profile_domain_fields(
+                &mut line_delimited_audit_evidence_archive_body,
+            );
             let line_delimited_audit_evidence_archive_bytes = [
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
                 line_delimited_audit_evidence_archive_body.as_slice(),
@@ -44896,10 +50943,60 @@ mod tests {
             .field_count
             .saturating_add(1)
             .to_string();
+        let stale_proof_profile_public_opening_material_version = evidence
+            .proof_profile
+            .public_opening_material_version
+            .saturating_add(1)
+            .to_string();
+        let stale_proof_profile_public_opening_material_field_count = evidence
+            .proof_profile
+            .public_opening_material_field_count
+            .saturating_add(1)
+            .to_string();
         let proof_profile_field_count_fragment =
             format!("; proof-profile-field-count={proof_profile_field_count}");
         let stale_proof_profile_field_count_fragment =
             format!("; proof-profile-field-count={stale_proof_profile_field_count}");
+        let proof_profile_public_opening_material_version_fragment = format!(
+            "; proof-profile-public-opening-material-version={proof_profile_public_opening_material_version}"
+        );
+        let stale_proof_profile_public_opening_material_version_fragment = format!(
+            "; proof-profile-public-opening-material-version={stale_proof_profile_public_opening_material_version}"
+        );
+        let proof_profile_public_opening_material_field_count_fragment = format!(
+            "; proof-profile-public-opening-material-field-count={proof_profile_public_opening_material_field_count}"
+        );
+        let stale_proof_profile_public_opening_material_field_count_fragment = format!(
+            "; proof-profile-public-opening-material-field-count={stale_proof_profile_public_opening_material_field_count}"
+        );
+        let stale_proof_profile_hash_fn = evidence.proof_profile.hash_fn.saturating_add(1);
+        let proof_profile_hash_fn_fragment =
+            format!("; proof-profile-hash-fn={proof_profile_hash_fn}");
+        let stale_proof_profile_hash_fn_fragment =
+            format!("; proof-profile-hash-fn={stale_proof_profile_hash_fn}");
+        let stale_proof_profile_queries = evidence.proof_profile.queries.saturating_add(1);
+        let proof_profile_queries_fragment =
+            format!("; proof-profile-queries={proof_profile_queries}");
+        let stale_proof_profile_queries_fragment =
+            format!("; proof-profile-queries={stale_proof_profile_queries}");
+        let proof_profile_n_log2_fragment =
+            format!("; proof-profile-n-log2={proof_profile_n_log2}");
+        let proof_profile_blowup_log2_fragment =
+            format!("; proof-profile-blowup-log2={proof_profile_blowup_log2}");
+        let stale_proof_profile_blowup_log2 = evidence.proof_profile.blowup_log2.saturating_add(1);
+        let stale_proof_profile_blowup_log2_fragment =
+            format!("; proof-profile-blowup-log2={stale_proof_profile_blowup_log2}");
+        let proof_profile_fold_arity_fragment =
+            format!("; proof-profile-fold-arity={proof_profile_fold_arity}");
+        let stale_proof_profile_fold_arity = evidence.proof_profile.fold_arity.saturating_add(1);
+        let stale_proof_profile_fold_arity_fragment =
+            format!("; proof-profile-fold-arity={stale_proof_profile_fold_arity}");
+        let proof_profile_merkle_arity_fragment =
+            format!("; proof-profile-merkle-arity={proof_profile_merkle_arity}");
+        let stale_proof_profile_merkle_arity =
+            evidence.proof_profile.merkle_arity.saturating_add(1);
+        let stale_proof_profile_merkle_arity_fragment =
+            format!("; proof-profile-merkle-arity={stale_proof_profile_merkle_arity}");
         let proof_profile_requires_base_fragment = format!(
             "; proof-profile-requires-canonical-base-transcript-label={proof_profile_requires_canonical_base_transcript_label}"
         );
@@ -44910,6 +51007,64 @@ mod tests {
         );
         let stale_proof_profile_rejects_suffixed_fragment =
             "; proof-profile-rejects-suffixed-transcript-label-aliases=false";
+        let proof_profile_requires_verifier_trace_digest_fragment = format!(
+            "; proof-profile-requires-verifier-owned-trace-material-digest={proof_profile_requires_verifier_owned_trace_material_digest}"
+        );
+        let stale_proof_profile_requires_verifier_trace_digest_fragment =
+            "; proof-profile-requires-verifier-owned-trace-material-digest=false";
+        let proof_profile_validates_public_opening_fragment = format!(
+            "; proof-profile-validates-transcript-public-opening-material={proof_profile_validates_transcript_public_opening_material}"
+        );
+        let stale_proof_profile_validates_public_opening_fragment =
+            "; proof-profile-validates-transcript-public-opening-material=false";
+        let proof_profile_validates_merkle_path_roots_fragment = format!(
+            "; proof-profile-validates-merkle-path-roots={proof_profile_validates_merkle_path_roots}"
+        );
+        let stale_proof_profile_validates_merkle_path_roots_fragment =
+            "; proof-profile-validates-merkle-path-roots=false";
+        let proof_profile_validates_fri_query_chain_fragment = format!(
+            "; proof-profile-validates-fri-query-chain={proof_profile_validates_fri_query_chain}"
+        );
+        let stale_proof_profile_validates_fri_query_chain_fragment =
+            "; proof-profile-validates-fri-query-chain=false";
+        let proof_profile_prover_input_domain =
+            std::str::from_utf8(&evidence.proof_profile.prover_input_material_digest_domain)
+                .expect("proof-profile prover input digest domain is UTF-8");
+        let proof_profile_prover_input_domain_fragment = format!(
+            "; proof-profile-prover-input-material-digest-domain={proof_profile_prover_input_domain}"
+        );
+        let stale_proof_profile_prover_input_domain_fragment = "; proof-profile-prover-input-material-digest-domain=wrong-full-bootstrap-prover-input-domain";
+        let proof_profile_air_constraint_domain = std::str::from_utf8(
+            &evidence
+                .proof_profile
+                .arithmetic_air_constraint_system_digest_domain,
+        )
+        .expect("proof-profile AIR constraint-system digest domain is UTF-8");
+        let proof_profile_air_constraint_domain_fragment = format!(
+            "; proof-profile-arithmetic-air-constraint-system-digest-domain={proof_profile_air_constraint_domain}"
+        );
+        let proof_profile_public_opening_domain =
+            std::str::from_utf8(&evidence.proof_profile.public_opening_material_digest_domain)
+                .expect("proof-profile public opening material digest domain is UTF-8");
+        let proof_profile_public_opening_domain_fragment = format!(
+            "; proof-profile-public-opening-material-digest-domain={proof_profile_public_opening_domain}"
+        );
+        let stale_proof_profile_public_opening_domain_fragment = "; proof-profile-public-opening-material-digest-domain=wrong-full-bootstrap-public-opening-domain";
+        let proof_profile_proof_key_pair_domain =
+            std::str::from_utf8(&evidence.proof_profile.proof_key_pair_commitment_domain)
+                .expect("proof-profile proof-key pair commitment domain is UTF-8");
+        let proof_profile_proof_key_pair_domain_fragment = format!(
+            "; proof-profile-proof-key-pair-commitment-domain={proof_profile_proof_key_pair_domain}"
+        );
+        let stale_proof_profile_proof_key_pair_domain_fragment = "; proof-profile-proof-key-pair-commitment-domain=wrong-full-bootstrap-proof-key-pair-domain";
+        let proof_profile_separates_release_prover_fragment = format!(
+            "; proof-profile-separates-release-prover-material-domains={}",
+            evidence
+                .proof_profile
+                .separates_release_prover_material_domains
+        );
+        let stale_proof_profile_separates_release_prover_fragment =
+            "; proof-profile-separates-release-prover-material-domains=false";
         let arithmetic_trace_profile_digest_fragment =
             format!("; arithmetic-trace-profile-digest={arithmetic_trace_profile_digest_hex}");
         let arithmetic_air_constraint_system_digest_fragment = format!(
@@ -44943,6 +51098,68 @@ mod tests {
             "proof profile field count",
             "release audit packages must reject signed reports with stale proof-profile field counts",
         );
+        let signed_report_without_public_opening_material_version_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_public_opening_material_version_fragment,
+                    "",
+                ),
+                "build signed report missing proof-profile public-opening material version",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_without_public_opening_material_version_package,
+            ),
+            "public opening material version",
+            "release audit packages must reject signed reports that omit the proof-profile public-opening material version",
+        );
+        let signed_report_with_stale_public_opening_material_field_count_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_public_opening_material_field_count_fragment,
+                    &stale_proof_profile_public_opening_material_field_count_fragment,
+                ),
+                "build signed report with stale proof-profile public-opening material field count",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_stale_public_opening_material_field_count_package,
+            ),
+            "public opening material field count",
+            "release audit packages must reject signed reports with stale proof-profile public-opening material field counts",
+        );
+        let signed_report_with_stale_hash_fn_package = signed_package_with_report_bytes(
+            replace_ascii_once(
+                &audit_report_bytes,
+                &proof_profile_hash_fn_fragment,
+                &stale_proof_profile_hash_fn_fragment,
+            ),
+            "build signed report with stale proof-profile STARK hash selector",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_stale_hash_fn_package,
+            ),
+            "STARK hash selector",
+            "release audit packages must reject signed reports with stale proof-profile STARK hash selectors",
+        );
+        let signed_report_with_stale_queries_package = signed_package_with_report_bytes(
+            replace_ascii_once(
+                &audit_report_bytes,
+                &proof_profile_queries_fragment,
+                &stale_proof_profile_queries_fragment,
+            ),
+            "build signed report with stale proof-profile FRI query count",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_stale_queries_package,
+            ),
+            "FRI query count",
+            "release audit packages must reject signed reports with stale proof-profile FRI query counts",
+        );
         let signed_report_with_downgraded_base_label_obligation_package =
             signed_package_with_report_bytes(
                 replace_ascii_once(
@@ -44974,6 +51191,116 @@ mod tests {
             ),
             "suffixed transcript-label",
             "release audit packages must reject signed reports with downgraded suffixed transcript-label obligations",
+        );
+        let signed_report_with_downgraded_verifier_trace_digest_obligation_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_requires_verifier_trace_digest_fragment,
+                    stale_proof_profile_requires_verifier_trace_digest_fragment,
+                ),
+                "build signed report with downgraded verifier-owned trace-material digest obligation",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_downgraded_verifier_trace_digest_obligation_package,
+            ),
+            "verifier-owned trace-material digest",
+            "release audit packages must reject signed reports with downgraded verifier-owned trace-material digest obligations",
+        );
+        let signed_report_with_downgraded_public_opening_obligation_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_validates_public_opening_fragment,
+                    stale_proof_profile_validates_public_opening_fragment,
+                ),
+                "build signed report with downgraded public-opening material obligation",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_downgraded_public_opening_obligation_package,
+            ),
+            "transcript public-opening material",
+            "release audit packages must reject signed reports with downgraded public-opening material obligations",
+        );
+        let signed_report_with_downgraded_fri_query_chain_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_validates_fri_query_chain_fragment,
+                    stale_proof_profile_validates_fri_query_chain_fragment,
+                ),
+                "build signed report with downgraded FRI query-chain validation obligation",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_downgraded_fri_query_chain_package,
+            ),
+            "FRI query-chain",
+            "release audit packages must reject signed reports with downgraded FRI query-chain validation obligations",
+        );
+        let signed_report_without_prover_input_domain_package = signed_package_with_report_bytes(
+            replace_ascii_once(
+                &audit_report_bytes,
+                &proof_profile_prover_input_domain_fragment,
+                "",
+            ),
+            "build signed report missing proof-profile prover input digest domain",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_without_prover_input_domain_package,
+            ),
+            "prover input material digest domain",
+            "release audit packages must reject signed reports that omit proof-profile release-prover digest domains",
+        );
+        let signed_report_with_stale_prover_input_domain_package = signed_package_with_report_bytes(
+            replace_ascii_once(
+                &audit_report_bytes,
+                &proof_profile_prover_input_domain_fragment,
+                stale_proof_profile_prover_input_domain_fragment,
+            ),
+            "build signed report with stale proof-profile prover input digest domain",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_stale_prover_input_domain_package,
+            ),
+            "prover input material digest domain",
+            "release audit packages must reject signed reports with stale proof-profile release-prover digest domains",
+        );
+        let signed_report_with_stale_public_opening_domain_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_public_opening_domain_fragment,
+                    stale_proof_profile_public_opening_domain_fragment,
+                ),
+                "build signed report with stale proof-profile public opening material digest domain",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_stale_public_opening_domain_package,
+            ),
+            "public opening material digest domain",
+            "release audit packages must reject signed reports with stale proof-profile public opening material domains",
+        );
+        let signed_report_with_stale_proof_key_pair_domain_package =
+            signed_package_with_report_bytes(
+                replace_ascii_once(
+                    &audit_report_bytes,
+                    &proof_profile_proof_key_pair_domain_fragment,
+                    stale_proof_profile_proof_key_pair_domain_fragment,
+                ),
+                "build signed report with stale proof-profile proof-key pair commitment domain",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_report_with_stale_proof_key_pair_domain_package,
+            ),
+            "proof-key pair commitment domain",
+            "release audit packages must reject signed reports with stale proof-profile proof-key commitment domains",
         );
         let uppercase_release_evidence_digest_hex =
             release_evidence_digest_hex.to_ascii_uppercase();
@@ -45348,6 +51675,98 @@ mod tests {
             "proof profile field count",
             "release audit packages must reject signed evidence archives with stale proof-profile field counts",
         );
+        let signed_archive_with_stale_public_opening_material_version_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_public_opening_material_version_fragment,
+                    &stale_proof_profile_public_opening_material_version_fragment,
+                ),
+                "build signed archive with stale proof-profile public-opening material version",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_stale_public_opening_material_version_package,
+            ),
+            "public opening material version",
+            "release audit packages must reject signed evidence archives with stale proof-profile public-opening material versions",
+        );
+        let signed_archive_without_public_opening_material_field_count_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_public_opening_material_field_count_fragment,
+                    "",
+                ),
+                "build signed archive missing proof-profile public-opening material field count",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_without_public_opening_material_field_count_package,
+            ),
+            "public opening material field count",
+            "release audit packages must reject signed evidence archives that omit the proof-profile public-opening material field count",
+        );
+        let signed_archive_without_n_log2_package = signed_package_with_archive_bytes(
+            replace_ascii_once(
+                &audit_evidence_archive_bytes,
+                &proof_profile_n_log2_fragment,
+                "",
+            ),
+            "build signed archive missing proof-profile STARK n_log2",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_without_n_log2_package,
+            ),
+            "STARK n_log2",
+            "release audit packages must reject signed evidence archives that omit proof-profile STARK domain size",
+        );
+        let signed_archive_with_stale_blowup_log2_package = signed_package_with_archive_bytes(
+            replace_ascii_once(
+                &audit_evidence_archive_bytes,
+                &proof_profile_blowup_log2_fragment,
+                &stale_proof_profile_blowup_log2_fragment,
+            ),
+            "build signed archive with stale proof-profile STARK blowup log2",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_stale_blowup_log2_package,
+            ),
+            "STARK blowup log2",
+            "release audit packages must reject signed evidence archives with stale proof-profile STARK blowup factors",
+        );
+        let signed_archive_with_stale_fold_arity_package = signed_package_with_archive_bytes(
+            replace_ascii_once(
+                &audit_evidence_archive_bytes,
+                &proof_profile_fold_arity_fragment,
+                &stale_proof_profile_fold_arity_fragment,
+            ),
+            "build signed archive with stale proof-profile FRI fold arity",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_stale_fold_arity_package,
+            ),
+            "FRI fold arity",
+            "release audit packages must reject signed evidence archives with stale proof-profile FRI fold arities",
+        );
+        let signed_archive_with_stale_merkle_arity_package = signed_package_with_archive_bytes(
+            replace_ascii_once(
+                &audit_evidence_archive_bytes,
+                &proof_profile_merkle_arity_fragment,
+                &stale_proof_profile_merkle_arity_fragment,
+            ),
+            "build signed archive with stale proof-profile Merkle arity",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_stale_merkle_arity_package,
+            ),
+            "Merkle arity",
+            "release audit packages must reject signed evidence archives with stale proof-profile Merkle arities",
+        );
         let signed_archive_with_downgraded_base_label_obligation_package =
             signed_package_with_archive_bytes(
                 replace_ascii_once(
@@ -45379,6 +51798,101 @@ mod tests {
             ),
             "suffixed transcript-label",
             "release audit packages must reject signed evidence archives with downgraded suffixed transcript-label obligations",
+        );
+        let signed_archive_with_downgraded_verifier_trace_digest_obligation_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_requires_verifier_trace_digest_fragment,
+                    stale_proof_profile_requires_verifier_trace_digest_fragment,
+                ),
+                "build signed archive with downgraded verifier-owned trace-material digest obligation",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_downgraded_verifier_trace_digest_obligation_package,
+            ),
+            "verifier-owned trace-material digest",
+            "release audit packages must reject signed evidence archives with downgraded verifier-owned trace-material digest obligations",
+        );
+        let signed_archive_with_downgraded_public_opening_obligation_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_validates_public_opening_fragment,
+                    stale_proof_profile_validates_public_opening_fragment,
+                ),
+                "build signed archive with downgraded public-opening material obligation",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_downgraded_public_opening_obligation_package,
+            ),
+            "transcript public-opening material",
+            "release audit packages must reject signed evidence archives with downgraded public-opening material obligations",
+        );
+        let signed_archive_with_downgraded_merkle_roots_package = signed_package_with_archive_bytes(
+            replace_ascii_once(
+                &audit_evidence_archive_bytes,
+                &proof_profile_validates_merkle_path_roots_fragment,
+                stale_proof_profile_validates_merkle_path_roots_fragment,
+            ),
+            "build signed archive with downgraded Merkle path root validation obligation",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_downgraded_merkle_roots_package,
+            ),
+            "Merkle path root",
+            "release audit packages must reject signed evidence archives with downgraded Merkle path root validation obligations",
+        );
+        let signed_archive_without_air_constraint_domain_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_air_constraint_domain_fragment,
+                    "",
+                ),
+                "build signed archive missing proof-profile AIR constraint-system digest domain",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_without_air_constraint_domain_package,
+            ),
+            "arithmetic AIR constraint-system digest domain",
+            "release audit packages must reject signed evidence archives that omit proof-profile release-prover digest domains",
+        );
+        let signed_archive_with_stale_public_opening_domain_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_public_opening_domain_fragment,
+                    stale_proof_profile_public_opening_domain_fragment,
+                ),
+                "build signed archive with stale proof-profile public opening material digest domain",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_stale_public_opening_domain_package,
+            ),
+            "public opening material digest domain",
+            "release audit packages must reject signed evidence archives with stale proof-profile public opening material domains",
+        );
+        let signed_archive_with_downgraded_release_prover_domain_separation_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &proof_profile_separates_release_prover_fragment,
+                    stale_proof_profile_separates_release_prover_fragment,
+                ),
+                "build signed archive with downgraded proof-profile release-prover domain separation",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_downgraded_release_prover_domain_separation_package,
+            ),
+            "release-prover domain-separation",
+            "release audit packages must reject signed evidence archives with downgraded proof-profile release-prover domain separation",
         );
         let signed_archive_without_trace_profile_digest_package = signed_package_with_archive_bytes(
             replace_ascii_once(
@@ -45803,6 +52317,45 @@ mod tests {
             "native prover payload hex",
             "release audit packages must reject signed evidence archives that omit native prover payload bytes",
         );
+        let signed_archive_with_uppercase_native_prover_payload_label_package =
+            signed_package_with_archive_bytes(
+                [
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                    b"external-review-evidence-archive: BFV full-bootstrap prover verifier evidence v1; artifact-bundle-digest=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                    b"; evaluator-artifact-set-digest=".as_slice(),
+                    evaluator_artifact_set_digest_hex.as_bytes(),
+                    b"; centered-source-chain-digest=".as_slice(),
+                    centered_source_chain_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-sha256=".as_slice(),
+                    generated_circuit_body_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-byte-length=".as_slice(),
+                    generated_circuit_body_byte_length.as_bytes(),
+                    b"; generated-circuit-body-hex=".as_slice(),
+                    generated_circuit_body_hex.as_bytes(),
+                    b"; NATIVE-PROVER-PAYLOAD-HEX=".as_slice(),
+                    native_prover_payload_hex.as_bytes(),
+                    b"; native-verifier-payload-hex=".as_slice(),
+                    native_verifier_payload_hex.as_bytes(),
+                    b"; native-circuit-fingerprint=".as_slice(),
+                    native_circuit_fingerprint_hex.as_bytes(),
+                    b"; proof-key-pair-commitment=".as_slice(),
+                    proof_key_pair_commitment_hex.as_bytes(),
+                    b"; prover-key-digest=".as_slice(),
+                    prover_key_digest_hex.as_bytes(),
+                    b"; verifier-key-digest=".as_slice(),
+                    verifier_key_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "build signed record for archive with uppercase native prover payload hex label",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_uppercase_native_prover_payload_label_package,
+            ),
+            "native prover payload hex",
+            "release audit packages must reject uppercase native prover payload hex labels",
+        );
         let mut stale_native_prover_payload = native_prover_payload.clone();
         stale_native_prover_payload[0] ^= 0x01;
         let stale_native_prover_payload_hex = hex::encode(stale_native_prover_payload);
@@ -45845,6 +52398,46 @@ mod tests {
             "native prover payload hex",
             "release audit packages must reject signed evidence archives with stale native prover payload bytes",
         );
+        let uppercase_native_prover_payload_hex = native_prover_payload_hex.to_ascii_uppercase();
+        let signed_archive_with_uppercase_native_prover_payload_hex_package =
+            signed_package_with_archive_bytes(
+                [
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                    b"external-review-evidence-archive: BFV full-bootstrap prover verifier evidence v1; artifact-bundle-digest=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                    b"; evaluator-artifact-set-digest=".as_slice(),
+                    evaluator_artifact_set_digest_hex.as_bytes(),
+                    b"; centered-source-chain-digest=".as_slice(),
+                    centered_source_chain_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-sha256=".as_slice(),
+                    generated_circuit_body_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-byte-length=".as_slice(),
+                    generated_circuit_body_byte_length.as_bytes(),
+                    b"; generated-circuit-body-hex=".as_slice(),
+                    generated_circuit_body_hex.as_bytes(),
+                    b"; native-prover-payload-hex=".as_slice(),
+                    uppercase_native_prover_payload_hex.as_bytes(),
+                    b"; native-verifier-payload-hex=".as_slice(),
+                    native_verifier_payload_hex.as_bytes(),
+                    b"; native-circuit-fingerprint=".as_slice(),
+                    native_circuit_fingerprint_hex.as_bytes(),
+                    b"; proof-key-pair-commitment=".as_slice(),
+                    proof_key_pair_commitment_hex.as_bytes(),
+                    b"; prover-key-digest=".as_slice(),
+                    prover_key_digest_hex.as_bytes(),
+                    b"; verifier-key-digest=".as_slice(),
+                    verifier_key_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "build signed record for archive with uppercase native prover payload hex",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_uppercase_native_prover_payload_hex_package,
+            ),
+            "native prover payload hex",
+            "release audit packages must reject uppercase native prover payload hex",
+        );
         let signed_archive_without_native_verifier_payload_hex_package =
             signed_package_with_archive_bytes(
                 [
@@ -45881,6 +52474,45 @@ mod tests {
             ),
             "native verifier payload hex",
             "release audit packages must reject signed evidence archives that omit native verifier payload bytes",
+        );
+        let signed_archive_with_colon_native_verifier_payload_label_package =
+            signed_package_with_archive_bytes(
+                [
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                    b"external-review-evidence-archive: BFV full-bootstrap prover verifier evidence v1; artifact-bundle-digest=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                    b"; evaluator-artifact-set-digest=".as_slice(),
+                    evaluator_artifact_set_digest_hex.as_bytes(),
+                    b"; centered-source-chain-digest=".as_slice(),
+                    centered_source_chain_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-sha256=".as_slice(),
+                    generated_circuit_body_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-byte-length=".as_slice(),
+                    generated_circuit_body_byte_length.as_bytes(),
+                    b"; generated-circuit-body-hex=".as_slice(),
+                    generated_circuit_body_hex.as_bytes(),
+                    b"; native-prover-payload-hex=".as_slice(),
+                    native_prover_payload_hex.as_bytes(),
+                    b"; native-verifier-payload-hex: ".as_slice(),
+                    native_verifier_payload_hex.as_bytes(),
+                    b"; native-circuit-fingerprint=".as_slice(),
+                    native_circuit_fingerprint_hex.as_bytes(),
+                    b"; proof-key-pair-commitment=".as_slice(),
+                    proof_key_pair_commitment_hex.as_bytes(),
+                    b"; prover-key-digest=".as_slice(),
+                    prover_key_digest_hex.as_bytes(),
+                    b"; verifier-key-digest=".as_slice(),
+                    verifier_key_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "build signed record for archive with colon native verifier payload hex label",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_colon_native_verifier_payload_label_package,
+            ),
+            "native verifier payload hex",
+            "release audit packages must reject colon-separated native verifier payload hex labels",
         );
         let mut stale_native_verifier_payload = native_verifier_payload.clone();
         stale_native_verifier_payload[0] ^= 0x01;
@@ -45923,6 +52555,45 @@ mod tests {
             ),
             "native verifier payload hex",
             "release audit packages must reject signed evidence archives with stale native verifier payload bytes",
+        );
+        let signed_archive_with_raw_native_verifier_payload_package =
+            signed_package_with_archive_bytes(
+                [
+                    BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                    b"external-review-evidence-archive: BFV full-bootstrap prover verifier evidence v1; artifact-bundle-digest=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                    b"; evaluator-artifact-set-digest=".as_slice(),
+                    evaluator_artifact_set_digest_hex.as_bytes(),
+                    b"; centered-source-chain-digest=".as_slice(),
+                    centered_source_chain_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-sha256=".as_slice(),
+                    generated_circuit_body_digest_hex.as_bytes(),
+                    b"; generated-circuit-body-byte-length=".as_slice(),
+                    generated_circuit_body_byte_length.as_bytes(),
+                    b"; generated-circuit-body-hex=".as_slice(),
+                    generated_circuit_body_hex.as_bytes(),
+                    b"; native-prover-payload-hex=".as_slice(),
+                    native_prover_payload_hex.as_bytes(),
+                    b"; native-verifier-payload-hex=".as_slice(),
+                    native_verifier_payload.as_slice(),
+                    b"; native-circuit-fingerprint=".as_slice(),
+                    native_circuit_fingerprint_hex.as_bytes(),
+                    b"; proof-key-pair-commitment=".as_slice(),
+                    proof_key_pair_commitment_hex.as_bytes(),
+                    b"; prover-key-digest=".as_slice(),
+                    prover_key_digest_hex.as_bytes(),
+                    b"; verifier-key-digest=".as_slice(),
+                    verifier_key_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "build signed record for archive with raw native verifier payload bytes",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_raw_native_verifier_payload_package,
+            ),
+            "native verifier payload hex",
+            "release audit packages must reject raw native verifier payload bytes in hex fields",
         );
         let signed_archive_without_prover_key_artifact_hex_package =
             signed_package_with_archive_bytes(
@@ -46230,6 +52901,48 @@ mod tests {
             ),
             "native verifier payload hex",
             "release audit packages must reject archives with same-value duplicate native verifier payload hex labels",
+        );
+        let prover_native_payload_digest_fragment =
+            format!("; prover-native-payload-digest={prover_native_payload_digest_hex}");
+        let signed_archive_without_prover_native_payload_digest_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &prover_native_payload_digest_fragment,
+                    "",
+                ),
+                "build signed archive missing prover native payload digest",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_without_prover_native_payload_digest_package,
+            ),
+            "prover native payload digest",
+            "release audit packages must reject evidence archives that omit the signed prover native payload digest",
+        );
+        let verifier_native_payload_digest_fragment =
+            format!("; verifier-native-payload-digest={verifier_native_payload_digest_hex}");
+        let stale_verifier_native_payload_digest_fragment = format!(
+            "; verifier-native-payload-digest={}",
+            hex::encode(<[u8; Hash::LENGTH]>::from(Hash::new(
+                b"stale-release-audit-archive-verifier-native-payload-digest"
+            )))
+        );
+        let signed_archive_with_stale_verifier_native_payload_digest_package =
+            signed_package_with_archive_bytes(
+                replace_ascii_once(
+                    &audit_evidence_archive_bytes,
+                    &verifier_native_payload_digest_fragment,
+                    &stale_verifier_native_payload_digest_fragment,
+                ),
+                "build signed archive with stale verifier native payload digest",
+            );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &signed_archive_with_stale_verifier_native_payload_digest_package,
+            ),
+            "verifier native payload digest",
+            "release audit packages must reject evidence archives with stale verifier native payload digests",
         );
         let signed_archive_without_artifact_bundle_digest_package =
             signed_package_with_archive_bytes(
@@ -47242,6 +53955,16 @@ mod tests {
             "release audit manifest generated-body digest must match verifier-key evidence"
         );
         assert_eq!(
+            manifest.prover_native_payload_digest,
+            Hash::prehashed(record.evidence.prover_key.native_payload_digest),
+            "release audit manifest must bind the native prover payload digest"
+        );
+        assert_eq!(
+            manifest.verifier_native_payload_digest,
+            Hash::prehashed(record.evidence.verifier_key.native_payload_digest),
+            "release audit manifest must bind the native verifier payload digest"
+        );
+        assert_eq!(
             manifest.centered_scale_round_source_chain_digest,
             record.evidence.centered_scale_round_source_chain_digest,
             "release audit manifest must bind the centered source-chain digest"
@@ -47263,11 +53986,26 @@ mod tests {
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditManifestV1>(&manifest_bytes)
                 .expect("decode audit manifest");
         assert_eq!(decoded_manifest, manifest);
+        let safely_decoded_manifest =
+            decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(&manifest_bytes)
+                .expect("safe canonical release audit manifest decode");
+        assert_eq!(safely_decoded_manifest, manifest);
         validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(
             &decoded_manifest,
             &record,
         )
         .expect("decoded release audit manifest matches signed record");
+        let mut stale_native_payload_manifest = manifest.clone();
+        stale_native_payload_manifest.verifier_native_payload_digest =
+            Hash::new(b"stale-release-audit-manifest-verifier-native-payload-digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(
+                &stale_native_payload_manifest,
+                &record,
+            ),
+            "verifier native payload digest mismatch",
+            "release audit manifest/record binding must reject native verifier payload digest drift",
+        );
         let manifest_reviewer_key_rejections = [
             (
                 "empty",
@@ -47397,6 +54135,14 @@ mod tests {
         let manifest_digest = bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)
             .expect("release audit manifest digest");
         assert_eq!(
+            manifest_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_DIGEST_DOMAIN,
+                manifest_bytes.as_slice(),
+            ]),
+            "release audit manifest digest must hash self-describing typed manifest"
+        );
+        assert_eq!(
             package.manifest_digest, manifest_digest,
             "release audit package must carry the canonical manifest digest"
         );
@@ -47405,6 +54151,36 @@ mod tests {
             bfv_full_bootstrap_release_audit_manifest_digest_v1(&decoded_manifest)
                 .expect("decoded release audit manifest digest"),
             "release audit manifest digest must survive canonical roundtrip"
+        );
+        assert_eq!(
+            manifest_digest,
+            bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(&manifest_bytes)
+                .expect("canonical release audit manifest byte digest"),
+            "safe byte digesting must hash the canonical release audit manifest"
+        );
+        let compressed_manifest_bytes =
+            norito::to_compressed_bytes(&manifest, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed release audit manifest");
+        assert_ne!(
+            compressed_manifest_bytes, manifest_bytes,
+            "compressed release audit manifest must differ from canonical v1 bytes"
+        );
+        let decoded_compressed_manifest = norito::decode_from_bytes::<
+            BfvFullBootstrapReleaseAuditManifestV1,
+        >(&compressed_manifest_bytes)
+        .expect("compressed release audit manifest must decode structurally");
+        assert_eq!(decoded_compressed_manifest, manifest);
+        assert_error_contains(
+            decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(&compressed_manifest_bytes),
+            "canonical v1 bytes",
+            "safe release audit manifest byte admission must reject noncanonical compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(
+                &compressed_manifest_bytes,
+            ),
+            "canonical v1 bytes",
+            "safe release audit manifest byte digesting must reject noncanonical compressed Norito framing before hashing",
         );
         assert_ne!(
             manifest_digest, record_digest,
@@ -47421,6 +54197,10 @@ mod tests {
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditPackageV1>(&package_bytes)
                 .expect("decode audit package");
         assert_eq!(decoded_package, package);
+        let safely_decoded_package =
+            decode_bfv_full_bootstrap_release_audit_package_bytes_v1(&package_bytes)
+                .expect("safe canonical release audit package decode");
+        assert_eq!(safely_decoded_package, package);
         validate_bfv_full_bootstrap_release_audit_package_for_artifacts_v1(
             &params,
             &material,
@@ -47432,9 +54212,47 @@ mod tests {
             .expect("release audit package digest");
         assert_eq!(
             package_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_DIGEST_DOMAIN,
+                package_bytes.as_slice(),
+            ]),
+            "release audit package digest must hash self-describing typed package"
+        );
+        assert_eq!(
+            package_digest,
             bfv_full_bootstrap_release_audit_package_digest_v1(&decoded_package)
                 .expect("decoded release audit package digest"),
             "release audit package digest must survive canonical roundtrip"
+        );
+        assert_eq!(
+            package_digest,
+            bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(&package_bytes)
+                .expect("canonical release audit package byte digest"),
+            "safe byte digesting must hash the canonical release audit package"
+        );
+        let compressed_package_bytes =
+            norito::to_compressed_bytes(&package, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed release audit package");
+        assert_ne!(
+            compressed_package_bytes, package_bytes,
+            "compressed release audit package must differ from canonical v1 bytes"
+        );
+        let decoded_compressed_package = norito::decode_from_bytes::<
+            BfvFullBootstrapReleaseAuditPackageV1,
+        >(&compressed_package_bytes)
+        .expect("compressed release audit package must decode structurally");
+        assert_eq!(decoded_compressed_package, package);
+        assert_error_contains(
+            decode_bfv_full_bootstrap_release_audit_package_bytes_v1(&compressed_package_bytes),
+            "canonical v1 bytes",
+            "safe release audit package byte admission must reject noncanonical compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(
+                &compressed_package_bytes,
+            ),
+            "canonical v1 bytes",
+            "safe release audit package byte digesting must reject noncanonical compressed Norito framing before hashing",
         );
         assert_ne!(
             package_digest, record_digest,
@@ -49537,8 +56355,12 @@ mod tests {
             arithmetic_air_constraint_system_artifact_hex.as_bytes(),
             b"; native-prover-payload-hex=".as_slice(),
             native_prover_payload_hex.as_bytes(),
+            b"; prover-native-payload-digest=".as_slice(),
+            prover_native_payload_digest_hex.as_bytes(),
             b"; native-verifier-payload-hex=".as_slice(),
             native_verifier_payload_hex.as_bytes(),
+            b"; verifier-native-payload-digest=".as_slice(),
+            verifier_native_payload_digest_hex.as_bytes(),
             b"; prover-key-artifact-hex=".as_slice(),
             prover_key_artifact_hex.as_bytes(),
             b"; verifier-key-artifact-hex=".as_slice(),
@@ -50009,6 +56831,63 @@ mod tests {
             ),
             "placeholder audit artifact",
             "release audit packages must reject signed binary-decorated placeholder evidence archive bodies",
+        );
+        let mut binary_fragmented_placeholder_report_body =
+            b"reviewer metadata\xffoperator your.proof audit report body".to_vec();
+        binary_fragmented_placeholder_report_body
+            .resize(BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES, b'x');
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_report_bytes_v1(
+                &binary_fragmented_placeholder_report_body,
+            ),
+            "placeholder audit artifact",
+            "release audit report byte builder must reject binary-fragmented placeholder bodies",
+        );
+        let mut binary_fragmented_placeholder_report_package = package.clone();
+        binary_fragmented_placeholder_report_package.audit_report_bytes = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            binary_fragmented_placeholder_report_body.as_slice(),
+        ]
+        .concat();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &binary_fragmented_placeholder_report_package,
+            ),
+            "placeholder audit artifact",
+            "release audit packages must reject signed binary-fragmented placeholder audit report bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &binary_fragmented_placeholder_report_package,
+            ),
+            "placeholder audit artifact",
+            "release audit package digesting must reject signed binary-fragmented placeholder audit report bodies",
+        );
+        let mut binary_fragmented_placeholder_archive_body =
+            b"reviewer metadata\xffoperator your.proof evidence archive body".to_vec();
+        binary_fragmented_placeholder_archive_body.resize(
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
+            b'x',
+        );
+        let mut binary_fragmented_placeholder_archive_package = package.clone();
+        binary_fragmented_placeholder_archive_package.audit_evidence_archive_bytes = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            binary_fragmented_placeholder_archive_body.as_slice(),
+        ]
+        .concat();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &binary_fragmented_placeholder_archive_package,
+            ),
+            "placeholder audit artifact",
+            "release audit packages must reject signed binary-fragmented placeholder evidence archive bodies",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &binary_fragmented_placeholder_archive_package,
+            ),
+            "placeholder audit artifact",
+            "release audit package digesting must reject signed binary-fragmented placeholder evidence archive bodies",
         );
         let short_body_report_package = signed_package_with_audit_artifacts(
             short_body_audit_report_bytes,
@@ -50720,6 +57599,68 @@ mod tests {
             "release audit evidence validation must reject proof profile AIR evaluation layout downgrades",
         );
 
+        let mut stale_release_prover_domain_profile_evidence = evidence.clone();
+        stale_release_prover_domain_profile_evidence
+            .proof_profile
+            .prover_input_material_digest_domain =
+            b"wrong-full-bootstrap-release-audit-prover-input-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_release_prover_domain_profile_evidence,
+            ),
+            "prover input material digest domain",
+            "release audit evidence validation must reject proof profile release-prover digest-domain drift",
+        );
+
+        let mut placeholder_release_prover_domain_profile_evidence = evidence.clone();
+        placeholder_release_prover_domain_profile_evidence
+            .proof_profile
+            .air_evaluation_material_digest_domain = b"replace_before_production".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &placeholder_release_prover_domain_profile_evidence,
+            ),
+            "placeholder text",
+            "release audit evidence validation must reject placeholder proof profile digest domains",
+        );
+
+        let mut missing_release_prover_domain_separation_evidence = evidence.clone();
+        missing_release_prover_domain_separation_evidence
+            .proof_profile
+            .separates_release_prover_material_domains = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &missing_release_prover_domain_separation_evidence,
+            ),
+            "separate release-prover material digest domains",
+            "release audit evidence validation must require release-prover digest-domain separation",
+        );
+
+        let mut stale_proof_key_commitment_domain_profile_evidence = evidence.clone();
+        stale_proof_key_commitment_domain_profile_evidence
+            .proof_profile
+            .proof_key_pair_commitment_domain =
+            b"wrong-full-bootstrap-proof-key-pair-commitment-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_proof_key_commitment_domain_profile_evidence,
+            ),
+            "proof-key pair commitment domain",
+            "release audit evidence validation must reject proof-key commitment-domain drift",
+        );
+
+        let mut missing_proof_key_commitment_domain_separation_evidence = evidence.clone();
+        missing_proof_key_commitment_domain_separation_evidence
+            .proof_profile
+            .separates_proof_key_material_and_pair_commitments = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &missing_proof_key_commitment_domain_separation_evidence,
+            ),
+            "separate proof-key material and pair commitment domains",
+            "release audit evidence validation must require proof-key commitment-domain separation",
+        );
+
         let mut downgraded_claim_support_evidence = evidence.clone();
         downgraded_claim_support_evidence
             .proof_profile
@@ -50794,6 +57735,10 @@ mod tests {
         expect_opening_policy_profile_downgrade_rejected!(
             validates_transcript_public_padding_openings,
             "transcript public-padding opening replay"
+        );
+        expect_opening_policy_profile_downgrade_rejected!(
+            requires_verifier_owned_trace_material_digest,
+            "verifier-owned trace material digest"
         );
         expect_opening_policy_profile_downgrade_rejected!(
             requires_canonical_base_transcript_label,
@@ -50994,8 +57939,8 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_evidence_v1(
                 &duplicate_payload_digest_evidence,
             ),
-            "distinct",
-            "release audit evidence validation must reject duplicated native payload digests",
+            "native payload digest mismatch",
+            "release audit evidence validation must reject duplicated native payload digests before they can alias canonical role payloads",
         );
 
         let mut aliased_payload_digest_evidence = evidence.clone();
@@ -51005,8 +57950,8 @@ mod tests {
             <[u8; Hash::LENGTH]>::from(aliased_payload_digest_evidence.proof_key_pair_commitment);
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_v1(&aliased_payload_digest_evidence),
-            "native payload digest must be distinct",
-            "release audit evidence validation must reject native payload digest aliasing with signed evidence commitments",
+            "native payload digest mismatch",
+            "release audit evidence validation must reject native payload digest aliasing with signed evidence commitments before they can replace canonical role payloads",
         );
 
         let mut empty_payload_digest_evidence = evidence.clone();
@@ -51483,8 +58428,74 @@ mod tests {
         );
         assert_eq!(
             digest.to_string(),
-            "c1833808081d238b4b164f21be13ffe555f4d24d71e513dec6f154a5579bf181",
+            "6611fb2fefe992db66f31f64da77ca6c1f511d6d675bbd4df18ee63cbf84febb",
             "canonical full-bootstrap artifact bundle digest drifted"
+        );
+        let bundle_digest_material = BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
+            version: BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1,
+            artifact_digest_count:
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
+            coefficient_to_slot_key_digest: material.coefficient_to_slot_key_digest,
+            slot_to_coefficient_key_digest: material.slot_to_coefficient_key_digest,
+            blind_rotation_key_digest: material.blind_rotation_key_digest,
+            sample_extraction_key_digest: material.sample_extraction_key_digest,
+            accumulator_digest: material.accumulator_digest,
+            proof_public_input_schema_digest: material.proof_public_input_schema_digest,
+            arithmetic_air_constraint_system_artifact_digest: material
+                .arithmetic_air_constraint_system_artifact_digest,
+            prover_key_digest: material.prover_key_digest,
+            verifier_key_digest: material.verifier_key_digest,
+        };
+        let bundle_digest_material_bytes = norito::to_bytes(&bundle_digest_material)
+            .expect("encode full-bootstrap artifact bundle digest material");
+        assert_eq!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN,
+                bundle_digest_material_bytes.as_slice(),
+            ]),
+            "full-bootstrap artifact bundle digest must hash self-describing typed material"
+        );
+        let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+            &params,
+            material.max_bootstrap_depth,
+            &artifacts.coefficient_to_slot_key,
+            &artifacts.slot_to_coefficient_key,
+            &artifacts.blind_rotation_key,
+            &artifacts.sample_extraction_key,
+            &artifacts.accumulator,
+            &artifacts.proof_public_input_schema,
+            &artifacts.arithmetic_air_constraint_system,
+        )
+        .expect("derive concrete evaluator artifact-set digest");
+        assert_eq!(
+            evaluator_artifact_set_digest,
+            bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(&params, &material)
+                .expect("derive governed evaluator artifact-set digest"),
+            "concrete and governed evaluator artifact-set digests must match"
+        );
+        let evaluator_digest_material =
+            bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
+                &params,
+                material.max_bootstrap_depth,
+                &artifacts.coefficient_to_slot_key,
+                &artifacts.slot_to_coefficient_key,
+                &artifacts.blind_rotation_key,
+                &artifacts.sample_extraction_key,
+                &artifacts.accumulator,
+                &artifacts.proof_public_input_schema,
+                &artifacts.arithmetic_air_constraint_system,
+            )
+            .expect("build evaluator artifact-set digest material");
+        let evaluator_digest_material_bytes = norito::to_bytes(&evaluator_digest_material)
+            .expect("encode evaluator artifact-set digest material");
+        assert_eq!(
+            evaluator_artifact_set_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
+                evaluator_digest_material_bytes.as_slice(),
+            ]),
+            "full-bootstrap evaluator artifact-set digest must hash self-describing typed material"
         );
         let mut placeholder_circuit_material = material.clone();
         placeholder_circuit_material.circuit_id = "replace_before_production".to_owned();
@@ -51542,22 +58553,9 @@ mod tests {
             "arithmetic AIR artifact digest",
             "circuit material validation must reject arithmetic AIR artifact digest drift",
         );
-        let mut placeholder_bundle_digest_material =
-            BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
-                version: BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1,
-                artifact_digest_count:
-                    BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
-                coefficient_to_slot_key_digest: material.coefficient_to_slot_key_digest,
-                slot_to_coefficient_key_digest: material.slot_to_coefficient_key_digest,
-                blind_rotation_key_digest: material.blind_rotation_key_digest,
-                sample_extraction_key_digest: material.sample_extraction_key_digest,
-                accumulator_digest: material.accumulator_digest,
-                proof_public_input_schema_digest: material.proof_public_input_schema_digest,
-                arithmetic_air_constraint_system_artifact_digest: material
-                    .arithmetic_air_constraint_system_artifact_digest,
-                prover_key_digest: Hash::new(b"placeholder full-bootstrap prover-key commitment"),
-                verifier_key_digest: material.verifier_key_digest,
-            };
+        let mut placeholder_bundle_digest_material = bundle_digest_material;
+        placeholder_bundle_digest_material.prover_key_digest =
+            Hash::new(b"placeholder full-bootstrap prover-key commitment");
         assert_error_contains(
             hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
                 &placeholder_bundle_digest_material,
@@ -51851,6 +58849,54 @@ mod tests {
             "Norito-encoded",
             "evaluator artifact-set digesting must reject malformed artifact envelopes",
         );
+        let coefficient_to_slot_envelope = norito::decode_from_bytes::<
+            BfvFullBootstrapCircuitArtifactPayloadV1,
+        >(&artifacts.coefficient_to_slot_key)
+        .expect("decode coefficient-to-slot artifact envelope for compression");
+        let compressed_coefficient_to_slot_envelope = norito::to_compressed_bytes(
+            &coefficient_to_slot_envelope,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed coefficient-to-slot artifact envelope");
+        assert_ne!(
+            compressed_coefficient_to_slot_envelope, artifacts.coefficient_to_slot_key,
+            "compressed coefficient-to-slot artifact envelope must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapCircuitArtifactPayloadV1 = norito::decode_from_bytes(
+            &compressed_coefficient_to_slot_envelope,
+        )
+        .expect("compressed coefficient-to-slot artifact envelope must decode structurally");
+        let mut compressed_envelope_artifacts = artifacts.clone();
+        compressed_envelope_artifacts.coefficient_to_slot_key =
+            compressed_coefficient_to_slot_envelope.clone();
+        let compressed_envelope_material = BfvFullBootstrapCircuitMaterialV1 {
+            coefficient_to_slot_key_digest: Hash::new(&compressed_coefficient_to_slot_envelope),
+            ..material.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                &params,
+                &compressed_envelope_material,
+                &compressed_envelope_artifacts,
+            ),
+            "canonical v1 envelope bytes",
+            "artifact bundles must reject noncanonical compressed artifact envelope framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                &params,
+                1,
+                &compressed_coefficient_to_slot_envelope,
+                &artifacts.slot_to_coefficient_key,
+                &artifacts.blind_rotation_key,
+                &artifacts.sample_extraction_key,
+                &artifacts.accumulator,
+                &artifacts.proof_public_input_schema,
+                &artifacts.arithmetic_air_constraint_system,
+            ),
+            "canonical v1 envelope bytes",
+            "evaluator artifact-set digesting must reject noncanonical compressed artifact envelope framing",
+        );
         let opaque_evaluator_artifact = sample_full_bootstrap_artifact_payload(
             &params,
             BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
@@ -51988,6 +59034,45 @@ mod tests {
             ),
             "arithmetic AIR artifact digest",
             "artifact bundles must reject stale arithmetic AIR contract material before payload decoding",
+        );
+        let canonical_air_material =
+            bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1();
+        let compressed_air_payload = norito::to_compressed_bytes(
+            &canonical_air_material,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed arithmetic AIR contract material");
+        assert_ne!(
+            compressed_air_payload,
+            norito::to_bytes(&canonical_air_material).expect("encode canonical AIR material"),
+            "compressed arithmetic AIR payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 =
+            norito::decode_from_bytes(&compressed_air_payload)
+                .expect("compressed arithmetic AIR payload must decode structurally");
+        let compressed_air_artifact = encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ArithmeticAirConstraintSystem,
+            &compressed_air_payload,
+        )
+        .expect("wrap compressed AIR contract artifact");
+        let mut compressed_air_artifacts = artifacts.clone();
+        compressed_air_artifacts.arithmetic_air_constraint_system = compressed_air_artifact;
+        let compressed_air_material_record = BfvFullBootstrapCircuitMaterialV1 {
+            arithmetic_air_constraint_system_artifact_digest: Hash::new(
+                &compressed_air_artifacts.arithmetic_air_constraint_system,
+            ),
+            ..material.clone()
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+                &params,
+                &compressed_air_material_record,
+                &compressed_air_artifacts.arithmetic_air_constraint_system,
+            ),
+            "canonical v1 bytes",
+            "arithmetic AIR artifact admission must reject noncanonical compressed payload framing",
         );
 
         let assert_valid_artifact_drift_changes_digest = |label: &str,
@@ -52682,6 +59767,35 @@ mod tests {
         )
         .expect("decode governed proof public-input schema artifact");
         assert_eq!(decoded_schema, schema);
+        let compressed_schema_payload =
+            norito::to_compressed_bytes(&schema, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed proof public-input schema payload");
+        assert_ne!(
+            compressed_schema_payload,
+            norito::to_bytes(&schema).expect("encode canonical schema payload"),
+            "compressed proof public-input schema payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapProofPublicInputSchemaV1 =
+            norito::decode_from_bytes(&compressed_schema_payload)
+                .expect("compressed proof public-input schema payload must decode structurally");
+        let compressed_schema_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
+            &compressed_schema_payload,
+        );
+        let compressed_schema_material = BfvFullBootstrapCircuitMaterialV1 {
+            proof_public_input_schema_digest: Hash::new(&compressed_schema_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+                &params,
+                &compressed_schema_material,
+                &compressed_schema_artifact,
+            ),
+            "canonical v1 bytes",
+            "proof public-input schema artifacts must reject noncanonical compressed Norito payload framing",
+        );
 
         let prover_key = BfvFullBootstrapProofKeyV1 {
             key_role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
@@ -52724,6 +59838,8 @@ mod tests {
             derives_opening_schedule_from_trace_material_digest: true,
             bounds_opening_schedule_rejection_sampling: true,
             validates_transcript_public_padding_openings: true,
+            validates_transcript_public_opening_material: true,
+            requires_verifier_owned_trace_material_digest: true,
             validates_merkle_path_shape: true,
             validates_merkle_path_roots: true,
             validates_fri_query_chain: true,
@@ -52763,13 +59879,6 @@ mod tests {
         let wrong_circuit_key = BfvFullBootstrapProofKeyV1 {
             circuit_id: "iroha_bfv_full_bootstrap_wrong_outer_key_v1".to_owned(),
             ..prover_key.clone()
-        };
-        let wrong_circuit_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_circuit_key,
-            )
-            .expect("wrong-circuit proof-key commitment"),
-            ..wrong_circuit_key
         };
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
@@ -52835,6 +59944,36 @@ mod tests {
         )
         .expect("decode governed prover-key artifact");
         assert_eq!(decoded_prover_key, prover_key);
+        let compressed_prover_key_payload =
+            norito::to_compressed_bytes(&prover_key, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed prover-key payload");
+        assert_ne!(
+            compressed_prover_key_payload,
+            norito::to_bytes(&prover_key).expect("encode canonical prover-key payload"),
+            "compressed prover-key payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapProofKeyV1 =
+            norito::decode_from_bytes(&compressed_prover_key_payload)
+                .expect("compressed prover-key payload must decode structurally");
+        let compressed_prover_key_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &compressed_prover_key_payload,
+        );
+        let compressed_prover_key_material = BfvFullBootstrapCircuitMaterialV1 {
+            prover_key_digest: Hash::new(&compressed_prover_key_artifact),
+            ..prover_material.clone()
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_artifact_v1(
+                &params,
+                &compressed_prover_key_material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &compressed_prover_key_artifact,
+            ),
+            "canonical v1 bytes",
+            "proof-key artifacts must reject noncanonical compressed Norito payload framing",
+        );
 
         let verifier_key = BfvFullBootstrapProofKeyV1 {
             key_role: BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
@@ -52877,6 +60016,8 @@ mod tests {
             derives_opening_schedule_from_trace_material_digest: true,
             bounds_opening_schedule_rejection_sampling: true,
             validates_transcript_public_padding_openings: true,
+            validates_transcript_public_opening_material: true,
+            requires_verifier_owned_trace_material_digest: true,
             validates_merkle_path_shape: true,
             validates_merkle_path_roots: true,
             validates_fri_query_chain: true,
@@ -53313,13 +60454,6 @@ mod tests {
             public_input_schema_digest: Hash::new(b"wrong-proof-public-input-schema"),
             ..prover_key.clone()
         };
-        let wrong_schema_digest_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_schema_digest_key,
-            )
-            .expect("wrong-schema key commitment"),
-            ..wrong_schema_digest_key
-        };
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
                 &material,
@@ -53335,13 +60469,6 @@ mod tests {
                 b"wrong-bfv-full-bootstrap-evaluator-artifact-set",
             ),
             ..prover_key.clone()
-        };
-        let wrong_evaluator_artifact_set_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_evaluator_artifact_set_key,
-            )
-            .expect("wrong-evaluator artifact-set key commitment"),
-            ..wrong_evaluator_artifact_set_key
         };
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
@@ -53653,17 +60780,19 @@ mod tests {
             Hash::new(b"mismatched-native-full-bootstrap-proof-key-pair-commitment");
         mismatched_native_prover_key.proof_key_pair_commitment = mismatched_pair_commitment;
         mismatched_native_verifier_key.proof_key_pair_commitment = mismatched_pair_commitment;
+        mismatched_native_prover_key.key_material_commitment =
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&mismatched_native_prover_key)
+                .expect("refresh internally consistent prover-key material commitment");
         mismatched_native_verifier_key.key_material =
             noncanonical_native_proof_key_material_envelope_for_key(
                 &mismatched_native_verifier_key,
                 "iroha_bfv_full_bootstrap_wrong_verifier_native_circuit_v1",
             );
-        mismatched_native_prover_key.key_material_commitment =
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&mismatched_native_prover_key)
-                .expect("refresh mismatched native prover commitment");
-        mismatched_native_verifier_key.key_material_commitment =
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&mismatched_native_verifier_key)
-                .expect("refresh mismatched native verifier commitment");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&mismatched_native_verifier_key),
+            "canonical",
+            "proof-key material commitments must reject noncanonical native verifier material before hashing",
+        );
         let mismatched_native_prover_payload = norito::to_bytes(&mismatched_native_prover_key)
             .expect("encode mismatched native prover-key payload");
         let mismatched_native_verifier_payload = norito::to_bytes(&mismatched_native_verifier_key)
@@ -53711,9 +60840,11 @@ mod tests {
                 &stale_computed_verifier_key,
                 "iroha_bfv_full_bootstrap_stale_computed_native_circuit_v1",
             );
-        stale_computed_verifier_key.key_material_commitment =
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&stale_computed_verifier_key)
-                .expect("refresh stale-computed verifier-key material commitment");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&stale_computed_verifier_key),
+            "canonical",
+            "proof-key material commitments must reject stale-computed native verifier material before hashing",
+        );
         let stale_computed_payload = norito::to_bytes(&stale_computed_verifier_key)
             .expect("encode stale-computed verifier-key payload");
         stale_computed_pair_artifacts.verifier_key =
@@ -53797,6 +60928,8 @@ mod tests {
             derives_opening_schedule_from_trace_material_digest: true,
             bounds_opening_schedule_rejection_sampling: true,
             validates_transcript_public_padding_openings: true,
+            validates_transcript_public_opening_material: true,
+            requires_verifier_owned_trace_material_digest: true,
             validates_merkle_path_shape: true,
             validates_merkle_path_roots: true,
             validates_fri_query_chain: true,
@@ -53840,6 +60973,59 @@ mod tests {
             )
             .expect("derive prover-key material commitment"),
             prover_key.key_material_commitment
+        );
+        let compressed_prover_key_payload =
+            norito::to_compressed_bytes(&prover_key, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed artifact-helper prover-key payload");
+        assert_ne!(
+            compressed_prover_key_payload,
+            norito::to_bytes(&prover_key).expect("encode canonical artifact-helper proof key"),
+            "compressed artifact-helper prover-key payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapProofKeyV1 =
+            norito::decode_from_bytes(&compressed_prover_key_payload)
+                .expect("compressed artifact-helper proof-key payload must decode structurally");
+        let compressed_prover_artifact = encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &compressed_prover_key_payload,
+        )
+        .expect("wrap compressed artifact-helper prover-key payload");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &compressed_prover_artifact,
+            ),
+            "canonical v1 bytes",
+            "artifact-derived proof-key commitments must reject noncanonical compressed Norito payload framing",
+        );
+        let prover_artifact_envelope =
+            norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(&prover_artifact)
+                .expect("decode prover-key artifact envelope for compression");
+        let compressed_prover_envelope = norito::to_compressed_bytes(
+            &prover_artifact_envelope,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed prover-key artifact envelope");
+        assert_ne!(
+            compressed_prover_envelope, prover_artifact,
+            "compressed prover-key artifact envelope must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapCircuitArtifactPayloadV1 =
+            norito::decode_from_bytes(&compressed_prover_envelope)
+                .expect("compressed prover-key artifact envelope must decode structurally");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &compressed_prover_envelope,
+            ),
+            "canonical v1 envelope bytes",
+            "artifact-derived proof-key commitments must reject noncanonical compressed envelope framing",
         );
         let mut placeholder_circuit_id_artifact =
             norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(&prover_artifact)
@@ -53992,13 +61178,6 @@ mod tests {
             parameter_digest: Hash::new(b"wrong-full-bootstrap-proof-key-parameter-profile"),
             ..prover_key.clone()
         };
-        let wrong_parameter_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_parameter_key,
-            )
-            .expect("wrong-parameter proof-key commitment"),
-            ..wrong_parameter_key
-        };
         assert_error_contains(
             encode_bfv_full_bootstrap_proof_key_artifact_v1(
                 &params,
@@ -54032,13 +61211,6 @@ mod tests {
         let wrong_depth_key = BfvFullBootstrapProofKeyV1 {
             max_bootstrap_depth: 2,
             ..prover_key.clone()
-        };
-        let wrong_depth_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_depth_key,
-            )
-            .expect("wrong-depth proof-key commitment"),
-            ..wrong_depth_key
         };
         assert_error_contains(
             encode_bfv_full_bootstrap_proof_key_artifact_v1(
@@ -54429,6 +61601,117 @@ mod tests {
     }
 
     #[test]
+    fn full_bootstrap_release_prover_contract_material_binds_public_opening_obligations() {
+        let material = bfv_full_bootstrap_release_prover_contract_material_v1();
+        validate_bfv_full_bootstrap_release_prover_contract_material_v1(&material)
+            .expect("canonical release-prover contract material validates");
+        let encoded = norito::to_bytes(&material).expect("encode release-prover contract material");
+        let decoded: BfvFullBootstrapReleaseProverContractMaterialV1 =
+            norito::decode_from_bytes(&encoded).expect("decode release-prover contract material");
+        assert_eq!(decoded, material);
+        let digest = bfv_full_bootstrap_release_prover_contract_digest_v1()
+            .expect("canonical release-prover contract digest");
+        assert_eq!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_DIGEST_DOMAIN,
+                encoded.as_slice(),
+            ]),
+            "release-prover contract digest must hash self-describing typed material"
+        );
+        validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
+            "test release-prover contract digest",
+            &digest,
+        )
+        .expect("canonical release-prover contract digest validates");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
+                "test release-prover contract digest",
+                &Hash::prehashed([0_u8; Hash::LENGTH]),
+            ),
+            "zero hash",
+            "release-prover contract digest validation must reject missing digests",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
+                "test release-prover contract digest",
+                &Hash::new(b"stale-bfv-full-bootstrap-release-prover-contract"),
+            ),
+            "mismatch",
+            "release-prover contract digest validation must reject stale contracts",
+        );
+
+        macro_rules! expect_release_contract_rejection {
+            ($field:ident: $value:expr, $expected:literal, $context:literal) => {{
+                let mut drifted = material.clone();
+                drifted.$field = $value;
+                assert_error_contains(
+                    validate_bfv_full_bootstrap_release_prover_contract_material_v1(&drifted),
+                    $expected,
+                    $context,
+                );
+            }};
+        }
+
+        expect_release_contract_rejection!(
+            version: material.version.saturating_add(1),
+            "version",
+            "release-prover contract material must pin its layout version"
+        );
+        expect_release_contract_rejection!(
+            field_count: material.field_count.saturating_add(1),
+            "field count",
+            "release-prover contract material must pin its field count"
+        );
+        expect_release_contract_rejection!(
+            public_opening_material_version: material.public_opening_material_version.saturating_add(1),
+            "public opening material version",
+            "release-prover contract material must pin public-opening material versions"
+        );
+        expect_release_contract_rejection!(
+            public_opening_material_field_count: material.public_opening_material_field_count.saturating_add(1),
+            "public opening material field count",
+            "release-prover contract material must pin public-opening material layouts"
+        );
+        expect_release_contract_rejection!(
+            public_opening_material_digest_domain: b"replace_before_production".to_vec(),
+            "placeholder text",
+            "release-prover contract material must reject placeholder public-opening digest domains"
+        );
+        expect_release_contract_rejection!(
+            public_opening_material_digest_domain:
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN.to_vec(),
+            "canonical bytes",
+            "release-prover contract material must pin the public-opening digest domain"
+        );
+        expect_release_contract_rejection!(
+            separates_release_prover_material_domains: false,
+            "separate material digest domains",
+            "release-prover contract material must advertise separated digest domains"
+        );
+        expect_release_contract_rejection!(
+            binds_arithmetic_air_evaluation_trace_material_digest: false,
+            "arithmetic AIR evaluation trace material digest",
+            "release-prover contract material must bind AIR evaluation material to trace material"
+        );
+        expect_release_contract_rejection!(
+            binds_arithmetic_trace_material_digest: false,
+            "arithmetic trace material digest",
+            "release-prover contract material must bind release prover inputs to trace material"
+        );
+        expect_release_contract_rejection!(
+            validates_transcript_public_opening_material: false,
+            "transcript public opening material",
+            "release-prover contract material must require typed transcript public-opening validation"
+        );
+        expect_release_contract_rejection!(
+            requires_verifier_owned_trace_material_digest: false,
+            "verifier-owned trace material digest",
+            "release-prover contract material must require verifier-owned trace material digest input"
+        );
+    }
+
+    #[test]
     fn full_bootstrap_arithmetic_trace_profile_digest_binds_schema_and_native_material() {
         let profile = bfv_full_bootstrap_arithmetic_trace_profile_v1();
         assert_eq!(
@@ -54443,6 +61726,15 @@ mod tests {
             bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(&profile)
                 .expect("digest canonical arithmetic trace profile"),
             profile_digest
+        );
+        let profile_bytes = norito::to_bytes(&profile).expect("encode arithmetic trace profile");
+        assert_eq!(
+            profile_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_DIGEST_DOMAIN,
+                profile_bytes.as_slice(),
+            ]),
+            "arithmetic trace profile digest must hash self-describing typed material"
         );
         let placeholder_profile_digest =
             Hash::new(b"pending BFV full-bootstrap execution witness digest");
@@ -54583,6 +61875,18 @@ mod tests {
             schema.arithmetic_air_constraint_system_digest,
             air_contract_digest
         );
+        let air_contract_material =
+            bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1();
+        let air_contract_material_bytes =
+            norito::to_bytes(&air_contract_material).expect("encode arithmetic AIR contract");
+        assert_eq!(
+            air_contract_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN,
+                air_contract_material_bytes.as_slice(),
+            ]),
+            "arithmetic AIR contract digest must hash self-describing typed material"
+        );
         let placeholder_air_contract_digest =
             Hash::new(b"pending BFV full-bootstrap execution witness digest");
         assert_error_contains(
@@ -54608,6 +61912,10 @@ mod tests {
         assert!(
             schema.rejects_stale_proof_key_artifacts,
             "proof schema must advertise stale proof-key artifact rejection"
+        );
+        assert!(
+            schema.requires_verifier_owned_trace_material_digest,
+            "proof schema must advertise verifier-owned trace-material digest checks"
         );
         assert!(
             schema.derives_opening_schedule_from_statement_hash,
@@ -54673,12 +61981,25 @@ mod tests {
             fingerprint_material.field_count,
             BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1
         );
+        let fingerprint_material_bytes = norito::to_bytes(&fingerprint_material)
+            .expect("encode native proof circuit fingerprint material");
+        assert_eq!(
+            prover_fingerprint,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
+                fingerprint_material_bytes.as_slice(),
+            ]),
+            "native proof circuit fingerprint must hash self-describing typed material"
+        );
         let expected_centered_source_digest =
             canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()
                 .expect("canonical centered scale-round source-chain digest");
         let expected_schema_payload_digest =
             canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()
                 .expect("canonical proof public-input schema payload digest");
+        let expected_release_prover_contract_digest =
+            bfv_full_bootstrap_release_prover_contract_digest_v1()
+                .expect("canonical release-prover contract digest");
         assert_eq!(
             fingerprint_material.centered_scale_round_source_chain_digest,
             expected_centered_source_digest
@@ -54687,6 +62008,10 @@ mod tests {
             fingerprint_material.proof_public_input_schema_payload_digest,
             expected_schema_payload_digest
         );
+        assert_eq!(
+            fingerprint_material.release_prover_contract_digest,
+            expected_release_prover_contract_digest
+        );
         assert!(fingerprint_material.validates_artifact_bound_prover_input);
         assert!(fingerprint_material.rejects_stale_galois_key_set_replay);
         assert!(fingerprint_material.rejects_stale_proof_key_artifacts);
@@ -54694,6 +62019,8 @@ mod tests {
         assert!(fingerprint_material.derives_opening_schedule_from_trace_material_digest);
         assert!(fingerprint_material.bounds_opening_schedule_rejection_sampling);
         assert!(fingerprint_material.validates_transcript_public_padding_openings);
+        assert!(fingerprint_material.validates_transcript_public_opening_material);
+        assert!(fingerprint_material.requires_verifier_owned_trace_material_digest);
         assert!(fingerprint_material.validates_merkle_path_shape);
         assert!(fingerprint_material.validates_merkle_path_roots);
         assert!(fingerprint_material.validates_fri_query_chain);
@@ -54740,6 +62067,20 @@ mod tests {
             prover_fingerprint, stale_schema_fingerprint,
             "native proof circuit fingerprint must bind the proof public-input schema payload"
         );
+        let mut stale_release_contract_fingerprint_material = fingerprint_material.clone();
+        stale_release_contract_fingerprint_material.release_prover_contract_digest =
+            Hash::new(b"stale-native-fingerprint-release-prover-contract");
+        let stale_release_contract_fingerprint_bytes =
+            norito::to_bytes(&stale_release_contract_fingerprint_material)
+                .expect("encode stale release-prover contract fingerprint material");
+        let stale_release_contract_fingerprint = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
+            stale_release_contract_fingerprint_bytes.as_slice(),
+        ]);
+        assert_ne!(
+            prover_fingerprint, stale_release_contract_fingerprint,
+            "native proof circuit fingerprint must bind the release-prover contract digest"
+        );
         assert_fingerprint_policy_flag_bound!(
             validates_artifact_bound_prover_input,
             "native proof circuit fingerprint must bind artifact-bound prover input validation"
@@ -54767,6 +62108,14 @@ mod tests {
         assert_fingerprint_policy_flag_bound!(
             validates_transcript_public_padding_openings,
             "native proof circuit fingerprint must bind public-padding opening replay"
+        );
+        assert_fingerprint_policy_flag_bound!(
+            validates_transcript_public_opening_material,
+            "native proof circuit fingerprint must bind typed public-opening material validation"
+        );
+        assert_fingerprint_policy_flag_bound!(
+            requires_verifier_owned_trace_material_digest,
+            "native proof circuit fingerprint must bind verifier-owned trace material digest"
         );
         assert_fingerprint_policy_flag_bound!(
             validates_merkle_path_shape,
@@ -54909,9 +62258,11 @@ mod tests {
         let mut stale_envelope_key = prover_key.clone();
         stale_envelope_key.key_material =
             norito::to_bytes(&stale_envelope).expect("encode stale trace-profile envelope");
-        stale_envelope_key.key_material_commitment =
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&stale_envelope_key)
-                .expect("refresh stale envelope commitment");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&stale_envelope_key),
+            "arithmetic trace profile",
+            "proof-key material commitments must reject stale arithmetic trace envelopes before hashing",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_profile_v1(&stale_envelope_key),
             "arithmetic trace profile",
@@ -54923,9 +62274,11 @@ mod tests {
         let mut stale_air_envelope_key = prover_key.clone();
         stale_air_envelope_key.key_material =
             norito::to_bytes(&stale_air_envelope).expect("encode stale AIR contract envelope");
-        stale_air_envelope_key.key_material_commitment =
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&stale_air_envelope_key)
-                .expect("refresh stale AIR envelope commitment");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&stale_air_envelope_key),
+            "arithmetic AIR constraint-system",
+            "proof-key material commitments must reject stale AIR envelopes before hashing",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_profile_v1(&stale_air_envelope_key),
             "arithmetic AIR constraint-system",
@@ -55189,6 +62542,22 @@ mod tests {
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
                 statement_hash,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+            ),
+            "zero hash",
+            "opening derivation must reject zero trace material digests",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+                Hash::new(b"pending BFV full-bootstrap execution witness digest"),
+                trace_material_digest,
+            ),
+            "placeholder",
+            "opening derivation must reject placeholder statement hashes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+                statement_hash,
                 Hash::new(b"pending BFV full-bootstrap execution witness digest"),
             ),
             "placeholder",
@@ -55205,6 +62574,45 @@ mod tests {
             ),
             "placeholder",
             "opening derivation must reject delayed-placeholder trace material digests",
+        );
+        let binary_framed_placeholder_digest = Hash::new_from_chunks(&[
+            b"\xff",
+            b"pending BFV full-bootstrap execution witness digest",
+        ]);
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+                statement_hash,
+                binary_framed_placeholder_digest,
+            ),
+            "placeholder",
+            "opening derivation must reject binary-framed placeholder trace material digests",
+        );
+        let delayed_binary_framed_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+            b"\xff",
+            b"pending BFV full-bootstrap execution witness digest",
+        ]);
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+                statement_hash,
+                delayed_binary_framed_placeholder_digest,
+            ),
+            "placeholder",
+            "opening derivation must reject delayed binary-framed placeholder trace material digests",
+        );
+        let leading_delayed_binary_framed_placeholder_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES[0],
+            BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+            b"\xff",
+            b"pending BFV full-bootstrap execution witness digest",
+        ]);
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
+                statement_hash,
+                leading_delayed_binary_framed_placeholder_digest,
+            ),
+            "placeholder",
+            "opening derivation must reject leading delayed binary-framed placeholder trace material digests",
         );
         for separator_spelled_preimage in [
             b"p-e-n-d-i-n-g BFV full-bootstrap execution witness digest".as_slice(),
@@ -55272,6 +62680,132 @@ mod tests {
             bound_mode,
         )
         .expect("transcript-bound public openings validate");
+        let public_opening_material =
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcript_v1(
+                statement_hash,
+                trace_material_digest,
+                slot_index,
+                bound_mode,
+            )
+            .expect("build transcript-bound public opening material");
+        assert_eq!(
+            public_opening_material.version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
+        );
+        assert_eq!(
+            public_opening_material.field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
+        );
+        assert_eq!(public_opening_material.statement_hash, statement_hash);
+        assert_eq!(
+            public_opening_material.trace_material_digest,
+            trace_material_digest
+        );
+        assert_eq!(public_opening_material.slot_index, slot_index);
+        assert_eq!(public_opening_material.bound_mode, bound_mode);
+        assert_eq!(
+            public_opening_material.query_count,
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1
+        );
+        assert_eq!(
+            public_opening_material.row_width,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
+        );
+        assert_eq!(
+            public_opening_material.padded_row_count,
+            canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1()
+        );
+        assert_eq!(
+            public_opening_material.private_row_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
+        );
+        assert_eq!(public_opening_material.opening_indices, opening_indices);
+        assert_eq!(public_opening_material.opened_rows, opened_rows);
+        assert_eq!(public_opening_material.opened_next_rows, opened_next_rows);
+        validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+            &public_opening_material,
+        )
+        .expect("typed public opening material validates");
+        let public_opening_material_digest =
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
+                &public_opening_material,
+            )
+            .expect("hash public opening material");
+        assert_eq!(
+            public_opening_material_digest,
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
+                &public_opening_material,
+            )
+            .expect("hash public opening material again"),
+            "public opening material digest must be deterministic"
+        );
+        assert_ne!(
+            public_opening_material_digest,
+            Hash::prehashed([0_u8; Hash::LENGTH]),
+            "public opening material digest must not be the zero hash"
+        );
+        assert_ne!(
+            public_opening_material_digest, trace_material_digest,
+            "public opening material digest must be domain-separated from the trace digest"
+        );
+        let public_opening_material_bytes =
+            norito::to_bytes(&public_opening_material).expect("encode public opening material");
+        assert_eq!(
+            decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
+                &public_opening_material_bytes,
+            )
+            .expect("decode canonical public opening material bytes"),
+            public_opening_material,
+            "canonical public opening material bytes must decode to the typed material"
+        );
+        assert_eq!(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
+                &public_opening_material_bytes,
+            )
+            .expect("hash canonical public opening material bytes"),
+            public_opening_material_digest,
+            "canonical public opening material bytes must hash to the typed digest"
+        );
+        assert_eq!(
+            public_opening_material_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
+                public_opening_material_bytes.as_slice(),
+            ]),
+            "public opening material digest must hash self-describing typed material"
+        );
+        let compressed_public_opening_material_bytes = norito::to_compressed_bytes(
+            &public_opening_material,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed public opening material");
+        assert_ne!(
+            compressed_public_opening_material_bytes, public_opening_material_bytes,
+            "compressed public opening material must differ from canonical bytes"
+        );
+        let structurally_decoded_public_opening_material:
+            BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 = norito::decode_from_bytes(
+            &compressed_public_opening_material_bytes,
+        )
+        .expect("compressed public opening material still decodes structurally");
+        assert_eq!(
+            structurally_decoded_public_opening_material, public_opening_material,
+            "compressed public opening material must carry the same typed material"
+        );
+        assert_error_contains(
+            decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
+                &compressed_public_opening_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "public opening material byte admission must reject compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
+                &compressed_public_opening_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "public opening material byte digesting must reject compressed Norito framing",
+        );
 
         let mut reordered_indices = opening_indices.clone();
         reordered_indices.rotate_left(1);
@@ -55300,6 +62834,19 @@ mod tests {
             ),
             "opened row count",
             "public opening replay must reject missing opened rows",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
+                &opening_indices,
+                &opened_rows,
+                &opened_next_rows[..opened_next_rows.len() - 1],
+                statement_hash,
+                trace_material_digest,
+                slot_index,
+                bound_mode,
+            ),
+            "opened next-row count",
+            "public opening replay must reject missing opened next rows",
         );
         let mut drifted_opened_rows = opened_rows.clone();
         drifted_opened_rows[0][3] = drifted_opened_rows[0][3].saturating_add(1);
@@ -55333,6 +62880,96 @@ mod tests {
             "public padding opening query 0 failed",
             "public opening replay must reject next-row payload drift with query context",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
+                &opening_indices,
+                &opened_rows,
+                &opened_next_rows,
+                statement_hash,
+                trace_material_digest,
+                slot_index.saturating_add(1),
+                bound_mode,
+            ),
+            "public padding opening query 0 failed",
+            "public opening replay must reject stale caller slot context",
+        );
+        let alternate_bound_mode = match bound_mode {
+            BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
+                BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise
+            }
+            BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => {
+                BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple
+            }
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
+                &opening_indices,
+                &opened_rows,
+                &opened_next_rows,
+                statement_hash,
+                trace_material_digest,
+                slot_index,
+                alternate_bound_mode,
+            ),
+            "public padding opening query 0 failed",
+            "public opening replay must reject stale caller bound-mode context",
+        );
+        let mut stale_material_query_count = public_opening_material.clone();
+        stale_material_query_count.query_count =
+            stale_material_query_count.query_count.saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+                &stale_material_query_count,
+            ),
+            "query count",
+            "typed public opening material must reject stale query count metadata",
+        );
+        let mut stale_material_row_width = public_opening_material.clone();
+        stale_material_row_width.row_width = stale_material_row_width.row_width.saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+                &stale_material_row_width,
+            ),
+            "row width",
+            "typed public opening material must reject stale row-width metadata",
+        );
+        let mut reordered_material = public_opening_material.clone();
+        reordered_material.opening_indices.rotate_left(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+                &reordered_material,
+            ),
+            "opening schedule",
+            "typed public opening material must reject reordered opening schedules",
+        );
+        let mut missing_material_row = public_opening_material.clone();
+        missing_material_row.opened_rows.pop();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+                &missing_material_row,
+            ),
+            "opened row count",
+            "typed public opening material must reject missing opened rows",
+        );
+        let mut drifted_material_row = public_opening_material.clone();
+        drifted_material_row.opened_rows[0][3] =
+            drifted_material_row.opened_rows[0][3].saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+                &drifted_material_row,
+            ),
+            "public padding opening query 0 failed",
+            "typed public opening material must reject opened row drift",
+        );
+        let mut zero_statement_material = public_opening_material.clone();
+        zero_statement_material.statement_hash = Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
+                &zero_statement_material,
+            ),
+            "zero hash",
+            "typed public opening material must reject zero statement hashes",
+        );
     }
 
     #[test]
@@ -55351,6 +62988,51 @@ mod tests {
                 );
             }};
         }
+
+        let release_prover_digest_domains = [
+            (
+                "proof input material",
+                schema.proof_input_material_digest_domain.as_slice(),
+            ),
+            (
+                "prover input material",
+                schema.prover_input_material_digest_domain.as_slice(),
+            ),
+            (
+                "AIR evaluation material",
+                schema.air_evaluation_material_digest_domain.as_slice(),
+            ),
+            (
+                "public opening material",
+                schema.public_opening_material_digest_domain.as_slice(),
+            ),
+            (
+                "arithmetic trace material",
+                schema.arithmetic_trace_material_digest_domain.as_slice(),
+            ),
+            (
+                "arithmetic AIR constraint system",
+                schema
+                    .arithmetic_air_constraint_system_digest_domain
+                    .as_slice(),
+            ),
+        ];
+        for (left_index, (left_label, left_domain)) in
+            release_prover_digest_domains.iter().enumerate()
+        {
+            for (right_label, right_domain) in
+                release_prover_digest_domains.iter().skip(left_index + 1)
+            {
+                assert_ne!(
+                    left_domain, right_domain,
+                    "release-prover digest domains for {left_label} and {right_label} must be distinct"
+                );
+            }
+        }
+        assert_ne!(
+            schema.proof_key_material_commitment_domain, schema.proof_key_pair_commitment_domain,
+            "proof-key material and pair commitment domains must be distinct"
+        );
 
         let mut wrong_statement_version = schema.clone();
         wrong_statement_version.statement_material_version = wrong_statement_version
@@ -55540,6 +63222,145 @@ mod tests {
             "canonical",
             "proof public-input schemas must pin the proof input material digest domain",
         );
+        let mut placeholder_prover_input_digest_domain = schema.clone();
+        placeholder_prover_input_digest_domain.prover_input_material_digest_domain =
+            b"replace_before_production".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_prover_input_digest_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder prover input digest domains before mismatch",
+        );
+        let mut wrong_prover_input_digest_domain = schema.clone();
+        wrong_prover_input_digest_domain.prover_input_material_digest_domain =
+            b"wrong-full-bootstrap-execution-prover-input-digest-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_prover_input_digest_domain,
+            ),
+            "canonical",
+            "proof public-input schemas must pin the prover input material digest domain",
+        );
+        let mut placeholder_air_evaluation_digest_domain = schema.clone();
+        placeholder_air_evaluation_digest_domain.air_evaluation_material_digest_domain =
+            b"TODO_full-bootstrap_air_evaluation_digest_domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_air_evaluation_digest_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder AIR evaluation digest domains before mismatch",
+        );
+        let mut wrong_air_evaluation_digest_domain = schema.clone();
+        wrong_air_evaluation_digest_domain.air_evaluation_material_digest_domain =
+            b"wrong-full-bootstrap-air-evaluation-digest-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_air_evaluation_digest_domain,
+            ),
+            "canonical",
+            "proof public-input schemas must pin the AIR evaluation material digest domain",
+        );
+        let mut placeholder_trace_material_digest_domain = schema.clone();
+        placeholder_trace_material_digest_domain.arithmetic_trace_material_digest_domain =
+            b"not-production-ready".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_trace_material_digest_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder trace material digest domains before mismatch",
+        );
+        let mut wrong_trace_material_digest_domain = schema.clone();
+        wrong_trace_material_digest_domain.arithmetic_trace_material_digest_domain =
+            b"wrong-full-bootstrap-trace-material-digest-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_trace_material_digest_domain,
+            ),
+            "canonical",
+            "proof public-input schemas must pin the arithmetic trace material digest domain",
+        );
+        let mut placeholder_air_constraint_digest_domain = schema.clone();
+        placeholder_air_constraint_digest_domain.arithmetic_air_constraint_system_digest_domain =
+            b"TODO_full-bootstrap_air_constraint_digest_domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_air_constraint_digest_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder AIR constraint-system digest domains before mismatch",
+        );
+        let mut wrong_air_constraint_digest_domain = schema.clone();
+        wrong_air_constraint_digest_domain.arithmetic_air_constraint_system_digest_domain =
+            b"wrong-full-bootstrap-air-constraint-system-digest-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_air_constraint_digest_domain,
+            ),
+            "canonical",
+            "proof public-input schemas must pin the arithmetic AIR constraint-system digest domain",
+        );
+        let mut missing_release_prover_domain_separation = schema.clone();
+        missing_release_prover_domain_separation.separates_release_prover_material_domains = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &missing_release_prover_domain_separation,
+            ),
+            "separate release-prover material digest domains",
+            "proof public-input schemas must advertise release-prover digest-domain separation",
+        );
+        let mut placeholder_proof_key_material_commitment_domain = schema.clone();
+        placeholder_proof_key_material_commitment_domain.proof_key_material_commitment_domain =
+            b"replace_before_production".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_proof_key_material_commitment_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder proof-key material commitment domains before mismatch",
+        );
+        let mut wrong_proof_key_material_commitment_domain = schema.clone();
+        wrong_proof_key_material_commitment_domain.proof_key_material_commitment_domain =
+            b"wrong-full-bootstrap-proof-key-material-commitment-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_proof_key_material_commitment_domain,
+            ),
+            "canonical",
+            "proof public-input schemas must pin the proof-key material commitment domain",
+        );
+        let mut placeholder_proof_key_pair_commitment_domain = schema.clone();
+        placeholder_proof_key_pair_commitment_domain.proof_key_pair_commitment_domain =
+            b"TODO_full-bootstrap_proof_key_pair_commitment_domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_proof_key_pair_commitment_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder proof-key pair commitment domains before mismatch",
+        );
+        let mut wrong_proof_key_pair_commitment_domain = schema.clone();
+        wrong_proof_key_pair_commitment_domain.proof_key_pair_commitment_domain =
+            b"wrong-full-bootstrap-proof-key-pair-commitment-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_proof_key_pair_commitment_domain,
+            ),
+            "canonical",
+            "proof public-input schemas must pin the proof-key pair commitment domain",
+        );
+        let mut missing_proof_key_commitment_domain_separation = schema.clone();
+        missing_proof_key_commitment_domain_separation
+            .separates_proof_key_material_and_pair_commitments = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &missing_proof_key_commitment_domain_separation,
+            ),
+            "separate proof-key material and pair commitment domains",
+            "proof public-input schemas must advertise proof-key commitment-domain separation",
+        );
         let mut wrong_prover_input_version = schema.clone();
         wrong_prover_input_version.prover_input_material_version = wrong_prover_input_version
             .prover_input_material_version
@@ -55581,6 +63402,45 @@ mod tests {
             ),
             "AIR evaluation material field count",
             "proof public-input schemas must pin the AIR evaluation material field count",
+        );
+        let mut wrong_public_opening_version = schema.clone();
+        wrong_public_opening_version.public_opening_material_version = wrong_public_opening_version
+            .public_opening_material_version
+            .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&wrong_public_opening_version),
+            "public opening material version",
+            "proof public-input schemas must pin public-opening material versions",
+        );
+        let mut wrong_public_opening_field_count = schema.clone();
+        wrong_public_opening_field_count.public_opening_material_field_count =
+            wrong_public_opening_field_count
+                .public_opening_material_field_count
+                .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &wrong_public_opening_field_count,
+            ),
+            "public opening material field count",
+            "proof public-input schemas must pin public-opening material field counts",
+        );
+        let mut placeholder_public_opening_domain = schema.clone();
+        placeholder_public_opening_domain.public_opening_material_digest_domain =
+            b"replace_before_production".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+                &placeholder_public_opening_domain,
+            ),
+            "placeholder text",
+            "proof public-input schemas must reject placeholder public-opening material digest domains before mismatch",
+        );
+        let mut wrong_public_opening_domain = schema.clone();
+        wrong_public_opening_domain.public_opening_material_digest_domain =
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN.to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&wrong_public_opening_domain),
+            "canonical bytes",
+            "proof public-input schemas must pin the public-opening material digest domain",
         );
         let mut wrong_public_input_hash_count = schema.clone();
         wrong_public_input_hash_count.public_input_hash_count = wrong_public_input_hash_count
@@ -55851,6 +63711,16 @@ mod tests {
             "proof public-input schemas must bind arithmetic trace material digests"
         );
         expect_schema_flag_rejection!(
+            validates_transcript_public_opening_material,
+            "transcript public opening material",
+            "proof public-input schemas must require typed transcript public-opening validation"
+        );
+        expect_schema_flag_rejection!(
+            requires_verifier_owned_trace_material_digest,
+            "verifier-owned trace material digest",
+            "proof public-input schemas must require verifier-owned trace material digests"
+        );
+        expect_schema_flag_rejection!(
             binds_trace_proof_input_consistency,
             "trace/proof-input consistency",
             "proof public-input schemas must bind trace/proof-input consistency"
@@ -55948,6 +63818,8 @@ mod tests {
             derives_opening_schedule_from_trace_material_digest: true,
             bounds_opening_schedule_rejection_sampling: true,
             validates_transcript_public_padding_openings: true,
+            validates_transcript_public_opening_material: true,
+            requires_verifier_owned_trace_material_digest: true,
             validates_merkle_path_shape: true,
             validates_merkle_path_roots: true,
             validates_fri_query_chain: true,
@@ -55998,13 +63870,11 @@ mod tests {
             key_material: b"opaque-full-bootstrap-proof-key-material".to_vec(),
             ..prover_key.clone()
         };
-        let opaque_key_material = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &opaque_key_material,
-            )
-            .expect("opaque proof-key commitment"),
-            ..opaque_key_material
-        };
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&opaque_key_material),
+            "proof-key material envelope",
+            "proof-key material commitment derivation must reject opaque key material before hashing",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
                 &material,
@@ -56066,6 +63936,40 @@ mod tests {
             "proof-key validation must reject binary-decorated placeholder material envelope bytes before Norito decoding",
         );
 
+        let canonical_envelope =
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                .expect("decode canonical proof-key material envelope for compression");
+        let compressed_envelope_material = norito::to_compressed_bytes(
+            &canonical_envelope,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed proof-key material envelope");
+        assert_ne!(
+            compressed_envelope_material, prover_key.key_material,
+            "compressed proof-key material envelope must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+            norito::decode_from_bytes(&compressed_envelope_material)
+                .expect("compressed proof-key material envelope must decode structurally");
+        let compressed_envelope_key = BfvFullBootstrapProofKeyV1 {
+            key_material: compressed_envelope_material,
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&compressed_envelope_key),
+            "canonical v1 bytes",
+            "proof-key material commitment derivation must reject noncanonical compressed envelope framing before hashing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &compressed_envelope_key,
+            ),
+            "canonical v1 bytes",
+            "proof-key validation must reject noncanonical compressed material envelope framing",
+        );
+
         let mut drifted_envelope =
             decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
                 .expect("decode canonical proof-key material envelope");
@@ -56077,13 +63981,11 @@ mod tests {
             key_material: drifted_envelope_key_material,
             ..prover_key.clone()
         };
-        let drifted_envelope_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &drifted_envelope_key,
-            )
-            .expect("drifted envelope proof-key commitment"),
-            ..drifted_envelope_key
-        };
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&drifted_envelope_key),
+            "material envelope public-input schema digest",
+            "proof-key material commitment derivation must reject key-material envelope metadata drift before hashing",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
                 &material,
@@ -56125,6 +64027,24 @@ mod tests {
             ),
             "Merkle path root validation",
             "proof-key material envelopes must bind verifier-floor obligations to key metadata",
+        );
+        let mut unbound_verifier_trace_digest_envelope =
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key).expect(
+                "decode canonical proof-key material envelope for verifier trace digest drift",
+            );
+        unbound_verifier_trace_digest_envelope.requires_verifier_owned_trace_material_digest =
+            false;
+        let unbound_verifier_trace_digest_key = BfvFullBootstrapProofKeyV1 {
+            key_material: norito::to_bytes(&unbound_verifier_trace_digest_envelope)
+                .expect("encode proof-key envelope with verifier trace digest drift"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
+                &unbound_verifier_trace_digest_key,
+            ),
+            "verifier-owned trace material digest",
+            "proof-key material envelopes must bind verifier-owned trace material digest obligations to key metadata",
         );
         let mut unbound_transcript_label_envelope =
             decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
@@ -56174,6 +64094,27 @@ mod tests {
             bfv_full_bootstrap_proof_key_material_commitment_v1(&placeholder_parameter_key),
             "placeholder",
             "proof-key material commitment derivation must reject placeholder parameter digests before hashing",
+        );
+
+        let downgraded_verifier_trace_digest_key = BfvFullBootstrapProofKeyV1 {
+            requires_verifier_owned_trace_material_digest: false,
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &downgraded_verifier_trace_digest_key,
+            ),
+            "verifier-owned trace material digest",
+            "proof-key validation must reject downgraded verifier-owned trace material digest obligations",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(
+                &downgraded_verifier_trace_digest_key,
+            ),
+            "verifier-owned trace material digest",
+            "proof-key material commitment derivation must reject downgraded verifier-owned trace material digest obligations before hashing",
         );
 
         let mut placeholder_envelope =
@@ -56295,10 +64236,13 @@ mod tests {
             key_role: BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
             ..prover_key.clone()
         };
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&verifier_role_key),
+            "material envelope role",
+            "proof-key material commitments must reject role-retargeted envelopes before hashing",
+        );
         assert_ne!(
-            prover_key.key_material_commitment,
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&verifier_role_key)
-                .expect("verifier-role commitment"),
+            prover_key.key_material_commitment, canonical_verifier_key.key_material_commitment,
             "proof-key commitments must separate prover and verifier roles"
         );
 
@@ -56306,11 +64250,10 @@ mod tests {
             public_input_schema_digest: Hash::new(b"other-full-bootstrap-proof-schema"),
             ..prover_key.clone()
         };
-        assert_ne!(
-            prover_key.key_material_commitment,
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_schema_key)
-                .expect("other-schema commitment"),
-            "proof-key commitments must bind the public-input schema digest"
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_schema_key),
+            "material envelope public-input schema digest",
+            "proof-key material commitments must reject public-input schema retargets before hashing",
         );
 
         let other_evaluator_artifact_set_key = BfvFullBootstrapProofKeyV1 {
@@ -56319,33 +64262,30 @@ mod tests {
             ),
             ..prover_key.clone()
         };
-        assert_ne!(
-            prover_key.key_material_commitment,
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_evaluator_artifact_set_key)
-                .expect("other-evaluator-artifact-set commitment"),
-            "proof-key commitments must bind the evaluator artifact set digest"
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_evaluator_artifact_set_key),
+            "material envelope evaluator artifact set digest",
+            "proof-key material commitments must reject evaluator artifact-set retargets before hashing",
         );
 
         let other_parameter_profile_key = BfvFullBootstrapProofKeyV1 {
             parameter_digest: Hash::new(b"other-full-bootstrap-proof-parameter-profile"),
             ..prover_key.clone()
         };
-        assert_ne!(
-            prover_key.key_material_commitment,
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_parameter_profile_key)
-                .expect("other-parameter-profile commitment"),
-            "proof-key commitments must bind the parameter profile"
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_parameter_profile_key),
+            "material envelope parameter digest",
+            "proof-key material commitments must reject parameter-profile retargets before hashing",
         );
 
         let other_depth_key = BfvFullBootstrapProofKeyV1 {
             max_bootstrap_depth: prover_key.max_bootstrap_depth + 1,
             ..prover_key.clone()
         };
-        assert_ne!(
-            prover_key.key_material_commitment,
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_depth_key)
-                .expect("other-depth commitment"),
-            "proof-key commitments must bind the bootstrap depth"
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_depth_key),
+            "material envelope max bootstrap depth",
+            "proof-key material commitments must reject bootstrap-depth retargets before hashing",
         );
 
         macro_rules! expect_key_layout_rejection {
@@ -56354,20 +64294,11 @@ mod tests {
                     $field: $value,
                     ..prover_key.clone()
                 };
-                assert_ne!(
-                    prover_key.key_material_commitment,
-                    bfv_full_bootstrap_proof_key_material_commitment_v1(&drifted_key)
-                        .expect("drifted proof-key layout commitment"),
-                    "proof-key commitments must bind {}",
-                    stringify!($field)
+                assert_error_contains(
+                    bfv_full_bootstrap_proof_key_material_commitment_v1(&drifted_key),
+                    "does not match proof key metadata",
+                    "proof-key material commitment derivation must reject mismatched key-material envelopes before hashing",
                 );
-                let drifted_key = BfvFullBootstrapProofKeyV1 {
-                    key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                        &drifted_key,
-                    )
-                    .expect("refresh drifted proof-key layout commitment"),
-                    ..drifted_key
-                };
                 assert_error_contains(
                     validate_bfv_full_bootstrap_proof_key_v1(
                         &material,
@@ -56471,6 +64402,11 @@ mod tests {
             "proof-key validation must require transcript public-padding opening replay"
         );
         expect_key_layout_rejection!(
+            validates_transcript_public_opening_material: false,
+            "typed transcript public-opening material validation",
+            "proof-key validation must require typed transcript public-opening material validation"
+        );
+        expect_key_layout_rejection!(
             validates_merkle_path_shape: false,
             "Merkle path shape validation",
             "proof-key validation must require Merkle path shape validation"
@@ -56525,11 +64461,10 @@ mod tests {
             key_material: b"other-full-bootstrap-proof-key-material".to_vec(),
             ..prover_key.clone()
         };
-        assert_ne!(
-            prover_key.key_material_commitment,
-            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_material_key)
-                .expect("other-material commitment"),
-            "proof-key commitments must bind backend-native key bytes"
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&other_material_key),
+            "proof-key material envelope",
+            "proof-key material commitments must reject opaque backend-native key bytes before hashing",
         );
 
         let drifted_governed_material = BfvFullBootstrapCircuitMaterialV1 {
@@ -56552,13 +64487,6 @@ mod tests {
             parameter_digest: Hash::new(b"wrong-governed-full-bootstrap-proof-parameter-profile"),
             ..prover_key.clone()
         };
-        let wrong_governed_parameter_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_governed_parameter_key,
-            )
-            .expect("wrong-governed-parameter commitment"),
-            ..wrong_governed_parameter_key
-        };
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
                 &material,
@@ -56572,13 +64500,6 @@ mod tests {
         let wrong_governed_depth_key = BfvFullBootstrapProofKeyV1 {
             max_bootstrap_depth: material.max_bootstrap_depth + 1,
             ..prover_key.clone()
-        };
-        let wrong_governed_depth_key = BfvFullBootstrapProofKeyV1 {
-            key_material_commitment: bfv_full_bootstrap_proof_key_material_commitment_v1(
-                &wrong_governed_depth_key,
-            )
-            .expect("wrong-governed-depth commitment"),
-            ..wrong_governed_depth_key
         };
         assert_error_contains(
             validate_bfv_full_bootstrap_proof_key_v1(
@@ -56638,17 +64559,145 @@ mod tests {
         let schema_digest = Hash::new(&schema_artifact);
         assert_eq!(
             schema_digest.to_string(),
-            "a3ad6b103afc6c296a79f46ebd124b1c38cffe31dc74d828037eca7221f332bb",
+            "a1354821e8d00ab90629e00a685827151076b813d132cb10e7684a4ab84b556b",
             "canonical proof public-input schema artifact digest drifted"
+        );
+        let schema_payload_bytes =
+            norito::to_bytes(&schema).expect("encode canonical proof public-input schema payload");
+        assert_eq!(
+            canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()
+                .expect("canonical proof public-input schema payload digest"),
+            Hash::new(&schema_payload_bytes),
+            "canonical proof public-input schema payload digest must hash the exact typed Norito schema bytes"
+        );
+        let schema_artifact_payload =
+            norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(&schema_artifact)
+                .expect("decode canonical proof public-input schema artifact envelope");
+        assert_eq!(
+            schema_artifact_payload,
+            BfvFullBootstrapCircuitArtifactPayloadV1 {
+                circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+                parameter_digest: registered_bfv_parameter_digest(&params)
+                    .expect("registered parameter digest"),
+                rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(&params)
+                    .expect("registered RNS digest"),
+                key_switch_decomposition_chain_digest:
+                    registered_bfv_key_switch_decomposition_chain_digest(&params)
+                        .expect("registered decomposition digest"),
+                centered_scale_round_source_chain_digest:
+                    registered_bfv_centered_scale_round_source_chain_digest(&params)
+                        .expect("registered centered source-chain digest"),
+                max_bootstrap_depth: 1,
+                role: BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
+                payload: schema_payload_bytes,
+            },
+            "proof public-input schema artifact must wrap the exact typed schema bytes and registered BFV profile"
+        );
+        assert_eq!(
+            schema_digest,
+            Hash::new(
+                norito::to_bytes(&schema_artifact_payload)
+                    .expect("encode canonical proof public-input schema artifact envelope"),
+            ),
+            "proof public-input schema artifact digest must hash the governed artifact envelope bytes"
         );
         let evaluator_artifact_set_digest =
             sample_full_bootstrap_evaluator_artifact_set_digest(&params);
-        let (canonical_prover_key, _) = sample_full_bootstrap_proof_key_pair(
+        let (canonical_prover_key, canonical_verifier_key) = sample_full_bootstrap_proof_key_pair(
             &params,
             schema_digest,
             evaluator_artifact_set_digest,
         );
         let proof_key_pair_commitment = canonical_prover_key.proof_key_pair_commitment;
+        let canonical_pair_commitment = bfv_full_bootstrap_proof_key_pair_commitment_v1(
+            &canonical_prover_key,
+            &canonical_verifier_key,
+        )
+        .expect("derive canonical proof-key pair commitment");
+        assert_eq!(
+            proof_key_pair_commitment, canonical_pair_commitment,
+            "advertised proof-key pair commitment must match the canonical transcript"
+        );
+        let pair_parameter_digest: [u8; Hash::LENGTH] =
+            canonical_prover_key.parameter_digest.into();
+        let pair_rns_modulus_chain_digest: [u8; Hash::LENGTH] =
+            canonical_prover_key.rns_modulus_chain_digest.into();
+        let pair_key_switch_decomposition_chain_digest: [u8; Hash::LENGTH] = canonical_prover_key
+            .key_switch_decomposition_chain_digest
+            .into();
+        let pair_centered_scale_round_source_chain_digest: [u8; Hash::LENGTH] =
+            canonical_prover_key
+                .centered_scale_round_source_chain_digest
+                .into();
+        let pair_max_bootstrap_depth = canonical_prover_key.max_bootstrap_depth.to_le_bytes();
+        let pair_schema_digest: [u8; Hash::LENGTH] =
+            canonical_prover_key.public_input_schema_digest.into();
+        let pair_evaluator_artifact_set_digest: [u8; Hash::LENGTH] =
+            canonical_prover_key.evaluator_artifact_set_digest.into();
+        let pair_statement_material_version = canonical_prover_key
+            .statement_material_version
+            .to_le_bytes();
+        let pair_statement_material_field_count = canonical_prover_key
+            .statement_material_field_count
+            .to_le_bytes();
+        let pair_claim_version = canonical_prover_key.claim_version.to_le_bytes();
+        let pair_claim_field_count = canonical_prover_key.claim_field_count.to_le_bytes();
+        let pair_witness_digest_material_version = canonical_prover_key
+            .witness_digest_material_version
+            .to_le_bytes();
+        let pair_witness_digest_material_field_count = canonical_prover_key
+            .witness_digest_material_field_count
+            .to_le_bytes();
+        let pair_witness_trace_field_count =
+            canonical_prover_key.witness_trace_field_count.to_le_bytes();
+        let pair_witness_trace_bounds_field_count = canonical_prover_key
+            .witness_trace_bounds_field_count
+            .to_le_bytes();
+        let pair_public_input_hash_count =
+            canonical_prover_key.public_input_hash_count.to_le_bytes();
+        let pair_public_input_hash_bytes =
+            canonical_prover_key.public_input_hash_bytes.to_le_bytes();
+        let pair_supports_exact_residual_multiple = [u8::from(
+            canonical_prover_key.supports_exact_residual_multiple,
+        )];
+        let pair_supports_bounded_noise = [u8::from(canonical_prover_key.supports_bounded_noise)];
+        let pair_native_verifier_obligation_flags =
+            bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(&canonical_prover_key);
+        assert_eq!(
+            proof_key_pair_commitment,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_PROOF_KEY_PAIR_COMMITMENT_DOMAIN,
+                canonical_prover_key.backend.as_bytes(),
+                canonical_prover_key.key_format.as_bytes(),
+                canonical_prover_key.circuit_id.as_bytes(),
+                pair_parameter_digest.as_slice(),
+                pair_rns_modulus_chain_digest.as_slice(),
+                pair_key_switch_decomposition_chain_digest.as_slice(),
+                pair_centered_scale_round_source_chain_digest.as_slice(),
+                pair_max_bootstrap_depth.as_slice(),
+                pair_schema_digest.as_slice(),
+                pair_evaluator_artifact_set_digest.as_slice(),
+                pair_statement_material_version.as_slice(),
+                pair_statement_material_field_count.as_slice(),
+                pair_claim_version.as_slice(),
+                pair_claim_field_count.as_slice(),
+                canonical_prover_key.witness_digest_domain.as_slice(),
+                pair_witness_digest_material_version.as_slice(),
+                pair_witness_digest_material_field_count.as_slice(),
+                pair_witness_trace_field_count.as_slice(),
+                pair_witness_trace_bounds_field_count.as_slice(),
+                pair_public_input_hash_count.as_slice(),
+                pair_public_input_hash_bytes.as_slice(),
+                pair_supports_exact_residual_multiple.as_slice(),
+                pair_supports_bounded_noise.as_slice(),
+                pair_native_verifier_obligation_flags.as_slice(),
+                b"prover-key",
+                canonical_prover_key.key_material.as_slice(),
+                b"verifier-key",
+                canonical_verifier_key.key_material.as_slice(),
+            ]),
+            "proof-key pair commitment must hash its dedicated profile/key-material transcript"
+        );
 
         let prover_key = BfvFullBootstrapProofKeyV1 {
             key_role: BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
@@ -56691,6 +64740,8 @@ mod tests {
             derives_opening_schedule_from_trace_material_digest: true,
             bounds_opening_schedule_rejection_sampling: true,
             validates_transcript_public_padding_openings: true,
+            validates_transcript_public_opening_material: true,
+            requires_verifier_owned_trace_material_digest: true,
             validates_merkle_path_shape: true,
             validates_merkle_path_roots: true,
             validates_fri_query_chain: true,
@@ -56715,8 +64766,78 @@ mod tests {
             .expect("derive canonical prover-key material commitment");
         assert_eq!(
             prover_commitment.to_string(),
-            "e716f6a210664e510e0c6b9be0d0cc72e49c897245570bf568e3e01e31c601ab",
+            "9d719e7217868f8a74adc155a3b6126a60e5b9a9a9b6c8ead528f4a0f59c8685",
             "canonical prover-key material commitment drifted"
+        );
+        let material_role_label = full_bootstrap_proof_key_role_label(prover_key.key_role)
+            .expect("canonical prover role label");
+        let material_parameter_digest: [u8; Hash::LENGTH] = prover_key.parameter_digest.into();
+        let material_rns_modulus_chain_digest: [u8; Hash::LENGTH] =
+            prover_key.rns_modulus_chain_digest.into();
+        let material_key_switch_decomposition_chain_digest: [u8; Hash::LENGTH] =
+            prover_key.key_switch_decomposition_chain_digest.into();
+        let material_centered_scale_round_source_chain_digest: [u8; Hash::LENGTH] =
+            prover_key.centered_scale_round_source_chain_digest.into();
+        let material_max_bootstrap_depth = prover_key.max_bootstrap_depth.to_le_bytes();
+        let material_schema_digest: [u8; Hash::LENGTH] =
+            prover_key.public_input_schema_digest.into();
+        let material_evaluator_artifact_set_digest: [u8; Hash::LENGTH] =
+            prover_key.evaluator_artifact_set_digest.into();
+        let material_proof_key_pair_commitment: [u8; Hash::LENGTH] =
+            prover_key.proof_key_pair_commitment.into();
+        let material_statement_material_version =
+            prover_key.statement_material_version.to_le_bytes();
+        let material_statement_material_field_count =
+            prover_key.statement_material_field_count.to_le_bytes();
+        let material_claim_version = prover_key.claim_version.to_le_bytes();
+        let material_claim_field_count = prover_key.claim_field_count.to_le_bytes();
+        let material_witness_digest_material_version =
+            prover_key.witness_digest_material_version.to_le_bytes();
+        let material_witness_digest_material_field_count =
+            prover_key.witness_digest_material_field_count.to_le_bytes();
+        let material_witness_trace_field_count = prover_key.witness_trace_field_count.to_le_bytes();
+        let material_witness_trace_bounds_field_count =
+            prover_key.witness_trace_bounds_field_count.to_le_bytes();
+        let material_public_input_hash_count = prover_key.public_input_hash_count.to_le_bytes();
+        let material_public_input_hash_bytes = prover_key.public_input_hash_bytes.to_le_bytes();
+        let material_supports_exact_residual_multiple =
+            [u8::from(prover_key.supports_exact_residual_multiple)];
+        let material_supports_bounded_noise = [u8::from(prover_key.supports_bounded_noise)];
+        let material_native_verifier_obligation_flags =
+            bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(&prover_key);
+        assert_eq!(
+            prover_commitment,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_COMMITMENT_DOMAIN,
+                material_role_label,
+                prover_key.backend.as_bytes(),
+                prover_key.key_format.as_bytes(),
+                prover_key.circuit_id.as_bytes(),
+                material_parameter_digest.as_slice(),
+                material_rns_modulus_chain_digest.as_slice(),
+                material_key_switch_decomposition_chain_digest.as_slice(),
+                material_centered_scale_round_source_chain_digest.as_slice(),
+                material_max_bootstrap_depth.as_slice(),
+                material_schema_digest.as_slice(),
+                material_evaluator_artifact_set_digest.as_slice(),
+                material_proof_key_pair_commitment.as_slice(),
+                material_statement_material_version.as_slice(),
+                material_statement_material_field_count.as_slice(),
+                material_claim_version.as_slice(),
+                material_claim_field_count.as_slice(),
+                prover_key.witness_digest_domain.as_slice(),
+                material_witness_digest_material_version.as_slice(),
+                material_witness_digest_material_field_count.as_slice(),
+                material_witness_trace_field_count.as_slice(),
+                material_witness_trace_bounds_field_count.as_slice(),
+                material_public_input_hash_count.as_slice(),
+                material_public_input_hash_bytes.as_slice(),
+                material_supports_exact_residual_multiple.as_slice(),
+                material_supports_bounded_noise.as_slice(),
+                material_native_verifier_obligation_flags.as_slice(),
+                prover_key.key_material.as_slice(),
+            ]),
+            "proof-key material commitment must hash its dedicated role/profile/key-material transcript"
         );
     }
 
@@ -57365,6 +65486,199 @@ mod tests {
     }
 
     #[test]
+    fn full_bootstrap_evaluator_artifacts_reject_noncanonical_payload_framing() {
+        let params = ram_lfe_bfv_parameters_v1();
+
+        let transform = sample_identity_full_bootstrap_linear_transform(&params);
+        let compressed_transform_payload =
+            norito::to_compressed_bytes(&transform, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed linear-transform payload");
+        assert_ne!(
+            compressed_transform_payload,
+            norito::to_bytes(&transform).expect("encode canonical linear-transform payload"),
+            "compressed linear-transform payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapLinearTransformV1 =
+            norito::decode_from_bytes(&compressed_transform_payload)
+                .expect("compressed linear-transform payload must decode structurally");
+        let compressed_transform_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+            &compressed_transform_payload,
+        );
+        let compressed_transform_material = BfvFullBootstrapCircuitMaterialV1 {
+            coefficient_to_slot_key_digest: Hash::new(&compressed_transform_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_linear_transform_artifact_v1(
+                &params,
+                &compressed_transform_material,
+                BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+                &compressed_transform_artifact,
+            ),
+            "canonical v1 bytes",
+            "linear-transform artifacts must reject noncanonical compressed Norito payload framing",
+        );
+
+        let accumulator = sample_full_bootstrap_accumulator(&params);
+        let compressed_accumulator_payload =
+            norito::to_compressed_bytes(&accumulator, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed accumulator payload");
+        assert_ne!(
+            compressed_accumulator_payload,
+            norito::to_bytes(&accumulator).expect("encode canonical accumulator payload"),
+            "compressed accumulator payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapAccumulatorV1 =
+            norito::decode_from_bytes(&compressed_accumulator_payload)
+                .expect("compressed accumulator payload must decode structurally");
+        let compressed_accumulator_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
+            &compressed_accumulator_payload,
+        );
+        let compressed_accumulator_material = BfvFullBootstrapCircuitMaterialV1 {
+            accumulator_digest: Hash::new(&compressed_accumulator_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_accumulator_artifact_v1(
+                &params,
+                &compressed_accumulator_material,
+                &compressed_accumulator_artifact,
+            ),
+            "canonical v1 bytes",
+            "accumulator artifacts must reject noncanonical compressed Norito payload framing",
+        );
+
+        let accumulator_artifact = sample_full_bootstrap_accumulator_artifact_payload(&params);
+        let accumulator_digest = Hash::new(&accumulator_artifact);
+        let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+            &params,
+            accumulator_digest,
+            1,
+        )
+        .expect("build blind-rotation key");
+        let compressed_blind_rotation_payload = norito::to_compressed_bytes(
+            &blind_rotation_key,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed blind-rotation payload");
+        assert_ne!(
+            compressed_blind_rotation_payload,
+            norito::to_bytes(&blind_rotation_key).expect("encode canonical blind-rotation payload"),
+            "compressed blind-rotation payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapBlindRotationKeyV1 =
+            norito::decode_from_bytes(&compressed_blind_rotation_payload)
+                .expect("compressed blind-rotation payload must decode structurally");
+        let compressed_blind_rotation_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
+            &compressed_blind_rotation_payload,
+        );
+        let compressed_blind_rotation_material = BfvFullBootstrapCircuitMaterialV1 {
+            blind_rotation_key_digest: Hash::new(&compressed_blind_rotation_artifact),
+            accumulator_digest,
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+                &params,
+                &compressed_blind_rotation_material,
+                &compressed_blind_rotation_artifact,
+            ),
+            "canonical v1 bytes",
+            "blind-rotation artifacts must reject noncanonical compressed Norito payload framing",
+        );
+
+        let sample_extraction = sample_full_bootstrap_sample_extraction(&params);
+        let compressed_sample_extraction_payload = norito::to_compressed_bytes(
+            &sample_extraction,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed sample-extraction payload");
+        assert_ne!(
+            compressed_sample_extraction_payload,
+            norito::to_bytes(&sample_extraction)
+                .expect("encode canonical sample-extraction payload"),
+            "compressed sample-extraction payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapSampleExtractionV1 =
+            norito::decode_from_bytes(&compressed_sample_extraction_payload)
+                .expect("compressed sample-extraction payload must decode structurally");
+        let compressed_sample_extraction_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+            &compressed_sample_extraction_payload,
+        );
+        let compressed_sample_extraction_material = BfvFullBootstrapCircuitMaterialV1 {
+            sample_extraction_key_digest: Hash::new(&compressed_sample_extraction_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+                &params,
+                &compressed_sample_extraction_material,
+                &compressed_sample_extraction_artifact,
+            ),
+            "canonical v1 bytes",
+            "sample-extraction metadata artifacts must reject noncanonical compressed Norito payload framing",
+        );
+
+        let (secret_key, _public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-canonical-switch-keygen")
+                .expect("sample switch-key keygen");
+        let switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+            &params,
+            &secret_key,
+            sample_extraction,
+            b"bfv-full-bootstrap-canonical-switch-key",
+        )
+        .expect("sample switch-key material");
+        let compressed_switch_key_payload =
+            norito::to_compressed_bytes(&switch_key, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed sample-extraction switch-key payload");
+        assert_ne!(
+            compressed_switch_key_payload,
+            norito::to_bytes(&switch_key)
+                .expect("encode canonical sample-extraction switch-key payload"),
+            "compressed sample-extraction switch-key payload must differ from canonical v1 bytes"
+        );
+        let _: BfvFullBootstrapSampleExtractionSwitchKeyV1 =
+            norito::decode_from_bytes(&compressed_switch_key_payload)
+                .expect("compressed sample-extraction switch-key payload must decode structurally");
+        let compressed_switch_key_artifact = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+            &compressed_switch_key_payload,
+        );
+        let compressed_switch_key_material = BfvFullBootstrapCircuitMaterialV1 {
+            sample_extraction_key_digest: Hash::new(&compressed_switch_key_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+                &params,
+                &compressed_switch_key_material,
+                &compressed_switch_key_artifact,
+            ),
+            "canonical v1 bytes",
+            "sample-extraction switch-key artifacts must reject noncanonical compressed Norito payload framing",
+        );
+        assert_error_contains(
+            decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+                &params,
+                &compressed_switch_key_material,
+                &compressed_switch_key_artifact,
+            ),
+            "canonical v1 bytes",
+            "sample-extraction metadata view must reject noncanonical compressed switch-key payload framing",
+        );
+    }
+
+    #[test]
     fn sample_extraction_switch_key_domains_separate_exact_and_bounded_modes() {
         let params = BfvParameters {
             polynomial_degree: 2,
@@ -57977,6 +66291,16 @@ mod tests {
             sample_profile.plaintext,
             vec![blind_rotation_profile.plaintext[sample_index]],
         );
+        let mut expected_rotated_slots = slots.clone();
+        expected_rotated_slots
+            .rotate_left(usize::try_from(blind_rotation.rotation_steps).expect("rotation fits"));
+        let expected_rotated_plaintext =
+            encode_packed_plaintext_slots(&params, &expected_rotated_slots)
+                .expect("encode governed rotated packed slots");
+        assert_eq!(
+            sample_profile.plaintext[0], expected_rotated_plaintext[sample_index],
+            "exact full-bootstrap sample extraction must expose the governed packed-slot rotation coefficient"
+        );
         assert!(
             sample_profile.max_abs_residual_multiple <= prefix_bounds.raw_extracted_sample,
             "prefix raw sample residual {} must fit propagated bound {}",
@@ -58056,6 +66380,13 @@ mod tests {
         )
         .expect("artifact-aware exact full bootstrap output");
         assert_eq!(final_output, trace.slot_to_coefficient_output);
+        let mut expected_final_plaintext = vec![0; params.degree()];
+        expected_final_plaintext[0] = expected_rotated_plaintext[sample_index];
+        assert_eq!(
+            decrypt(&params, &secret_key, &final_output).expect("decrypt exact final output"),
+            expected_final_plaintext,
+            "artifact-aware exact full bootstrap must decrypt to the governed extracted coefficient at coefficient zero"
+        );
         let final_bound = bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
             &params,
             &bootstrap_key,
@@ -58222,6 +66553,74 @@ mod tests {
             ),
             "package digest mismatch",
             "release-audited exact execution must reject stale audit packages before missing Galois keys",
+        );
+        let mut report_tampered_release_audit_package = release_audit_package.clone();
+        report_tampered_release_audit_package
+            .audit_report_bytes
+            .extend_from_slice(b"; exact execution report byte tamper after signing");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+                &report_tampered_release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit report bytes digest mismatch",
+            "release-audited exact execution must reject tampered report bytes before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                u128::MAX,
+                &report_tampered_release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit report bytes digest mismatch",
+            "release-audited exact bounds must reject tampered report bytes before malformed input bounds",
+        );
+        let mut archive_tampered_release_audit_package = release_audit_package.clone();
+        archive_tampered_release_audit_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; exact execution archive byte tamper after signing");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+                &archive_tampered_release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit evidence archive bytes digest mismatch",
+            "release-audited exact execution must reject tampered archive bytes before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                u128::MAX,
+                &archive_tampered_release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit evidence archive bytes digest mismatch",
+            "release-audited exact bounds must reject tampered archive bytes before malformed input bounds",
         );
         let stale_generated_body_release_audit_package =
             stale_generated_body_release_audit_package_from(
@@ -58572,6 +66971,10 @@ mod tests {
             vec![bounded_blind_rotation_profile.plaintext[bounded_sample_index]],
         );
         assert_eq!(
+            bounded_sample_profile.plaintext[0], expected_rotated_plaintext[bounded_sample_index],
+            "bounded full-bootstrap sample extraction must expose the governed packed-slot rotation coefficient"
+        );
+        assert_eq!(
             bounded_sample_profile.noise,
             vec![bounded_blind_rotation_profile.noise[bounded_sample_index]],
         );
@@ -58648,6 +67051,14 @@ mod tests {
         assert_eq!(
             bounded_final_output,
             bounded_trace.slot_to_coefficient_output
+        );
+        let mut expected_bounded_final_plaintext = vec![0; params.degree()];
+        expected_bounded_final_plaintext[0] = expected_rotated_plaintext[bounded_sample_index];
+        assert_eq!(
+            decrypt_bounded_noise(&params, &bounded_secret_key, &bounded_final_output)
+                .expect("decrypt bounded final output"),
+            expected_bounded_final_plaintext,
+            "artifact-aware bounded full bootstrap must decrypt to the governed extracted coefficient at coefficient zero"
         );
         let bounded_final_bound = bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
             &params,
@@ -58791,6 +67202,76 @@ mod tests {
             ),
             "package digest mismatch",
             "release-audited bounded execution must reject stale audit packages before missing Galois keys",
+        );
+        let mut report_tampered_bounded_release_audit_package =
+            bounded_release_audit_package.clone();
+        report_tampered_bounded_release_audit_package
+            .audit_report_bytes
+            .extend_from_slice(b"; bounded execution report byte tamper after signing");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+                &report_tampered_bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit report bytes digest mismatch",
+            "release-audited bounded execution must reject tampered report bytes before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &report_tampered_bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit report bytes digest mismatch",
+            "release-audited bounded bounds must reject tampered report bytes before malformed input bounds",
+        );
+        let mut archive_tampered_bounded_release_audit_package =
+            bounded_release_audit_package.clone();
+        archive_tampered_bounded_release_audit_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; bounded execution archive byte tamper after signing");
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+                &archive_tampered_bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit evidence archive bytes digest mismatch",
+            "release-audited bounded execution must reject tampered archive bytes before missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &bounded_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &archive_tampered_bounded_release_audit_package,
+                bounded_release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit evidence archive bytes digest mismatch",
+            "release-audited bounded bounds must reject tampered archive bytes before malformed input bounds",
         );
         let stale_generated_body_bounded_release_audit_package =
             stale_generated_body_release_audit_package_from(
@@ -59868,6 +68349,16 @@ mod tests {
                 .expect("hash execution proof input material again"),
             "execution proof input material digest must be deterministic"
         );
+        let proof_input_material_bytes =
+            norito::to_bytes(&proof_input).expect("encode execution proof input material");
+        assert_eq!(
+            proof_input_material_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+                proof_input_material_bytes.as_slice(),
+            ]),
+            "execution proof input material digest must hash self-describing typed material"
+        );
         assert_ne!(
             proof_input_material_digest, proof_input.statement_hash,
             "execution proof input package digest must be domain-separated from the public statement"
@@ -60459,6 +68950,96 @@ mod tests {
                 .expect("hash row-major arithmetic trace material again"),
             "trace material digest must be deterministic"
         );
+        let trace_material_bytes =
+            norito::to_bytes(&trace_material).expect("encode arithmetic trace material");
+        assert_eq!(
+            trace_material_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN,
+                trace_material_bytes.as_slice(),
+            ]),
+            "trace material digest must hash self-describing typed material"
+        );
+        let public_opening_material =
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+                &trace_material,
+            )
+            .expect("build trace-bound public opening material");
+        assert_eq!(
+            public_opening_material.statement_hash,
+            trace_material.proof_input_material.statement_hash
+        );
+        assert_eq!(
+            public_opening_material.trace_material_digest,
+            trace_material_digest
+        );
+        assert_eq!(
+            public_opening_material.slot_index,
+            witness_material.slot_index
+        );
+        assert_eq!(
+            public_opening_material.bound_mode,
+            witness_material.bound_mode
+        );
+        validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+            &trace_material,
+            &public_opening_material,
+        )
+        .expect("trace-bound public opening material validates");
+        let public_opening_material_digest =
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_trace_v1(
+                &trace_material,
+                &public_opening_material,
+            )
+            .expect("hash trace-bound public opening material");
+        assert_eq!(
+            public_opening_material_digest,
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
+                &public_opening_material,
+            )
+            .expect("hash public opening material directly"),
+            "trace-bound public opening material digest must reuse the canonical material digest"
+        );
+        let public_opening_material_bytes =
+            norito::to_bytes(&public_opening_material).expect("encode public opening material");
+        assert_eq!(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+                &trace_material,
+                &public_opening_material_bytes,
+            )
+            .expect("hash trace-bound canonical public opening material bytes"),
+            public_opening_material_digest,
+            "trace-bound public opening byte digesting must match the typed digest"
+        );
+        let compressed_public_opening_material_bytes = norito::to_compressed_bytes(
+            &public_opening_material,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed public opening material");
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+                &trace_material,
+                &compressed_public_opening_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "trace-bound public opening byte digesting must reject compressed Norito framing",
+        );
+        let alternate_public_opening_material =
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcript_v1(
+                trace_material.proof_input_material.statement_hash,
+                Hash::new(b"alternate BFV full-bootstrap trace material digest for openings"),
+                witness_material.slot_index,
+                witness_material.bound_mode,
+            )
+            .expect("build self-consistent alternate public opening material");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+                &trace_material,
+                &alternate_public_opening_material,
+            ),
+            "does not match trace material",
+            "trace-bound public opening material validation must reject material for another trace digest",
+        );
 
         let full_bootstrap_material = bootstrap_key
             .full_bootstrap_material
@@ -60502,6 +69083,14 @@ mod tests {
             trace_material_digest
         );
         assert_eq!(
+            prover_input_material.public_opening_material,
+            public_opening_material
+        );
+        assert_eq!(
+            prover_input_material.public_opening_material_digest,
+            public_opening_material_digest
+        );
+        assert_eq!(
             prover_input_material.arithmetic_air_constraint_system_digest,
             bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()
                 .expect("canonical arithmetic AIR contract digest")
@@ -60527,6 +69116,16 @@ mod tests {
         assert_eq!(
             trace_bound_air_evaluation_material_digest, air_evaluation_material_digest,
             "canonical AIR evaluation digest must match after trace-bound validation"
+        );
+        let air_evaluation_material_bytes =
+            norito::to_bytes(&air_evaluation_material).expect("encode AIR evaluation material");
+        assert_eq!(
+            air_evaluation_material_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN,
+                air_evaluation_material_bytes.as_slice(),
+            ]),
+            "AIR evaluation material digest must hash self-describing typed material"
         );
         let mut wrong_trace_air_evaluation_material = air_evaluation_material.clone();
         wrong_trace_air_evaluation_material.arithmetic_trace_material_digest =
@@ -60679,6 +69278,29 @@ mod tests {
         );
         let drifted_difference =
             bfv_full_bootstrap_goldilocks_sub_v1(drifted_rows[0][9], trace_material.rows[0][9]);
+        let mut padding_drift_rows = trace_material.rows.clone();
+        padding_drift_rows[first_padding_index][9] = 1;
+        let padding_drift_composition_values =
+            bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
+                &trace_material,
+                &padding_drift_rows,
+            )
+            .expect("evaluate padding-row drift arithmetic AIR composition values");
+        assert_ne!(
+            padding_drift_composition_values[first_padding_index], 0,
+            "public padding-row arithmetic trace drift must produce a non-zero composition value"
+        );
+        let padding_drift_challenge = bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+            trace_material.proof_input_material.statement_hash,
+            trace_material_digest,
+            first_padding_index,
+            9,
+        )
+        .expect("derive padding trace-bound AIR composition challenge");
+        assert_eq!(
+            padding_drift_composition_values[first_padding_index], padding_drift_challenge,
+            "padding-row arithmetic trace drift must use the trace-material-bound AIR challenge"
+        );
         let mut low_digest_only = [0_u8; Hash::LENGTH];
         low_digest_only[0] = 7;
         let mut high_limb_digest = low_digest_only;
@@ -61456,6 +70078,16 @@ mod tests {
                 .expect("hash proof-key-bound execution prover input material again"),
             "prover input material digest must be deterministic"
         );
+        let prover_input_material_bytes = norito::to_bytes(&prover_input_material)
+            .expect("encode execution prover input material");
+        assert_eq!(
+            prover_input_material_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN,
+                prover_input_material_bytes.as_slice(),
+            ]),
+            "prover input material digest must hash self-describing typed material"
+        );
         let stale_prefix_shape_only_prover_digest =
             bfv_full_bootstrap_execution_prover_input_material_digest_v1(
                 &stale_prefix_prover_input,
@@ -61486,6 +70118,16 @@ mod tests {
             ),
             "arithmetic trace material digest",
             "prover input material must reject stale arithmetic trace material digests",
+        );
+        let mut zero_prover_input_trace_digest = prover_input_material.clone();
+        zero_prover_input_trace_digest.arithmetic_trace_material_digest =
+            Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &zero_prover_input_trace_digest,
+            ),
+            "zero hash",
+            "prover input material must reject zero arithmetic trace material digests",
         );
         let mut placeholder_prover_input_trace_digest = prover_input_material.clone();
         placeholder_prover_input_trace_digest.arithmetic_trace_material_digest =
@@ -61519,6 +70161,16 @@ mod tests {
             ),
             "arithmetic AIR constraint-system",
             "prover input material must reject stale arithmetic AIR contract digests",
+        );
+        let mut zero_prover_input_air_digest = prover_input_material.clone();
+        zero_prover_input_air_digest.arithmetic_air_constraint_system_digest =
+            Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &zero_prover_input_air_digest,
+            ),
+            "zero hash",
+            "prover input material must reject zero arithmetic AIR contract digests",
         );
 
         let mut zero_prover_input_air_artifact_digest = prover_input_material.clone();
@@ -61662,6 +70314,67 @@ mod tests {
             ),
             "arithmetic AIR evaluation material digest mismatch",
             "prover input material must reject stale AIR evaluation material digests",
+        );
+
+        let mut zero_public_opening_digest = prover_input_material.clone();
+        zero_public_opening_digest.public_opening_material_digest =
+            Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &zero_public_opening_digest,
+            ),
+            "zero hash",
+            "prover input material must reject zero public-opening material digests",
+        );
+
+        let mut placeholder_public_opening_digest = prover_input_material.clone();
+        placeholder_public_opening_digest.public_opening_material_digest =
+            Hash::new(b"pending BFV full-bootstrap execution witness digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &placeholder_public_opening_digest,
+            ),
+            "placeholder",
+            "prover input material must reject placeholder public-opening material digests",
+        );
+        for separator_spelled_digest in separator_spelled_placeholder_trace_digests {
+            let mut separator_spelled_public_opening_digest = prover_input_material.clone();
+            separator_spelled_public_opening_digest.public_opening_material_digest =
+                separator_spelled_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                    &separator_spelled_public_opening_digest,
+                ),
+                "placeholder",
+                "prover input material must reject separator-spelled placeholder public-opening material digests",
+            );
+        }
+
+        let mut stale_public_opening_digest = prover_input_material.clone();
+        stale_public_opening_digest.public_opening_material_digest =
+            Hash::new(b"stale BFV full-bootstrap public opening material digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &stale_public_opening_digest,
+            ),
+            "public opening material digest mismatch",
+            "prover input material must reject stale public-opening material digests",
+        );
+
+        let mut retargeted_public_opening_material = prover_input_material.clone();
+        retargeted_public_opening_material.public_opening_material =
+            alternate_public_opening_material;
+        retargeted_public_opening_material.public_opening_material_digest =
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
+                &retargeted_public_opening_material.public_opening_material,
+            )
+            .expect("hash internally valid retargeted public-opening material");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &retargeted_public_opening_material,
+            ),
+            "does not match trace material",
+            "prover input material must reject public-opening material for another trace digest",
         );
 
         let mut stale_prover_input_trace = prover_input_material.clone();
@@ -62000,7 +70713,7 @@ mod tests {
         );
         assert_eq!(
             exact_statement.to_string(),
-            "38f0018d056799ec88f9555aaebda6b0fb6733bf65f859a2f81b6626984850b9",
+            "e0fb7248645497af2afada4e0b6e8cfd7e3134f40d19f870cbf0e1854afad6c7",
             "canonical exact full-bootstrap execution proof statement digest drifted"
         );
         let bounded_claim = BfvFullBootstrapExecutionProofClaimV1 {
@@ -62021,7 +70734,7 @@ mod tests {
         );
         assert_eq!(
             bounded_statement.to_string(),
-            "ca389cb357416a052da190b0d35105d971b3a8c4258088eca638cba64bb14ca7",
+            "4d1cc75c22abadfcd967f526e0a58ac9df3432831f4cc389b0cc38bc08e4c133",
             "canonical bounded full-bootstrap execution proof statement digest drifted"
         );
 
@@ -62050,6 +70763,20 @@ mod tests {
                 statement_bytes.as_slice(),
             ]),
             "execution proof statement digest must hash self-describing typed material"
+        );
+        let bounded_statement_material = BfvFullBootstrapExecutionProofStatementMaterial {
+            claim: bounded_claim.clone(),
+            ..statement_material
+        };
+        let bounded_statement_bytes = norito::to_bytes(&bounded_statement_material)
+            .expect("encode bounded execution statement material");
+        assert_eq!(
+            bounded_statement,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN,
+                bounded_statement_bytes.as_slice(),
+            ]),
+            "bounded execution proof statement digest must hash self-describing typed material"
         );
 
         let different_slot_claim = BfvFullBootstrapExecutionProofClaimV1 {
@@ -65816,6 +74543,16 @@ mod tests {
                 .expect("hash material proof input material again"),
             "material proof input material digest must be deterministic"
         );
+        let proof_input_material_bytes =
+            norito::to_bytes(&proof_input).expect("encode material proof input material");
+        assert_eq!(
+            proof_input_material_digest,
+            Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
+                proof_input_material_bytes.as_slice(),
+            ]),
+            "material proof input material digest must hash self-describing typed material"
+        );
         assert_ne!(
             proof_input_material_digest, proof_input.statement_hash,
             "material proof input package digest must be domain-separated from the public statement"
@@ -67114,7 +75851,7 @@ mod tests {
                 &malformed_ciphertext,
                 2,
             ),
-            "BFV bounded-noise bootstrap refresh rounds 2",
+            "bootstrap refresh rounds 2",
             "multi-round bounded bootstrap must reject round count before key shape",
         );
 
@@ -67199,7 +75936,7 @@ mod tests {
                 &malformed_ciphertext,
                 1,
             ),
-            "BFV bounded-noise RNS bootstrap refresh round index 1",
+            "bootstrap refresh round index 1",
             "single-round bounded RNS bootstrap must reject round index before ciphertext shape",
         );
         assert_error_contains(
@@ -67210,7 +75947,7 @@ mod tests {
                 &malformed_ciphertext,
                 1,
             ),
-            "BFV bounded-noise RNS bootstrap refresh round index 1",
+            "bootstrap refresh round index 1",
             "single-round bounded RNS bootstrap must reject round index before key shape",
         );
         assert_error_contains(
@@ -67221,7 +75958,7 @@ mod tests {
                 &malformed_ciphertext,
                 2,
             ),
-            "BFV bounded-noise bootstrap refresh rounds 2",
+            "bootstrap refresh rounds 2",
             "multi-round bounded RNS bootstrap must reject round count before key shape",
         );
         assert_error_contains(
@@ -67232,7 +75969,7 @@ mod tests {
                 &malformed_ciphertext,
                 1,
             ),
-            "BFV bounded-noise RNS bootstrap refresh round index 1",
+            "bootstrap refresh round index 1",
             "single-round bounded RNS bootstrap must reject round index before caller-supplied chain shape",
         );
         assert_error_contains(
@@ -67243,7 +75980,7 @@ mod tests {
                 &malformed_ciphertext,
                 2,
             ),
-            "BFV bounded-noise bootstrap refresh rounds 2",
+            "bootstrap refresh rounds 2",
             "multi-round bounded RNS bootstrap must reject round count before caller-supplied chain shape",
         );
         assert_error_contains(
@@ -67340,7 +76077,7 @@ mod tests {
                 &malformed_ciphertext,
                 1,
             ),
-            "BFV bounded-noise RNS bootstrap refresh round index 1",
+            "bootstrap refresh round index 1",
             "registered bounded bootstrap must reject round index before ciphertext shape",
         );
         assert_error_contains(
@@ -67350,7 +76087,7 @@ mod tests {
                 &malformed_ciphertext,
                 1,
             ),
-            "BFV bounded-noise RNS bootstrap refresh round index 1",
+            "bootstrap refresh round index 1",
             "registered bounded bootstrap must reject round index before key shape",
         );
         assert_error_contains(
@@ -67360,7 +76097,7 @@ mod tests {
                 &malformed_ciphertext,
                 2,
             ),
-            "BFV bounded-noise bootstrap refresh rounds 2",
+            "bootstrap refresh rounds 2",
             "registered bounded multi-round bootstrap must reject round count before key shape",
         );
     }
@@ -69774,6 +78511,39 @@ mod tests {
             "bounded-noise basis-extension RNS relinearization key b[0] length",
             "bounded basis-extension multiply must reject entry polynomials before ciphertext shape",
         );
+        let non_prefix_scale_round_source_chain = BfvRnsModulusChain {
+            moduli: vec![
+                bounded_rns_chain.moduli[0],
+                bounded_rns_chain.moduli[1],
+                4_292_805_217,
+            ],
+        };
+        validate_rns_centered_scale_round_source_chain(
+            &bounded_rns_params,
+            &non_prefix_scale_round_source_chain,
+            "test non-prefix centered scale-round source",
+        )
+        .expect("non-prefix source chain is structurally valid and covers scale-round products");
+        assert!(
+            !bounded_rns_chain
+                .moduli
+                .as_slice()
+                .starts_with(non_prefix_scale_round_source_chain.moduli.as_slice()),
+            "test source chain must retarget the evaluator chain"
+        );
+        assert_error_contains(
+            multiply_ciphertexts_bounded_noise_rns_basis_extension_with_scale_round_source_exact(
+                &bounded_rns_params,
+                &non_prefix_scale_round_source_chain,
+                &bounded_decomposition_chain,
+                &bounded_rns_chain,
+                &bounded_malformed_entry_relinearization_key,
+                &bounded_malformed_ciphertext,
+                &bounded_malformed_ciphertext,
+            ),
+            "source chain must be a prefix of the evaluator chain",
+            "bounded basis-extension multiply must reject scale-round source retargets before payload shapes",
+        );
 
         let registered_params = ram_lfe_bfv_parameters_v1();
         let registered_malformed_entry_relinearization_key =
@@ -69795,8 +78565,8 @@ mod tests {
                 &malformed_ciphertext,
                 &malformed_ciphertext,
             ),
-            "bounded-noise RNS relinearization key b[0] length",
-            "registered bounded RNS multiply must reject entry polynomials before ciphertext shape",
+            "bounded-noise basis-extension RNS relinearization key b[0] length",
+            "registered bounded RNS compatibility multiply must reject entry polynomials before ciphertext shape",
         );
         assert_error_contains(
             multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact(
@@ -69909,7 +78679,7 @@ mod tests {
             &addition_too_narrow_chain,
             &bootstrap_key,
             &ciphertext,
-            99,
+            0,
         )
         .expect_err("bootstrap refresh must preflight the RNS addition chain");
         assert!(

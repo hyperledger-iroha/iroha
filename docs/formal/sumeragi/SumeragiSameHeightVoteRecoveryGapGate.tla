@@ -201,8 +201,14 @@ SameHeightVoteRecoveryGapMatchesSpec ==
        ActualEscalationOutput(c) = SpecEscalationOutput(c)
   /\ ActualStandardImpliesEscalation = SpecStandardImpliesEscalation
 
+SameHeightVoteRecoveryGapExactness ==
+  /\ SameHeightVoteRecoveryGapMatchesSpec
+SameHeightVoteRecoveryGapCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SameHeightVoteRecoveryGapExactness
+
 SafetyFast ==
-  SameHeightVoteRecoveryGapMatchesSpec
+  SameHeightVoteRecoveryGapExactness
 
 BugStdAllowsSubjectAhead ==
   ActualStandardOutput("std_subject_ahead") =

@@ -197,6 +197,17 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+CommitPipelineStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+CommitPipelineStatusExactness ==
+  /\ CommitPipelineStatusActionsMatchSpec
+
+CommitPipelineStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitPipelineStatusExactness
+
 BugResetEmptyKeepsSnapshot ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

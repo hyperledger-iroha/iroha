@@ -350,7 +350,17 @@ RbcDeliveredPayloadBytesCoreSafety ==
   /\ TelemetryExtractionRecordsOnlySuccessfulReports
   /\ FallbackAndComputedBytesFollowPriority
 
+RbcDeliveredPayloadBytesExactness ==
+  /\ ActionsMatchSpec
+  /\ DeliveredPayloadBytesAreGatedAndExact
+  /\ TelemetryExtractionRecordsOnlySuccessfulReports
+  /\ FallbackAndComputedBytesFollowPriority
+
+RbcDeliveredPayloadBytesCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcDeliveredPayloadBytesExactness
+
 SafetyFast ==
-  RbcDeliveredPayloadBytesCoreSafety
+  RbcDeliveredPayloadBytesExactness
 
 ====

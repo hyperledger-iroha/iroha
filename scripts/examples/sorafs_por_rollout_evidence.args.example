@@ -1,0 +1,13 @@
+# Reviewed SF-9 PoR rollout evidence gate arguments.
+# Point the evidence directory at the reviewed artifact root. Review only
+# payload-free rollout summaries. Keep challenge payloads, bearer tokens,
+# signing keys, raw proof material, and operator secrets in runtime-only
+# locations.
+--evidence-dir /var/tmp/sorafs/por-rollout
+--summary-out /var/tmp/sorafs/por-rollout-summary.json
+--max-evidence-age-secs 604800
+--max-route-latency-ms 1500
+--max-scheduler-lag-secs 900
+--max-report-latency-ms 3000
+--min-providers 3
+--min-challenges 3

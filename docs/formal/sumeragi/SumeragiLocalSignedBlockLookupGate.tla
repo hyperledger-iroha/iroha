@@ -446,8 +446,23 @@ LocalSignedBlockLookupCoreSafety ==
   /\ AbsentBlocksRemainMissing
   /\ LookupShapeMatchesPriority
 
-NoBugInvariant == LocalSignedBlockLookupCoreSafety
+LocalSignedBlockLookupExactness ==
+  /\ SourceMatchesSpec
+  /\ ActionsMatchSpec
+  /\ NormalLookupRejectsAbortedOwners
+  /\ BodyRepairIncludesAbortedOwners
+  /\ InvalidOwnersAreNeverReturned
+  /\ RejectedOwnersFallThrough
+  /\ RepairOwnerPriorityBeatsFallback
+  /\ DeferredAndKuraFallbacks
+  /\ AbsentBlocksRemainMissing
+  /\ LookupShapeMatchesPriority
+LocalSignedBlockLookupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LocalSignedBlockLookupExactness
 
-SafetyFast == LocalSignedBlockLookupCoreSafety
+NoBugInvariant == LocalSignedBlockLookupExactness
+
+SafetyFast == LocalSignedBlockLookupExactness
 
 ====

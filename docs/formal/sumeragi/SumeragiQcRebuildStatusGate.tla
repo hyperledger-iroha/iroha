@@ -184,9 +184,19 @@ Next ==
 TypeInvariant ==
   checked \in 0..18
 
-Safety ==
+QcRebuildStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+QcRebuildStatusExactness ==
+  /\ QcRebuildStatusActionsMatchSpec
+
+Safety ==
+  QcRebuildStatusExactness
+
+QcRebuildStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcRebuildStatusExactness
 
 BugResetEmptyKeepsAttempts ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

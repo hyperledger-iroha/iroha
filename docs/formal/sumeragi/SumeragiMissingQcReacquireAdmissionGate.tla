@@ -214,4 +214,12 @@ MissingQcReacquireAdmissionSafetyAnchors ==
 Safety ==
   MissingQcReacquireAdmissionSafetyAnchors
 
+MissingQcReacquireAdmissionExactness ==
+  /\ MissingQcReacquireAdmissionCoreSafety
+  /\ MissingQcReacquireAdmissionSafetyAnchors
+
+MissingQcReacquireAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcReacquireAdmissionExactness
+
 ====

@@ -15,18 +15,25 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use thiserror::Error;
 
 use crate::{
-    AdmissionRecord, AdvertValidationError, AuditorSignatureVerificationError, ByteRangeV1,
-    GovernanceDagBlockV1, GovernanceDagBlockValidationError, GovernanceDagChainValidationError,
-    GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
-    GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureVerificationError,
-    GovernanceLogValidationError, GovernanceSignatureAlgorithm, ORDERBOOK_CANCEL_VERSION_V1,
+    AdmissionRecord, AdvertValidationError, AuditorSignatureVerificationError,
+    BillingLineDirectionV1, BillingLineItemKindV1, BillingLineItemV1, BillingStatementV1,
+    ByteRangeV1, GovernanceDagBlockV1, GovernanceDagBlockValidationError,
+    GovernanceDagChainValidationError, GovernanceDagHeadChainValidationError, GovernanceDagHeadV1,
+    GovernanceDagHeadValidationError, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureVerificationError, GovernanceLogValidationError,
+    GovernanceSignatureAlgorithm, HedgingFeedStatusV1, HedgingPriceFeedV1,
+    HedgingReferencePriceDecisionV1, HedgingValidationError, ORDERBOOK_CANCEL_VERSION_V1,
     ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
     OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, OrderbookValidationError,
     PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
-    PdpProofV1, PdpProofValidationError, PorChallengeV1, PorChallengeValidationError, PorProofV1,
-    PorProofValidationError, PotrReceiptV1, PotrReceiptValidationError, ProofStreamTier,
-    ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError,
-    ProviderAdmissionRenewalV1, ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
+    PdpProofV1, PdpProofValidationError, PopCommitmentRootV1, PopCredentialV1,
+    PopCredentialValidationError, PopEligibilityClassV1, PopEnrollmentRequestV1,
+    PopIssuedCredentialBundleV1, PopMembershipProofSystemV1, PopMembershipProofV1,
+    PopRenewalRequestV1, PopRevocationListV1, PopSignatureAlgorithmV1, PopSignatureV1,
+    PorChallengeV1, PorChallengeValidationError, PorProofV1, PorProofValidationError,
+    PotrReceiptV1, PotrReceiptValidationError, ProofStreamTier, ProviderAdmissionEnvelopeError,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1,
+    ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
     ProviderAdmissionValidationError, ProviderAdvertV1, RepairAuditEventV1,
     RepairEscalationApprovalV1, RepairEscalationPolicyV1, RepairEvidenceV1, RepairReportV1,
     RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
@@ -37,7 +44,8 @@ use crate::{
     SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
     TradeEventV1, XorAmount, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
-    verify_envelope,
+    verify_envelope, verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
+    verify_pop_revocation_list_signature_v1,
 };
 
 /// Current schema version for [`ValidationOutcomeV1`].
@@ -1894,6 +1902,376 @@ fn append_orderbook_signature_context(
     ));
 }
 
+fn hedging_price_feed_context(feed: &HedgingPriceFeedV1) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "HedgingPriceFeedV1"),
+        ValidationContextFieldV1::new("version", feed.version.to_string()),
+        ValidationContextFieldV1::new("feed_id", feed.feed_id.clone()),
+        ValidationContextFieldV1::new("source", feed.source.clone()),
+        ValidationContextFieldV1::new("observed_at_unix", feed.observed_at_unix.to_string()),
+        ValidationContextFieldV1::new("xor_usd_micros", feed.xor_usd_micros.to_string()),
+        ValidationContextFieldV1::new("weight_bps", feed.weight_bps.to_string()),
+        ValidationContextFieldV1::new("evidence_digest_hex", hex::encode(feed.evidence_digest)),
+        ValidationContextFieldV1::new("status", hedging_feed_status_label(feed.status)),
+    ]
+}
+
+fn hedging_reference_price_decision_context(
+    decision: &HedgingReferencePriceDecisionV1,
+) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "HedgingReferencePriceDecisionV1"),
+        ValidationContextFieldV1::new("version", decision.version.to_string()),
+        ValidationContextFieldV1::new("decision_id_hex", hex::encode(decision.decision_id)),
+        ValidationContextFieldV1::new("effective_at_unix", decision.effective_at_unix.to_string()),
+        ValidationContextFieldV1::new("xor_usd_micros", decision.xor_usd_micros.to_string()),
+        ValidationContextFieldV1::new("max_feed_age_secs", decision.max_feed_age_secs.to_string()),
+        ValidationContextFieldV1::new(
+            "max_divergence_bps",
+            decision.max_divergence_bps.to_string(),
+        ),
+        ValidationContextFieldV1::new("feed_count", decision.feeds.len().to_string()),
+        ValidationContextFieldV1::new("degraded", decision.degraded.to_string()),
+        ValidationContextFieldV1::new(
+            "degradation_reason_count",
+            decision.degradation_reasons.len().to_string(),
+        ),
+    ]
+}
+
+fn billing_line_item_context(line: &BillingLineItemV1) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "BillingLineItemV1"),
+        ValidationContextFieldV1::new("version", line.version.to_string()),
+        ValidationContextFieldV1::new("line_id_hex", hex::encode(line.line_id)),
+        ValidationContextFieldV1::new("kind", billing_line_kind_label(line.kind)),
+        ValidationContextFieldV1::new("direction", billing_line_direction_label(line.direction)),
+        ValidationContextFieldV1::new("source_id", line.source_id.clone()),
+        ValidationContextFieldV1::new(
+            "xor_amount_micro_xor",
+            line.xor_amount.as_micro().to_string(),
+        ),
+        ValidationContextFieldV1::new("usd_micros", line.usd_micros.to_string()),
+        ValidationContextFieldV1::new("quantity_units", line.quantity_units.to_string()),
+        ValidationContextFieldV1::new("note_present", line.note.is_some().to_string()),
+    ]
+}
+
+fn billing_statement_context(statement: &BillingStatementV1) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "BillingStatementV1"),
+        ValidationContextFieldV1::new("version", statement.version.to_string()),
+        ValidationContextFieldV1::new("statement_id_hex", hex::encode(statement.statement_id)),
+        ValidationContextFieldV1::new("account_id_len", statement.account_id.len().to_string()),
+        ValidationContextFieldV1::new("period_start_unix", statement.period_start_unix.to_string()),
+        ValidationContextFieldV1::new("period_end_unix", statement.period_end_unix.to_string()),
+        ValidationContextFieldV1::new("due_at_unix", statement.due_at_unix.to_string()),
+        ValidationContextFieldV1::new(
+            "reference_decision_id_hex",
+            hex::encode(statement.reference_price.decision_id),
+        ),
+        ValidationContextFieldV1::new("line_count", statement.lines.len().to_string()),
+        ValidationContextFieldV1::new(
+            "total_debit_micro_xor",
+            statement.total_debit_xor.as_micro().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "total_credit_micro_xor",
+            statement.total_credit_xor.as_micro().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "net_due_micro_xor",
+            statement.net_due_xor.as_micro().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "total_debit_usd_micros",
+            statement.total_debit_usd_micros.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "total_credit_usd_micros",
+            statement.total_credit_usd_micros.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "net_due_usd_micros",
+            statement.net_due_usd_micros.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "previous_statement_present",
+            statement.previous_statement_id.is_some().to_string(),
+        ),
+    ]
+}
+
+fn hedging_feed_status_label(status: HedgingFeedStatusV1) -> String {
+    match status {
+        HedgingFeedStatusV1::Ok => "ok",
+        HedgingFeedStatusV1::Degraded => "degraded",
+        HedgingFeedStatusV1::Rejected => "rejected",
+    }
+    .to_owned()
+}
+
+fn billing_line_direction_label(direction: BillingLineDirectionV1) -> String {
+    match direction {
+        BillingLineDirectionV1::Debit => "debit",
+        BillingLineDirectionV1::Credit => "credit",
+    }
+    .to_owned()
+}
+
+fn billing_line_kind_label(kind: BillingLineItemKindV1) -> String {
+    match kind {
+        BillingLineItemKindV1::Storage => "storage",
+        BillingLineItemKindV1::Egress => "egress",
+        BillingLineItemKindV1::ReserveRent => "reserve_rent",
+        BillingLineItemKindV1::SettlementFee => "settlement_fee",
+        BillingLineItemKindV1::Penalty => "penalty",
+        BillingLineItemKindV1::IncentiveCredit => "incentive_credit",
+        BillingLineItemKindV1::Adjustment => "adjustment",
+    }
+    .to_owned()
+}
+
+fn pop_credential_context(credential: &PopCredentialV1) -> Vec<ValidationContextFieldV1> {
+    let mut context = vec![
+        ValidationContextFieldV1::new("schema", "PopCredentialV1"),
+        ValidationContextFieldV1::new("version", credential.version.to_string()),
+        ValidationContextFieldV1::new("credential_id_hex", hex::encode(credential.credential_id)),
+        ValidationContextFieldV1::new(
+            "holder_commitment_hex",
+            hex::encode(credential.holder_commitment),
+        ),
+        ValidationContextFieldV1::new(
+            "eligibility_class",
+            pop_eligibility_class_label(credential.eligibility_class),
+        ),
+        ValidationContextFieldV1::new("issuer_id", credential.issuer_id.clone()),
+        ValidationContextFieldV1::new("issued_at_epoch", credential.issued_at_epoch.to_string()),
+        ValidationContextFieldV1::new("expires_at_epoch", credential.expires_at_epoch.to_string()),
+        ValidationContextFieldV1::new("renewal_at_epoch", credential.renewal_at_epoch.to_string()),
+        ValidationContextFieldV1::new(
+            "revocation_nonce_hex",
+            hex::encode(credential.revocation_nonce),
+        ),
+        ValidationContextFieldV1::new(
+            "commitment_root_hex",
+            hex::encode(credential.commitment_root),
+        ),
+        ValidationContextFieldV1::new(
+            "commitment_tree_version",
+            credential.commitment_tree_version.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "revocation_list_version",
+            credential.revocation_list_version.to_string(),
+        ),
+        ValidationContextFieldV1::new("attribute_count", credential.attributes.len().to_string()),
+    ];
+    append_pop_signature_context(&mut context, &credential.issuer_signature);
+    context
+}
+
+fn pop_commitment_root_context(root: &PopCommitmentRootV1) -> Vec<ValidationContextFieldV1> {
+    let mut context = vec![
+        ValidationContextFieldV1::new("schema", "PopCommitmentRootV1"),
+        ValidationContextFieldV1::new("version", root.version.to_string()),
+        ValidationContextFieldV1::new("root_digest_hex", hex::encode(root.root_digest)),
+        ValidationContextFieldV1::new("tree_size", root.tree_size.to_string()),
+        ValidationContextFieldV1::new("tree_version", root.tree_version.to_string()),
+        ValidationContextFieldV1::new("issuer_id", root.issuer_id.clone()),
+        ValidationContextFieldV1::new("published_at_epoch", root.published_at_epoch.to_string()),
+        ValidationContextFieldV1::new(
+            "previous_root_present",
+            root.previous_root_digest.is_some().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "governance_event_digest_hex",
+            hex::encode(root.governance_event_digest),
+        ),
+    ];
+    append_pop_signature_context(&mut context, &root.publisher_signature);
+    context
+}
+
+fn pop_revocation_list_context(revocations: &PopRevocationListV1) -> Vec<ValidationContextFieldV1> {
+    let mut context = vec![
+        ValidationContextFieldV1::new("schema", "PopRevocationListV1"),
+        ValidationContextFieldV1::new("version", revocations.version.to_string()),
+        ValidationContextFieldV1::new("list_version", revocations.list_version.to_string()),
+        ValidationContextFieldV1::new(
+            "commitment_root_hex",
+            hex::encode(revocations.commitment_root),
+        ),
+        ValidationContextFieldV1::new("issuer_id", revocations.issuer_id.clone()),
+        ValidationContextFieldV1::new(
+            "published_at_epoch",
+            revocations.published_at_epoch.to_string(),
+        ),
+        ValidationContextFieldV1::new("entry_count", revocations.entries.len().to_string()),
+    ];
+    append_pop_signature_context(&mut context, &revocations.publisher_signature);
+    context
+}
+
+fn pop_issued_credential_bundle_context(
+    bundle: &PopIssuedCredentialBundleV1,
+) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "PopIssuedCredentialBundleV1"),
+        ValidationContextFieldV1::new("version", bundle.version.to_string()),
+        ValidationContextFieldV1::new(
+            "credential_id_hex",
+            hex::encode(bundle.credential.credential_id),
+        ),
+        ValidationContextFieldV1::new("issuer_id", bundle.credential.issuer_id.clone()),
+        ValidationContextFieldV1::new(
+            "commitment_root_hex",
+            hex::encode(bundle.commitment_root.root_digest),
+        ),
+        ValidationContextFieldV1::new(
+            "commitment_tree_version",
+            bundle.commitment_root.tree_version.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "revocation_list_version",
+            bundle.revocation_list.list_version.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "revocation_entry_count",
+            bundle.revocation_list.entries.len().to_string(),
+        ),
+    ]
+}
+
+fn pop_enrollment_request_context(
+    request: &PopEnrollmentRequestV1,
+) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "PopEnrollmentRequestV1"),
+        ValidationContextFieldV1::new("version", request.version.to_string()),
+        ValidationContextFieldV1::new("request_id_hex", hex::encode(request.request_id)),
+        ValidationContextFieldV1::new("applicant_id", request.applicant_id.clone()),
+        ValidationContextFieldV1::new(
+            "requested_class",
+            pop_eligibility_class_label(request.requested_class),
+        ),
+        ValidationContextFieldV1::new(
+            "requested_attribute_count",
+            request.requested_attributes.len().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "attestation_digest_hex",
+            hex::encode(request.attestation_digest),
+        ),
+        ValidationContextFieldV1::new("submitted_at_epoch", request.submitted_at_epoch.to_string()),
+        ValidationContextFieldV1::new("expires_at_epoch", request.expires_at_epoch.to_string()),
+    ]
+}
+
+fn pop_renewal_request_context(request: &PopRenewalRequestV1) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "PopRenewalRequestV1"),
+        ValidationContextFieldV1::new("version", request.version.to_string()),
+        ValidationContextFieldV1::new("request_id_hex", hex::encode(request.request_id)),
+        ValidationContextFieldV1::new(
+            "previous_credential_id_hex",
+            hex::encode(request.previous_credential_id),
+        ),
+        ValidationContextFieldV1::new(
+            "holder_commitment_hex",
+            hex::encode(request.holder_commitment),
+        ),
+        ValidationContextFieldV1::new(
+            "rotation_commitment_hex",
+            hex::encode(request.rotation_commitment),
+        ),
+        ValidationContextFieldV1::new(
+            "requested_expires_at_epoch",
+            request.requested_expires_at_epoch.to_string(),
+        ),
+        ValidationContextFieldV1::new("submitted_at_epoch", request.submitted_at_epoch.to_string()),
+        ValidationContextFieldV1::new(
+            "attestation_digest_hex",
+            hex::encode(request.attestation_digest),
+        ),
+    ]
+}
+
+fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationContextFieldV1> {
+    vec![
+        ValidationContextFieldV1::new("schema", "PopMembershipProofV1"),
+        ValidationContextFieldV1::new("version", proof.version.to_string()),
+        ValidationContextFieldV1::new("proof_id_hex", hex::encode(proof.proof_id)),
+        ValidationContextFieldV1::new("credential_id_hex", hex::encode(proof.credential_id)),
+        ValidationContextFieldV1::new(
+            "holder_commitment_hex",
+            hex::encode(proof.holder_commitment),
+        ),
+        ValidationContextFieldV1::new(
+            "eligibility_class",
+            pop_eligibility_class_label(proof.eligibility_class),
+        ),
+        ValidationContextFieldV1::new("commitment_root_hex", hex::encode(proof.commitment_root)),
+        ValidationContextFieldV1::new(
+            "commitment_tree_version",
+            proof.commitment_tree_version.to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "revocation_list_version",
+            proof.revocation_list_version.to_string(),
+        ),
+        ValidationContextFieldV1::new("nullifier_hex", hex::encode(proof.nullifier)),
+        ValidationContextFieldV1::new("challenge_digest_hex", hex::encode(proof.challenge_digest)),
+        ValidationContextFieldV1::new("verifier_context", proof.verifier_context.clone()),
+        ValidationContextFieldV1::new(
+            "proof_system",
+            pop_membership_proof_system_label(proof.proof_system),
+        ),
+        ValidationContextFieldV1::new("proof_digest_hex", hex::encode(proof.proof_digest)),
+        ValidationContextFieldV1::new("expires_at_epoch", proof.expires_at_epoch.to_string()),
+    ]
+}
+
+fn append_pop_signature_context(
+    context: &mut Vec<ValidationContextFieldV1>,
+    signature: &PopSignatureV1,
+) {
+    context.push(ValidationContextFieldV1::new(
+        "signature_algorithm",
+        pop_signature_algorithm_label(signature.algorithm),
+    ));
+    context.push(ValidationContextFieldV1::new(
+        "signature_public_key_len",
+        signature.public_key.len().to_string(),
+    ));
+    context.push(ValidationContextFieldV1::new(
+        "signature_len",
+        signature.signature.len().to_string(),
+    ));
+}
+
+fn pop_eligibility_class_label(class: PopEligibilityClassV1) -> &'static str {
+    match class {
+        PopEligibilityClassV1::General => "general",
+        PopEligibilityClassV1::Regional => "regional",
+        PopEligibilityClassV1::Expert => "expert",
+        PopEligibilityClassV1::Emergency => "emergency",
+        PopEligibilityClassV1::Observer => "observer",
+    }
+}
+
+fn pop_signature_algorithm_label(algorithm: PopSignatureAlgorithmV1) -> &'static str {
+    match algorithm {
+        PopSignatureAlgorithmV1::Ed25519 => "ed25519",
+    }
+}
+
+fn pop_membership_proof_system_label(system: PopMembershipProofSystemV1) -> &'static str {
+    match system {
+        PopMembershipProofSystemV1::TranscriptDigestV1 => "transcript_digest_v1",
+    }
+}
+
 fn order_side_label(side: OrderSideV1) -> &'static str {
     match side {
         OrderSideV1::Bid => "bid",
@@ -2269,6 +2647,126 @@ impl OrderbookValidationPayloadKindV1 {
     }
 }
 
+/// PoP credential payload kinds supported by the reference validator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopValidationPayloadKindV1 {
+    /// [`PopCredentialV1`] payload with issuer signature verification.
+    Credential,
+    /// [`PopCommitmentRootV1`] payload with publisher signature verification.
+    CommitmentRoot,
+    /// [`PopRevocationListV1`] payload with publisher signature verification.
+    RevocationList,
+    /// [`PopIssuedCredentialBundleV1`] payload with issuer publication verification.
+    IssuedCredentialBundle,
+    /// [`PopEnrollmentRequestV1`] payload.
+    EnrollmentRequest,
+    /// [`PopRenewalRequestV1`] payload.
+    RenewalRequest,
+    /// [`PopMembershipProofV1`] payload.
+    MembershipProof,
+}
+
+impl PopValidationPayloadKindV1 {
+    fn input_kind(self) -> &'static str {
+        match self {
+            Self::Credential => "pop_credential",
+            Self::CommitmentRoot => "pop_commitment_root",
+            Self::RevocationList => "pop_revocation_list",
+            Self::IssuedCredentialBundle => "pop_issued_credential_bundle",
+            Self::EnrollmentRequest => "pop_enrollment_request",
+            Self::RenewalRequest => "pop_renewal_request",
+            Self::MembershipProof => "pop_membership_proof",
+        }
+    }
+
+    fn schema(self) -> &'static str {
+        match self {
+            Self::Credential => "PopCredentialV1",
+            Self::CommitmentRoot => "PopCommitmentRootV1",
+            Self::RevocationList => "PopRevocationListV1",
+            Self::IssuedCredentialBundle => "PopIssuedCredentialBundleV1",
+            Self::EnrollmentRequest => "PopEnrollmentRequestV1",
+            Self::RenewalRequest => "PopRenewalRequestV1",
+            Self::MembershipProof => "PopMembershipProofV1",
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Credential => "credential",
+            Self::CommitmentRoot => "commitment_root",
+            Self::RevocationList => "revocation_list",
+            Self::IssuedCredentialBundle => "issued_credential_bundle",
+            Self::EnrollmentRequest => "enrollment_request",
+            Self::RenewalRequest => "renewal_request",
+            Self::MembershipProof => "membership_proof",
+        }
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::Credential => "PoP credential accepted",
+            Self::CommitmentRoot => "PoP commitment root accepted",
+            Self::RevocationList => "PoP revocation list accepted",
+            Self::IssuedCredentialBundle => "PoP issued credential bundle accepted",
+            Self::EnrollmentRequest => "PoP enrollment request accepted",
+            Self::RenewalRequest => "PoP renewal request accepted",
+            Self::MembershipProof => "PoP membership proof accepted",
+        }
+    }
+}
+
+/// SoraFS hedging and billing payload kinds supported by the reference validator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HedgingValidationPayloadKindV1 {
+    /// [`HedgingPriceFeedV1`] payload.
+    PriceFeed,
+    /// [`HedgingReferencePriceDecisionV1`] payload.
+    ReferencePriceDecision,
+    /// [`BillingLineItemV1`] payload.
+    BillingLineItem,
+    /// [`BillingStatementV1`] payload.
+    BillingStatement,
+}
+
+impl HedgingValidationPayloadKindV1 {
+    fn input_kind(self) -> &'static str {
+        match self {
+            Self::PriceFeed => "hedging_price_feed",
+            Self::ReferencePriceDecision => "hedging_reference_price_decision",
+            Self::BillingLineItem => "billing_line_item",
+            Self::BillingStatement => "billing_statement",
+        }
+    }
+
+    fn schema(self) -> &'static str {
+        match self {
+            Self::PriceFeed => "HedgingPriceFeedV1",
+            Self::ReferencePriceDecision => "HedgingReferencePriceDecisionV1",
+            Self::BillingLineItem => "BillingLineItemV1",
+            Self::BillingStatement => "BillingStatementV1",
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::PriceFeed => "price_feed",
+            Self::ReferencePriceDecision => "reference_price_decision",
+            Self::BillingLineItem => "billing_line_item",
+            Self::BillingStatement => "billing_statement",
+        }
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::PriceFeed => "hedging price feed accepted",
+            Self::ReferencePriceDecision => "hedging reference-price decision accepted",
+            Self::BillingLineItem => "billing line item accepted",
+            Self::BillingStatement => "billing statement accepted",
+        }
+    }
+}
+
 /// Validates a Norito-encoded orderbook payload and emits a reference outcome.
 #[must_use]
 pub fn validate_orderbook_payload_bytes(
@@ -2354,6 +2852,72 @@ pub fn validate_orderbook_payload_bytes(
                     generated_at,
                 ),
                 Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+    }
+}
+
+/// Validates a Norito-encoded SoraFS hedging/billing payload and emits a reference outcome.
+#[must_use]
+pub fn validate_hedging_payload_bytes(
+    kind: HedgingValidationPayloadKindV1,
+    bytes: &[u8],
+    input_label: impl Into<String>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    let input_label = input_label.into();
+    let inputs = vec![ValidationInputV1::new(
+        kind.input_kind(),
+        input_label.clone(),
+    )];
+
+    match kind {
+        HedgingValidationPayloadKindV1::PriceFeed => {
+            match norito::decode_from_bytes::<HedgingPriceFeedV1>(bytes) {
+                Ok(payload) => validate_hedging_payload_value(
+                    kind,
+                    payload.validate(),
+                    hedging_price_feed_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => hedging_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        HedgingValidationPayloadKindV1::ReferencePriceDecision => {
+            match norito::decode_from_bytes::<HedgingReferencePriceDecisionV1>(bytes) {
+                Ok(payload) => validate_hedging_payload_value(
+                    kind,
+                    payload.validate(),
+                    hedging_reference_price_decision_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => hedging_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        HedgingValidationPayloadKindV1::BillingLineItem => {
+            match norito::decode_from_bytes::<BillingLineItemV1>(bytes) {
+                Ok(payload) => validate_hedging_payload_value(
+                    kind,
+                    payload.validate(),
+                    billing_line_item_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => hedging_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        HedgingValidationPayloadKindV1::BillingStatement => {
+            match norito::decode_from_bytes::<BillingStatementV1>(bytes) {
+                Ok(payload) => validate_hedging_payload_value(
+                    kind,
+                    payload.validate(),
+                    billing_statement_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => hedging_decode_error(kind, error.to_string(), inputs, generated_at),
             }
         }
     }
@@ -2727,6 +3291,199 @@ fn orderbook_decode_error(
         vec![
             "sorafs.reference.orderbook".to_owned(),
             format!("sorafs.reference.orderbook.{}", kind.tag()),
+            "sorafs.reference.code.SFS-NORITO-001".to_owned(),
+        ],
+        vec![ValidationContextFieldV1::new("schema", kind.schema())],
+        inputs,
+        generated_at,
+    )
+}
+
+fn validate_hedging_payload_value(
+    kind: HedgingValidationPayloadKindV1,
+    result: Result<(), HedgingValidationError>,
+    context: Vec<ValidationContextFieldV1>,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    if let Err(error) = result {
+        return hedging_validation_error_outcome(kind, error, context, inputs, generated_at);
+    }
+
+    ValidationOutcomeV1::ok(
+        "SFS-OK-000",
+        kind.success_message(),
+        vec![
+            "sorafs.reference.hedging".to_owned(),
+            format!("sorafs.reference.hedging.{}", kind.tag()),
+            "sorafs.reference.code.SFS-OK-000".to_owned(),
+        ],
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn hedging_decode_error(
+    kind: HedgingValidationPayloadKindV1,
+    error: String,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    ValidationOutcomeV1::error(
+        "SFS-NORITO-001",
+        CATEGORY_NORITO,
+        format!("failed to decode {} Norito payload: {error}", kind.schema()),
+        "Re-encode the hedging or billing payload with the canonical SoraFS Norito schema.",
+        vec![
+            "sorafs.reference.hedging".to_owned(),
+            format!("sorafs.reference.hedging.{}", kind.tag()),
+            "sorafs.reference.code.SFS-NORITO-001".to_owned(),
+        ],
+        vec![ValidationContextFieldV1::new("schema", kind.schema())],
+        inputs,
+        generated_at,
+    )
+}
+
+/// Validates a Norito-encoded PoP credential payload and emits a reference outcome.
+#[must_use]
+pub fn validate_pop_payload_bytes(
+    kind: PopValidationPayloadKindV1,
+    bytes: &[u8],
+    input_label: impl Into<String>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    let input = ValidationInputV1::new(kind.input_kind(), input_label);
+    let inputs = vec![input];
+
+    match kind {
+        PopValidationPayloadKindV1::Credential => {
+            match norito::decode_from_bytes::<PopCredentialV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    verify_pop_credential_signature_v1(&payload),
+                    pop_credential_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        PopValidationPayloadKindV1::CommitmentRoot => {
+            match norito::decode_from_bytes::<PopCommitmentRootV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    verify_pop_commitment_root_signature_v1(&payload),
+                    pop_commitment_root_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        PopValidationPayloadKindV1::RevocationList => {
+            match norito::decode_from_bytes::<PopRevocationListV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    verify_pop_revocation_list_signature_v1(&payload),
+                    pop_revocation_list_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        PopValidationPayloadKindV1::IssuedCredentialBundle => {
+            match norito::decode_from_bytes::<PopIssuedCredentialBundleV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    payload.validate(),
+                    pop_issued_credential_bundle_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        PopValidationPayloadKindV1::EnrollmentRequest => {
+            match norito::decode_from_bytes::<PopEnrollmentRequestV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    payload.validate(),
+                    pop_enrollment_request_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        PopValidationPayloadKindV1::RenewalRequest => {
+            match norito::decode_from_bytes::<PopRenewalRequestV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    payload.validate(),
+                    pop_renewal_request_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+        PopValidationPayloadKindV1::MembershipProof => {
+            match norito::decode_from_bytes::<PopMembershipProofV1>(bytes) {
+                Ok(payload) => validate_pop_payload_value(
+                    kind,
+                    payload.validate(),
+                    pop_membership_proof_context(&payload),
+                    inputs,
+                    generated_at,
+                ),
+                Err(error) => pop_decode_error(kind, error.to_string(), inputs, generated_at),
+            }
+        }
+    }
+}
+
+fn validate_pop_payload_value(
+    kind: PopValidationPayloadKindV1,
+    result: Result<(), PopCredentialValidationError>,
+    context: Vec<ValidationContextFieldV1>,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    if let Err(error) = result {
+        return pop_validation_error_outcome(kind, error, context, inputs, generated_at);
+    }
+
+    ValidationOutcomeV1::ok(
+        "SFS-OK-000",
+        kind.success_message(),
+        vec![
+            "sorafs.reference.pop".to_owned(),
+            format!("sorafs.reference.pop.{}", kind.tag()),
+            "sorafs.reference.code.SFS-OK-000".to_owned(),
+        ],
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn pop_decode_error(
+    kind: PopValidationPayloadKindV1,
+    error: String,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    ValidationOutcomeV1::error(
+        "SFS-NORITO-001",
+        CATEGORY_NORITO,
+        format!("failed to decode {} Norito payload: {error}", kind.schema()),
+        "Re-encode the PoP payload with the canonical SoraFS Norito schema.",
+        vec![
+            "sorafs.reference.pop".to_owned(),
+            format!("sorafs.reference.pop.{}", kind.tag()),
             "sorafs.reference.code.SFS-NORITO-001".to_owned(),
         ],
         vec![ValidationContextFieldV1::new("schema", kind.schema())],
@@ -4960,6 +5717,115 @@ fn repair_validation_action(code: &str) -> &'static str {
     }
 }
 
+fn pop_validation_error_outcome(
+    kind: PopValidationPayloadKindV1,
+    error: PopCredentialValidationError,
+    mut context: Vec<ValidationContextFieldV1>,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    let code = pop_validation_code(&error);
+    let category = pop_validation_category(&error);
+    let error_key = if category == CATEGORY_SIGNATURE {
+        "signature_error"
+    } else {
+        "validation_error"
+    };
+    context.push(ValidationContextFieldV1::new(error_key, error.to_string()));
+    ValidationOutcomeV1::error(
+        code,
+        category,
+        format!("{} validation failed: {error}", kind.schema()),
+        pop_validation_action(code),
+        vec![
+            "sorafs.reference.pop".to_owned(),
+            format!("sorafs.reference.pop.{}", kind.tag()),
+            format!("sorafs.reference.code.{code}"),
+        ],
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn pop_validation_action(code: &str) -> &'static str {
+    match code {
+        "SFS-NORITO-001" => "Re-encode the PoP payload with the canonical SoraFS Norito schema.",
+        "SFS-VAL-001" => {
+            "Regenerate the PoP payload from canonical issuer or juror-client state with non-zero digests and valid text fields."
+        }
+        "SFS-VAL-002" => "Regenerate the PoP payload with the supported V1 schema.",
+        "SFS-POP-001" => {
+            "Regenerate the PoP proof or publication from the same active credential, commitment root, and revocation list snapshot."
+        }
+        "SFS-POL-010" => {
+            "Refresh the PoP credential, proof, or revocation snapshot before submitting the payload."
+        }
+        "SFS-SIG-009" => {
+            "Resign the PoP credential, commitment root, or revocation list with the governed issuer Ed25519 key."
+        }
+        "SFS-INT-001" => {
+            "Retry validation after checking the local validator build and Norito encoder."
+        }
+        _ => "Regenerate the PoP payload from canonical SoraFS state and retry validation.",
+    }
+}
+
+fn hedging_validation_error_outcome(
+    kind: HedgingValidationPayloadKindV1,
+    error: HedgingValidationError,
+    mut context: Vec<ValidationContextFieldV1>,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    let code = hedging_validation_code(&error);
+    let category = hedging_validation_category(&error);
+    let error_key = if category == CATEGORY_INTERNAL {
+        "internal_error"
+    } else {
+        "validation_error"
+    };
+    context.push(ValidationContextFieldV1::new(error_key, error.to_string()));
+    ValidationOutcomeV1::error(
+        code,
+        category,
+        format!("{} validation failed: {error}", kind.schema()),
+        hedging_validation_action(code),
+        vec![
+            "sorafs.reference.hedging".to_owned(),
+            format!("sorafs.reference.hedging.{}", kind.tag()),
+            format!("sorafs.reference.code.{code}"),
+        ],
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn hedging_validation_action(code: &str) -> &'static str {
+    match code {
+        "SFS-NORITO-001" => {
+            "Re-encode the hedging or billing payload with the canonical SoraFS Norito schema."
+        }
+        "SFS-VAL-001" => {
+            "Regenerate the hedging or billing payload from canonical feed, pricing, or statement state with non-zero ids, digests, prices, and amounts."
+        }
+        "SFS-VAL-002" => "Regenerate the hedging or billing payload with the supported V1 schema.",
+        "SFS-POL-020" => {
+            "Refresh the feed, decision, or billing window so timestamps and feed policy match the active SoraFS hedging policy."
+        }
+        "SFS-HDG-001" => {
+            "Replay the reference-price or billing statement calculation and regenerate ids, totals, and USD equivalents from canonical inputs."
+        }
+        "SFS-INT-001" => {
+            "Retry validation after checking the local validator build, Norito encoder, and amount ranges."
+        }
+        _ => {
+            "Regenerate the hedging or billing payload from canonical SoraFS state and retry validation."
+        }
+    }
+}
+
 fn advert_validation_code(error: &AdvertValidationError) -> &'static str {
     match error {
         AdvertValidationError::UnsupportedVersion(_) => "SFS-VAL-002",
@@ -5005,6 +5871,81 @@ fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
         | OrderbookValidationError::ReceiptExceedsEscrow { .. }
         | OrderbookValidationError::Amount(_) => "SFS-OBK-002",
         _ => "SFS-OBK-001",
+    }
+}
+
+fn pop_validation_code(error: &PopCredentialValidationError) -> &'static str {
+    match error {
+        PopCredentialValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
+        PopCredentialValidationError::InvalidDigest { .. }
+        | PopCredentialValidationError::EmptyText { .. }
+        | PopCredentialValidationError::InvalidText { .. }
+        | PopCredentialValidationError::DuplicateAttribute { .. }
+        | PopCredentialValidationError::DuplicateRequestedAttribute { .. }
+        | PopCredentialValidationError::DuplicateDigest { .. }
+        | PopCredentialValidationError::InvalidVersionCounter { .. }
+        | PopCredentialValidationError::UnsortedRevocationList
+        | PopCredentialValidationError::DuplicateRevocationNonce => "SFS-VAL-001",
+        PopCredentialValidationError::InvalidTimestamp { .. }
+        | PopCredentialValidationError::InvalidValidityWindow { .. }
+        | PopCredentialValidationError::InvalidRenewalEpoch { .. }
+        | PopCredentialValidationError::ExpiredCredential { .. }
+        | PopCredentialValidationError::ExpiredProof { .. }
+        | PopCredentialValidationError::StaleRevocationList { .. }
+        | PopCredentialValidationError::RevocationListVersionMismatch { .. }
+        | PopCredentialValidationError::RevokedCredential
+        | PopCredentialValidationError::ReplayedProof
+        | PopCredentialValidationError::PolicyOnlyProofSystem => "SFS-POL-010",
+        PopCredentialValidationError::ProofDigestMismatch
+        | PopCredentialValidationError::ProofCredentialMismatch
+        | PopCredentialValidationError::ProofHolderCommitmentMismatch
+        | PopCredentialValidationError::ProofEligibilityClassMismatch
+        | PopCredentialValidationError::WrongCommitmentRoot
+        | PopCredentialValidationError::CommitmentTreeVersionMismatch
+        | PopCredentialValidationError::IssuerMismatch
+        | PopCredentialValidationError::IssuerKeyMismatch
+        | PopCredentialValidationError::CredentialRevocationListMismatch => "SFS-POP-001",
+        PopCredentialValidationError::InvalidPublicKeyLength { .. }
+        | PopCredentialValidationError::InvalidSignatureLength { .. }
+        | PopCredentialValidationError::InvalidPublicKey { .. }
+        | PopCredentialValidationError::SignatureVerification { .. } => "SFS-SIG-009",
+        PopCredentialValidationError::SignaturePayloadEncoding { .. } => "SFS-INT-001",
+    }
+}
+
+fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
+    match error {
+        HedgingValidationError::UnsupportedPriceFeedVersion { .. }
+        | HedgingValidationError::UnsupportedReferencePriceDecisionVersion { .. }
+        | HedgingValidationError::UnsupportedBillingLineVersion { .. }
+        | HedgingValidationError::UnsupportedBillingStatementVersion { .. } => "SFS-VAL-002",
+        HedgingValidationError::InvalidText { .. }
+        | HedgingValidationError::InvalidDigest { .. }
+        | HedgingValidationError::InvalidTimestamp { .. }
+        | HedgingValidationError::InvalidBasisPoints { .. }
+        | HedgingValidationError::NoPriceFeeds
+        | HedgingValidationError::DuplicateFeedId { .. }
+        | HedgingValidationError::ZeroMaxFeedAge
+        | HedgingValidationError::ZeroReferencePrice
+        | HedgingValidationError::DuplicateDegradationReason
+        | HedgingValidationError::ZeroBillingAmount
+        | HedgingValidationError::ZeroUsdAmount
+        | HedgingValidationError::EmptyAccountId
+        | HedgingValidationError::NoBillingLines
+        | HedgingValidationError::DuplicateLineId => "SFS-VAL-001",
+        HedgingValidationError::RejectedFeed { .. }
+        | HedgingValidationError::FutureFeed { .. }
+        | HedgingValidationError::StaleFeed { .. }
+        | HedgingValidationError::InvalidPeriod
+        | HedgingValidationError::InvalidDueAt => "SFS-POL-020",
+        HedgingValidationError::ReferencePriceMismatch { .. }
+        | HedgingValidationError::DegradationMismatch
+        | HedgingValidationError::BillingTotalsMismatch
+        | HedgingValidationError::BillingLineUsdMismatch { .. }
+        | HedgingValidationError::DigestMismatch { .. } => "SFS-HDG-001",
+        HedgingValidationError::AmountOverflow
+        | HedgingValidationError::AmountUnderflow
+        | HedgingValidationError::Norito(_) => "SFS-INT-001",
     }
 }
 
@@ -5079,8 +6020,10 @@ fn pdp_proof_validation_code(error: &PdpProofValidationError) -> &'static str {
         PdpProofValidationError::MissingSignature => "SFS-SIG-008",
         PdpProofValidationError::EmptyProofSet
         | PdpProofValidationError::InvalidSegmentDigest { .. }
+        | PdpProofValidationError::MissingSegmentMerklePath { .. }
         | PdpProofValidationError::MissingHotLeafProofs { .. }
-        | PdpProofValidationError::InvalidLeafDigest { .. } => "SFS-PDP-001",
+        | PdpProofValidationError::InvalidLeafDigest { .. }
+        | PdpProofValidationError::MissingLeafMerklePath { .. } => "SFS-PDP-001",
         PdpProofValidationError::InvalidChallengeId
         | PdpProofValidationError::InvalidProviderId
         | PdpProofValidationError::InvalidIssuedAt => "SFS-PDP-002",
@@ -5275,6 +6218,41 @@ fn orderbook_validation_category(error: &OrderbookValidationError) -> &'static s
         OrderbookValidationError::InvalidSignature
         | OrderbookValidationError::InvalidPublicKeyLength { .. }
         | OrderbookValidationError::InvalidSignatureLength { .. } => CATEGORY_SIGNATURE,
+        _ => CATEGORY_VALIDATION,
+    }
+}
+
+fn pop_validation_category(error: &PopCredentialValidationError) -> &'static str {
+    match error {
+        PopCredentialValidationError::InvalidTimestamp { .. }
+        | PopCredentialValidationError::InvalidValidityWindow { .. }
+        | PopCredentialValidationError::InvalidRenewalEpoch { .. }
+        | PopCredentialValidationError::ExpiredCredential { .. }
+        | PopCredentialValidationError::ExpiredProof { .. }
+        | PopCredentialValidationError::StaleRevocationList { .. }
+        | PopCredentialValidationError::RevocationListVersionMismatch { .. }
+        | PopCredentialValidationError::RevokedCredential
+        | PopCredentialValidationError::ReplayedProof
+        | PopCredentialValidationError::PolicyOnlyProofSystem => CATEGORY_POLICY,
+        PopCredentialValidationError::InvalidPublicKeyLength { .. }
+        | PopCredentialValidationError::InvalidSignatureLength { .. }
+        | PopCredentialValidationError::InvalidPublicKey { .. }
+        | PopCredentialValidationError::SignatureVerification { .. } => CATEGORY_SIGNATURE,
+        PopCredentialValidationError::SignaturePayloadEncoding { .. } => CATEGORY_INTERNAL,
+        _ => CATEGORY_VALIDATION,
+    }
+}
+
+fn hedging_validation_category(error: &HedgingValidationError) -> &'static str {
+    match error {
+        HedgingValidationError::RejectedFeed { .. }
+        | HedgingValidationError::FutureFeed { .. }
+        | HedgingValidationError::StaleFeed { .. }
+        | HedgingValidationError::InvalidPeriod
+        | HedgingValidationError::InvalidDueAt => CATEGORY_POLICY,
+        HedgingValidationError::AmountOverflow
+        | HedgingValidationError::AmountUnderflow
+        | HedgingValidationError::Norito(_) => CATEGORY_INTERNAL,
         _ => CATEGORY_VALIDATION,
     }
 }
@@ -5691,6 +6669,204 @@ mod tests {
             settlement_receipts: vec![receipt],
             expired_order_ids: vec![[0x74; 32]],
         }
+    }
+
+    fn hedging_digest(label: &str) -> [u8; 32] {
+        let hash = blake3::hash(label.as_bytes());
+        let mut out = [0_u8; 32];
+        out.copy_from_slice(hash.as_bytes());
+        out
+    }
+
+    fn hedging_feed(feed_id: &str, price: u64, observed_at_unix: u64) -> HedgingPriceFeedV1 {
+        HedgingPriceFeedV1 {
+            version: crate::HEDGING_PRICE_FEED_VERSION_V1,
+            feed_id: feed_id.to_owned(),
+            source: format!("{feed_id}-source"),
+            observed_at_unix,
+            xor_usd_micros: price,
+            weight_bps: 5_000,
+            evidence_digest: hedging_digest(feed_id),
+            status: HedgingFeedStatusV1::Ok,
+        }
+    }
+
+    fn hedging_reference_decision() -> HedgingReferencePriceDecisionV1 {
+        crate::derive_reference_price_decision_v1(
+            1_800,
+            vec![
+                hedging_feed("primary", 2_000_000, 1_790),
+                hedging_feed("secondary", 2_000_000, 1_785),
+            ],
+            120,
+            500,
+        )
+        .expect("reference decision")
+    }
+
+    fn billing_statement() -> BillingStatementV1 {
+        let reference_price = hedging_reference_decision();
+        let storage = crate::build_billing_line_item_v1(
+            BillingLineItemKindV1::Storage,
+            BillingLineDirectionV1::Debit,
+            "deal-storage",
+            XorAmount::from_micro(10 * crate::MICRO_XOR_PER_XOR),
+            reference_price.xor_usd_micros,
+            86_400,
+            Some("weekly storage".to_owned()),
+        )
+        .expect("storage line");
+        let credit = crate::build_billing_line_item_v1(
+            BillingLineItemKindV1::IncentiveCredit,
+            BillingLineDirectionV1::Credit,
+            "provider-credit",
+            XorAmount::from_micro(crate::MICRO_XOR_PER_XOR),
+            reference_price.xor_usd_micros,
+            1,
+            None,
+        )
+        .expect("credit line");
+        crate::build_billing_statement_v1(
+            b"buyer-account".to_vec(),
+            1_000,
+            1_700,
+            2_000,
+            reference_price,
+            vec![storage, credit],
+            None,
+        )
+        .expect("billing statement")
+    }
+
+    fn pop_digest(seed: u8) -> [u8; 32] {
+        [seed; 32]
+    }
+
+    fn pop_empty_signature() -> crate::PopSignatureV1 {
+        crate::PopSignatureV1 {
+            algorithm: crate::PopSignatureAlgorithmV1::Ed25519,
+            public_key: vec![1; PUBLIC_KEY_LENGTH],
+            signature: vec![2; SIGNATURE_LENGTH],
+        }
+    }
+
+    fn pop_credential() -> crate::PopCredentialV1 {
+        crate::PopCredentialV1 {
+            version: crate::POP_CREDENTIAL_VERSION_V1,
+            credential_id: pop_digest(0x11),
+            holder_commitment: pop_digest(0x12),
+            eligibility_class: crate::PopEligibilityClassV1::General,
+            attributes: vec![crate::PopCredentialAttributeV1 {
+                key: "residency".to_owned(),
+                value_commitment: pop_digest(0x13),
+            }],
+            issuer_id: "issuer.sorafs".to_owned(),
+            issued_at_epoch: 100,
+            expires_at_epoch: 1_000,
+            renewal_at_epoch: 800,
+            revocation_nonce: pop_digest(0x14),
+            commitment_root: pop_digest(0x15),
+            commitment_tree_version: 7,
+            revocation_list_version: 3,
+            issuer_signature: pop_empty_signature(),
+        }
+    }
+
+    fn pop_commitment_root() -> crate::PopCommitmentRootV1 {
+        crate::PopCommitmentRootV1 {
+            version: crate::POP_COMMITMENT_ROOT_VERSION_V1,
+            root_digest: pop_digest(0x15),
+            tree_size: 32,
+            tree_version: 7,
+            issuer_id: "issuer.sorafs".to_owned(),
+            published_at_epoch: 120,
+            previous_root_digest: Some(pop_digest(0x16)),
+            governance_event_digest: pop_digest(0x17),
+            publisher_signature: pop_empty_signature(),
+        }
+    }
+
+    fn pop_revocations() -> crate::PopRevocationListV1 {
+        crate::PopRevocationListV1 {
+            version: crate::POP_REVOCATION_LIST_VERSION_V1,
+            list_version: 3,
+            commitment_root: pop_digest(0x15),
+            issuer_id: "issuer.sorafs".to_owned(),
+            published_at_epoch: 130,
+            entries: Vec::new(),
+            publisher_signature: pop_empty_signature(),
+        }
+    }
+
+    fn pop_enrollment() -> crate::PopEnrollmentRequestV1 {
+        crate::PopEnrollmentRequestV1 {
+            version: crate::POP_ENROLLMENT_REQUEST_VERSION_V1,
+            request_id: pop_digest(0x21),
+            applicant_id: "alice@sora".to_owned(),
+            requested_class: crate::PopEligibilityClassV1::General,
+            requested_attributes: vec!["residency".to_owned()],
+            attestation_digest: pop_digest(0x22),
+            submitted_at_epoch: 100,
+            expires_at_epoch: 200,
+        }
+    }
+
+    fn pop_renewal() -> crate::PopRenewalRequestV1 {
+        crate::PopRenewalRequestV1 {
+            version: crate::POP_RENEWAL_REQUEST_VERSION_V1,
+            request_id: pop_digest(0x31),
+            previous_credential_id: pop_digest(0x11),
+            holder_commitment: pop_digest(0x12),
+            rotation_commitment: pop_digest(0x32),
+            requested_expires_at_epoch: 2_000,
+            submitted_at_epoch: 900,
+            attestation_digest: pop_digest(0x33),
+        }
+    }
+
+    fn pop_membership_proof() -> crate::PopMembershipProofV1 {
+        crate::finalize_pop_membership_proof_digest_v1(crate::PopMembershipProofV1 {
+            version: crate::POP_MEMBERSHIP_PROOF_VERSION_V1,
+            proof_id: pop_digest(0x41),
+            credential_id: pop_digest(0x11),
+            holder_commitment: pop_digest(0x12),
+            eligibility_class: crate::PopEligibilityClassV1::General,
+            commitment_root: pop_digest(0x15),
+            commitment_tree_version: 7,
+            revocation_list_version: 3,
+            nullifier: pop_digest(0x42),
+            challenge_digest: pop_digest(0x43),
+            verifier_context: "jury-case-1".to_owned(),
+            proof_system: crate::PopMembershipProofSystemV1::TranscriptDigestV1,
+            proof_digest: [0; 32],
+            expires_at_epoch: 2_000,
+        })
+        .expect("finalize PoP proof digest")
+    }
+
+    fn signed_pop_material() -> (
+        crate::PopCredentialV1,
+        crate::PopCommitmentRootV1,
+        crate::PopRevocationListV1,
+    ) {
+        let key = SigningKey::from_bytes(&[0x55; 32]);
+        let credential =
+            crate::sign_pop_credential_ed25519_v1(pop_credential(), &key).expect("sign credential");
+        let root = crate::sign_pop_commitment_root_ed25519_v1(pop_commitment_root(), &key)
+            .expect("sign commitment root");
+        let revocations = crate::sign_pop_revocation_list_ed25519_v1(pop_revocations(), &key)
+            .expect("sign revocations");
+        (credential, root, revocations)
+    }
+
+    fn issued_pop_bundle() -> crate::PopIssuedCredentialBundleV1 {
+        crate::issue_pop_credential_bundle_ed25519_v1(
+            pop_credential(),
+            pop_commitment_root(),
+            pop_revocations(),
+            &SigningKey::from_bytes(&[0x55; 32]),
+        )
+        .expect("issue PoP bundle")
     }
 
     fn potr_receipt() -> PotrReceiptV1 {
@@ -6792,6 +7968,171 @@ mod tests {
         );
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-SIG-004", "{outcome:?}");
+        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+    }
+
+    #[test]
+    fn validate_hedging_payload_bytes_accepts_billing_statement() {
+        let statement = billing_statement();
+        let bytes = to_bytes(&statement).expect("encode billing statement");
+        let outcome = validate_hedging_payload_bytes(
+            HedgingValidationPayloadKindV1::BillingStatement,
+            &bytes,
+            "billing-statement.to",
+            31,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "statement_id_hex" && field.value == hex::encode(statement.statement_id)
+        }));
+    }
+
+    #[test]
+    fn validate_hedging_payload_bytes_rejects_malformed_norito() {
+        let outcome = validate_hedging_payload_bytes(
+            HedgingValidationPayloadKindV1::BillingStatement,
+            b"not norito",
+            "bad-billing-statement.to",
+            32,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
+    }
+
+    #[test]
+    fn validate_hedging_payload_bytes_rejects_stale_decision_feed() {
+        let mut decision = hedging_reference_decision();
+        decision.feeds[0].observed_at_unix = 1_000;
+        decision.decision_id =
+            crate::reference_price_decision_id_v1(&decision).expect("derive tampered decision id");
+        let bytes = to_bytes(&decision).expect("encode stale decision");
+        let outcome = validate_hedging_payload_bytes(
+            HedgingValidationPayloadKindV1::ReferencePriceDecision,
+            &bytes,
+            "stale-decision.to",
+            33,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-POL-020", "{outcome:?}");
+        assert_eq!(outcome.category, CATEGORY_POLICY);
+    }
+
+    #[test]
+    fn validate_pop_payload_bytes_accepts_signed_publications() {
+        let (credential, root, revocations) = signed_pop_material();
+
+        let credential_bytes = to_bytes(&credential).expect("encode PoP credential");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::Credential,
+            &credential_bytes,
+            "pop-credential.to",
+            31,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "credential_id_hex" && field.value == hex::encode(credential.credential_id)
+        }));
+
+        let root_bytes = to_bytes(&root).expect("encode PoP commitment root");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::CommitmentRoot,
+            &root_bytes,
+            "pop-root.to",
+            31,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+
+        let revocation_bytes = to_bytes(&revocations).expect("encode PoP revocations");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::RevocationList,
+            &revocation_bytes,
+            "pop-revocations.to",
+            31,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+
+        let bundle = issued_pop_bundle();
+        let bundle_bytes = to_bytes(&bundle).expect("encode PoP issued bundle");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::IssuedCredentialBundle,
+            &bundle_bytes,
+            "pop-issued-bundle.to",
+            31,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "revocation_list_version"
+                && field.value == bundle.revocation_list.list_version.to_string()
+        }));
+    }
+
+    #[test]
+    fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
+        let enrollment_bytes = to_bytes(&pop_enrollment()).expect("encode PoP enrollment");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::EnrollmentRequest,
+            &enrollment_bytes,
+            "pop-enrollment.to",
+            32,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let renewal_bytes = to_bytes(&pop_renewal()).expect("encode PoP renewal");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::RenewalRequest,
+            &renewal_bytes,
+            "pop-renewal.to",
+            32,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let proof_bytes = to_bytes(&pop_membership_proof()).expect("encode PoP proof");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::MembershipProof,
+            &proof_bytes,
+            "pop-proof.to",
+            32,
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            outcome
+                .telemetry_tags
+                .contains(&"sorafs.reference.pop.membership_proof".to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_pop_payload_bytes_rejects_malformed_norito() {
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::Credential,
+            b"not norito",
+            "bad-pop-credential.to",
+            33,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, CATEGORY_NORITO);
+    }
+
+    #[test]
+    fn validate_pop_payload_bytes_rejects_signature_tampering() {
+        let (mut credential, _, _) = signed_pop_material();
+        credential.credential_id = pop_digest(0x99);
+        let bytes = to_bytes(&credential).expect("encode tampered credential");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::Credential,
+            &bytes,
+            "bad-pop-signature.to",
+            34,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-SIG-009", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
 

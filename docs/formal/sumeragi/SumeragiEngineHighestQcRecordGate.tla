@@ -290,7 +290,7 @@ SubjectTieBreakOrdersSameRank ==
   /\ "sameSlotSubjectLow" \in tried =>
        ~ImplementationUpdates("sameSlotSubjectLow")
 
-Safety ==
+EngineHighestQcRecordExactness ==
   /\ RecordMatchesSpec
   /\ EmptyStateRecordsCandidate
   /\ EqualCandidateDoesNotOverwrite
@@ -300,5 +300,11 @@ Safety ==
   /\ ViewDominatesPhaseAndSubject
   /\ PhaseRankOrdersSameSlot
   /\ SubjectTieBreakOrdersSameRank
+
+EngineHighestQcRecordCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineHighestQcRecordExactness
+
+Safety == EngineHighestQcRecordExactness
 
 ====

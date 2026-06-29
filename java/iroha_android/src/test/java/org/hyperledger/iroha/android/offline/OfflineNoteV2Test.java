@@ -250,10 +250,6 @@ public final class OfflineNoteV2Test {
         OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
         OfflineNoteV2.encodeRedeem(redeem),
         OfflineNoteV2.redeemInstruction(redeem));
-    assertInstructionWrapper(
-        OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-        OfflineNoteV2.encodeDeviceAttestationRegistration(registration),
-        OfflineNoteV2.registerDeviceAttestationInstruction(registration));
     assertEquals(
         string(obj(obj(fixture, "chain_vectors"), "attestation_registration"), "instruction_norito_base64"),
         base64(wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration))),

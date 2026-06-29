@@ -229,8 +229,15 @@ InvalidProposalEvidenceBuildMatchesSpec ==
   /\ Matches(BuildReasonString)
   /\ ValidBuiltEvidenceShape(BuildQcParentHeight)
 
+InvalidProposalEvidenceBuildExactness ==
+  /\ InvalidProposalEvidenceBuildMatchesSpec
+
+InvalidProposalEvidenceBuildCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ InvalidProposalEvidenceBuildExactness
+
 SafetyFast ==
-  InvalidProposalEvidenceBuildMatchesSpec
+  InvalidProposalEvidenceBuildExactness
 
 BugWrapperWrongKind ==
   Matches(WrapPreservesProposalReason)

@@ -305,6 +305,22 @@ SafetyAnchors ==
   /\ SampleSelectionAnchors
   /\ MetadataAnchors
 
+RbcSamplingExactness ==
+  /\ AllKindsMatchSpec
+  /\ AllOkSamplesWellFormed
+  /\ AllOkSamplesMatchSpec
+  /\ AllOkMetadataMatches
+  /\ LoadOutcomeAnchors
+  /\ InvalidRequestAnchors
+  /\ ProofFailureAnchors
+  /\ ValidKindAnchors
+  /\ SampleSelectionAnchors
+  /\ MetadataAnchors
+
+RbcSamplingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcSamplingExactness
+
 BugLoadAbsentAsError ==
   ActualKind("absent") = SpecKind("absent")
 

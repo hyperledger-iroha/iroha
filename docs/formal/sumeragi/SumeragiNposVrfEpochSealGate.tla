@@ -385,11 +385,16 @@ NposVrfEpochSealEffectValidationExactness ==
 
 NposVrfEpochSealExactness ==
   /\ NposVrfEpochSealCaseGroupsComplete
-  /\ NposVrfEpochSealMergeExactness
-  /\ NposVrfEpochSealStageExactness
-  /\ NposVrfEpochSealCommittedEffectExactness
-  /\ NposVrfEpochSealActivationExactness
-  /\ NposVrfEpochSealEffectValidationExactness
+  /\ MergeAdmissionMatchesSpec
+  /\ MergePreservesMonotonicFields
+  /\ StageMatchesSpec
+  /\ CommittedEffectsMatchSpec
+  /\ ActivationMatchesSpec
+  /\ EffectValidationFailsClosed
+
+NposVrfEpochSealCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NposVrfEpochSealExactness
 
 Safety ==
   NposVrfEpochSealExactness

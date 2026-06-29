@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_proof_streaming_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6a3af98cf966b3fd9927c0029d145b7e50b84b289cf6d52dcf55a4b643f86acd
-source_last_modified: "2025-11-02T18:05:35.356355+00:00"
+source_hash: 26dbf6fb34366691f28094d7cded3b678d38b460c07bc57c1d0c01540d933709
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-22
 ---
 
@@ -43,6 +43,8 @@ CLI commands:
 Operator features:
 - `sorafs_cli proof stream` reads NDJSON, verifies PoR samples locally, and
   records a summary JSON blob for CI/governance archives.
+- Torii validates PoR/PDP `sample_count` in the shared request envelope and
+  rejects values outside `1..=500` before manifest lookup.
 - `--governance-evidence-dir` copies the manifest, metadata, and proof summary
   into a deterministic evidence directory.
 - `--max-failures` and `--max-verification-failures` let rehearsals tolerate a
@@ -70,7 +72,7 @@ Operator features:
       manifest_digest: Hash,
       provider_id: ProviderId,
       proof_kind: ProofKind,         // Por | Pdp | Potr
-      sample_count: Option<u32>,     // Required for PoR/PDP
+      sample_count: Option<u32>,     // Required for PoR/PDP; 1..=500
       deadline_ms: Option<u32>,      // Required for PoTR
       nonce: [u8; 16],               // Client-supplied to prevent replay
       orchestrator_job_id: Option<Uuid>,

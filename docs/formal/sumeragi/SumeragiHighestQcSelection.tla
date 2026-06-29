@@ -218,4 +218,17 @@ SubjectTieBreakDominatesArrivalOrder ==
   /\ observedA = {"subjectLow", "subjectHigh"} => selectedA = "subjectHigh"
   /\ observedB = {"subjectLow", "subjectHigh"} => selectedB = "subjectHigh"
 
+HighestQcSelectionExactness ==
+  /\ SelectedAEqualsSpecMax
+  /\ SelectedBEqualsSpecMax
+  /\ SelectedOnlyFromNewViewCertificates
+  /\ EqualObservedSelectsEqualQc
+  /\ HeightPriorityDominatesView
+  /\ PhaseRankDominatesSubject
+  /\ SubjectTieBreakDominatesArrivalOrder
+
+HighestQcSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HighestQcSelectionExactness
+
 ====

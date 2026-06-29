@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from html import unescape as html_unescape
+from urllib.parse import unquote
 import json
 import sys
 import urllib.error
@@ -154,10 +156,16 @@ def _unsupported_tron_field_detail(field: Any) -> str:
     return field
 
 
+def _safe_public_key_sort_key(value: object) -> tuple[int, str]:
+    if isinstance(value, str):
+        return (0, value)
+    return (1, type(value).__name__)
+
+
 def _unsupported_tron_fields_message(label: str, fields: set[Any]) -> str:
     details = [
         _unsupported_tron_field_detail(field)
-        for field in sorted(fields, key=lambda item: str(item))
+        for field in sorted(fields, key=_safe_public_key_sort_key)
     ]
     return f"{label} has unsupported fields: {', '.join(details)}"
 
@@ -559,7 +567,7 @@ def _constant_word(
             label=f"TRON constant call {function_selector} ABI word",
             nonzero=False,
         )
-    except RuntimeError:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"TRON constant call {function_selector} returned non-hex data"
         ) from None
@@ -1555,7 +1563,7 @@ def _source_event_result_bytes_are_success(result_bytes: bytes) -> bool:
                 cursor,
                 label="source-event transaction result bytes",
             )
-        except RuntimeError:
+        except (SystemExit, RuntimeError, TypeError, ValueError):
             return False
         previous_field_number = field_number
         if field_number == 2 and value != 0:
@@ -3311,7 +3319,7 @@ def _source_event_transaction_summary(
                 log.get("address"),
                 label="source-event log address",
             )
-        except RuntimeError:
+        except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         topics = log.get("topics")
         if not isinstance(topics, list) or len(topics) != 2:
@@ -3334,7 +3342,7 @@ def _source_event_transaction_summary(
                 label="source-event log data",
                 nonzero=False,
             )
-        except RuntimeError:
+        except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         if event_data != b"":
             continue
@@ -3630,7 +3638,7 @@ def _route_canary_message_proof_event_summary(
             log.get("address"),
             label="route-canary log address",
         )
-    except RuntimeError:
+    except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
         return None
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics:
@@ -6247,7 +6255,7 @@ def render_offline_full_toml(summary: dict[str, Any]) -> str:
     offline_parser = evidence.build_parser()
     try:
         offline_args = offline_parser.parse_args(args)
-    except SystemExit:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "generated offline full TOML arguments are invalid"
         ) from None
@@ -7363,33 +7371,83 @@ def build_parser() -> argparse.ArgumentParser:
 
 SENSITIVE_CLI_ERROR_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "passphrase",
-    "bearer ",
+    "bearer",
     "authorization",
+    "access key",
     "access-key",
     "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
-    "session=",
-    "token=",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "recovery phrase",
+    "recovery-phrase",
+    "recovery_phrase",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
+    "session",
+    "token",
 )
 
 
+def _decoded_public_blocker_text(value: str) -> str:
+    decoded = value
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        for _percent_pass in range(3):
+            next_percent_decoded = unquote(next_decoded)
+            if next_percent_decoded == next_decoded:
+                break
+            next_decoded = next_percent_decoded
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    return decoded
+
+
+def _decoded_cli_error_text_issue(value: str) -> bool:
+    decoded = _decoded_public_blocker_text(value)
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
+        return True
+    if not decoded.isascii():
+        return True
+    return any(character in "|`<>" for character in decoded)
+
+
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
         return fallback
-    lowered = text.lower()
-    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+    if not text.isascii():
         return fallback
-    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+    if _decoded_cli_error_text_issue(text):
+        return fallback
+    normalized_text = _decoded_public_blocker_text(text).lower()
+    if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
         return fallback
     return text
 
@@ -7412,11 +7470,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(render_offline_full_toml(summary))
             return 0
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

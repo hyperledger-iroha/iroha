@@ -5,7 +5,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use iroha_crypto::{Hash, HashOf};
@@ -18,6 +17,7 @@ use super::RoutingPlan;
 pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 1;
 
 type SignedTxHash = HashOf<SignedTransaction>;
+type QueuePlanJournalKey = (SignedTxHash, Hash);
 
 /// Pending transaction routing-plan journal record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -30,7 +30,10 @@ pub struct QueuePlanJournalRecordV1 {
     pub signed_transaction_hash: SignedTxHash,
     /// Full routing plan admitted for this transaction.
     pub routing_plan: RoutingPlan,
-    /// Cached gossip payload bytes for retransmission.
+    /// Compatibility payload bytes from early v1 records.
+    ///
+    /// New records leave this empty because `entrypoint` is canonical and
+    /// sufficient to regenerate gossip bytes during replay.
     pub gossip_payload: Vec<u8>,
     /// Local enqueue timestamp in milliseconds.
     pub enqueue_timestamp_ms: u64,
@@ -43,7 +46,6 @@ impl QueuePlanJournalRecordV1 {
         entrypoint: TransactionEntrypoint,
         signed_transaction_hash: SignedTxHash,
         routing_plan: RoutingPlan,
-        gossip_payload: Arc<Vec<u8>>,
         enqueue_timestamp_ms: u64,
     ) -> Self {
         Self {
@@ -51,7 +53,10 @@ impl QueuePlanJournalRecordV1 {
             entrypoint,
             signed_transaction_hash,
             routing_plan,
-            gossip_payload: gossip_payload.as_ref().clone(),
+            // Kept as an empty compatibility field for v1 journals. The
+            // canonical entrypoint above is sufficient to regenerate gossip
+            // bytes during replay, so new writes avoid a duplicate payload.
+            gossip_payload: Vec::new(),
             enqueue_timestamp_ms,
         }
     }
@@ -91,6 +96,58 @@ pub struct QueuePlanJournal {
 pub struct QueuePlanJournalFlush {
     sync_data: bool,
     compact: bool,
+}
+
+/// Prepared live-record replay that can stream records without retaining them all.
+pub struct QueuePlanJournalReplay {
+    path: PathBuf,
+    live_positions: BTreeMap<QueuePlanJournalKey, u64>,
+}
+
+impl QueuePlanJournalReplay {
+    /// Return the number of live records captured by this replay snapshot.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.live_positions.len()
+    }
+
+    /// Return whether this replay snapshot has no live records.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.live_positions.is_empty()
+    }
+
+    /// Stream live records to `handle_record`.
+    ///
+    /// # Errors
+    /// Returns I/O errors, malformed-frame decode errors, or errors returned by
+    /// `handle_record`.
+    pub fn for_each_record<F>(mut self, mut handle_record: F) -> io::Result<usize>
+    where
+        F: FnMut(QueuePlanJournalRecordV1) -> io::Result<()>,
+    {
+        let records = self.live_positions.len();
+        if self.is_empty() {
+            return Ok(0);
+        }
+
+        let mut frame_index = 0_u64;
+        for_each_frame(&self.path, |frame| {
+            if let QueuePlanJournalFrameV1::Put(record) = frame
+                && record.version == QUEUE_PLAN_JOURNAL_VERSION
+            {
+                let key = (record.signed_transaction_hash, record.plan_digest());
+                if self.live_positions.get(&key).copied() == Some(frame_index) {
+                    self.live_positions.remove(&key);
+                    handle_record(record)?;
+                }
+            }
+            frame_index = frame_index.saturating_add(1);
+            Ok(())
+        })?;
+
+        Ok(records)
+    }
 }
 
 impl QueuePlanJournalFlush {
@@ -225,36 +282,73 @@ impl QueuePlanJournal {
     ///
     /// # Errors
     /// Returns I/O errors or malformed-frame decode errors mapped to I/O.
+    #[cfg(test)]
     pub fn replay(&self) -> io::Result<Vec<QueuePlanJournalRecordV1>> {
-        let mut live = BTreeMap::<(SignedTxHash, Hash), QueuePlanJournalRecordV1>::new();
-        for frame in read_frames(&self.path)? {
+        let replay = self.prepare_replay()?;
+        let mut records = Vec::with_capacity(replay.len());
+        replay.for_each_record(|record| {
+            records.push(record);
+            Ok(())
+        })?;
+        Ok(records)
+    }
+
+    /// Prepare a replay snapshot that stores live keys instead of full records.
+    ///
+    /// # Errors
+    /// Returns I/O errors or malformed-frame decode errors mapped to I/O.
+    pub fn prepare_replay(&self) -> io::Result<QueuePlanJournalReplay> {
+        let mut live_positions = BTreeMap::<QueuePlanJournalKey, u64>::new();
+        let mut frame_index = 0_u64;
+        for_each_frame(&self.path, |frame| {
             match frame {
                 QueuePlanJournalFrameV1::Put(record) => {
                     if record.version == QUEUE_PLAN_JOURNAL_VERSION {
-                        live.insert(
+                        live_positions.insert(
                             (record.signed_transaction_hash, record.plan_digest()),
-                            record,
+                            frame_index,
                         );
                     }
                 }
                 QueuePlanJournalFrameV1::Remove { hash, plan_digest } => {
-                    live.remove(&(hash, plan_digest));
+                    live_positions.remove(&(hash, plan_digest));
                 }
             }
-        }
-        Ok(live.into_values().collect())
+            frame_index = frame_index.saturating_add(1);
+            Ok(())
+        })?;
+        Ok(QueuePlanJournalReplay {
+            path: self.path.clone(),
+            live_positions,
+        })
+    }
+
+    /// Count live records from disk without materializing full journal records.
+    ///
+    /// # Errors
+    /// Returns I/O errors or malformed-frame decode errors mapped to I/O.
+    pub fn live_record_count(&self) -> io::Result<usize> {
+        Ok(self.prepare_replay()?.len())
     }
 
     /// Compact the journal by atomically rewriting live records when worthwhile.
     ///
     /// # Errors
-    /// Returns I/O errors from replay, rewrite, sync, or rename.
+    /// Returns I/O errors from live counting, replay, rewrite, sync, or rename.
     pub fn compact_if_needed(&mut self) -> io::Result<()> {
         let size = self.file.metadata()?.len();
-        let live = self.replay()?;
-        if self.tombstones <= live.len() as u64 && size <= self.max_bytes_before_compact {
+        let replay = if size > self.max_bytes_before_compact {
+            Some(self.prepare_replay()?)
+        } else if self.tombstones == 0 {
+            None
+        } else {
+            let replay = self.prepare_replay()?;
+            (self.tombstones > replay.len() as u64).then_some(replay)
+        };
+        let Some(replay) = replay else {
             return Ok(());
-        }
+        };
+
         let tmp = self.path.with_extension("tmp");
         {
             let mut file = OpenOptions::new()
@@ -262,9 +356,10 @@ impl QueuePlanJournal {
                 .truncate(true)
                 .write(true)
                 .open(&tmp)?;
-            for record in live {
+            replay.for_each_record(|record| {
                 write_frame(&mut file, &QueuePlanJournalFrameV1::Put(record))?;
-            }
+                Ok(())
+            })?;
             if self.durable_writes {
                 file.sync_all()?;
             }
@@ -347,14 +442,26 @@ fn truncate_journal_tail(file: &mut File, valid_end: u64, durable_writes: bool) 
     Ok(())
 }
 
+#[cfg(test)]
 fn read_frames(path: &Path) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
+    let mut frames = Vec::new();
+    for_each_frame(path, |frame| {
+        frames.push(frame);
+        Ok(())
+    })?;
+    Ok(frames)
+}
+
+fn for_each_frame<F>(path: &Path, mut handle_frame: F) -> io::Result<()>
+where
+    F: FnMut(QueuePlanJournalFrameV1) -> io::Result<()>,
+{
     let file = match File::open(path) {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
     let mut reader = BufReader::new(file);
-    let mut frames = Vec::new();
     loop {
         let mut len_bytes = [0_u8; 4];
         match reader.read_exact(&mut len_bytes) {
@@ -371,9 +478,9 @@ fn read_frames(path: &Path) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
         }
         let frame = norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&bytes)
             .map_err(io::Error::other)?;
-        frames.push(frame);
+        handle_frame(frame)?;
     }
-    Ok(frames)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -414,7 +521,6 @@ mod tests {
             accepted.entrypoint().clone(),
             accepted.hash(),
             RoutingPlan::single(super::super::RoutingDecision::default()),
-            accepted.entrypoint_bytes(),
             42,
         )
     }
@@ -434,6 +540,16 @@ mod tests {
         )
         .into();
         record_with_instruction(label, instruction)
+    }
+
+    #[test]
+    fn new_journal_records_do_not_duplicate_gossip_payload_bytes() {
+        let record = record("empty-compat-payload");
+
+        assert!(
+            record.gossip_payload.is_empty(),
+            "new journal records should rely on canonical entrypoint bytes instead of storing a duplicate gossip payload"
+        );
     }
 
     #[test]
@@ -459,6 +575,64 @@ mod tests {
                 .expect("flush journal");
         }
         let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert_eq!(journal.replay().expect("replay"), vec![second]);
+        assert_eq!(
+            read_frames(&path).expect("read uncompacted frames").len(),
+            3,
+            "tombstones at or below the live-record count should not force compaction"
+        );
+    }
+
+    #[test]
+    fn journal_live_record_count_tracks_replay_len() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan-count.norito");
+        let first = record("count-first");
+        let second = record("count-second");
+        let mut unsupported = record("count-unsupported");
+        unsupported.version = QUEUE_PLAN_JOURNAL_VERSION + 1;
+        {
+            let mut journal =
+                QueuePlanJournal::open(&path, 1024 * 1024, true).expect("open journal");
+            let first_flush = journal
+                .put_deferred_flush(first.clone())
+                .expect("put first");
+            let duplicate_flush = journal
+                .put_deferred_flush(first.clone())
+                .expect("put duplicate first");
+            let second_flush = journal
+                .put_deferred_flush(second.clone())
+                .expect("put second");
+            let unsupported_flush = journal
+                .put_deferred_flush(unsupported)
+                .expect("put unsupported");
+            let remove_flush = journal
+                .remove_many_deferred_flush([(first.signed_transaction_hash, first.plan_digest())])
+                .expect("remove first");
+            journal
+                .flush_deferred(
+                    first_flush
+                        .combine(duplicate_flush)
+                        .combine(second_flush)
+                        .combine(unsupported_flush)
+                        .combine(remove_flush),
+                )
+                .expect("flush journal");
+        }
+
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("reopen journal");
+        assert_eq!(journal.live_record_count().expect("count live records"), 1);
+        let replay = journal.prepare_replay().expect("prepare replay");
+        assert_eq!(replay.len(), 1);
+        assert!(!replay.is_empty());
+        let mut streamed = Vec::new();
+        replay
+            .for_each_record(|record| {
+                streamed.push(record);
+                Ok(())
+            })
+            .expect("stream replay");
+        assert_eq!(streamed, vec![second.clone()]);
         assert_eq!(journal.replay().expect("replay"), vec![second]);
     }
 

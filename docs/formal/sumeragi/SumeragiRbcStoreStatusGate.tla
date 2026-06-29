@@ -269,6 +269,15 @@ StatusSafetyAnchors ==
   /\ RecentEvictionAnchors
   /\ SnapshotAnchors
 
+RbcStoreStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ StatusSafetyAnchors
+
+RbcStoreStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStoreStatusExactness
+
 BugResetEmptyKeepsPressure ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

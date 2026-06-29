@@ -184,7 +184,7 @@ pub struct ModerationPrivacyAggregateV1 {
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
 
-/// Canonical privacy-safe record for one issued SoraFS moderation proof token.
+/// Canonical privacy-safe record for one issued `SoraFS` moderation proof token.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -802,7 +802,7 @@ impl ModerationLedgerBlockV1 {
             })?;
         let leaf_hashes = sorted
             .iter()
-            .map(|entry| entry.entry_hash())
+            .map(ModerationLedgerEntryV1::entry_hash)
             .collect::<Result<Vec<_>, _>>()?;
         let entry_root = merkle_root_from_leaf_hashes(&leaf_hashes)?;
         Ok(Self {
@@ -877,7 +877,7 @@ impl ModerationLedgerProofV1 {
         let sorted = sorted_entries_for_cycle(cycle_id, entries)?;
         let leaf_hashes = sorted
             .iter()
-            .map(|entry| entry.entry_hash())
+            .map(ModerationLedgerEntryV1::entry_hash)
             .collect::<Result<Vec<_>, _>>()?;
         let Some(leaf_index) = sorted.iter().position(|entry| entry.entry_id == entry_id) else {
             return Err(TransparencyLedgerError::EntryNotFound { entry_id });
@@ -996,7 +996,7 @@ impl ModerationLedgerCyclePublicationV1 {
         let sorted = sorted_entries_for_cycle(cycle_id, entries)?;
         let leaf_hashes = sorted
             .iter()
-            .map(|entry| entry.entry_hash())
+            .map(ModerationLedgerEntryV1::entry_hash)
             .collect::<Result<Vec<_>, _>>()?;
         let proofs = sorted
             .into_iter()
@@ -1358,13 +1358,13 @@ fn merkle_audit_path(
     let mut layer = leaf_hashes.to_vec();
     let mut path = Vec::new();
     while layer.len() > 1 {
-        let sibling_index = if index % 2 == 0 {
+        let sibling_index = if index.is_multiple_of(2) {
             (index + 1).min(layer.len() - 1)
         } else {
             index - 1
         };
         path.push(ModerationLedgerProofNodeV1 {
-            side: if index % 2 == 0 {
+            side: if index.is_multiple_of(2) {
                 ModerationLedgerProofSideV1::Right
             } else {
                 ModerationLedgerProofSideV1::Left
@@ -1413,13 +1413,13 @@ fn verify_audit_path_shape(
     let mut width = entry_count as usize;
     let mut expected_sides = Vec::new();
     while width > 1 {
-        expected_sides.push(if index % 2 == 0 {
+        expected_sides.push(if index.is_multiple_of(2) {
             ModerationLedgerProofSideV1::Right
         } else {
             ModerationLedgerProofSideV1::Left
         });
         index /= 2;
-        width = (width + 1) / 2;
+        width = width.div_ceil(2);
     }
     if path.len() != expected_sides.len() {
         return Err(TransparencyLedgerError::ProofPathLengthMismatch {

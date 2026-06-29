@@ -223,6 +223,18 @@ MissingBlockIngressFetchCoreSafety ==
   /\ HoldNeverFetchesOrForces
   /\ ForceOnlyForInitialElapsedGrace
 
+MissingBlockIngressFetchExactness ==
+  /\ ActionsMatchSpec
+  /\ BypassCasesDoNotHoldOrMutateRequests
+  /\ InitialFrontierWithinGraceHoldsAndRecords
+  /\ InitialFrontierAtOrAfterGraceForcesOnce
+  /\ ExistingRequestsNeverForceOrHold
+  /\ HoldNeverFetchesOrForces
+  /\ ForceOnlyForInitialElapsedGrace
+MissingBlockIngressFetchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingBlockIngressFetchExactness
+
 NoBugInvariant == MissingBlockIngressFetchCoreSafety
 
 SafetyFast == MissingBlockIngressFetchCoreSafety

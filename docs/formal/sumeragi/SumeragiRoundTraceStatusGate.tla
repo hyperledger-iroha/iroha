@@ -268,9 +268,19 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-Safety ==
+RoundTraceStatusActionsMatchSpec ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+RoundTraceStatusExactness ==
+  /\ RoundTraceStatusActionsMatchSpec
+
+Safety ==
+  RoundTraceStatusExactness
+
+RoundTraceStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RoundTraceStatusExactness
 
 BugTransitionNewKeyReturnsPrevious ==
   ImplementationActions(TransitionNewKeyNoPrevious) =

@@ -256,9 +256,19 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-Safety ==
+EffectiveTimingActionsMatchSpec ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+EffectiveTimingExactness ==
+  /\ EffectiveTimingActionsMatchSpec
+
+EffectiveTimingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EffectiveTimingExactness
+
+Safety ==
+  EffectiveTimingCorrectnessEnvelope
 
 BugAllPermResolvesNpos ==
   ImplementationActions(TimingAllPermissioned) =

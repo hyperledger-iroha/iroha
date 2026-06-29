@@ -342,8 +342,22 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+HighestQcDeferMarkerPruneExactness ==
+  /\ ActionsMatchSpec
+  /\ ViewChangePrunesOnlyStaleSameHeightMarkers
+  /\ RecoveryClearRemovesSameHeightThroughCurrentView
+  /\ DependencyCleanupRemovesCommittedKnownOrNonActionableMarkers
+  /\ DependencyCleanupShortCircuitsAfterCommittedOrKnown
+  /\ NoMarkerIsBothPresentAndAbsent
+  /\ ViewWrongHeightRetentionAnchors
+  /\ ViewStaleBoundaryAnchors
+  /\ RecoveryWrongHeightRetentionAnchors
+  /\ RecoveryViewBoundaryAnchors
+  /\ DependencyCommittedRemovalAnchors
+  /\ DependencyFuturePredicateAnchors
+
 HighestQcDeferMarkerPruneCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ NoBugInvariant
+  /\ HighestQcDeferMarkerPruneExactness
 
 ====

@@ -4,12 +4,12 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
-    func testExpectedBridgeAbiVersionIsTenForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 10)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 10)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 10)
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(10, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(9, for: "macos-arm64"))
+    func testExpectedBridgeAbiVersionIsTwelveForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 12)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 12)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 12)
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(12, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(11, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
     }
 
@@ -137,6 +137,28 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
         let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
         XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
+    }
+
+    func testArtifactManifestCandidateSearchHonorsAscentLimit() {
+        let binaryURL = URL(fileURLWithPath:
+            "/tmp/NoritoBridge.xcframework/ios-arm64/Library/Frameworks/libNoritoBridge.a")
+        let xcframeworkManifest = URL(fileURLWithPath:
+            "/tmp/NoritoBridge.xcframework/NoritoBridge.artifacts.json")
+        let siblingManifest = URL(fileURLWithPath: "/tmp/NoritoBridge.artifacts.json")
+
+        let limited = NoritoBridgeLoader.candidateArtifactManifestURLsForTests(
+            near: binaryURL,
+            maxAscents: 1
+        )
+        XCTAssertFalse(limited.contains(xcframeworkManifest))
+        XCTAssertFalse(limited.contains(siblingManifest))
+
+        let full = NoritoBridgeLoader.candidateArtifactManifestURLsForTests(
+            near: binaryURL,
+            maxAscents: 4
+        )
+        XCTAssertTrue(full.contains(xcframeworkManifest))
+        XCTAssertTrue(full.contains(siblingManifest))
     }
 
     private func bundledBridgeBinary() throws -> (url: URL, identifier: String) {

@@ -140,8 +140,15 @@ TypeInvariant ==
 FetchResponseDeferralMatchesSpec ==
   \A c \in Cases: Matches(c)
 
+FetchResponseDeferralExactness ==
+  /\ FetchResponseDeferralMatchesSpec
+
+FetchResponseDeferralCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FetchResponseDeferralExactness
+
 SafetyFast ==
-  FetchResponseDeferralMatchesSpec
+  FetchResponseDeferralExactness
 
 NextHeightNotDeferred ==
   Matches("next_height_block_created")

@@ -498,7 +498,18 @@ CanonicalFrontierReanchorSafetyAnchors ==
   /\ RangePullAnchors
   /\ ViewSuppressionAnchors
 
+CanonicalFrontierReanchorExactness ==
+  /\ ReasonClassifierAnchors
+  /\ GateHeightAnchors
+  /\ SnapshotAndProgressAnchors
+  /\ StrideAnchors
+  /\ RangePullAnchors
+  /\ ViewSuppressionAnchors
+CanonicalFrontierReanchorCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CanonicalFrontierReanchorExactness
+
 Safety ==
-  CanonicalFrontierReanchorSafetyAnchors
+  CanonicalFrontierReanchorCorrectnessEnvelope
 
 ====

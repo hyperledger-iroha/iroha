@@ -322,6 +322,26 @@ ProposalMismatchCoreSafety ==
   /\ MissingTxRootDefaultZeroAccepted
   /\ NoMismatchOnlyWhenCompatible
 
-Safety == ProposalMismatchCoreSafety
+ProposalMismatchExactness ==
+  /\ MismatchKindMatchesSpec
+  /\ MismatchFoundMatchesSpec
+  /\ MismatchRankMatchesSpec
+  /\ HeightMismatchHasPriority
+  /\ ViewMismatchAfterHeight
+  /\ ParentMismatchAfterView
+  /\ TxRootMismatchAfterParent
+  /\ StateRootMismatchAfterTx
+  /\ PayloadMismatchAfterCompatibleHeader
+  /\ ZeroStateRootCompatDoesNotReject
+  /\ ZeroStateRootCompatStillChecksPayload
+  /\ MatchingProposalAccepted
+  /\ GenesisParentDefaultZeroAccepted
+  /\ MissingTxRootDefaultZeroAccepted
+  /\ NoMismatchOnlyWhenCompatible
+ProposalMismatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalMismatchExactness
+
+Safety == ProposalMismatchExactness
 
 ====

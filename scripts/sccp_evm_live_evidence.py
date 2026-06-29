@@ -10,8 +10,10 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from html import unescape as html_unescape
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -884,7 +886,7 @@ def _route_canary_message_proof_event_summary(
             log.get("address"),
             label="route-canary log address",
         )
-    except RuntimeError:
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return None
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics:
@@ -896,7 +898,7 @@ def _route_canary_message_proof_event_summary(
             topics[0],
             label="route-canary log topic0",
         )
-    except RuntimeError:
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return None
     if log_address != bridge_address or topic0 != EVM_MESSAGE_PROOF_ACCEPTED_TOPIC:
         return None
@@ -1895,7 +1897,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     parser = evidence.build_parser()
     try:
         args = parser.parse_args([*_offline_args(summary), "--toml"])
-    except SystemExit:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "generated EVM destination TOML arguments are invalid"
         ) from None
@@ -2413,33 +2415,83 @@ def build_parser() -> argparse.ArgumentParser:
 
 SENSITIVE_CLI_ERROR_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "passphrase",
-    "bearer ",
+    "bearer",
     "authorization",
+    "access key",
     "access-key",
     "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
-    "session=",
-    "token=",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "recovery phrase",
+    "recovery-phrase",
+    "recovery_phrase",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
+    "session",
+    "token",
 )
 
 
+def _decoded_public_blocker_text(value: str) -> str:
+    decoded = value
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        for _percent_pass in range(3):
+            next_percent_decoded = unquote(next_decoded)
+            if next_percent_decoded == next_decoded:
+                break
+            next_decoded = next_percent_decoded
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    return decoded
+
+
+def _decoded_cli_error_text_issue(value: str) -> bool:
+    decoded = _decoded_public_blocker_text(value)
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
+        return True
+    if not decoded.isascii():
+        return True
+    return any(character in "|`<>" for character in decoded)
+
+
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
         return fallback
-    lowered = text.lower()
-    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+    if not text.isascii():
         return fallback
-    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+    if _decoded_cli_error_text_issue(text):
+        return fallback
+    normalized_text = _decoded_public_blocker_text(text).lower()
+    if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
         return fallback
     return text
 
@@ -2457,11 +2509,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(render_offline_toml(summary))
             return 0
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

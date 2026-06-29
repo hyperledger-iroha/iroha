@@ -248,9 +248,19 @@ Next ==
 TypeInvariant ==
   checked \in 0..24
 
-Safety ==
+KuraStoreStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+KuraStoreStatusExactness ==
+  /\ KuraStoreStatusActionsMatchSpec
+
+Safety ==
+  KuraStoreStatusExactness
+
+KuraStoreStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KuraStoreStatusExactness
 
 BugResetEmptyKeepsTotals ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

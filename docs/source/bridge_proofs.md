@@ -2898,9 +2898,30 @@ ad-hoc local output. The Windows `.NET` phase also inspects the direct
 `sccp-dotnet-sdk.trx` file before publishing release markers: the TRX must name
 `Hyperledger.Iroha.Sdk.Tests.dll`, include at least one passed SCCP
 `UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
-test results. Empty placeholder TRX files, wrong-assembly TRX files, and
+test results. The runner parses the TRX as XML and only trusts real `UnitTest`,
+`TestMethod`, and `UnitTestResult` elements. A passed SCCP result must bind by
+`testId` or `executionId` to a SCCP test definition whose `codeBase`/`storage`
+basename is exactly `Hyperledger.Iroha.Sdk.Tests.dll`, every TRX
+`UnitTestResult` row must bind to that same assembly-backed SCCP definition
+set, SCCP definitions must expose an exact `Sccp...` test-name token in the
+actual test name/class rather than an embedded or lowercase substring or runner
+adapter metadata, TRX `UnitTest` and `Execution` ids must be unique, the TRX
+`UnitTestResult` count must exactly match the VSTest summary passed count, and
+TRX XML is capped at 16777216 bytes with DTD/entity declarations rejected before
+parsing, so empty placeholder TRX files,
+wrong-assembly TRX files, comment-spoofed assembly names, arbitrary helper
+attributes, single-quoted failed outcomes, non-SCCP passed results, unbound
+SCCP-looking results, wrong-assembly SCCP definitions, embedded `Sccp`
+substrings, lowercase `sccp` tokens, `adapterTypeName` spoofing, execution-id
+drift, mixed SCCP plus non-SCCP result sets, mixed mapped and unmapped execution
+ids, duplicate `UnitTest`/`Execution` ids, TRX/count mismatches,
+oversized TRX files,
+DTD/entity declarations, malformed XML, and
 failed/skipped result XML remain forged evidence even if the console summary
 looks successful.
+Published release transcripts must also show the VSTest summary, TRX path, and
+TRX byte markers exactly once after the strict `.NET` test command; duplicated
+success markers in that command window remain forged evidence.
 `.github/workflows/sccp_production_corridor.yml` attaches the same
 phase list to pull requests touching SCCP surfaces, a nightly scheduled run,
 and manual `workflow_dispatch` runs for either the full corridor or one named
@@ -3018,10 +3039,16 @@ names `manifest.json` as the verifier root, so reviewers know to publish the
 manifest alongside the hashed artifacts. It exits non-zero unless the strict
 report is production-ready, so missing governed deployment evidence, missing
 live canary evidence, or missing phase logs cannot be accidentally published as
-a ready release. If `--force` is used to replace an output directory, the
-builder refuses dangerous targets and refuses any output directory that contains
-the input TOML or phase transcript sources, so evidence cannot be deleted before
-it is copied into the bundle. Dangerous-root, repository-containing output,
+a ready release. Required Release Evidence also pins that offline placeholder
+or template-derived governed verifier hashes keep the report blocked, so copied
+release notes cannot weaken the live-deployment rule while preserving only the
+generic governed-deployment heading. The public release-note attachment
+invariants also reject weakening that governed blocker inside `## Blocking
+Items`, even when the blocker section remains well formed. If `--force` is used
+to replace an output
+directory, the builder refuses dangerous targets and refuses any output directory
+that contains the input TOML or phase transcript sources, so evidence cannot be
+deleted before it is copied into the bundle. Dangerous-root, repository-containing output,
 `--force` containment, and existing-output diagnostics are category-only, so
 rejected output roots do not disclose local output or input evidence paths. The
 output directory itself and any existing

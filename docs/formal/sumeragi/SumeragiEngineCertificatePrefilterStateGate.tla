@@ -392,6 +392,10 @@ PrefilterStateExactness ==
   /\ RejectedPrefilterReturnExact
   /\ ValuesStayInDomain
 
+PrefilterStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrefilterStateExactness
+
 Safety ==
   PrefilterStateExactness
 

@@ -16,7 +16,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
     hash::Hash,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     marker::PhantomData,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     rc::Rc,
@@ -7099,6 +7099,97 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     }
     *out = sink.into_inner();
     Ok(())
+}
+
+/// Serialize an object with a Norito header directly into a seekable writer.
+///
+/// This is the file-backed equivalent of [`to_bytes`]. It writes a placeholder
+/// header first, streams the payload while computing its checksum and final
+/// layout flags, then seeks back to fill in the header.
+pub fn to_writer_seek<T, W>(writer: &mut W, value: &T) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    W: Write + Seek,
+{
+    let start = writer.stream_position()?;
+    let encode_guard = EncodeContextGuard::enter();
+    let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    let flags = base_flags;
+
+    let zero_header = [0u8; Header::SIZE];
+    writer.write_all(&zero_header)?;
+
+    let mut padding = payload_alignment_padding_for::<T>();
+    if padding != 0 {
+        const ZEROS: [u8; 64] = [0; 64];
+        while padding != 0 {
+            let chunk = padding.min(ZEROS.len());
+            writer.write_all(&ZEROS[..chunk])?;
+            padding -= chunk;
+        }
+    }
+
+    let mut payload_writer = FramedPayloadWriter {
+        inner: writer,
+        len: 0,
+        digest: crc64fast::Digest::new(),
+    };
+    {
+        let _guard = DecodeFlagsGuard::enter(flags);
+        value.serialize(&mut payload_writer)?;
+    }
+    let payload_len = u64::try_from(payload_writer.len).map_err(|_| Error::LengthMismatch)?;
+    let checksum = payload_writer.digest.sum64();
+
+    let fixed_offsets_used = fixed_offsets_used();
+    let field_bitset_used = field_bitset_used();
+    let compact_len_used = compact_len_used();
+    drop(encode_guard);
+
+    let mut final_flags = flags;
+    if field_bitset_used {
+        final_flags |= header_flags::FIELD_BITSET;
+    } else {
+        final_flags &= !header_flags::FIELD_BITSET;
+    }
+    if compact_len_used {
+        final_flags |= header_flags::COMPACT_LEN;
+    } else {
+        final_flags &= !header_flags::COMPACT_LEN;
+    }
+    if fixed_offsets_used {
+        final_flags |= header_flags::PACKED_SEQ;
+    } else {
+        final_flags &= !header_flags::PACKED_SEQ;
+    }
+    record_last_header_flags(final_flags);
+
+    let end = payload_writer.inner.stream_position()?;
+    let mut header = Header::new(T::schema_hash(), payload_len, checksum);
+    header.flags |= final_flags;
+    payload_writer.inner.seek(SeekFrom::Start(start))?;
+    header.write(&mut payload_writer.inner)?;
+    payload_writer.inner.seek(SeekFrom::Start(end))?;
+    Ok(())
+}
+
+struct FramedPayloadWriter<'a, W> {
+    inner: &'a mut W,
+    len: usize,
+    digest: crc64fast::Digest,
+}
+
+impl<W: Write> Write for FramedPayloadWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.inner.write_all(bytes)?;
+        self.len = self.len.saturating_add(bytes.len());
+        self.digest.write(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// Frame a bare payload (produced by `codec::Encode::encode_to`) with a Norito header

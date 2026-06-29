@@ -237,6 +237,10 @@ ConsensusMessageLabelsExactness ==
   /\ ReasonLabelsDistinct
   /\ SampleHandlingTripleStable
 
+ConsensusMessageLabelsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ConsensusMessageLabelsExactness
+
 SafetyFast == ConsensusMessageLabelsExactness
 
 ====

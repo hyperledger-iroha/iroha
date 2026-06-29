@@ -490,9 +490,12 @@ PenaltyOffenderSelectionSafetyAnchors ==
   /\ EpochModeAnchors
   /\ RosterFallbackAnchors
 
-PenaltyOffenderSelectionCorrectnessEnvelope ==
-  /\ TypeInvariant
+PenaltyOffenderSelectionExactness ==
   /\ PenaltyOffenderSelectionCoreSafety
   /\ PenaltyOffenderSelectionSafetyAnchors
+
+PenaltyOffenderSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PenaltyOffenderSelectionExactness
 
 ====

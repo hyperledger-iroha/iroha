@@ -775,6 +775,7 @@ async function writeSnarkjsStub(
     supportSetup = false,
     supportZkeyVerify = true,
     failZkeyVerify = false,
+    zkeyVerifyFailureMessage = "forced zkey verification failure",
     failR1csInfo = false,
     supportProofSelfTest = false,
     failProofVerify = false,
@@ -813,7 +814,7 @@ if (args[0] === "zkey" && args[1] === "export" && args[2] === "verificationkey" 
 }
 if (${JSON.stringify(supportZkeyVerify)} && args[0] === "zkey" && args[1] === "verify" && args[2] && args[3] && args[4]) {
   if (${JSON.stringify(failZkeyVerify)}) {
-    process.stderr.write("forced zkey verification failure\\n");
+    process.stderr.write(${JSON.stringify(zkeyVerifyFailureMessage)} + "\\n");
     process.exit(3);
   }
   process.stdout.write("ZKey Ok!\\n");
@@ -1328,6 +1329,44 @@ test("materialize rejects zkeys that fail Powers-of-Tau verification", async () 
       manifest.selfChecks.snarkjs.zkeyVerifyError,
       /forced zkey verification failure/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("materialize redacts encoded sensitive self-check blockers", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-groth16-zkey-sensitive-blocker-"),
+  );
+  try {
+    const inputs = await writeMaterialInputs(root);
+    const snarkjsStub = await writeSnarkjsStub(root, inputs.verificationKeyPath, {
+      failZkeyVerify: true,
+      zkeyVerifyFailureMessage: "private%2dkey-materialize-blocker",
+    });
+    let caught;
+    await assert.rejects(
+      () =>
+        materializeBscGroth16Material({
+          "bsc-network": "testnet",
+          r1cs: inputs.r1cs,
+          zkey: inputs.zkey,
+          ptau: inputs.ptau,
+          "snarkjs-verifier-key": inputs.verificationKeyPath,
+          "snarkjs-bin": snarkjsStub,
+          "circuit-source": inputs.circuitSource,
+          "trusted-setup-transcript": inputs.trustedSetupTranscript,
+          "reproducible-build-transcript": inputs.reproducibleBuildTranscript,
+          "out-dir": join(root, "out"),
+        }),
+      (error) => {
+        caught = error;
+        return /BSC Groth16 material productionBlockers\[\d+\] contains sensitive name/u.test(
+          error.message,
+        );
+      },
+    );
+    assert.doesNotMatch(caught.message, /private%2dkey-materialize-blocker/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -5725,6 +5764,180 @@ test("attestation-status flags blocked roles and supplied signatures for unready
   }
 });
 
+test("attestation-status redacts encoded sensitive role blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-status-sensitive-blockers-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    request.roles.trustedSetup.readyForSignature = false;
+    request.roles.trustedSetup.blockers = [
+      "private&#95;key-trusted-setup-blocker",
+    ];
+    await writeJson(requestPath, request);
+
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+    });
+
+    const rendered = JSON.stringify(status);
+    assert.equal(status.readyToFinalize, false);
+    assert.match(
+      status.roles.trustedSetup.blockers.join("\n"),
+      /attestation request package trusted setup blockers\[0\] contains sensitive name/u,
+    );
+    assert.doesNotMatch(rendered, /private&#95;key-trusted-setup-blocker/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("attestation-status and signing reject malformed public role blockers without leaking values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-role-bad-blockers-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    const privateKeyPath = await writePrivateKeyPem(
+      join(root, "setup-key.pem"),
+      SETUP_ATTESTATION_SIGNER,
+    );
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const baseRequest = JSON.parse(await readFile(requestPath, "utf8"));
+    const cases = [
+      {
+        label: "newline",
+        blockers: ["trusted setup blocker\nnext line"],
+        expected: /attestation request package trusted setup blockers\[0\] contains control character/u,
+        leaked: [
+          "trusted setup blocker\nnext line",
+          "trusted setup blocker\\nnext line",
+        ],
+      },
+      {
+        label: "tab",
+        blockers: ["trusted setup blocker\tfield"],
+        expected: /attestation request package trusted setup blockers\[0\] contains control character/u,
+        leaked: ["trusted setup blocker\tfield", "trusted setup blocker\\tfield"],
+      },
+      {
+        label: "DEL",
+        blockers: ["trusted setup blocker\x7fdel"],
+        expected: /attestation request package trusted setup blockers\[0\] contains control character/u,
+        leaked: [
+          "trusted setup blocker\x7fdel",
+          "trusted setup blocker\\u007fdel",
+        ],
+      },
+      {
+        label: "non-ASCII",
+        blockers: ["trusted setup blocker clé"],
+        expected: /attestation request package trusted setup blockers\[0\] must be printable ASCII/u,
+        leaked: ["trusted setup blocker clé"],
+      },
+      {
+        label: "encoded-newline",
+        blockers: ["trusted%0Asetup-blocker"],
+        expected: /attestation request package trusted setup blockers\[0\] contains decoded control character/u,
+        leaked: ["trusted%0Asetup-blocker"],
+      },
+      {
+        label: "html-entity-tab",
+        blockers: ["trusted&#9;setup-blocker"],
+        expected: /attestation request package trusted setup blockers\[0\] contains decoded control character/u,
+        leaked: ["trusted&#9;setup-blocker"],
+      },
+      {
+        label: "encoded-bidi",
+        blockers: ["trusted%E2%80%AEsetup-blocker"],
+        expected: /attestation request package trusted setup blockers\[0\] contains decoded non-ASCII character/u,
+        leaked: ["trusted%E2%80%AEsetup-blocker"],
+      },
+      {
+        label: "surrounding-whitespace",
+        blockers: [" malformed public role blocker"],
+        expected: /attestation request package trusted setup blockers\[0\] must be a non-empty canonical string/u,
+        leaked: [" malformed public role blocker"],
+      },
+      {
+        label: "non-string",
+        blockers: [123],
+        expected: /attestation request package trusted setup blockers\[0\] must be a non-empty canonical string/u,
+        leaked: ["123"],
+      },
+      {
+        label: "duplicate",
+        blockers: [
+          "safe duplicated trusted setup blocker",
+          "safe%20duplicated%20trusted%20setup%20blocker",
+        ],
+        expected: /attestation request package trusted setup blockers must not contain duplicate strings/u,
+        leaked: [
+          "safe duplicated trusted setup blocker",
+          "safe%20duplicated%20trusted%20setup%20blocker",
+        ],
+      },
+    ];
+
+    for (const { label, blockers, expected, leaked } of cases) {
+      const request = JSON.parse(JSON.stringify(baseRequest));
+      request.roles.trustedSetup.readyForSignature = false;
+      request.roles.trustedSetup.blockers = blockers;
+      const variantPath = join(root, `request-${label}.json`);
+      await writeJson(variantPath, request);
+
+      const status = await auditBscGroth16AttestationStatus({
+        request: variantPath,
+        ...trustedSignerOption(),
+      });
+      const rendered = JSON.stringify(status);
+      assert.equal(status.readyToFinalize, false, label);
+      assert.match(status.roles.trustedSetup.blockers.join("\n"), expected, label);
+      for (const leakedValue of leaked) {
+        assert.equal(rendered.includes(leakedValue), false, label);
+      }
+
+      let caught;
+      try {
+        await signBscGroth16AttestationRole({
+          request: variantPath,
+          role: "trustedSetup",
+          "private-key-pem": privateKeyPath,
+          out: join(root, `setup-attestation-${label}.json`),
+        });
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof Error, label);
+      assert.match(caught.message, expected, label);
+      for (const leakedValue of leaked) {
+        assert.equal(caught.message.includes(leakedValue), false, label);
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("attestation-status flags stale request bodies, forged signatures, and signer reuse", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-status-adversarial-"));
   try {
@@ -6333,6 +6546,81 @@ test("proof-self-test rejects production-ready manifests with unresolved blocker
   }
 });
 
+test("proof-self-test rejects production-ready manifests with encoded sensitive blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-sensitive-blockers-"));
+  try {
+    const candidate = await writePreflightCandidate(root, {
+      manifest: {
+        productionReady: true,
+        productionBlockers: ["private&#45;key-groth16-blocker"],
+      },
+    });
+
+    let caught;
+    try {
+      await main([
+        "proof-self-test",
+        "--manifest",
+        candidate.manifest,
+        "--snarkjs-bin",
+        join(root, "must-not-run-snarkjs"),
+        "--out",
+        join(root, "proof-self-test.json"),
+      ]);
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.ok(caught instanceof Error);
+    assert.match(
+      caught.message,
+      /material manifest productionBlockers\[0\] contains sensitive name/u,
+    );
+    assert.doesNotMatch(caught.message, /private&#45;key-groth16-blocker/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("proof-self-test rejects production-ready manifests with encoded duplicate blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-duplicate-blockers-"));
+  try {
+    const blocker = "safe duplicated Groth16 blocker";
+    const encodedBlocker = "safe%20duplicated%20Groth16%20blocker";
+    const candidate = await writePreflightCandidate(root, {
+      manifest: {
+        productionReady: true,
+        productionBlockers: [blocker, encodedBlocker],
+      },
+    });
+
+    let caught;
+    try {
+      await main([
+        "proof-self-test",
+        "--manifest",
+        candidate.manifest,
+        "--snarkjs-bin",
+        join(root, "must-not-run-snarkjs"),
+        "--out",
+        join(root, "proof-self-test.json"),
+      ]);
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.ok(caught instanceof Error);
+    assert.match(
+      caught.message,
+      /material manifest productionBlockers must not contain duplicate strings/u,
+    );
+    assert.doesNotMatch(caught.message, new RegExp(blocker, "u"));
+    assert.doesNotMatch(caught.message, new RegExp(encodedBlocker, "u"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("proof-self-test rejects malformed production blocker metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-bad-blockers-"));
   try {
@@ -6356,6 +6644,79 @@ test("proof-self-test rejects malformed production blocker metadata", async () =
         ]),
       /proof-self-test requires material manifest productionBlockers to be an empty array/u,
     );
+
+    for (const [blocker, expected, label] of [
+      [
+        "Groth16 blocker\nnext line",
+        /productionBlockers\[0\] contains control character/u,
+        "newline",
+      ],
+      [
+        "Groth16 blocker\tfield",
+        /productionBlockers\[0\] contains control character/u,
+        "tab",
+      ],
+      [
+        "Groth16 blocker\x7fdel",
+        /productionBlockers\[0\] contains control character/u,
+        "DEL",
+      ],
+      [
+        "Groth16 blocker clé",
+        /productionBlockers\[0\] must be printable ASCII/u,
+        "non-ASCII",
+      ],
+      [
+        "Groth16%0Ablocker",
+        /productionBlockers\[0\] contains decoded control character/u,
+        "percent-encoded newline",
+      ],
+      [
+        "Groth16&#9;blocker",
+        /productionBlockers\[0\] contains decoded control character/u,
+        "HTML-entity tab",
+      ],
+      [
+        "Groth16%E2%80%AEblocker",
+        /productionBlockers\[0\] contains decoded non-ASCII character/u,
+        "percent-encoded bidi",
+      ],
+      [
+        " Groth16 blocker",
+        /productionBlockers\[0\] must be a non-empty canonical string/u,
+        "surrounding whitespace",
+      ],
+      [
+        123,
+        /productionBlockers\[0\] must be a non-empty canonical string/u,
+        "non-string",
+      ],
+    ]) {
+      const malformedCandidate = await writePreflightCandidate(root, {
+        manifest: {
+          productionReady: true,
+          productionBlockers: [blocker],
+        },
+      });
+
+      let caught;
+      try {
+        await main([
+          "proof-self-test",
+          "--manifest",
+          malformedCandidate.manifest,
+          "--snarkjs-bin",
+          join(root, "must-not-run-snarkjs"),
+          "--out",
+          join(root, `proof-self-test-${label}.json`),
+        ]);
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof Error, label);
+      assert.match(caught.message, expected, label);
+      assert.doesNotMatch(caught.message, new RegExp(String(blocker), "u"), label);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -6799,6 +7160,59 @@ test("finalize-attestations refuses production blockers after signed request mat
         }),
       /attestation finalization did not produce productionReady material: .*role-separated.*reuse signer/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("finalize-attestations redacts encoded sensitive materialization blockers", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-groth16-finalize-sensitive-blocker-"),
+  );
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const attestations = await writeAttestationsFromRequest(root, requestPath);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      join(root, "out", "verification_key.json"),
+      {
+        failZkeyVerify: true,
+        zkeyVerifyFailureMessage: "private%2dkey-finalize-blocker",
+      },
+    );
+
+    let caught;
+    await assert.rejects(
+      () =>
+        finalizeBscGroth16Attestations({
+          request: requestPath,
+          ...trustedSignerOption(),
+          "semantic-attestation": attestations.semantic,
+          "circuit-security-attestation": attestations.security,
+          "trusted-setup-attestation": attestations.setup,
+          "reproducible-build-attestation": attestations.reproducible,
+          "snarkjs-bin": snarkjsStub,
+          "out-dir": join(root, "finalized"),
+        }),
+      (error) => {
+        caught = error;
+        return /BSC Groth16 material productionBlockers\[\d+\] contains sensitive name/u.test(
+          error.message,
+        );
+      },
+    );
+    assert.doesNotMatch(caught.message, /private%2dkey-finalize-blocker/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -7881,6 +8295,104 @@ test("preflight rejects proof self-test reports from unready manifests", async (
       result.problems.join("\n"),
       /proof self-test report blocker: proof self-test manifest\.productionBlockers must be empty: stale report generated before audit/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preflight rejects proof self-test reports with encoded sensitive manifest blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-sensitive-"));
+  try {
+    const candidate = await writePreflightCandidate(root);
+    const circomStub = await writeCircomStub(root);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+    const proofSelfTestPath = join(
+      candidate.outDir,
+      "testnet-bsc-groth16-proof-self-test.json",
+    );
+    await main([
+      "proof-self-test",
+      "--manifest",
+      candidate.manifest,
+      "--snarkjs-bin",
+      snarkjsStub,
+      "--out",
+      proofSelfTestPath,
+    ]);
+    const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
+    report.manifest.productionReady = false;
+    report.manifest.productionBlockers = ["secret%2dtoken-proof-report-blocker"];
+    await writeJson(proofSelfTestPath, report);
+
+    const result = await preflightBscGroth16Material({
+      "bsc-network": "testnet",
+      "out-dir": candidate.outDir,
+      "circom-bin": circomStub,
+      "snarkjs-bin": snarkjsStub,
+    });
+
+    assert.equal(result.ready, false);
+    assert.match(
+      result.problems.join("\n"),
+      /proof self-test report blocker: proof self-test manifest\.productionBlockers\[0\] contains sensitive name/u,
+    );
+    assert.doesNotMatch(
+      result.problems.join("\n"),
+      /secret%2dtoken-proof-report-blocker/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preflight rejects proof self-test reports with encoded duplicate manifest blockers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-preflight-proof-duplicate-"));
+  try {
+    const candidate = await writePreflightCandidate(root);
+    const circomStub = await writeCircomStub(root);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+    const proofSelfTestPath = join(
+      candidate.outDir,
+      "testnet-bsc-groth16-proof-self-test.json",
+    );
+    await main([
+      "proof-self-test",
+      "--manifest",
+      candidate.manifest,
+      "--snarkjs-bin",
+      snarkjsStub,
+      "--out",
+      proofSelfTestPath,
+    ]);
+    const blocker = "safe duplicated proof report blocker";
+    const encodedBlocker = "safe%20duplicated%20proof%20report%20blocker";
+    const report = JSON.parse(await readFile(proofSelfTestPath, "utf8"));
+    report.manifest.productionReady = false;
+    report.manifest.productionBlockers = [blocker, encodedBlocker];
+    await writeJson(proofSelfTestPath, report);
+
+    const result = await preflightBscGroth16Material({
+      "bsc-network": "testnet",
+      "out-dir": candidate.outDir,
+      "circom-bin": circomStub,
+      "snarkjs-bin": snarkjsStub,
+    });
+
+    assert.equal(result.ready, false);
+    assert.match(
+      result.problems.join("\n"),
+      /proof self-test report blocker: proof self-test manifest\.productionBlockers must not contain duplicate strings/u,
+    );
+    assert.doesNotMatch(result.problems.join("\n"), new RegExp(blocker, "u"));
+    assert.doesNotMatch(result.problems.join("\n"), new RegExp(encodedBlocker, "u"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

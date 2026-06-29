@@ -295,7 +295,40 @@ echo "Signing manifest with sorafs_cli..."
 
 auto_token_hash=""
 if command -v python3 >/dev/null 2>&1; then
-  auto_token_hash="$(python3 - "$sign_summary_path" -c 'import json, sys;\ntry:\n    with open(sys.argv[1], "r", encoding="utf-8") as handle:\n        value = json.load(handle).get("identity_token_hash_blake3_hex")\n    if isinstance(value, str):\n        print(value, end="")\nexcept Exception:\n    pass' 2>/dev/null || true)"
+  auto_token_hash="$(python3 - "$sign_summary_path" <<'PY' 2>/dev/null || true
+import json
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+try:
+    if os.path.islink(path):
+        raise OSError("sign summary must not be a symlink")
+    path_stat = os.lstat(path)
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise OSError("sign summary must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            raise OSError("sign summary must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            value = json.load(handle).get("identity_token_hash_blake3_hex")
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if isinstance(value, str):
+        print(value, end="")
+except Exception:
+    pass
+PY
+)"
 fi
 
 expected_hash="$expect_token_hash"

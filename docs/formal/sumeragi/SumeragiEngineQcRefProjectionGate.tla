@@ -160,7 +160,7 @@ ZeroHashIsNeverSynthesized ==
   \A candidate \in tried:
     ImplementationSubject(candidate) # "zero"
 
-Safety ==
+EngineQcRefProjectionExactness ==
   /\ ProjectionMatchesSpec
   /\ HeightMatchesCertificateRound
   /\ ViewMatchesCertificateRound
@@ -169,5 +169,11 @@ Safety ==
   /\ SubjectMatchesCertifiedBlock
   /\ ParentHashIsNeverSubject
   /\ ZeroHashIsNeverSynthesized
+
+EngineQcRefProjectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineQcRefProjectionExactness
+
+Safety == EngineQcRefProjectionExactness
 
 ====

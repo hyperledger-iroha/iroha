@@ -216,6 +216,17 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+TxQueueBackpressureStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+TxQueueBackpressureStatusExactness ==
+  /\ TxQueueBackpressureStatusActionsMatchSpec
+
+TxQueueBackpressureStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TxQueueBackpressureStatusExactness
+
 BugInitialDepthNonzero ==
   ImplementationActions(InitialZero) = SpecActions(InitialZero)
 

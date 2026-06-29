@@ -243,6 +243,10 @@ export const DEFAULT_PRODUCTION_REQUIREMENTS_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-production-requirements.json";
 export const DEFAULT_ROUTE_MANIFEST_ISI_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-route-manifest.upsert-isi.json";
+export const DEFAULT_TAIRA_BURN_RECORD_VK_TEMPLATE =
+  "artifacts/sccp-taira/ivm-execution/taira-xor-burn-record-vk-register.template.json";
+export const DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT =
+  "artifacts/sccp-bsc/taira-bsc-xor-burn-record-vk.register-isi.json";
 export const CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT = "artifacts/sccp-bsc";
 export const DEFAULT_PRIVATE_KEY_ENV = "SCCP_BSC_DEPLOYER_PRIVATE_KEY";
 export const DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV =
@@ -269,14 +273,16 @@ const BSC_CONTRACT_CODE_ROLES = Object.freeze([
 
 const DESTINATION_BINDING_LABEL = "iroha:sccp:evm-destination-binding:v1";
 const SECRET_KEY_PATTERN =
-  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret|password|api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|bearer(?:[_-]?token)?|session[_-]?token|refresh[_-]?token)/iu;
+  /(?:private[\s_-]?key|mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|secret|password|api[\s_-]?(?:key|token)|access[\s_-]?token|auth[\s_-]?token|bearer(?:[\s_-]?token)?|session[\s_-]?token|refresh[\s_-]?token)/iu;
 const SECRET_ASSIGNMENT_PATTERN =
-  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret|password|api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|bearer(?:[_-]?token)?|session[_-]?token|refresh[_-]?token)\s*[:=]\s*("[^"]*"|'[^']*'|<[^>]+>|\S+)/giu;
+  /(?:private[\s_-]?key|mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|secret|password|api[\s_-]?(?:key|token)|access[\s_-]?token|auth[\s_-]?token|bearer(?:[\s_-]?token)?|session[\s_-]?token|refresh[\s_-]?token)\s*[:=]\s*("[^"]*"|'[^']*'|<[^>]+>|\S+)/giu;
 const BEARER_TOKEN_TEXT_PATTERN = /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}\b/iu;
 const REDACTED_SECRET_ASSIGNMENT_VALUE_PATTERN =
   /^(?:redacted|<redacted>|\*{3,}|runtime[-_ ]?only|<runtime[-_ ]?only>|operator[-_ ]?provided|<operator[-_ ]?provided>|replace[_-]with[_-][A-Z0-9_ -]+)$/iu;
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
+const HTML_ENTITY_PATTERN =
+  /&(?:#([0-9]{1,7})|#x([0-9a-f]{1,6})|amp|lt|gt|quot|apos);/giu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 const PLACEHOLDER_BURN_RECORD_TEXT_PATTERN =
   /(?:diagnostic|dummy|fixture|mock|placeholder|stub|test-only)/iu;
@@ -746,6 +752,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-inventory --request <attestation-request.json> --scan-dir <dir> --trusted-attestation-signer <0x...>
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material finalize-attestations --request <attestation-request.json> --semantic-attestation <json> --circuit-security-attestation <json> --trusted-setup-attestation <json> --reproducible-build-attestation <json> --trusted-attestation-signer <0x...> [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-burn-record-vk [--route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--vk-template ${DEFAULT_TAIRA_BURN_RECORD_VK_TEMPLATE}] [--name <vk-name>] [--out ${DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
   node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
@@ -863,6 +870,15 @@ Builds the UpsertSccpRouteManifest ISI payload from a production BSC route
 manifest. By default the command writes the public ISI artifact without
 broadcasting. With --submit true it signs and submits the ISI to TAIRA using an
 operator account that holds CanManageSccpRouteManifests.`,
+  "publish-burn-record-vk": `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs publish-burn-record-vk [--route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--vk-template ${DEFAULT_TAIRA_BURN_RECORD_VK_TEMPLATE}] [--name <vk-name>] [--out ${DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
+
+Builds and optionally submits the RegisterVerifyingKey ISI for the TAIRA
+burn-record IVM verifier used by the BSC route. The VK backend/name default to
+the route manifest's tairaXorBurnRecord.vkRef, while the public verifier bytes,
+commitment, circuit id, and schema hash come from the canonical VK template.
+With --submit true it signs and submits the ISI to TAIRA using an operator
+account that holds CanManageVerifyingKeys.`,
   requirements: `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
 
@@ -1123,6 +1139,16 @@ export function bscProductionRequirements(options = {}) {
         `--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} ` +
         `--chain-id ${DEFAULT_TAIRA_CHAIN_ID} ` +
         "--authority <taira-route-manifest-manager-account> " +
+        `--private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} ` +
+        `--gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}`,
+      publishBurnRecordVk:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs publish-burn-record-vk " +
+        `--route-manifest ${routeManifestOut} ` +
+        `--vk-template ${DEFAULT_TAIRA_BURN_RECORD_VK_TEMPLATE} ` +
+        `--out ${DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT} ` +
+        `--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} ` +
+        `--chain-id ${DEFAULT_TAIRA_CHAIN_ID} ` +
+        "--authority <taira-verifying-key-manager-account> " +
         `--private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} ` +
         `--gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}`,
       routeConfig:
@@ -3580,6 +3606,7 @@ function normalizeCanonicalStringList(value, label) {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be a list of non-empty strings.`);
   }
+  const seenBlockers = new Set();
   return ownArrayValues(value).map(([index, entry]) => {
     if (
       typeof entry !== "string" ||
@@ -3590,8 +3617,85 @@ function normalizeCanonicalStringList(value, label) {
         `${label}[${index}] must be a non-empty canonical string.`,
       );
     }
+    if (/[\u0000-\u001f\u007f]/u.test(entry)) {
+      throw new Error(`${label}[${index}] contains control character.`);
+    }
+    if (/[^\u0020-\u007e]/u.test(entry)) {
+      throw new Error(`${label}[${index}] must be printable ASCII.`);
+    }
+    const decodedIssue = decodedPublicBlockerTextIssue(entry);
+    if (decodedIssue !== null) {
+      throw new Error(`${label}[${index}] ${decodedIssue}.`);
+    }
+    if (sensitivePublicBlockerText(entry)) {
+      throw new Error(`${label}[${index}] contains sensitive name.`);
+    }
+    const blockerKey = canonicalPublicBlockerKey(entry);
+    if (seenBlockers.has(blockerKey)) {
+      throw new Error(`${label} must not contain duplicate strings.`);
+    }
+    seenBlockers.add(blockerKey);
     return entry;
   });
+}
+
+function decodedPublicBlockerText(value) {
+  let decoded = value.replace(
+    HTML_ENTITY_PATTERN,
+    (match, decimalEntity, hexEntity) => {
+      if (decimalEntity !== undefined) {
+        const codePoint = Number.parseInt(decimalEntity, 10);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (hexEntity !== undefined) {
+        const codePoint = Number.parseInt(hexEntity, 16);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      const namedEntity = match.toLowerCase();
+      if (namedEntity === "&amp;") return "&";
+      if (namedEntity === "&lt;") return "<";
+      if (namedEntity === "&gt;") return ">";
+      if (namedEntity === "&quot;") return '"';
+      if (namedEntity === "&apos;") return "'";
+      return match;
+    },
+  );
+  for (let index = 0; index < 3; index += 1) {
+    let nextDecoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+  }
+  return decoded;
+}
+
+function decodedPublicBlockerTextIssue(value) {
+  const decoded = decodedPublicBlockerText(value);
+  if (/[\u0000-\u001f\u007f]/u.test(decoded)) {
+    return "contains decoded control character";
+  }
+  if (/[^\u0020-\u007e]/u.test(decoded)) {
+    return "contains decoded non-ASCII character";
+  }
+  return null;
+}
+
+function sensitivePublicBlockerText(value) {
+  return SECRET_KEY_PATTERN.test(decodedPublicBlockerText(value));
+}
+
+function canonicalPublicBlockerKey(value) {
+  return decodedPublicBlockerText(value).toLowerCase();
 }
 
 function postDeployLiveEvidenceProductionBlockers(record) {
@@ -14225,13 +14329,6 @@ async function commandPublishRouteManifest(options) {
   }
 
   const authority = normalizeNonEmptyText(options.authority, "--authority");
-  const privateKeyEnv = normalizeTairaPrivateKeyEnvName(
-    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
-  );
-  const privateKey = Buffer.from(
-    normalizePrivateKey(process.env[privateKeyEnv], privateKeyEnv).slice(2),
-    "hex",
-  );
   const chainId = normalizeTairaChainId(options["chain-id"]);
   const toriiUrl = normalizeTairaToriiUrl(options["torii-url"]);
   const waitForCommit = optionEnabled(options, "wait-for-commit", true);
@@ -14256,6 +14353,13 @@ async function commandPublishRouteManifest(options) {
     "--gas-limit",
     DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
   );
+  const privateKeyEnv = normalizeTairaPrivateKeyEnvName(
+    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+  );
+  const privateKey = Buffer.from(
+    normalizePrivateKey(process.env[privateKeyEnv], privateKeyEnv).slice(2),
+    "hex",
+  );
   const metadata = {
     routeId: publication.routeKey.routeId,
     assetKey: publication.routeKey.assetKey,
@@ -14266,7 +14370,9 @@ async function commandPublishRouteManifest(options) {
   const { buildTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
-  const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
   const transaction = buildTransaction({
     chainId,
     authority,
@@ -14331,6 +14437,407 @@ async function commandPublishRouteManifest(options) {
     commitTimeoutMs,
     routeId: publication.routeKey.routeId,
     assetKey: publication.routeKey.assetKey,
+  };
+}
+
+function readBurnRecordVkRefFromManifest(manifest) {
+  const burnRecord = isRecord(manifest?.tairaXorBurnRecord)
+    ? manifest.tairaXorBurnRecord
+    : isRecord(manifest?.taira_xor_burn_record)
+      ? manifest.taira_xor_burn_record
+      : {};
+  const vkRef = isRecord(burnRecord.vkRef)
+    ? burnRecord.vkRef
+    : isRecord(burnRecord.vk_ref)
+      ? burnRecord.vk_ref
+      : {};
+  return {
+    backend: vkRef.backend ?? burnRecord.vkBackend ?? burnRecord.vk_backend ?? null,
+    name: vkRef.name ?? burnRecord.vkName ?? burnRecord.vk_name ?? null,
+    settlementAssetDefinitionId:
+      burnRecord.settlementAssetDefinitionId ??
+      burnRecord.settlement_asset_definition_id ??
+      null,
+  };
+}
+
+function normalizeBurnRecordVkTemplate(template, routeVkRef, options) {
+  const backend = normalizeNonEmptyText(
+    options.backend ?? routeVkRef.backend ?? template.backend,
+    "burn-record VK backend",
+  );
+  const name = normalizeNonEmptyText(
+    options.name ?? routeVkRef.name ?? template.name,
+    "burn-record VK name",
+  );
+  if (name.includes(":")) {
+    throw new Error("burn-record VK name must not contain ':'.");
+  }
+  const vkBytes = normalizeStrictBase64(
+    template.vk_bytes ?? template.vkBytes,
+    "burn-record VK bytes",
+  );
+  const vkLen = normalizePositiveSafeInteger(
+    options["vk-len"] ?? template.vk_len ?? template.vkLen,
+    "burn-record VK length",
+  );
+  if (vkBytes.bytes.length !== vkLen) {
+    throw new Error("burn-record VK length must match the canonical VK bytes.");
+  }
+  const publicInputsSchemaHash = normalizeCanonicalHex32(
+    template.public_inputs_schema_hex ??
+      template.publicInputsSchemaHash ??
+      template.public_inputs_schema_hash,
+    "burn-record VK public input schema hash",
+  );
+  const commitment = normalizeCanonicalHex32(
+    template.commitment_hex ??
+      template.commitment ??
+      template.vkCommitment ??
+      template.vk_commitment,
+    "burn-record VK commitment",
+  );
+  return {
+    id: { backend, name },
+    publicInputsSchemaHash,
+    commitment,
+    recordInput: {
+      id: { backend, name },
+      version: normalizePositiveSafeInteger(template.version, "burn-record VK version"),
+      circuitId: normalizeNonEmptyText(
+        options["circuit-id"] ?? template.circuit_id ?? template.circuitId,
+        "burn-record VK circuit id",
+      ),
+      backend,
+      curve: normalizeNonEmptyText(template.curve, "burn-record VK curve"),
+      publicInputsSchemaHash: Array.from(hex32Bytes(publicInputsSchemaHash, "burn-record VK public input schema hash")),
+      commitment: Array.from(hex32Bytes(commitment, "burn-record VK commitment")),
+      vkLen,
+      maxProofBytes: normalizePositiveSafeInteger(
+        options["max-proof-bytes"] ??
+          template.max_proof_bytes ??
+          template.maxProofBytes,
+        "burn-record VK max proof bytes",
+      ),
+      gasScheduleId: normalizeNonEmptyText(
+        options["gas-schedule-id"] ??
+          template.gas_schedule_id ??
+          template.gasScheduleId,
+        "burn-record VK gas schedule id",
+      ),
+      vkBytes: vkBytes.text,
+      status: normalizeNonEmptyText(template.status ?? "Active", "burn-record VK status"),
+    },
+    vkBytes,
+  };
+}
+
+function burnRecordVkRegistryProblems(registryEntry, vk) {
+  const id = registryEntry?.id;
+  const record = registryEntry?.record;
+  const problems = [];
+  if (!isRecord(id) || id.backend !== vk.id.backend || id.name !== vk.id.name) {
+    problems.push("registry id does not match the requested VK ref");
+  }
+  if (!isRecord(record)) {
+    problems.push("registry entry is missing a record");
+    return problems;
+  }
+  if (record.status !== vk.recordInput.status) {
+    problems.push(`registry status is ${record.status ?? "missing"}`);
+  }
+  if (record.circuit_id !== vk.recordInput.circuitId) {
+    problems.push("registry circuit_id does not match");
+  }
+  if (record.commitment !== vk.commitment.slice(2)) {
+    problems.push("registry commitment does not match");
+  }
+  if (record.public_inputs_schema_hash !== vk.publicInputsSchemaHash.slice(2)) {
+    problems.push("registry public_inputs_schema_hash does not match");
+  }
+  if (record.vk_len !== vk.vkBytes.bytes.length) {
+    problems.push("registry vk_len does not match");
+  }
+  if (record.key?.bytes_b64 !== vk.vkBytes.text) {
+    problems.push("registry inline VK bytes do not match");
+  }
+  return problems;
+}
+
+async function fetchBurnRecordVkRegistryEntry(toriiUrl, vk) {
+  const url = new URL("/v1/zk/vk", toriiUrl);
+  url.searchParams.set("backend", vk.id.backend);
+  url.searchParams.set("name_contains", vk.id.name);
+  url.searchParams.set("limit", "10");
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const preview = await responseBodyPreview(response);
+    throw new Error(
+      `Torii responded with HTTP ${response.status} while reading VK registry${
+        preview ? `: ${preview}` : ""
+      }`,
+    );
+  }
+  const entries = await response.json();
+  if (!Array.isArray(entries)) {
+    throw new Error("TAIRA VK registry response must be a JSON array.");
+  }
+  return (
+    entries.find(
+      (entry) =>
+        entry?.id?.backend === vk.id.backend && entry?.id?.name === vk.id.name,
+    ) ?? null
+  );
+}
+
+async function waitForBurnRecordVkRegistryEntry(toriiUrl, vk, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastEntry = null;
+  let lastProblems = [];
+  while (Date.now() <= deadline) {
+    lastEntry = await fetchBurnRecordVkRegistryEntry(toriiUrl, vk);
+    if (lastEntry) {
+      lastProblems = burnRecordVkRegistryProblems(lastEntry, vk);
+      if (lastProblems.length === 0) {
+        return { entry: lastEntry, problems: [] };
+      }
+    }
+    await delayMs(500);
+  }
+  return { entry: lastEntry, problems: lastProblems };
+}
+
+async function commandPublishBurnRecordVk(options) {
+  const manifestPath = normalizeBscRouteManifestPath(
+    options["route-manifest"] ?? options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const manifest = await readJson(manifestPath, "BSC route manifest");
+  const templatePath = resolve(
+    options["vk-template"] ?? DEFAULT_TAIRA_BURN_RECORD_VK_TEMPLATE,
+  );
+  const template = await readJson(templatePath, "TAIRA burn-record VK template");
+  const routeVkRef = readBurnRecordVkRefFromManifest(manifest);
+  const vk = normalizeBurnRecordVkTemplate(template, routeVkRef, options);
+  const { buildRegisterPrivacyVerifierKeyInstruction } = await import(
+    "../javascript/iroha_js/src/instructionBuilders.js"
+  );
+  const instruction = buildRegisterPrivacyVerifierKeyInstruction(vk.recordInput);
+  const routeId = normalizeNonEmptyText(manifest.routeId ?? manifest.route_id, "route id");
+  const assetKey = normalizeNonEmptyText(manifest.assetKey ?? manifest.asset_key, "asset key");
+  const artifact = {
+    schema: "iroha-sccp-bsc-burn-record-vk-register-isi/v1",
+    routeId,
+    assetKey,
+    requiredPermission: "CanManageVerifyingKeys",
+    id: vk.id,
+    vkRef: vk.id,
+    instruction,
+    routeManifestSha256: sha256HexBytes(
+      Buffer.from(canonicalJson(manifest), "utf8"),
+    ),
+    vkTemplateSha256: sha256HexBytes(
+      Buffer.from(canonicalJson(template), "utf8"),
+    ),
+    vkBytesSha256: sha256HexBytes(vk.vkBytes.bytes),
+    vkLen: vk.vkBytes.bytes.length,
+    circuitId: vk.recordInput.circuitId,
+    publicInputsSchemaHash: vk.publicInputsSchemaHash,
+    commitment: vk.commitment,
+    gasScheduleId: vk.recordInput.gasScheduleId,
+    status: vk.recordInput.status,
+  };
+  const out = resolve(options.out ?? DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT);
+  await writeJsonNoSecrets(out, artifact);
+
+  const submit = optionEnabled(options, "submit", false);
+  if (!submit) {
+    return {
+      ok: true,
+      wrote: out,
+      submitted: false,
+      routeId,
+      assetKey,
+      vkRef: vk.id,
+      requiredPermission: artifact.requiredPermission,
+      nextStep:
+        "Review the VK registration artifact, then rerun with --submit true and a TAIRA authority holding CanManageVerifyingKeys.",
+    };
+  }
+
+  const authority = normalizeNonEmptyText(options.authority, "--authority");
+  const chainId = normalizeTairaChainId(options["chain-id"]);
+  const toriiUrl = normalizeTairaToriiUrl(options["torii-url"]);
+  const waitForCommit = optionEnabled(options, "wait-for-commit", true);
+  const commitTimeoutMs = normalizePositiveSafeInteger(
+    options["commit-timeout-ms"],
+    "--commit-timeout-ms",
+    120_000,
+  );
+  const gasAssetId =
+    options["gas-asset-id"] === undefined || options["gas-asset-id"] === null
+      ? normalizeCanonicalAssetDefinitionId(
+          routeVkRef.settlementAssetDefinitionId,
+          "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
+        )
+      : normalizeCanonicalAssetDefinitionId(
+          options["gas-asset-id"],
+          "--gas-asset-id",
+        );
+  const gasLimit = normalizePositiveSafeInteger(
+    options["gas-limit"],
+    "--gas-limit",
+    DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+  );
+
+  const existingEntry = await fetchBurnRecordVkRegistryEntry(toriiUrl, vk);
+  if (existingEntry) {
+    const existingProblems = burnRecordVkRegistryProblems(existingEntry, vk);
+    if (existingProblems.length > 0) {
+      throw new Error(
+        `Existing TAIRA burn-record VK registry entry does not match: ${existingProblems.join("; ")}.`,
+      );
+    }
+    const submissionEvidence = {
+      submitted: false,
+      alreadyRegistered: true,
+      toriiUrl,
+      chainId,
+      authority,
+      registryReadback: existingEntry,
+      gasAssetId,
+      gasLimit,
+      waitForCommit,
+      commitTimeoutMs,
+    };
+    await writeJsonNoSecrets(out, {
+      ...artifact,
+      submission: submissionEvidence,
+    });
+    return {
+      ok: true,
+      wrote: out,
+      submitted: false,
+      alreadyRegistered: true,
+      toriiUrl,
+      chainId,
+      authority,
+      gasAssetId,
+      gasLimit,
+      waitForCommit,
+      commitTimeoutMs,
+      routeId,
+      assetKey,
+      vkRef: vk.id,
+    };
+  }
+
+  const privateKeyEnv = normalizeTairaPrivateKeyEnvName(
+    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+  );
+  const privateKey = Buffer.from(
+    normalizePrivateKey(process.env[privateKeyEnv], privateKeyEnv).slice(2),
+    "hex",
+  );
+  const metadata = {
+    routeId,
+    assetKey,
+    action: "publish_burn_record_vk",
+    gas_asset_id: gasAssetId,
+    gas_limit: gasLimit,
+  };
+  const { buildTransaction } = await import(
+    "../javascript/iroha_js/src/transaction.js"
+  );
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
+  const transaction = buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    privateKey,
+  });
+  const client = new ToriiClient(toriiUrl);
+  const hash = normalizeTransactionHash(
+    transaction.hash.toString("hex"),
+    "local transaction hash",
+  );
+  const submission = await submitSignedTransactionRawToTairaPipeline(
+    client,
+    toriiUrl,
+    transaction.signedTransaction,
+    hash,
+    { waitForCommit, timeoutMs: commitTimeoutMs },
+  );
+  const submittedHash = normalizeTransactionHash(
+    submission.hash,
+    "submitted transaction hash",
+  );
+  const statusKind = transactionStatusKind(submission.status);
+  const registryResult =
+    waitForCommit && statusKind === "Applied"
+      ? await waitForBurnRecordVkRegistryEntry(toriiUrl, vk, commitTimeoutMs)
+      : { entry: null, problems: [] };
+  const submissionEvidence = {
+    submitted: true,
+    alreadyRegistered: false,
+    toriiUrl,
+    chainId,
+    authority,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
+    registryReadback: registryResult.entry,
+    gasAssetId,
+    gasLimit,
+    waitForCommit,
+    commitTimeoutMs,
+  };
+  await writeJsonNoSecrets(out, {
+    ...artifact,
+    submission: submissionEvidence,
+  });
+  if (waitForCommit && statusKind !== "Applied") {
+    throw new Error(
+      `TAIRA burn-record VK registration was not applied: ${statusKind ?? "unknown"}.`,
+    );
+  }
+  if (
+    waitForCommit &&
+    (!registryResult.entry || registryResult.problems.length > 0)
+  ) {
+    throw new Error(
+      `TAIRA burn-record VK registry readback failed${
+        registryResult.problems.length > 0
+          ? `: ${registryResult.problems.join("; ")}`
+          : "."
+      }`,
+    );
+  }
+  return {
+    ok: true,
+    wrote: out,
+    submitted: true,
+    alreadyRegistered: false,
+    toriiUrl,
+    chainId,
+    authority,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
+    gasAssetId,
+    gasLimit,
+    waitForCommit,
+    commitTimeoutMs,
+    routeId,
+    assetKey,
+    vkRef: vk.id,
   };
 }
 
@@ -14518,6 +15025,8 @@ export async function main(argv = process.argv.slice(2)) {
       return commandNativeProverBundle(options);
     case "publish-route-manifest":
       return commandPublishRouteManifest(options);
+    case "publish-burn-record-vk":
+      return commandPublishBurnRecordVk(options);
     case "route-config":
       return commandRouteConfig(options);
     case "requirements":

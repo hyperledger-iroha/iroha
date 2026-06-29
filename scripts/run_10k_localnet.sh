@@ -16,6 +16,10 @@ Options:
   --batch-size <N>        tx_load batch size (default: 10000)
   --batch-interval <SEC>  tx_load batch interval seconds (default: 1)
   --drain-timeout <SEC>   seconds to wait for queue drain (default: 120)
+  --queue-soft-limit <N>  pause batches above this queue delta per shard (default: 50000)
+  --queue-hard-limit <N>  abort batches above this queue delta per shard (default: 120000)
+  --queue-wait-timeout <SEC>
+                          seconds to wait below soft queue limit (default: 60)
   --out-base <DIR>        output directory base (default: /tmp/iroha-10k)
   --target-dir <DIR>      Set CARGO_TARGET_DIR for builds and binary reuse
   --fast                  Run cargo via scripts/cargo_fast.sh when available
@@ -49,6 +53,9 @@ PER_PEER=false
 BATCH_SIZE=10000
 BATCH_INTERVAL=1
 DRAIN_TIMEOUT=120
+QUEUE_SOFT_LIMIT=50000
+QUEUE_HARD_LIMIT=120000
+QUEUE_WAIT_TIMEOUT=60
 OUT_BASE="/tmp/iroha-10k"
 PROFILE="release"
 TARGET_DIR=""
@@ -96,6 +103,21 @@ while [[ $# -gt 0 ]]; do
       ;;
     --drain-timeout)
       DRAIN_TIMEOUT="$2"
+      shift 2
+      ;;
+    --queue-soft-limit)
+      require_option_value "--queue-soft-limit" "${2-}"
+      QUEUE_SOFT_LIMIT="$2"
+      shift 2
+      ;;
+    --queue-hard-limit)
+      require_option_value "--queue-hard-limit" "${2-}"
+      QUEUE_HARD_LIMIT="$2"
+      shift 2
+      ;;
+    --queue-wait-timeout)
+      require_option_value "--queue-wait-timeout" "${2-}"
+      QUEUE_WAIT_TIMEOUT="$2"
       shift 2
       ;;
     --out-base)
@@ -290,6 +312,9 @@ run_mode() {
     --batch-size "$BATCH_SIZE"
     --batch-interval "$BATCH_INTERVAL"
     --drain-timeout "$DRAIN_TIMEOUT"
+    --queue-soft-limit "$QUEUE_SOFT_LIMIT"
+    --queue-hard-limit "$QUEUE_HARD_LIMIT"
+    --queue-wait-timeout "$QUEUE_WAIT_TIMEOUT"
     --no-wait
     --no-index
   )

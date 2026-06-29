@@ -7,6 +7,7 @@
 use std::{
     borrow::Cow,
     cell::Cell,
+    cmp::Reverse,
     collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     convert::TryFrom,
     ffi::OsStr,
@@ -123,7 +124,7 @@ use super::{
     rbc_status,
     stake_snapshot::{
         CommitStakeSnapshot, commit_stake_snapshot_from_map, fallback_stake_for_world,
-        stake_map_from_world, stake_quorum_reached_for_snapshot,
+        stake_map_from_world_with_active_lanes, stake_quorum_reached_for_snapshot,
     },
     *,
 };
@@ -135,7 +136,7 @@ use crate::{
     kura::{BlockCount, Kura},
     native_amx::{
         NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey,
-        NativeAmxVoteV1, aggregate_votes_to_qc,
+        NativeAmxVoteIngressError, NativeAmxVoteV1, aggregate_votes_to_qc,
     },
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
@@ -262,8 +263,6 @@ const COMMIT_QC_ONLY_RETRY_FLOOR: Duration = Duration::from_secs(2);
 const COMMIT_QC_ONLY_RETRY_CEILING: Duration = Duration::from_secs(10);
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
-/// Bound native AMX vote sessions retained while proposer collection is in progress.
-const NATIVE_AMX_SESSION_CACHE_MAX: usize = 1024;
 /// Minimum interval between RBC DELIVER deferral log emissions per session.
 const RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 
@@ -544,19 +543,13 @@ fn missing_quorum_stale(
 }
 
 fn emit_pipeline_events(events_sender: &EventsSender, events: Vec<PipelineEventBox>) {
-    match events.len() {
-        0 => {}
-        1 => {
-            if let Some(event) = events.into_iter().next()
-                && let Err(err) = events_sender.send(EventBox::Pipeline(event))
-            {
-                debug!(?err, "failed to forward pipeline event");
-            }
-        }
-        _ => {
-            if let Err(err) = events_sender.send(EventBox::PipelineBatch(events)) {
-                debug!(?err, "failed to forward pipeline event batch");
-            }
+    // Tokio broadcast retention is measured in sent messages, not in heap bytes. Sending a whole
+    // block as one `PipelineBatch` lets the channel retain `events_buffer_capacity` block-sized
+    // vectors, which is unbounded with respect to transaction count. Emit individual events so the
+    // configured channel capacity bounds retained pipeline events directly.
+    for event in events {
+        if let Err(err) = events_sender.send(EventBox::Pipeline(event)) {
+            debug!(?err, "failed to forward pipeline event");
         }
     }
 }
@@ -674,20 +667,26 @@ fn realign_qcs_after_failed_commit(
     (new_locked, new_highest)
 }
 
-fn requeue_block_transactions(
+fn requeue_block_transactions<I>(
     queue: &Queue,
     state: &State,
-    txs: Vec<TransactionEntrypoint>,
-) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>) {
+    txs: I,
+) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>)
+where
+    I: IntoIterator<Item = TransactionEntrypoint>,
+{
     requeue_block_transactions_skipping_known_committed(queue, state, txs, None)
 }
 
-fn requeue_block_transactions_skipping_known_committed(
+fn requeue_block_transactions_skipping_known_committed<I>(
     queue: &Queue,
     state: &State,
-    txs: Vec<TransactionEntrypoint>,
+    txs: I,
     known_committed_hashes: Option<&BTreeSet<HashOf<SignedTransaction>>>,
-) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>) {
+) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>)
+where
+    I: IntoIterator<Item = TransactionEntrypoint>,
+{
     let mut requeued = 0usize;
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
@@ -720,62 +719,69 @@ fn requeue_block_transactions_skipping_known_committed(
             gossip_hashes.push(tx_hash);
             continue;
         }
-        let routing_plan = if let Some(plan) = crate::queue::routing_ledger::get_plan(&tx_hash) {
-            plan
-        } else if let Some(plan) = match queue.route_plan_for_gossip_without_state(&accepted) {
-            Ok(plan) => plan,
-            Err(err) => {
-                warn!(
-                    tx = %tx_hash,
-                    reason = %err,
-                    reason_label = err.as_label(),
-                    "failed to resolve routing without state during requeue"
-                );
-                None
-            }
-        } {
-            plan
-        } else {
-            match queue.route_plan_for_gossip_with_state(&accepted, state) {
+        let (routing_plan, ledger_plan) =
+            if let Some(plan) = crate::queue::routing_ledger::get_plan(&tx_hash) {
+                let ledger_plan = plan.clone();
+                (plan, Some(ledger_plan))
+            } else if let Some(plan) = match queue.route_plan_for_gossip_without_state(&accepted) {
                 Ok(plan) => plan,
                 Err(err) => {
-                    failures = failures.saturating_add(1);
                     warn!(
                         tx = %tx_hash,
                         reason = %err,
                         reason_label = err.as_label(),
-                        "failed to resolve routing during requeue"
+                        "failed to resolve routing without state during requeue"
                     );
-                    continue;
+                    None
                 }
-            }
-        };
+            } {
+                (plan, None)
+            } else {
+                match queue.route_plan_for_gossip_with_state(&accepted, state) {
+                    Ok(plan) => (plan, None),
+                    Err(err) => {
+                        failures = failures.saturating_add(1);
+                        warn!(
+                            tx = %tx_hash,
+                            reason = %err,
+                            reason_label = err.as_label(),
+                            "failed to resolve routing during requeue"
+                        );
+                        continue;
+                    }
+                }
+            };
         match queue.push_requeued_with_routing_plan(accepted, routing_plan, state) {
             Ok(()) => {
                 requeued = requeued.saturating_add(1);
                 gossip_hashes.push(tx_hash);
             }
-            Err(push_err) => match push_err.err {
-                crate::queue::Error::IsInQueue => {
-                    duplicate_failures = duplicate_failures.saturating_add(1);
-                    trace!(
-                        tx = %tx_hash,
-                        "transaction already in queue during requeue; keeping pending block"
-                    );
-                    gossip_hashes.push(tx_hash);
+            Err(push_err) => {
+                if let Some(plan) = ledger_plan.as_ref() {
+                    crate::queue::routing_ledger::discard_plan_if_matches(&tx_hash, plan);
                 }
-                crate::queue::Error::InBlockchain => {
-                    duplicate_failures = duplicate_failures.saturating_add(1);
-                    trace!(
-                        tx = %tx_hash,
-                        "transaction already committed during requeue; skipping"
-                    );
+                match push_err.err {
+                    crate::queue::Error::IsInQueue => {
+                        duplicate_failures = duplicate_failures.saturating_add(1);
+                        trace!(
+                            tx = %tx_hash,
+                            "transaction already in queue during requeue; keeping pending block"
+                        );
+                        gossip_hashes.push(tx_hash);
+                    }
+                    crate::queue::Error::InBlockchain => {
+                        duplicate_failures = duplicate_failures.saturating_add(1);
+                        trace!(
+                            tx = %tx_hash,
+                            "transaction already committed during requeue; skipping"
+                        );
+                    }
+                    err => {
+                        failures = failures.saturating_add(1);
+                        warn!(?err, "failed to requeue transaction after commit failure");
+                    }
                 }
-                err => {
-                    failures = failures.saturating_add(1);
-                    warn!(?err, "failed to requeue transaction after commit failure");
-                }
-            },
+            }
         }
     }
     if !gossip_hashes.is_empty() {
@@ -816,13 +822,12 @@ fn drop_pending_block_and_requeue_skipping_known_committed(
     known_committed_hashes: Option<&BTreeSet<HashOf<SignedTransaction>>>,
 ) -> Option<(usize, usize, usize, usize)> {
     let pending = pending_blocks.remove(&pending_hash)?;
-    let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
-    let tx_count = txs.len();
+    let tx_count = pending.block.external_entrypoint_count();
     let (requeued, failures, duplicate_failures, _) =
         requeue_block_transactions_skipping_known_committed(
             queue,
             state,
-            txs,
+            pending.block.external_entrypoints_cloned(),
             known_committed_hashes,
         );
     Some((tx_count, requeued, failures, duplicate_failures))
@@ -831,6 +836,222 @@ fn drop_pending_block_and_requeue_skipping_known_committed(
 #[inline]
 fn drop_pending_after_requeue(failures: usize, _duplicate_failures: usize) -> bool {
     failures > 0
+}
+
+#[cfg(test)]
+mod requeue_block_transaction_tests {
+    use iroha_config::parameters::actual::{LaneRoutingPolicy, Queue as QueueConfig};
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        domain::DomainId,
+        isi::InstructionBox,
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog,
+            DataSpaceMetadata, LaneCatalog, LaneConfig,
+        },
+        prelude::{AccountId, Domain, Register, TransactionBuilder},
+    };
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        query::store::LiveQueryStore,
+        queue::{ConfigLaneRouter, LaneRouter, RoutingPlan},
+        state::World,
+    };
+
+    struct NativeAmxParticipantDriftFixture {
+        state: State,
+        signed_tx: SignedTransaction,
+        stale_plan: RoutingPlan,
+        current_plan: RoutingPlan,
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("main-loop requeue fixture key generation should succeed")
+    }
+
+    fn native_amx_participant_drift_fixture() -> NativeAmxParticipantDriftFixture {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![],
+        };
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let stale_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: first_dataspace,
+                    alias: "acme-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(3),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let mut current_lanes = stale_lane_catalog.lanes().to_vec();
+        let stale_participant_lane = current_lanes
+            .iter_mut()
+            .find(|lane| lane.id == LaneId::new(2))
+            .expect("stale participant lane");
+        stale_participant_lane.alias = "elastic-lane-2".to_owned();
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "10".to_owned());
+        let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
+            .expect("current lane catalog");
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.routing_policy = policy.clone();
+            nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+
+        let key_pair = checked_keypair();
+        let signed_tx = TransactionBuilder::new(
+            ChainId::from("requeue-native-amx-participant-drift"),
+            AccountId::new(key_pair.public_key().clone()),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "acme").expect("domain id"),
+            ))),
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("treasury", "bank").expect("domain id"),
+            ))),
+        ])
+        .sign(key_pair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed_tx.clone()));
+        let stale_plan = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            stale_lane_catalog,
+        )
+        .try_route_plan(&accepted)
+        .expect("stale Native AMX plan should resolve");
+        let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
+            .try_route_plan(&accepted)
+            .expect("current Native AMX plan should resolve");
+
+        NativeAmxParticipantDriftFixture {
+            state,
+            signed_tx,
+            stale_plan,
+            current_plan,
+        }
+    }
+
+    #[test]
+    fn requeue_block_transactions_discards_stale_native_amx_routing_ledger_plan() {
+        let time_source = TimeSource::new_system();
+        let queue = Queue::test(QueueConfig::default(), &time_source);
+        let fixture = native_amx_participant_drift_fixture();
+        let tx_hash = fixture.signed_tx.hash();
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
+
+        crate::queue::routing_ledger::record_plan_bounded(
+            tx_hash,
+            fixture.stale_plan.clone(),
+            iroha_config::parameters::defaults::queue::CAPACITY.get(),
+        );
+        let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
+            &queue,
+            &fixture.state,
+            vec![TransactionEntrypoint::External(fixture.signed_tx.clone())],
+        );
+
+        assert_eq!(requeued, 0, "stale Native AMX plan must not requeue");
+        assert_eq!(failures, 1, "stale Native AMX plan is a hard failure");
+        assert_eq!(duplicate_failures, 0);
+        assert!(gossip_hashes.is_empty(), "failed requeue must not gossip");
+        assert_eq!(queue.queued_len(), 0);
+        assert!(!queue.contains_transaction_hash(tx_hash));
+        assert!(
+            crate::queue::routing_ledger::get_plan(&tx_hash).is_none(),
+            "stale full-plan hint must be discarded after rejection"
+        );
+        assert!(
+            crate::queue::routing_ledger::get(&tx_hash).is_none(),
+            "stale coordinator hint must be discarded with the full plan"
+        );
+
+        let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
+            &queue,
+            &fixture.state,
+            vec![TransactionEntrypoint::External(fixture.signed_tx.clone())],
+        );
+
+        assert_eq!(
+            requeued, 1,
+            "second requeue should recompute the current Native AMX plan"
+        );
+        assert_eq!(failures, 0);
+        assert_eq!(duplicate_failures, 0);
+        assert_eq!(gossip_hashes, vec![tx_hash]);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.contains_transaction_hash(tx_hash));
+        let recorded_plan = crate::queue::routing_ledger::get_plan(&tx_hash)
+            .expect("successful requeue records current routing plan");
+        assert_eq!(recorded_plan.digest(), fixture.current_plan.digest());
+
+        crate::queue::routing_ledger::discard_plan_if_matches(&tx_hash, &fixture.current_plan);
+        let _ = crate::queue::routing_ledger::take(&tx_hash);
+    }
 }
 
 #[derive(Debug)]
@@ -864,12 +1085,8 @@ fn handle_commit_failure_with_qc_quorum(
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     latest_committed: Option<crate::sumeragi::consensus::QcHeaderRef>,
 ) -> QcCommitFailureOutcome {
-    pending.tx_batch = None;
-    let (requeued, failed_requeues, duplicate_requeues, _) = requeue_block_transactions(
-        queue,
-        state,
-        failed_block.external_entrypoints_cloned().collect(),
-    );
+    let (requeued, failed_requeues, duplicate_requeues, _) =
+        requeue_block_transactions(queue, state, failed_block.external_entrypoints_cloned());
     let (new_locked, new_highest) =
         realign_qcs_after_failed_commit(locked_qc, highest_qc, block_hash, latest_committed);
     pending.set_block(failed_block);
@@ -887,11 +1104,10 @@ fn handle_commit_failure_with_qc_quorum(
     }
 }
 
-fn handle_prev_block_mismatch(
-    queue: &Queue,
-    state: &State,
-    txs: Vec<TransactionEntrypoint>,
-) -> PrevBlockMismatchOutcome {
+fn handle_prev_block_mismatch<I>(queue: &Queue, state: &State, txs: I) -> PrevBlockMismatchOutcome
+where
+    I: IntoIterator<Item = TransactionEntrypoint>,
+{
     let (requeued, failures, _duplicates, _) = requeue_block_transactions(queue, state, txs);
     PrevBlockMismatchOutcome { requeued, failures }
 }
@@ -1425,6 +1641,7 @@ fn record_qc_validation_error(
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn validate_qc_with_evidence(
     vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
@@ -1442,7 +1659,7 @@ fn validate_qc_with_evidence(
     Result<QcValidationOutcome, QcValidationError>,
     Option<crate::sumeragi::consensus::Evidence>,
 ) {
-    match validate_qc_against_votes(
+    validate_qc_with_evidence_and_active_lanes(
         vote_log,
         qc,
         topology,
@@ -1454,6 +1671,41 @@ fn validate_qc_with_evidence(
         mode_tag,
         prf_seed,
         aggregate_ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_qc_with_evidence_and_active_lanes(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> (
+    Result<QcValidationOutcome, QcValidationError>,
+    Option<crate::sumeragi::consensus::Evidence>,
+) {
+    match validate_qc_against_votes_with_active_lanes(
+        vote_log,
+        qc,
+        topology,
+        world,
+        pops,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+        active_lane_ids,
     ) {
         Ok(outcome) => (Ok(outcome), None),
         Err(err) => (Err(err), qc_validation_error_to_evidence(qc, &err)),
@@ -1965,10 +2217,11 @@ pub(crate) fn validated_block_signers_from_world(
     Ok(signers)
 }
 
-fn resolve_stake_snapshot_for_roster(
+fn resolve_stake_snapshot_for_roster_with_active_lanes(
     stake_snapshot: Option<&CommitStakeSnapshot>,
     world: &impl WorldReadOnly,
     roster: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Option<CommitStakeSnapshot> {
     if let Some(snapshot) = stake_snapshot {
         if snapshot.matches_roster(roster) {
@@ -1979,7 +2232,7 @@ fn resolve_stake_snapshot_for_roster(
             "stake snapshot roster mismatch; recomputing"
         );
     }
-    CommitStakeSnapshot::from_roster(world, roster)
+    CommitStakeSnapshot::from_roster_with_active_lanes(world, roster, active_lane_ids)
 }
 
 fn resolve_stake_snapshot_for_roster_from_cache(
@@ -2041,7 +2294,7 @@ impl RosterValidationInputs {
         consensus_mode: ConsensusMode,
         stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> Self {
-        let stake_map = stake_map_from_world(world);
+        let stake_map = super::stake_snapshot::stake_map_from_world(world);
         let fallback_stake = fallback_stake_for_world(world);
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
@@ -2170,10 +2423,20 @@ struct RosterValidationCache {
 }
 
 impl RosterValidationCache {
+    #[cfg(test)]
     fn from_world(
         world: &impl WorldReadOnly,
         fallback_epoch_length: u64,
         fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+    ) -> Self {
+        Self::from_world_with_active_lanes(world, fallback_epoch_length, fallback_pops, None)
+    }
+
+    fn from_world_with_active_lanes(
+        world: &impl WorldReadOnly,
+        fallback_epoch_length: u64,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+        active_lane_ids: Option<&BTreeSet<LaneId>>,
     ) -> Self {
         let epoch_schedule =
             super::EpochScheduleSnapshot::from_world_with_fallback(world, fallback_epoch_length);
@@ -2189,7 +2452,7 @@ impl RosterValidationCache {
                 pops.entry(pk.clone()).or_insert_with(|| pop.clone());
             }
         }
-        let stake_map = stake_map_from_world(world);
+        let stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
         let fallback_stake = fallback_stake_for_world(world);
         Self {
             epoch_schedule,
@@ -2207,8 +2470,14 @@ impl RosterValidationCache {
         world: &impl WorldReadOnly,
         fallback_epoch_length: u64,
         fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+        active_lane_ids: Option<&BTreeSet<LaneId>>,
     ) {
-        *self = Self::from_world(world, fallback_epoch_length, fallback_pops);
+        *self = Self::from_world_with_active_lanes(
+            world,
+            fallback_epoch_length,
+            fallback_pops,
+            active_lane_ids,
+        );
     }
 
     fn expected_epoch(&self, height: u64, consensus_mode: ConsensusMode) -> u64 {
@@ -2319,6 +2588,39 @@ pub(crate) fn validate_block_sync_qc(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
+    validate_block_sync_qc_with_active_lanes(
+        qc,
+        topology,
+        world,
+        block_signers,
+        block_view,
+        pops,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_block_sync_qc_with_active_lanes(
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    block_view: u64,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
     let canonical_roster =
         roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
@@ -2368,9 +2670,12 @@ pub(crate) fn validate_block_sync_qc(
     }
     let resolved_snapshot = match consensus_mode {
         ConsensusMode::Permissioned => None,
-        ConsensusMode::Npos => {
-            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
-        }
+        ConsensusMode::Npos => resolve_stake_snapshot_for_roster_with_active_lanes(
+            stake_snapshot,
+            world,
+            canonical_topology.as_ref(),
+            active_lane_ids,
+        ),
     };
     match consensus_mode {
         ConsensusMode::Permissioned => {
@@ -2589,8 +2894,9 @@ fn tally_qc_against_block_signers(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Result<QcSignerTally, QcValidationError> {
-    let _ = validate_block_sync_qc(
+    let _ = validate_block_sync_qc_with_active_lanes(
         qc,
         topology,
         world,
@@ -2603,6 +2909,7 @@ fn tally_qc_against_block_signers(
         mode_tag,
         prf_seed,
         aggregate_ok,
+        active_lane_ids,
     )?;
     // Keep bitmap indices as-is so cached signers reproduce the QC bitmap correctly.
     let roster_len = topology.as_ref().len();
@@ -2637,6 +2944,7 @@ fn validate_new_view_qc_highest(
     Ok(highest)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 fn validate_qc_against_votes(
@@ -2652,14 +2960,49 @@ fn validate_qc_against_votes(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<QcValidationOutcome, QcValidationError> {
+    validate_qc_against_votes_with_active_lanes(
+        vote_log,
+        qc,
+        topology,
+        world,
+        pops,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
+fn validate_qc_against_votes_with_active_lanes(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<QcValidationOutcome, QcValidationError> {
     let canonical_roster =
         roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let resolved_stake_snapshot = match consensus_mode {
         ConsensusMode::Permissioned => None,
-        ConsensusMode::Npos => {
-            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
-        }
+        ConsensusMode::Npos => resolve_stake_snapshot_for_roster_with_active_lanes(
+            stake_snapshot,
+            world,
+            canonical_topology.as_ref(),
+            active_lane_ids,
+        ),
     };
     validate_qc_against_votes_with_resolved_stake(
         vote_log,
@@ -3297,6 +3640,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::DuplicateTransactions
         | BlockValidationError::SccpCommitmentRootMismatch { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
+        | BlockValidationError::CommittedFragmentCountMismatch { .. }
         | BlockValidationError::TransactionAccept(_)
         | BlockValidationError::MerkleRootMismatch
         | BlockValidationError::SignatureVerification(_)
@@ -6099,7 +6443,7 @@ impl Actor {
         pending: &PendingBlock,
     ) -> bool {
         let key = (block_hash, pending.height, pending.view);
-        let local_payload_matches = Hash::new(pending.payload_bytes()) == pending.payload_hash;
+        let local_payload_matches = pending.payload_hash_matches_block();
         local_payload_matches
             && (self
                 .subsystems
@@ -6125,7 +6469,7 @@ impl Actor {
         pending: &PendingBlock,
     ) -> bool {
         let key = (block_hash, pending.height, pending.view);
-        let local_payload_matches = Hash::new(pending.payload_bytes()) == pending.payload_hash;
+        let local_payload_matches = pending.payload_hash_matches_block();
         if !local_payload_matches {
             return false;
         }
@@ -6192,6 +6536,163 @@ impl Actor {
         }
 
         ready_count >= Self::rbc_protocol_deliver_quorum(&topology)
+    }
+
+    fn pending_block_has_rbc_progress_without_payload(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        let key = (block_hash, pending.height, pending.view);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                !session.is_invalid()
+                    && session
+                        .payload_hash()
+                        .is_some_and(|hash| hash == pending.payload_hash)
+                    && (session.received_chunks() > 0
+                        || !session.ready_signatures.is_empty()
+                        || rbc_session_has_complete_delivery(session))
+            })
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .status_handle
+                .get(&key)
+                .is_some_and(|summary| {
+                    !summary.invalid
+                        && summary.payload_hash == Some(pending.payload_hash)
+                        && (summary.received_chunks > 0
+                            || summary.ready_count > 0
+                            || summary.delivered)
+                })
+    }
+
+    fn pending_block_body_retention_rank(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> PendingBlockRetentionRank {
+        let frontier_height = u64::try_from(tip_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let frontier_distance = pending.height.abs_diff(frontier_height);
+        let valid = pending.validation_status != ValidationStatus::Invalid;
+        let not_aborted = !pending.aborted;
+        let not_retired = !pending.is_retired_same_height();
+        let active_tip_extending = !pending.is_consensus_inactive()
+            && pending_extends_tip(
+                pending.height,
+                pending.block.header().prev_block_hash(),
+                tip_height,
+                tip_hash,
+            );
+        let commit_certificate = pending.commit_qc_observed()
+            || self.pending_block_has_commit_qc(block_hash, pending.height, pending.view);
+        let cached_qc = self.pending_block_has_qc(block_hash, pending.height, pending.view);
+        let local_commit_vote = pending.local_commit_vote_emitted();
+        let votes = self.pending_block_has_votes(block_hash, pending.height, pending.view);
+        let rbc_progress = self.pending_block_has_rbc_progress_without_payload(block_hash, pending);
+
+        PendingBlockRetentionRank {
+            valid,
+            not_aborted,
+            not_retired,
+            commit_certificate,
+            cached_qc,
+            local_commit_vote,
+            votes,
+            rbc_progress,
+            active_tip_extending,
+            kura_persisted: pending.kura_persisted,
+            frontier_distance: Reverse(frontier_distance),
+            height: pending.height,
+            view: pending.view,
+            inserted_at: pending.inserted_at,
+            block_hash,
+        }
+    }
+
+    fn enforce_pending_block_cap(
+        &mut self,
+        protected_hash: HashOf<BlockHeader>,
+        source: &'static str,
+    ) -> bool {
+        let cap = self.recovery_pending_block_cap();
+        if self.pending.pending_blocks.len() <= cap {
+            return self.pending.pending_blocks.contains_key(&protected_hash);
+        }
+
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let mut candidates = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter(|(hash, _)| **hash != protected_hash)
+            .map(|(hash, pending)| {
+                (
+                    self.pending_block_body_retention_rank(*hash, pending, tip_height, tip_hash),
+                    *hash,
+                    pending.height,
+                    pending.view,
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(rank, _, _, _)| *rank);
+
+        for (_, victim_hash, height, view) in candidates {
+            if self.pending.pending_blocks.len() <= cap {
+                break;
+            }
+            let Some((tx_count, requeued, failures, duplicate_failures)) =
+                self.drop_pending_block_for_memory_cap(victim_hash, height, view)
+            else {
+                debug!(
+                    height,
+                    view,
+                    block = %victim_hash,
+                    cap,
+                    pending_blocks = self.pending.pending_blocks.len(),
+                    source,
+                    "skipping pending block cap victim that could not be dropped"
+                );
+                continue;
+            };
+            super::status::inc_pending_queue_evictions_total(1);
+            debug!(
+                height,
+                view,
+                block = %victim_hash,
+                cap,
+                pending_blocks = self.pending.pending_blocks.len(),
+                tx_count,
+                requeued,
+                failures,
+                duplicate_failures,
+                source,
+                "evicted pending block body to enforce recovery pending-block cap"
+            );
+        }
+
+        if self.pending.pending_blocks.len() > cap {
+            warn!(
+                cap,
+                pending_blocks = self.pending.pending_blocks.len(),
+                protected = %protected_hash,
+                source,
+                "pending block body cap remains exceeded after deterministic eviction pass"
+            );
+        }
+
+        self.pending.pending_blocks.contains_key(&protected_hash)
     }
 
     fn pending_block_validation_priority_reason(
@@ -10045,14 +10546,12 @@ impl Actor {
         payload_hash: Hash,
         chunk_max_bytes: usize,
     ) -> bool {
-        let mut probe = session.clone();
-        let outcome = self::rbc::apply_hydrated_payload(
-            &mut probe,
+        self::rbc::local_payload_satisfies_session_chunk_metadata(
+            session,
             payload_bytes,
             payload_hash,
             chunk_max_bytes,
-        );
-        outcome.all_chunks_present && probe.complete_payload_matches(&payload_hash)
+        )
     }
 
     fn rbc_session_metadata_matches_progress_slot(
@@ -10818,10 +11317,12 @@ fn qc_vote_key_from_qc(qc: &crate::sumeragi::consensus::Qc) -> QcVoteKey {
 }
 
 const KNOWN_BLOCK_QC_WORK_PER_TICK: usize = 2;
+const KNOWN_BLOCK_QC_WORK_CAP: usize = 256;
 const QUARANTINED_BLOCK_SYNC_QC_PER_TICK: usize = 4;
 const QUARANTINED_BLOCK_SYNC_QC_CAP: usize = 256;
 const QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS: u32 = 4;
 const DEFERRED_MISSING_PAYLOAD_QC_PER_TICK: usize = 4;
+const DEFERRED_ROSTER_QC_CAP: usize = 256;
 const DEFERRED_MISSING_PAYLOAD_QC_CAP: usize = 256;
 const DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS: u32 = 4;
 const EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN: Duration = Duration::from_secs(5);
@@ -10842,6 +11343,51 @@ const RECOVERY_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 64;
 const RECOVERY_QUEUE_BACKLOG_DEPTH_DIVISOR: u64 = 2;
 const ROUND_LIVENESS_STAGNATION_WINDOWS_TO_ISOLATE: u32 = 3;
 const ROUND_LIVENESS_GAP_TO_ISOLATE: u64 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedQcInsertDecision {
+    Insert,
+    DropIncoming,
+    Evict(QcVoteKey),
+}
+
+fn qc_key_retention_rank(
+    key: QcVoteKey,
+) -> (
+    u64,
+    u64,
+    u64,
+    crate::sumeragi::consensus::Phase,
+    HashOf<BlockHeader>,
+    Hash,
+    u64,
+) {
+    (key.2, key.3, key.4, key.0, key.1, key.5, key.6)
+}
+
+fn bounded_qc_insert_decision<V>(
+    entries: &BTreeMap<QcVoteKey, V>,
+    incoming: QcVoteKey,
+    cap: usize,
+) -> BoundedQcInsertDecision {
+    let cap = cap.max(1);
+    if entries.len() < cap {
+        return BoundedQcInsertDecision::Insert;
+    }
+    let Some(eviction) = entries
+        .keys()
+        .copied()
+        .chain(std::iter::once(incoming))
+        .min_by_key(|key| qc_key_retention_rank(*key))
+    else {
+        return BoundedQcInsertDecision::Insert;
+    };
+    if eviction == incoming {
+        BoundedQcInsertDecision::DropIncoming
+    } else {
+        BoundedQcInsertDecision::Evict(eviction)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RosterRecoveryState {
@@ -11515,9 +12061,29 @@ struct DeterministicRecoveryProfile {
     max_forced_proposal_attempts_per_view: u32,
     rotate_after_reacquire_exhausted: bool,
     missing_request_stale_height_margin: u64,
+    pending_block_cap: usize,
     pending_block_sync_cap: usize,
     pending_proposal_cap: usize,
     missing_fetch_aggressive_after_attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PendingBlockRetentionRank {
+    valid: bool,
+    not_aborted: bool,
+    not_retired: bool,
+    commit_certificate: bool,
+    cached_qc: bool,
+    local_commit_vote: bool,
+    votes: bool,
+    rbc_progress: bool,
+    active_tip_extending: bool,
+    kura_persisted: bool,
+    frontier_distance: Reverse<u64>,
+    height: u64,
+    view: u64,
+    inserted_at: Instant,
+    block_hash: HashOf<BlockHeader>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -13015,6 +13581,28 @@ enum RbcRepairAttempt {
 struct OutboundRbcChunk {
     message: Arc<BlockMessage>,
     encoded: Arc<Vec<u8>>,
+}
+
+impl OutboundRbcChunk {
+    fn retained_bytes(&self) -> usize {
+        let message_bytes = match self.message.as_ref() {
+            BlockMessage::RbcChunk(chunk) => chunk.bytes.len(),
+            BlockMessage::RbcChunkCompact(chunk) => chunk.bytes.len(),
+            _ => 0,
+        };
+        message_bytes.saturating_add(self.encoded.len())
+    }
+}
+
+impl RbcOutboundChunks {
+    fn retained_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .skip(self.cursor.min(self.chunks.len()))
+            .fold(0usize, |acc, chunk| {
+                acc.saturating_add(chunk.retained_bytes())
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -15543,6 +16131,10 @@ fn select_block_sync_roster(
             return filtered;
         }
 
+        let nexus = state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         let derived = roster::derive_active_topology_for_mode_from_world(
             &world,
             &commit_topology,
@@ -15550,6 +16142,7 @@ fn select_block_sync_roster(
             trusted,
             me,
             consensus_mode,
+            active_lane_ids.as_ref(),
         );
         if !derived.is_empty() {
             debug!(
@@ -15854,8 +16447,16 @@ impl Actor {
         let height = block.header().height().get();
         let view = block.header().view_change_index();
         let world = state.world_view();
-        let roster_cache =
-            RosterValidationCache::from_world(&world, fallback_epoch_length, fallback_pops);
+        let nexus = state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
+        let roster_cache = RosterValidationCache::from_world_with_active_lanes(
+            &world,
+            fallback_epoch_length,
+            fallback_pops,
+            active_lane_ids.as_ref(),
+        );
         let inputs = roster_cache.inputs_for_roster(roster, consensus_mode, None);
         let topology = super::network_topology::Topology::new(roster.to_vec());
         let block_signers = BTreeSet::new();
@@ -15866,7 +16467,7 @@ impl Actor {
                 candidate.height == height
                     && candidate.subject_block_hash == block.hash()
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-                    && validate_block_sync_qc(
+                    && validate_block_sync_qc_with_active_lanes(
                         candidate,
                         &topology,
                         &world,
@@ -15879,6 +16480,7 @@ impl Actor {
                         mode_tag,
                         None,
                         None,
+                        active_lane_ids.as_ref(),
                     )
                     .is_ok()
             })
@@ -15920,7 +16522,7 @@ impl Actor {
         if cert.validator_set.as_slice() != roster {
             return None;
         }
-        if validate_block_sync_qc(
+        if validate_block_sync_qc_with_active_lanes(
             &cert,
             &topology,
             &world,
@@ -15933,6 +16535,7 @@ impl Actor {
             mode_tag,
             None,
             None,
+            active_lane_ids.as_ref(),
         )
         .is_err()
         {
@@ -15940,7 +16543,17 @@ impl Actor {
         }
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => Some(CommitStakeSnapshot::from_roster(&world, roster)?),
+            ConsensusMode::Npos => {
+                let nexus = state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                Some(CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    roster,
+                    active_lane_ids.as_ref(),
+                )?)
+            }
         };
         Some((cert, stake_snapshot))
     }
@@ -15985,6 +16598,10 @@ impl Actor {
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
         if matches!(consensus_mode, ConsensusMode::Npos) {
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             return roster::derive_active_topology_for_mode_from_world(
                 world,
                 commit_topology,
@@ -15992,6 +16609,7 @@ impl Actor {
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
                 consensus_mode,
+                active_lane_ids.as_ref(),
             );
         }
         // Live consensus rounds must derive validator topology from committed chain state.
@@ -16821,11 +17439,19 @@ impl Actor {
         let pops = &self.roster_validation_cache.pops;
         let (result, evidence, fallback_tally, sync_err) = {
             let world = self.state.world_view();
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    topology.as_ref(),
+                    active_lane_ids.as_ref(),
+                ),
             };
-            let (result, evidence) = validate_qc_with_evidence(
+            let (result, evidence) = validate_qc_with_evidence_and_active_lanes(
                 &self.vote_log,
                 qc,
                 topology,
@@ -16837,6 +17463,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 None,
+                active_lane_ids.as_ref(),
             );
             let mut fallback_tally = None;
             let mut sync_err = None;
@@ -16854,6 +17481,7 @@ impl Actor {
                     mode_tag,
                     prf_seed,
                     None,
+                    active_lane_ids.as_ref(),
                 ) {
                     Ok(tally) => fallback_tally = Some(tally),
                     Err(err) => {
@@ -17013,7 +17641,7 @@ impl Actor {
             return Vec::new();
         };
         let mut roster: Vec<PeerId> = Vec::new();
-        for tx in genesis.0.transactions_vec().iter() {
+        for tx in genesis.0.external_transactions() {
             let Executable::Instructions(isi) = tx.instructions() else {
                 continue;
             };
@@ -17188,7 +17816,15 @@ impl Actor {
             ConsensusMode::Permissioned => None,
             ConsensusMode::Npos => {
                 let world = self.state.world_view();
-                CommitStakeSnapshot::from_roster(&world, &roster)
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    &roster,
+                    active_lane_ids.as_ref(),
+                )
             }
         };
         self.state
@@ -17428,10 +18064,11 @@ impl Actor {
             if matches!(pending.validation_status, ValidationStatus::Invalid) {
                 return None;
             }
+            let payload_bytes = pending.payload_bytes_cow();
             return Some(use_payload(
                 pending.height,
                 pending.view,
-                pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 pending.payload_hash,
             ));
         }
@@ -17444,10 +18081,11 @@ impl Actor {
             ) {
                 return None;
             }
+            let payload_bytes = inflight.pending.payload_bytes_cow();
             return Some(use_payload(
                 inflight.pending.height,
                 inflight.pending.view,
-                inflight.pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 inflight.pending.payload_hash,
             ));
         }
@@ -17484,10 +18122,11 @@ impl Actor {
             {
                 return None;
             }
+            let payload_bytes = pending.payload_bytes_cow();
             return Some(use_payload(
                 pending.height,
                 pending.view,
-                pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 pending.payload_hash,
             ));
         }
@@ -17502,10 +18141,11 @@ impl Actor {
             {
                 return None;
             }
+            let payload_bytes = inflight.pending.payload_bytes_cow();
             return Some(use_payload(
                 inflight.pending.height,
                 inflight.pending.view,
-                inflight.pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 inflight.pending.payload_hash,
             ));
         }
@@ -19786,6 +20426,10 @@ impl Actor {
             startup_trace_started_at,
         );
 
+        let native_amx_sessions = NativeAmxSessionCache::with_limits(
+            config.native_amx.session_cache_max,
+            config.native_amx.session_body_bucket_max,
+        );
         let mut rbc_sessions = BTreeMap::new();
         let mut persisted_rbc_sessions = BTreeSet::new();
         let mut rbc_session_rosters = BTreeMap::new();
@@ -20054,17 +20698,27 @@ impl Actor {
         let roster_validation_cache = {
             let trusted_pops = &common_config.trusted_peers.value().pops;
             if let Some(initial_view) = initial_state_view {
-                RosterValidationCache::from_world(
+                let active_lane_ids = initial_view
+                    .nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&initial_view.nexus));
+                RosterValidationCache::from_world_with_active_lanes(
                     initial_view.world(),
                     config.npos.epoch_length_blocks,
                     Some(trusted_pops),
+                    active_lane_ids.as_ref(),
                 )
             } else {
                 let world = state.world.view();
-                let cache = RosterValidationCache::from_world(
+                let nexus = state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                let cache = RosterValidationCache::from_world_with_active_lanes(
                     &world,
                     config.npos.epoch_length_blocks,
                     Some(trusted_pops),
+                    active_lane_ids.as_ref(),
                 );
                 drop(world);
                 cache
@@ -20100,9 +20754,7 @@ impl Actor {
             kura,
             network,
             subsystems,
-            native_amx_sessions: NativeAmxSessionCache::new(
-                NonZeroUsize::new(NATIVE_AMX_SESSION_CACHE_MAX).unwrap_or(NonZeroUsize::MIN),
-            ),
+            native_amx_sessions,
             block_payload_dedup,
             frontier_block_sync_hint,
             peers_gossiper,
@@ -24392,8 +25044,11 @@ impl Actor {
             NativeAmxMessage::CommitRequest(body) => {
                 self.handle_native_amx_attestation_request(sender, body, NativeAmxPhase::Commit);
             }
-            NativeAmxMessage::PrepareVote(vote) | NativeAmxMessage::CommitVote(vote) => {
-                self.record_native_amx_vote(vote);
+            NativeAmxMessage::PrepareVote(vote) => {
+                self.record_native_amx_vote(vote, NativeAmxPhase::Prepare, Some(&sender));
+            }
+            NativeAmxMessage::CommitVote(vote) => {
+                self.record_native_amx_vote(vote, NativeAmxPhase::Commit, Some(&sender));
             }
         }
         Ok(())
@@ -24427,7 +25082,7 @@ impl Actor {
         for peer in validator_set {
             if peer == &local_peer {
                 if let Some(vote) = self.local_native_amx_vote(body, body.phase, None) {
-                    self.record_native_amx_vote(vote);
+                    self.record_native_amx_vote(vote, body.phase, None);
                 }
                 continue;
             }
@@ -24506,12 +25161,43 @@ impl Actor {
         })
     }
 
-    fn record_native_amx_vote(&mut self, vote: NativeAmxVoteV1) {
-        if !roster_member_allowed_bls(&vote.signer) {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                "dropping native AMX vote because signer is not BLS-normal"
-            );
+    fn record_native_amx_vote(
+        &mut self,
+        vote: NativeAmxVoteV1,
+        expected_phase: NativeAmxPhase,
+        sender: Option<&PeerId>,
+    ) {
+        if let Err(err) = vote.validate_ingress(expected_phase, sender) {
+            match err {
+                NativeAmxVoteIngressError::PhaseMismatch { expected, actual } => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        ?sender,
+                        ?expected,
+                        ?actual,
+                        "dropping native AMX vote because message phase does not match body"
+                    );
+                }
+                NativeAmxVoteIngressError::SenderMismatch => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        ?sender,
+                        "dropping native AMX vote because sender does not match signer"
+                    );
+                }
+                NativeAmxVoteIngressError::SignerNotBlsNormal => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        "dropping native AMX vote because signer is not BLS-normal"
+                    );
+                }
+                NativeAmxVoteIngressError::InvalidSignature => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        "dropping native AMX vote with invalid signature"
+                    );
+                }
+            }
             return;
         }
         {
@@ -24536,16 +25222,6 @@ impl Actor {
                 );
                 return;
             }
-        }
-        if let Err(err) = Signature::from_bytes(&vote.bls_signature)
-            .verify(vote.signer.public_key(), &vote.body.signature_preimage())
-        {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                ?err,
-                "dropping native AMX vote with invalid signature"
-            );
-            return;
         }
         let phase = vote.body.phase;
         let signer = vote.signer.clone();
@@ -24864,8 +25540,6 @@ impl Actor {
                     error = %err,
                     "dropping invalid lane relay envelope"
                 );
-                // Still surface the envelope to status for operator visibility (it will be rejected).
-                super::status::push_lane_relay_envelope(envelope);
             }
         }
         Ok(())
@@ -26167,7 +26841,7 @@ impl Actor {
     ) -> Option<RbcInit> {
         let payload_bytes = self::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
-        self.rebuild_rbc_init_from_payload_bytes(block, key, &payload_bytes, payload_hash)
+        self.rebuild_rbc_init_from_canonical_payload_bytes(block, key, &payload_bytes, payload_hash)
     }
 
     fn rebuild_rbc_init_from_payload_bytes(
@@ -26177,6 +26851,33 @@ impl Actor {
         payload_bytes: &[u8],
         payload_hash: Hash,
     ) -> Option<RbcInit> {
+        self.rebuild_rbc_init_from_payload_bytes_impl(block, key, payload_bytes, payload_hash, true)
+    }
+
+    fn rebuild_rbc_init_from_canonical_payload_bytes(
+        &self,
+        block: &SignedBlock,
+        key: super::rbc_store::SessionKey,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+    ) -> Option<RbcInit> {
+        self.rebuild_rbc_init_from_payload_bytes_impl(
+            block,
+            key,
+            payload_bytes,
+            payload_hash,
+            false,
+        )
+    }
+
+    fn rebuild_rbc_init_from_payload_bytes_impl(
+        &self,
+        block: &SignedBlock,
+        key: super::rbc_store::SessionKey,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+        verify_payload_bytes: bool,
+    ) -> Option<RbcInit> {
         let block_header = block.header();
         if block.hash() != key.0 || block_header.height().get() != key.1 {
             return None;
@@ -26184,11 +26885,13 @@ impl Actor {
         if block_header.view_change_index() != key.2 {
             return None;
         }
-        if Hash::new(payload_bytes) != payload_hash {
-            return None;
-        }
-        if self::proposals::block_payload_bytes(block) != payload_bytes {
-            return None;
+        if verify_payload_bytes {
+            if Hash::new(payload_bytes) != payload_hash {
+                return None;
+            }
+            if self::proposals::block_payload_bytes(block) != payload_bytes {
+                return None;
+            }
         }
         let mut roster = self.rbc_roster_for_session(key);
         if roster.is_empty()
@@ -26999,6 +27702,88 @@ impl Actor {
         rebroadcaster
     }
 
+    fn rbc_outbound_queue_bytes(&self) -> usize {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .outbound_chunks
+            .values()
+            .fold(0usize, |acc, entry| {
+                acc.saturating_add(entry.retained_bytes())
+            })
+    }
+
+    fn rbc_outbound_queue_eviction_candidate(
+        &self,
+        protected: Option<super::rbc_store::SessionKey>,
+    ) -> Option<super::rbc_store::SessionKey> {
+        if self.subsystems.da_rbc.rbc.outbound_chunks.len() <= 1 {
+            return None;
+        }
+        let mut candidates: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .outbound_chunks
+            .keys()
+            .copied()
+            .filter(|key| Some(*key) != protected)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        candidates.into_iter().next()
+    }
+
+    fn enforce_rbc_outbound_queue_cap(
+        &mut self,
+        protected: Option<super::rbc_store::SessionKey>,
+    ) -> bool {
+        let max_sessions = self.config.rbc.outbound_queue_max_sessions.max(1);
+        let max_bytes = self.config.rbc.outbound_queue_max_bytes.max(1);
+        let mut pruned = false;
+
+        loop {
+            let sessions = self.subsystems.da_rbc.rbc.outbound_chunks.len();
+            let bytes = self.rbc_outbound_queue_bytes();
+            if sessions <= max_sessions && bytes <= max_bytes {
+                break;
+            }
+            let Some(evicted_key) = self.rbc_outbound_queue_eviction_candidate(protected) else {
+                break;
+            };
+            let freed_bytes = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .remove(&evicted_key)
+                .map_or(0, |entry| entry.retained_bytes());
+            if self.subsystems.da_rbc.rbc.outbound_cursor == Some(evicted_key) {
+                self.subsystems.da_rbc.rbc.outbound_cursor = None;
+            }
+            pruned = true;
+            debug!(
+                height = evicted_key.1,
+                view = evicted_key.2,
+                block = %evicted_key.0,
+                freed_bytes,
+                queued_sessions = self.subsystems.da_rbc.rbc.outbound_chunks.len(),
+                queued_bytes = self.rbc_outbound_queue_bytes(),
+                max_sessions,
+                max_bytes,
+                "evicted RBC outbound chunk queue entry to enforce memory cap"
+            );
+        }
+
+        pruned
+    }
+
     fn dispatch_rbc_outbound_chunks(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -27104,6 +27889,7 @@ impl Actor {
                     record_target_metrics,
                 },
             );
+            self.enforce_rbc_outbound_queue_cap(Some(key));
             dispatch.stored = true;
         }
 
@@ -27136,9 +27922,14 @@ impl Actor {
                 let to_send = available.min(requested);
                 let end = entry.cursor.saturating_add(to_send);
                 let targets = entry.targets.clone();
-                let chunks_to_send = entry.chunks[entry.cursor..end].to_vec();
-                entry.cursor = end;
-                let exhausted = entry.cursor >= entry.chunks.len();
+                let cursor = entry.cursor.min(entry.chunks.len());
+                let end = end.min(entry.chunks.len());
+                let chunks_to_send: Vec<_> = entry.chunks.drain(cursor..end).collect();
+                if cursor != 0 {
+                    entry.chunks.drain(..cursor);
+                }
+                entry.cursor = 0;
+                let exhausted = entry.chunks.is_empty();
                 (
                     targets,
                     chunks_to_send,
@@ -27152,6 +27943,8 @@ impl Actor {
 
         if exhausted {
             self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
+        } else {
+            self.enforce_rbc_outbound_queue_cap(Some(key));
         }
         if chunks_to_send.is_empty() {
             return dispatch;
@@ -29326,6 +30119,7 @@ impl Actor {
                 .config
                 .recovery
                 .missing_request_stale_height_margin,
+            pending_block_cap: self.config.recovery.pending_block_cap.max(1),
             pending_block_sync_cap: self.config.recovery.pending_block_sync_cap.max(1),
             pending_proposal_cap: self.config.recovery.pending_proposal_cap.max(1),
             missing_fetch_aggressive_after_attempts: self
@@ -31886,6 +32680,10 @@ impl Actor {
     fn recovery_missing_request_stale_height_margin(&self) -> u64 {
         self.deterministic_recovery_profile()
             .missing_request_stale_height_margin
+    }
+
+    fn recovery_pending_block_cap(&self) -> usize {
+        self.deterministic_recovery_profile().pending_block_cap
     }
 
     fn recovery_pending_block_sync_cap(&self) -> usize {
@@ -36474,6 +37272,10 @@ impl Actor {
         let committed_height = self.committed_height_snapshot();
         let live_height = height.min(committed_height.saturating_add(1)).max(1);
         let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         let commit_topology = self.state.commit_topology_snapshot();
         let active_commit_topology = self.active_topology_with_genesis_fallback_from_world(
             &world,
@@ -36485,9 +37287,23 @@ impl Actor {
             BTreeSet::new()
         } else {
             crate::state::validator_lane_ids_for_peers(&world, active_commit_topology.iter())
+                .into_iter()
+                .filter(|lane_id| {
+                    active_lane_ids
+                        .as_ref()
+                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
+                })
+                .collect()
         };
         let local_lane_ids =
-            crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id());
+            crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id())
+                .into_iter()
+                .filter(|lane_id| {
+                    active_lane_ids
+                        .as_ref()
+                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
+                })
+                .collect();
         let candidates = match consensus_mode {
             ConsensusMode::Npos => {
                 let lane_scope = if topology_lane_ids.is_empty() {
@@ -36496,9 +37312,16 @@ impl Actor {
                     &topology_lane_ids
                 };
                 if lane_scope.is_empty() {
-                    roster::stake_active_validator_roster_from_world(&world)
+                    roster::stake_active_validator_roster_from_world_with_active_lanes(
+                        &world,
+                        active_lane_ids.as_ref(),
+                    )
                 } else {
-                    roster::stake_active_validator_roster_for_lanes_from_world(&world, lane_scope)
+                    roster::stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
+                        &world,
+                        lane_scope,
+                        active_lane_ids.as_ref(),
+                    )
                 }
             }
             ConsensusMode::Permissioned => self.trusted_topology(),
@@ -46278,10 +47101,7 @@ impl RbcSession {
         let Some(payload_hash) = self.payload_hash else {
             return false;
         };
-        let Some(payload) = self.payload_bytes() else {
-            return false;
-        };
-        if Hash::new(&payload) != payload_hash {
+        if !self.payload_hash_matches_chunks(&payload_hash) {
             self.invalid = true;
             return false;
         }
@@ -46328,10 +47148,7 @@ impl RbcSession {
         let Some(payload_hash) = self.payload_hash else {
             return false;
         };
-        let Some(payload) = self.payload_bytes() else {
-            return false;
-        };
-        Hash::new(&payload) == payload_hash && self.complete_chunk_root_matches()
+        self.payload_hash_matches_chunks(&payload_hash) && self.complete_chunk_root_matches()
     }
 
     fn complete_chunk_root_matches(&self) -> bool {
@@ -46452,9 +47269,7 @@ impl RbcSession {
             && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
             && self.complete_chunk_root_matches()
-            && self
-                .payload_bytes()
-                .is_some_and(|payload| Hash::new(&payload) == *payload_hash)
+            && self.payload_hash_matches_chunks(payload_hash)
     }
 
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
@@ -46544,6 +47359,37 @@ impl RbcSession {
         }
         payload.truncate(payload_size);
         Some(payload)
+    }
+
+    fn payload_chunk_slices(&self) -> Option<Vec<&[u8]>> {
+        if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
+            return None;
+        }
+        if !self.layout.payload_size_known() {
+            let mut chunks = Vec::with_capacity(usize::try_from(self.total_chunks).ok()?);
+            for idx in 0..self.total_chunks {
+                chunks.push(self.chunk_bytes(idx)?);
+            }
+            return Some(chunks);
+        }
+
+        let payload_chunk_count = self.layout.payload_chunk_count()?;
+        let mut chunks = Vec::with_capacity(payload_chunk_count);
+        for payload_idx in 0..payload_chunk_count {
+            let encoded_idx = self.layout.encoded_index_for_payload_chunk(payload_idx)?;
+            chunks.push(self.chunk_bytes(u32::try_from(encoded_idx).ok()?)?);
+        }
+        Some(chunks)
+    }
+
+    fn payload_hash_from_chunks(&self) -> Option<Hash> {
+        self.payload_chunk_slices()
+            .map(|chunks| Hash::new_from_chunks(&chunks))
+    }
+
+    fn payload_hash_matches_chunks(&self, payload_hash: &Hash) -> bool {
+        self.payload_hash_from_chunks()
+            .is_some_and(|hash| hash == *payload_hash)
     }
 
     fn try_reconstruct_full_chunks(&mut self) -> bool {
@@ -47066,9 +47912,7 @@ impl RbcSession {
         let _ = session.try_reconstruct_full_chunks();
         if let Some(hash) = payload_hash
             && session.received_chunks == total_chunks
-            && session
-                .payload_bytes()
-                .is_some_and(|payload| Hash::new(&payload) != hash)
+            && !session.payload_hash_matches_chunks(&hash)
         {
             return Err(PersistedLoadError::PayloadHashMismatch);
         }
@@ -47327,10 +48171,7 @@ impl RbcSession {
         let Some(payload_hash) = self.payload_hash else {
             return true;
         };
-        let Some(payload) = self.payload_bytes() else {
-            return true;
-        };
-        Hash::new(&payload) != payload_hash
+        !self.payload_hash_matches_chunks(&payload_hash)
     }
 }
 

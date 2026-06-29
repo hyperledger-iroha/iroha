@@ -351,7 +351,12 @@ where
 
     let mut fixed = batch_invert_assigned(assembly.fixed);
     let (cs, selector_polys) = if compress_selectors {
-        cs.compress_selectors(assembly.selectors.clone())
+        if vk.is_some() {
+            let selectors = std::mem::take(&mut assembly.selectors);
+            cs.compress_selectors(selectors)
+        } else {
+            cs.compress_selectors(assembly.selectors.clone())
+        }
     } else {
         let selectors = std::mem::take(&mut assembly.selectors);
         cs.directly_convert_selectors_to_fixed(selectors)
@@ -362,32 +367,66 @@ where
             .map(|poly| domain.lagrange_from_vec(poly)),
     );
 
-    let permutation_pk = assembly
-        .permutation
-        .clone()
-        .build_pk(params, &domain, &cs.permutation);
-
-    let vk = match vk {
-        Some(vk) => vk,
-        None => {
-            let permutation_vk = assembly
+    #[cfg(not(feature = "thread-safe-region"))]
+    let (permutation_pk, vk) = match vk {
+        Some(vk) => {
+            let permutation_pk = assembly
                 .permutation
-                .build_vk(params, &domain, &cs.permutation);
+                .build_pk(params, &domain, &cs.permutation);
+            (permutation_pk, vk)
+        }
+        None => {
+            let permutation = assembly.permutation;
+            let permutation_pk = permutation
+                .clone()
+                .build_pk(params, &domain, &cs.permutation);
+            let permutation_vk = permutation.build_vk(params, &domain, &cs.permutation);
 
             let fixed_commitments = (&fixed)
                 .into_par_iter()
                 .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
                 .collect();
 
-            VerifyingKey::from_parts(
+            let vk = VerifyingKey::from_parts(
                 domain,
                 fixed_commitments,
                 permutation_vk,
                 cs,
                 assembly.selectors,
                 compress_selectors,
-            )
+            );
+            (permutation_pk, vk)
         }
+    };
+
+    #[cfg(feature = "thread-safe-region")]
+    let (permutation_pk, vk) = {
+        let permutation_pk = assembly
+            .permutation
+            .build_pk(params, &domain, &cs.permutation);
+        let vk = match vk {
+            Some(vk) => vk,
+            None => {
+                let permutation_vk = assembly
+                    .permutation
+                    .build_vk(params, &domain, &cs.permutation);
+
+                let fixed_commitments = (&fixed)
+                    .into_par_iter()
+                    .map(|poly| params.commit_lagrange(poly, Blind::default()).to_affine())
+                    .collect();
+
+                VerifyingKey::from_parts(
+                    domain,
+                    fixed_commitments,
+                    permutation_vk,
+                    cs,
+                    assembly.selectors,
+                    compress_selectors,
+                )
+            }
+        };
+        (permutation_pk, vk)
     };
 
     let fixed_polys: Vec<_> = fixed

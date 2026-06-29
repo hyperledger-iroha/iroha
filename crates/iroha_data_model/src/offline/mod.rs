@@ -89,7 +89,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: &s
     "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
 /// Canonical verifier-witness profile for reserved Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1";
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
 /// Canonical circuit id for proof-carrying Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-aggregation-v1";
@@ -9736,6 +9736,7 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
     /// Returns [`KagemushaFoldError`] when the recursive bundle, final redeem
     /// proof, public amount, lineage witness, lineage verifier selection, or
     /// change commitment is malformed.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_lineage_witness_change_and_records(
         bundle: KagemushaRecursiveSpendBundleV1,
         recipient: AccountId,

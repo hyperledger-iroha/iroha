@@ -195,6 +195,17 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+PrecommitVoteCountExactness ==
+  /\ \A c \in Candidates:
+    ImplementationActions(c) = SpecActions(c)
+  /\ SpecReturnClassification
+  /\ SpecPhaseGateAnchors
+  /\ SpecBitmapBoundaryAnchors
+
+PrecommitVoteCountCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrecommitVoteCountExactness
+
 BugPrepareCountsBitmap ==
   ImplementationActions(PreparePhaseZero) = SpecActions(PreparePhaseZero)
 

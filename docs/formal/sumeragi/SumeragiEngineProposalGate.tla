@@ -236,5 +236,29 @@ OutputsStayTogether ==
   /\ validated = prepared
   /\ validated = preparePhase
 
+EngineProposalExactness ==
+  /\ AcceptedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ SafeProposalsValidate
+  /\ SafeProposalsSignPrepare
+  /\ SafeProposalsEnterPreparePhase
+  /\ UnsafeProposalsAreIgnored
+  /\ WrongPhaseNeverAccepted
+  /\ WrongRoundNeverAccepted
+  /\ IncompatibleHighestNeverAccepted
+  /\ LockedConflictWithoutUnlockNeverAccepted
+  /\ AcceptedProposalsRequestValidation
+  /\ AcceptedProposalsSignPrepareVote
+  /\ AcceptedProposalsEnterPrepare
+  /\ IgnoredProposalsDoNotEmit
+  /\ OutputsStayTogether
+
+Safety ==
+  EngineProposalExactness
+
+EngineProposalCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineProposalExactness
+
 =============================================================================
 ====

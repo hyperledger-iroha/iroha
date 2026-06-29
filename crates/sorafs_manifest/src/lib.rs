@@ -24,12 +24,14 @@ pub mod gar;
 pub mod gateway;
 pub mod gateway_fixture;
 pub mod governance;
+pub mod hedging;
 pub mod hosts;
 pub mod hybrid_envelope;
 pub mod manifest_capabilities;
 pub mod orderbook;
 pub mod pdp;
 pub mod pin_registry;
+pub mod pop_credentials;
 pub mod por;
 pub mod potr;
 pub mod pricing;
@@ -92,6 +94,15 @@ pub use governance::{
     governance_log_node_cid_v1, validate_governance_dag_chain_v1,
     validate_governance_dag_head_against_chain_v1,
 };
+pub use hedging::{
+    BILLING_LINE_ITEM_VERSION_V1, BILLING_STATEMENT_VERSION_V1, BillingLineDirectionV1,
+    BillingLineItemKindV1, BillingLineItemV1, BillingStatementV1, HEDGING_BASIS_POINTS,
+    HEDGING_PRICE_FEED_VERSION_V1, HEDGING_REFERENCE_PRICE_DECISION_VERSION_V1,
+    HedgingFeedStatusV1, HedgingPriceFeedV1, HedgingReferencePriceDecisionV1,
+    HedgingValidationError, billing_line_item_id_v1, billing_statement_id_v1,
+    build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
+    reference_price_decision_id_v1, xor_to_usd_micros,
+};
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{
     ChunkProfileSummary, ManifestCapabilitySummary, detect_manifest_capabilities,
@@ -121,6 +132,22 @@ pub use pin_registry::{
     PinRecordV1, PinRecordValidationError, ReplicationOrderV1 as PinRegistryReplicationOrderV1,
     ReplicationOrderValidationError as PinRegistryReplicationOrderValidationError,
     ReplicationReceiptStatus, ReplicationReceiptV1, ReplicationReceiptValidationError,
+};
+pub use pop_credentials::{
+    POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_VERSION_V1, POP_ENROLLMENT_REQUEST_VERSION_V1,
+    POP_ISSUED_CREDENTIAL_BUNDLE_VERSION_V1, POP_MEMBERSHIP_PROOF_VERSION_V1,
+    POP_RENEWAL_REQUEST_VERSION_V1, POP_REVOCATION_LIST_VERSION_V1, PopCommitmentRootV1,
+    PopCredentialAttributeV1, PopCredentialV1, PopCredentialValidationError, PopEligibilityClassV1,
+    PopEnrollmentRequestV1, PopIssuedCredentialBundleV1, PopMembershipProofSystemV1,
+    PopMembershipProofV1, PopRenewalRequestV1, PopRevocationEntryV1, PopRevocationListV1,
+    PopRevocationReasonV1, PopSignatureAlgorithmV1, PopSignatureV1,
+    finalize_pop_membership_proof_digest_v1, issue_pop_credential_bundle_ed25519_v1,
+    pop_commitment_root_signature_digest_v1, pop_credential_signature_digest_v1,
+    pop_membership_proof_transcript_digest_v1, pop_revocation_list_signature_digest_v1,
+    sign_pop_commitment_root_ed25519_v1, sign_pop_credential_ed25519_v1,
+    sign_pop_revocation_list_ed25519_v1, verify_pop_commitment_root_signature_v1,
+    verify_pop_credential_signature_v1, verify_pop_membership_proof_v1,
+    verify_pop_membership_transcript_policy_v1, verify_pop_revocation_list_signature_v1,
 };
 pub use por::{
     AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, AuditVerdictValidationError,
@@ -172,25 +199,25 @@ pub use reconciliation::{
     SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
 };
 pub use reference::{
-    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, HedgingValidationPayloadKindV1,
+    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1,
-    REFERENCE_SDK_ERRORS_DOC_URL, RepairValidationPayloadKindV1, VALIDATION_OUTCOME_VERSION_V1,
-    ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
-    build_signed_orderbook_order_cancel_bytes_ed25519_v1,
+    PopValidationPayloadKindV1, REFERENCE_SDK_ERRORS_DOC_URL, RepairValidationPayloadKindV1,
+    VALIDATION_OUTCOME_VERSION_V1, ValidationContextFieldV1, ValidationInputV1,
+    ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
     sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
     validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
-    validate_por_challenge_proof_bytes, validate_potr_receipt_bytes,
-    validate_provider_admission_envelope_bytes, validate_provider_admission_renewal_bytes,
-    validate_provider_admission_revocation_bytes, validate_provider_advert_bytes,
-    validate_repair_payload_bytes, validate_replication_order_bytes,
-    validate_signed_replication_order_bytes,
+    validate_governance_log_node_bytes, validate_hedging_payload_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes, validate_pop_payload_bytes, validate_por_challenge_proof_bytes,
+    validate_potr_receipt_bytes, validate_provider_admission_envelope_bytes,
+    validate_provider_admission_renewal_bytes, validate_provider_admission_revocation_bytes,
+    validate_provider_advert_bytes, validate_repair_payload_bytes,
+    validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
 pub use repair::{
     AuditorSignatureV1, AuditorSignatureVerificationError, GC_AUDIT_EVENT_VERSION_V1,

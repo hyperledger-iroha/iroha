@@ -14,7 +14,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     ops::Deref,
     path::Path,
     str::FromStr,
@@ -29,6 +29,8 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
 use indexmap::IndexSet;
+#[cfg(test)]
+use iroha_config::parameters::actual::LaneConfig as LaneGeometry;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
 };
@@ -52,7 +54,7 @@ use iroha_data_model::{
     name::Name,
     transaction::{Executable, TransactionEntrypoint, error::TransactionRejectionReason},
 };
-use iroha_logger::{trace, warn};
+use iroha_logger::{debug, trace, warn};
 use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
@@ -65,9 +67,10 @@ pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
-    evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_with_catalog,
-    evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
-    resolve_query_routing_decision, resolve_routing_decision,
+    evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_plan_with_nexus_and_world_at,
+    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
+    evaluate_policy_with_catalog_and_world_at, resolve_query_routing_decision,
+    resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -314,8 +317,6 @@ pub struct Queue {
     queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
     /// Cached count of hashes still waiting in `tx_hashes`.
     queued_count: AtomicUsize,
-    /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
-    tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Optional local journal for replaying pending transactions with full routing plans.
     plan_journal: parking_lot::Mutex<Option<QueuePlanJournal>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -332,6 +333,10 @@ pub struct Queue {
     capacity: NonZeroUsize,
     /// The maximum number of transactions in the queue per user. Used to apply throttling
     capacity_per_user: NonZeroUsize,
+    /// Estimated maximum retained queue memory budget in bytes.
+    max_retained_bytes: NonZeroU64,
+    /// Estimated retained memory for transactions currently tracked by the queue.
+    retained_bytes: AtomicU64,
     /// The time source used to check transaction against
     ///
     /// A mock time source is used in tests for determinism
@@ -380,6 +385,7 @@ impl fmt::Debug for Queue {
         f.debug_struct("Queue")
             .field("capacity", &self.capacity)
             .field("capacity_per_user", &self.capacity_per_user)
+            .field("max_retained_bytes", &self.max_retained_bytes)
             .field("tx_time_to_live", &self.tx_time_to_live)
             .field("expired_cull_interval", &self.expired_cull_interval)
             .field("expired_cull_batch", &self.expired_cull_batch)
@@ -393,6 +399,8 @@ impl fmt::Debug for Queue {
 
 const QUEUE_PRESSURE_MIN_AGE_BUDGET_MS: u64 = 2_000;
 const QUEUE_PRESSURE_MAX_AGE_BUDGET_MS: u64 = 5_000;
+/// Queue-side retained heap estimate charged to each transaction in addition to its canonical bytes.
+const TX_RETAINED_OVERHEAD_BYTES: u64 = 128 * 1024;
 
 /// Snapshot of queue pressure used by Torii admission and status reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,10 +411,16 @@ pub struct QueuePressureSnapshot {
     pub queued_tx_count: usize,
     /// Maximum queue capacity configured for the peer.
     pub capacity: NonZeroUsize,
+    /// Estimated retained bytes for all transactions tracked by the queue.
+    pub retained_bytes: u64,
+    /// Configured maximum estimated retained bytes for the queue.
+    pub max_retained_bytes: NonZeroU64,
     /// Age in milliseconds of the oldest queue-resident transaction's local queue residence.
     pub oldest_queued_tx_age_ms: u64,
     /// Whether the queue saturated because the tracked count hit capacity.
     pub saturated_by_count: bool,
+    /// Whether the queue saturated because the retained-byte budget is exhausted.
+    pub saturated_by_bytes: bool,
     /// Whether the queue saturated because the oldest queued age exceeded the budget.
     pub saturated_by_age: bool,
 }
@@ -415,17 +429,17 @@ impl QueuePressureSnapshot {
     /// Whether either saturation signal is active.
     #[must_use]
     pub const fn is_saturated(self) -> bool {
-        self.saturated_by_count || self.saturated_by_age
+        self.saturated_by_count || self.saturated_by_bytes || self.saturated_by_age
     }
 
     /// Convert the richer pressure snapshot into the coarse backpressure state.
     ///
     /// Coarse backpressure gates admission and consensus pacing. Keep it tied to
-    /// capacity saturation; age pressure stays available through the richer
-    /// snapshot for status reporting and diagnostics.
+    /// count/byte capacity saturation; age pressure stays available through the
+    /// richer snapshot for status reporting and diagnostics.
     #[must_use]
     pub const fn into_backpressure(self) -> BackpressureState {
-        if self.saturated_by_count {
+        if self.saturated_by_count || self.saturated_by_bytes {
             BackpressureState::Saturated {
                 queued: self.queued_tx_count,
                 capacity: self.capacity,
@@ -543,7 +557,6 @@ struct PreparedQueueAdmission {
     routing_decision: RoutingDecision,
     routing_plan: RoutingPlan,
     encoded_len: usize,
-    gossip_payload: Option<Arc<Vec<u8>>>,
     proposal_gas_cost: u64,
     enqueued_at_ms: u64,
     #[cfg(feature = "telemetry")]
@@ -1011,6 +1024,57 @@ impl Queue {
         tx.entrypoint_bytes().len()
     }
 
+    fn retained_byte_cost(encoded_len: usize) -> u64 {
+        u64::try_from(encoded_len)
+            .unwrap_or(u64::MAX)
+            .saturating_add(TX_RETAINED_OVERHEAD_BYTES)
+    }
+
+    /// Return the minimum retained-byte estimate charged for `count` incoming transactions.
+    ///
+    /// This excludes canonical transaction bytes because Torii may not have decoded the
+    /// payloads yet; it is intended for early admission shedding before expensive work.
+    pub fn retained_byte_cost_floor_for_transactions(count: usize) -> u64 {
+        u64::try_from(count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(TX_RETAINED_OVERHEAD_BYTES)
+    }
+
+    fn track_retained_bytes(&self, encoded_len: usize) {
+        self.retained_bytes
+            .fetch_add(Self::retained_byte_cost(encoded_len), Ordering::Relaxed);
+    }
+
+    fn untrack_retained_bytes(&self, encoded_len: usize) {
+        let cost = Self::retained_byte_cost(encoded_len);
+        let mut current = self.retained_bytes.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_sub(cost);
+            match self.retained_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn insert_tx_encoded_len(&self, hash: SignedTxHash, encoded_len: usize) {
+        if let Some(old_len) = self.tx_encoded_len.insert(hash, encoded_len) {
+            self.untrack_retained_bytes(old_len);
+        }
+        self.track_retained_bytes(encoded_len);
+    }
+
+    fn remove_tx_encoded_len(&self, hash: &SignedTxHash) {
+        if let Some((_, encoded_len)) = self.tx_encoded_len.remove(hash) {
+            self.untrack_retained_bytes(encoded_len);
+        }
+    }
+
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
         tx.entrypoint_bytes()
     }
@@ -1021,7 +1085,7 @@ impl Queue {
     /// state snapshot and discard stale records deterministically.
     ///
     /// # Errors
-    /// Returns journal open or replay I/O errors.
+    /// Returns journal open or frame decode I/O errors.
     pub fn install_plan_journal(
         &self,
         path: impl AsRef<Path>,
@@ -1029,7 +1093,7 @@ impl Queue {
         durable_writes: bool,
     ) -> std::io::Result<usize> {
         let journal = QueuePlanJournal::open(path, max_bytes_before_compact, durable_writes)?;
-        let replayable = journal.replay()?.len();
+        let replayable = journal.live_record_count()?;
         *self.plan_journal.lock() = Some(journal);
         Ok(replayable)
     }
@@ -1046,16 +1110,16 @@ impl Queue {
         &self,
         state: &State,
     ) -> std::io::Result<QueuePlanJournalReplaySummary> {
-        let records = {
+        let replay = {
             let guard = self.plan_journal.lock();
             let Some(journal) = guard.as_ref() else {
                 return Ok(QueuePlanJournalReplaySummary::default());
             };
-            journal.replay()?
+            journal.prepare_replay()?
         };
 
         let mut summary = QueuePlanJournalReplaySummary {
-            records: records.len(),
+            records: replay.len(),
             ..QueuePlanJournalReplaySummary::default()
         };
         let mut journal_removals = Vec::new();
@@ -1066,7 +1130,7 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 
-        for record in records {
+        replay.for_each_record(|record| {
             let hash = record.signed_transaction_hash;
             let routing_plan = record.routing_plan.clone();
             let accepted =
@@ -1075,17 +1139,17 @@ impl Queue {
             if accepted.hash() != hash {
                 summary.tombstoned_malformed = summary.tombstoned_malformed.saturating_add(1);
                 journal_removals.push((hash, routing_plan.digest()));
-                continue;
+                return Ok(());
             }
             if state.has_committed_transaction(hash) {
                 summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
                 journal_removals.push((hash, routing_plan.digest()));
-                continue;
+                return Ok(());
             }
             if self.is_expired(&accepted) {
                 summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
                 journal_removals.push((hash, routing_plan.digest()));
-                continue;
+                return Ok(());
             }
             match self.route_plan_with_state(&accepted, state) {
                 Ok(current_plan) if current_plan == routing_plan => {}
@@ -1098,7 +1162,7 @@ impl Queue {
                     );
                     summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
                     journal_removals.push((hash, routing_plan.digest()));
-                    continue;
+                    return Ok(());
                 }
                 Err(error) => {
                     warn!(
@@ -1109,19 +1173,17 @@ impl Queue {
                     );
                     summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
                     journal_removals.push((hash, routing_plan.digest()));
-                    continue;
+                    return Ok(());
                 }
             }
 
             let checked = CheckedTransaction::new_unchecked(accepted);
-            let gossip_payload = (!record.gossip_payload.is_empty())
-                .then(|| Arc::new(record.gossip_payload.clone()));
             let mut state_access = LazyAdmissionStateAccess::new(state);
             let mut prepared = match self.prepare_checked_for_enqueue(
                 checked,
                 routing_plan.clone(),
                 &mut state_access,
-                gossip_payload,
+                None,
                 #[cfg(feature = "telemetry")]
                 telemetry_handle,
             ) {
@@ -1134,7 +1196,7 @@ impl Queue {
                     );
                     summary.rejected = summary.rejected.saturating_add(1);
                     journal_removals.push((hash, routing_plan.digest()));
-                    continue;
+                    return Ok(());
                 }
             };
             prepared.enqueued_at_ms = record.enqueue_timestamp_ms;
@@ -1156,7 +1218,8 @@ impl Queue {
                     journal_removals.push((hash, routing_plan.digest()));
                 }
             }
-        }
+            Ok(())
+        })?;
 
         self.record_plan_journal_removes(journal_removals);
 
@@ -1168,7 +1231,6 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         hash: SignedTxHash,
         routing_plan: &RoutingPlan,
-        gossip_payload: Arc<Vec<u8>>,
         enqueue_timestamp_ms: u64,
     ) -> DeferredQueuePlanJournalFlush {
         let mut guard = self.plan_journal.lock();
@@ -1179,7 +1241,6 @@ impl Queue {
             tx.entrypoint().clone(),
             hash,
             routing_plan.clone(),
-            gossip_payload,
             enqueue_timestamp_ms,
         );
         match journal.put_deferred_flush(record) {
@@ -1889,6 +1950,7 @@ impl Queue {
         Config {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
@@ -1904,6 +1966,7 @@ impl Queue {
             Config {
                 capacity,
                 capacity_per_user,
+                max_retained_bytes,
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
@@ -1924,6 +1987,7 @@ impl Queue {
         Config {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
@@ -1941,6 +2005,7 @@ impl Queue {
             Config {
                 capacity,
                 capacity_per_user,
+                max_retained_bytes,
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
@@ -1961,6 +2026,7 @@ impl Queue {
         Config {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
@@ -2000,13 +2066,14 @@ impl Queue {
                 queued_tx_enqueued_at_ms: DashMap::new(),
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
                 queued_count: AtomicUsize::new(0),
-                tx_gossip_payloads: DashMap::new(),
                 plan_journal: parking_lot::Mutex::new(None),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
                 capacity,
                 capacity_per_user,
+                max_retained_bytes,
+                retained_bytes: AtomicU64::new(0),
                 time_source: TimeSource::new_system(),
                 tx_time_to_live: transaction_time_to_live,
                 expired_cull_interval,
@@ -2266,13 +2333,7 @@ impl Queue {
                         }
                     };
                     let routing = routing_plan.coordinator_route();
-                    let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
-                        Arc::clone(entry.value())
-                    } else {
-                        let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
-                        self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
-                        payload
-                    };
+                    let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
                     // Deep clone to produce an owned AcceptedTransaction for gossip
                     batch.push(GossipBatchEntry {
                         tx: tx_ref.as_accepted().clone(),
@@ -2307,6 +2368,57 @@ impl Queue {
         )
     }
 
+    fn resolve_view_routing_plan(
+        plan: RoutingPlan,
+        state_view: &StateView<'_>,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let nexus = state_view.nexus();
+        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)
+    }
+
+    fn resolve_precomputed_routing_plan_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+        nexus: &Nexus,
+        plan: RoutingPlan,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let plan = resolve_routing_plan_against_catalogs(
+            plan,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )?;
+        let current_plan = self
+            .router
+            .read()
+            .try_route_plan_with_state(tx, state)
+            .and_then(|plan| {
+                resolve_routing_plan_against_catalogs(
+                    plan,
+                    &nexus.lane_catalog,
+                    &nexus.dataspace_catalog,
+                )
+            })?;
+        if current_plan == plan {
+            Ok(plan)
+        } else {
+            Err(RoutingResolveError::StaleRoutingPlan)
+        }
+    }
+
+    fn sync_nexus_routing_with_state(&self, state: &State) -> Nexus {
+        let nexus = state.nexus_snapshot();
+        self.reconfigure_nexus_with_state_if_needed(&nexus, state, self.lane_compliance_engine());
+        nexus
+    }
+
+    fn sync_nexus_routing_with_view(&self, state_view: &StateView<'_>) {
+        let nexus = state_view.nexus();
+        if !self.nexus_routing_matches(nexus) {
+            self.reconfigure_nexus(nexus, state_view, self.lane_compliance_engine());
+        }
+    }
+
     /// Resolve a full routing plan without a [`StateView`] when the active router supports it.
     pub(crate) fn route_plan_for_gossip_without_state(
         &self,
@@ -2323,15 +2435,20 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        self.resolve_queue_routing_plan(plan)
+        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)
     }
 
     fn record_refreshed_routing_plan(&self, hash: SignedTxHash, plan: RoutingPlan) {
         let routing = plan.coordinator_route();
         self.routing_decisions.insert(hash, routing);
         self.routing_plans.insert(hash, plan.clone());
-        routing_ledger::record_plan(hash, plan);
+        self.record_routing_plan_in_ledger(hash, plan);
+    }
+
+    fn record_routing_plan_in_ledger(&self, hash: SignedTxHash, plan: RoutingPlan) {
+        routing_ledger::record_plan_bounded(hash, plan, self.capacity.get());
     }
 
     fn refresh_routing_plan_with_view(
@@ -2340,11 +2457,12 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        self.sync_nexus_routing_with_view(state_view);
         let plan = self
             .router
             .read()
             .try_route_plan_with_view(tx.as_accepted(), state_view)?;
-        let plan = self.resolve_queue_routing_plan(plan)?;
+        let plan = Self::resolve_view_routing_plan(plan, state_view)?;
         self.record_refreshed_routing_plan(hash, plan.clone());
         Ok(plan)
     }
@@ -2355,11 +2473,16 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self
             .router
             .read()
             .try_route_plan_with_state(tx.as_accepted(), state)?;
-        let plan = self.resolve_queue_routing_plan(plan)?;
+        let plan = resolve_routing_plan_against_catalogs(
+            plan,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        )?;
         self.record_refreshed_routing_plan(hash, plan.clone());
         Ok(plan)
     }
@@ -2401,11 +2524,10 @@ impl Queue {
             self.record_teu_dequeue(&hash, telemetry);
         }
 
-        self.tx_encoded_len.remove(&hash);
+        self.remove_tx_encoded_len(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
         self.remove_queued_age(&hash);
-        self.tx_gossip_payloads.remove(&hash);
 
         let err = Error::UnresolvedRoute { reason };
         if let Some(reason) = Self::queue_rejection_reason(&err) {
@@ -2445,8 +2567,9 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        self.resolve_queue_routing_plan(plan)
+        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)
     }
 
     /// Returns whether the queue currently tracks the transaction hash.
@@ -2504,11 +2627,12 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        self.sync_nexus_routing_with_view(state_view);
         let routing_plan = match self
             .router
             .read()
             .try_route_plan_with_view(&tx, state_view)
-            .and_then(|plan| self.resolve_queue_routing_plan(plan))
+            .and_then(|plan| Self::resolve_view_routing_plan(plan, state_view))
         {
             Ok(plan) => plan,
             Err(err) => {
@@ -2587,13 +2711,22 @@ impl Queue {
         routing_plan: Option<RoutingPlan>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        let nexus = self.sync_nexus_routing_with_state(state);
         let routing_plan = match routing_plan {
-            Some(plan) => self.resolve_queue_routing_plan(plan),
+            Some(plan) => {
+                self.resolve_precomputed_routing_plan_with_state(&tx, state, &nexus, plan)
+            }
             None => self
                 .router
                 .read()
                 .try_route_plan_with_state(&tx, state)
-                .and_then(|plan| self.resolve_queue_routing_plan(plan)),
+                .and_then(|plan| {
+                    resolve_routing_plan_against_catalogs(
+                        plan,
+                        &nexus.lane_catalog,
+                        &nexus.dataspace_catalog,
+                    )
+                }),
         };
         let routing_plan = match routing_plan {
             Ok(plan) => plan,
@@ -2689,7 +2822,7 @@ impl Queue {
         checked: CheckedTransaction<'static>,
         routing_plan: RoutingPlan,
         state_access: &mut C,
-        gossip_payload: Option<Arc<Vec<u8>>>,
+        _gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
         let routing_decision = routing_plan.coordinator_route();
@@ -2979,20 +3112,7 @@ impl Queue {
             telemetry_handle.record_manifest_admission("allowed");
         }
 
-        let provided_gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
-        let canonical_gossip_payload = Some(checked.as_accepted().entrypoint_bytes());
-        let gossip_payload = match (provided_gossip_payload, canonical_gossip_payload) {
-            (Some(provided), Some(canonical)) if provided.as_slice() == canonical.as_slice() => {
-                Some(provided)
-            }
-            (_, Some(canonical)) => Some(canonical),
-            (Some(provided), None) => Some(provided),
-            (None, None) => None,
-        };
-        let encoded_len = gossip_payload
-            .as_ref()
-            .map(|payload| payload.len())
-            .unwrap_or_else(|| Self::compute_tx_encoded_len(checked.as_accepted()));
+        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let hash = checked.as_ref().hash();
         let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
@@ -3005,7 +3125,6 @@ impl Queue {
             routing_decision,
             routing_plan,
             encoded_len,
-            gossip_payload,
             proposal_gas_cost,
             enqueued_at_ms,
             #[cfg(feature = "telemetry")]
@@ -3032,7 +3151,10 @@ impl Queue {
             let _guard = self.push_remove_lock.lock();
             let base_len = self.active_len();
             let capacity = self.capacity.get();
+            let base_retained_bytes = self.retained_bytes();
+            let max_retained_bytes = self.max_retained_bytes.get();
             let mut accepted_count = 0usize;
+            let mut accepted_retained_bytes = 0u64;
             let mut checked_user_increments = HashMap::<&AccountId, usize>::new();
 
             for (idx, admission) in prepared.iter().enumerate() {
@@ -3050,7 +3172,7 @@ impl Queue {
                 }
 
                 if base_len.saturating_add(accepted_count) >= capacity {
-                    warn!(
+                    debug!(
                         lane_id = %lane_id,
                         dataspace_id = %dataspace_id,
                         max = self.capacity,
@@ -3063,11 +3185,32 @@ impl Queue {
                     break;
                 }
 
+                let retained_cost = Self::retained_byte_cost(admission.encoded_len);
+                if base_retained_bytes
+                    .saturating_add(accepted_retained_bytes)
+                    .saturating_add(retained_cost)
+                    > max_retained_bytes
+                {
+                    debug!(
+                        lane_id = %lane_id,
+                        dataspace_id = %dataspace_id,
+                        retained_bytes = base_retained_bytes.saturating_add(accepted_retained_bytes),
+                        tx_retained_bytes = retained_cost,
+                        max_retained_bytes,
+                        "Achieved maximum retained transaction queue bytes"
+                    );
+                    failure = Some(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::Full,
+                    });
+                    break;
+                }
+
                 if let Some(authority) = checked.as_ref().authority_opt() {
                     let queued = self.queued_tx_count_for_user(authority);
                     let pending = checked_user_increments.get(authority).copied().unwrap_or(0);
                     if queued.saturating_add(pending) >= self.capacity_per_user.get() {
-                        warn!(
+                        debug!(
                             max_txs_per_user = self.capacity_per_user,
                             %authority,
                             "Account reached maximum allowed number of transactions in the queue per user"
@@ -3085,6 +3228,7 @@ impl Queue {
                 }
 
                 accepted_count = accepted_count.saturating_add(1);
+                accepted_retained_bytes = accepted_retained_bytes.saturating_add(retained_cost);
             }
             drop(checked_user_increments);
 
@@ -3096,7 +3240,6 @@ impl Queue {
                     routing_decision,
                     routing_plan,
                     encoded_len,
-                    gossip_payload,
                     proposal_gas_cost,
                     enqueued_at_ms,
                     #[cfg(feature = "telemetry")]
@@ -3121,15 +3264,8 @@ impl Queue {
                 self.track_active_transaction();
                 self.routing_decisions.insert(hash, routing_decision);
                 self.routing_plans.insert(hash, routing_plan.clone());
-                routing_ledger::record_plan(hash, routing_plan.clone());
+                self.record_routing_plan_in_ledger(hash, routing_plan.clone());
                 self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
-                let journal_payload = record_plan_journal.then(|| {
-                    gossip_payload
-                        .as_ref()
-                        .map(Arc::clone)
-                        .unwrap_or_else(|| Self::encode_gossip_payload(tx_arc.as_accepted()))
-                });
-
                 let mut pushed = self.push_queued_hash(hash, enqueued_at_ms);
                 if !pushed {
                     let compacted = self.compact_hash_queue_locked();
@@ -3138,7 +3274,7 @@ impl Queue {
                     }
                 }
                 if !pushed {
-                    warn!("Queue is full");
+                    debug!("Queue is full");
                     let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
                     drop(tx_arc);
                     self.untrack_active_transaction();
@@ -3162,17 +3298,13 @@ impl Queue {
                     });
                     break;
                 }
-                self.tx_encoded_len.insert(hash, encoded_len);
-                if let Some(payload) = gossip_payload {
-                    self.tx_gossip_payloads.insert(hash, payload);
-                }
+                self.insert_tx_encoded_len(hash, encoded_len);
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
-                if let Some(journal_payload) = journal_payload {
+                if record_plan_journal {
                     let flush = self.record_plan_journal_put_deferred(
                         tx_arc.as_accepted(),
                         hash,
                         &routing_plan,
-                        journal_payload,
                         enqueued_at_ms,
                     );
                     journal_flush.combine(flush.0);
@@ -3397,9 +3529,15 @@ impl Queue {
         let mut state_access = LazyAdmissionStateAccess::new(state);
         let mut prepared = Vec::with_capacity(txs.len());
         let mut precheck_failure = None;
+        let nexus = self.sync_nexus_routing_with_state(state);
 
         for (tx, routing_plan) in txs {
-            let routing_plan = match self.resolve_queue_routing_plan(routing_plan) {
+            let routing_plan = match self.resolve_precomputed_routing_plan_with_state(
+                &tx,
+                state,
+                &nexus,
+                routing_plan,
+            ) {
                 Ok(plan) => plan,
                 Err(err) => {
                     precheck_failure = Some(Failure {
@@ -3523,7 +3661,13 @@ impl Queue {
             });
         }
 
-        let routing_plan = match self.resolve_queue_routing_plan(routing_plan) {
+        let nexus = self.sync_nexus_routing_with_state(state);
+        let routing_plan = match self.resolve_precomputed_routing_plan_with_state(
+            checked.as_accepted(),
+            state,
+            &nexus,
+            routing_plan,
+        ) {
             Ok(plan) => plan,
             Err(err) => {
                 return Err(Failure {
@@ -3565,11 +3709,30 @@ impl Queue {
             };
 
             if txs_len >= self.capacity.get() {
-                warn!(
+                debug!(
                     lane_id = %lane_id,
                     dataspace_id = %dataspace_id,
                     max = self.capacity,
                     "Achieved maximum amount of transactions"
+                );
+                self.publish_backpressure_state(txs_len, backpressure_telemetry);
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err: Error::Full,
+                });
+            }
+
+            let retained_cost = Self::retained_byte_cost(encoded_len);
+            let retained_bytes = self.retained_bytes();
+            let max_retained_bytes = self.max_retained_bytes.get();
+            if retained_bytes.saturating_add(retained_cost) > max_retained_bytes {
+                debug!(
+                    lane_id = %lane_id,
+                    dataspace_id = %dataspace_id,
+                    retained_bytes,
+                    tx_retained_bytes = retained_cost,
+                    max_retained_bytes,
+                    "Achieved maximum retained transaction queue bytes"
                 );
                 self.publish_backpressure_state(txs_len, backpressure_telemetry);
                 return Err(Failure {
@@ -3594,9 +3757,8 @@ impl Queue {
             self.track_active_transaction();
             self.routing_decisions.insert(hash, routing_decision);
             self.routing_plans.insert(hash, routing_plan.clone());
-            routing_ledger::record_plan(hash, routing_plan.clone());
+            self.record_routing_plan_in_ledger(hash, routing_plan.clone());
             self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-            let journal_payload = Self::encode_gossip_payload(tx_arc.as_accepted());
             let mut pushed = self.push_queued_hash(hash, enqueue_at_ms);
             if !pushed {
                 let compacted = self.compact_hash_queue_locked();
@@ -3605,7 +3767,7 @@ impl Queue {
                 }
             }
             if !pushed {
-                warn!("Queue is full");
+                debug!("Queue is full");
                 let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
                 drop(tx_arc);
                 self.untrack_active_transaction();
@@ -3630,13 +3792,12 @@ impl Queue {
                     err: Error::Full,
                 });
             }
-            self.tx_encoded_len.insert(hash, encoded_len);
+            self.insert_tx_encoded_len(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
             let flush = self.record_plan_journal_put_deferred(
                 tx_arc.as_accepted(),
                 hash,
                 &routing_plan,
-                journal_payload,
                 enqueue_at_ms,
             );
             journal_flush.combine(flush.0);
@@ -3753,11 +3914,11 @@ impl Queue {
             self.expiry_ring_members.clear();
             self.expiry_ring.lock().clear();
             self.tx_encoded_len.clear();
+            self.retained_bytes.store(0, Ordering::Relaxed);
             self.tx_gas_cost.clear();
             self.tx_enqueued_at_ms.clear();
             self.routing_decisions.clear();
             self.routing_plans.clear();
-            self.tx_gossip_payloads.clear();
             #[cfg(feature = "telemetry")]
             {
                 self.tx_teu.clear();
@@ -3853,11 +4014,10 @@ impl Queue {
                         expired_transactions.push(tx.into_accepted());
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -3932,11 +4092,10 @@ impl Queue {
                         );
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4047,11 +4206,10 @@ impl Queue {
                         expired_transactions.push(tx.into_accepted());
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4124,11 +4282,10 @@ impl Queue {
                         );
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4245,6 +4402,16 @@ impl Queue {
             return 0;
         }
         self.queued_count.load(Ordering::Relaxed)
+    }
+
+    /// Return the queue's estimated retained transaction bytes.
+    pub fn retained_bytes(&self) -> u64 {
+        self.retained_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Return the configured retained-byte budget for the queue.
+    pub fn max_retained_bytes(&self) -> NonZeroU64 {
+        self.max_retained_bytes
     }
 
     fn track_active_transaction(&self) {
@@ -4663,8 +4830,12 @@ impl Queue {
         tracked_tx_count: usize,
     ) -> QueuePressureSnapshot {
         let queued_tx_count = self.queued_len();
+        let retained_bytes = self.retained_bytes();
+        let max_retained_bytes = self.max_retained_bytes;
         let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
         let saturated_by_count = tracked_tx_count >= self.capacity.get();
+        let saturated_by_bytes =
+            retained_bytes.saturating_add(TX_RETAINED_OVERHEAD_BYTES) > max_retained_bytes.get();
         let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
         let saturated_by_age =
             queued_tx_count > 0 && oldest_queued_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
@@ -4673,8 +4844,11 @@ impl Queue {
             tracked_tx_count,
             queued_tx_count,
             capacity: self.capacity,
+            retained_bytes,
+            max_retained_bytes,
             oldest_queued_tx_age_ms,
             saturated_by_count,
+            saturated_by_bytes,
             saturated_by_age,
         }
     }
@@ -4702,7 +4876,10 @@ impl Queue {
                 tel,
                 snapshot.queued_tx_count as u64,
                 self.capacity.get() as u64,
+                snapshot.retained_bytes,
+                snapshot.max_retained_bytes.get(),
                 snapshot.saturated_by_count,
+                snapshot.saturated_by_bytes,
             );
         }
         #[cfg(not(feature = "telemetry"))]
@@ -4798,9 +4975,8 @@ impl Queue {
                 }
                 removed = removed.saturating_add(1);
             }
-            self.tx_encoded_len.remove(&hash);
+            self.remove_tx_encoded_len(&hash);
             self.tx_gas_cost.remove(&hash);
-            self.tx_gossip_payloads.remove(&hash);
         }
         let remove_ms = Self::duration_to_millis(remove_start.elapsed());
         if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
@@ -4891,14 +5067,13 @@ impl Queue {
                 self.decrease_per_user_tx_count(authority);
             }
             if decision.is_some() {
-                routing_ledger::record_plan(hash, plan);
+                self.record_routing_plan_in_ledger(hash, plan);
             }
         }
-        self.tx_encoded_len.remove(&hash);
+        self.remove_tx_encoded_len(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
         self.remove_queued_age(&hash);
-        self.tx_gossip_payloads.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
         self.removed_hashes.remove(&hash);
@@ -4961,11 +5136,10 @@ impl Queue {
                 }
                 let _ = routing_ledger::take(&hash);
                 let _ = routing_ledger::take_plan(&hash);
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 if let Some(tx_arc) = tx_arc {
                     self.untrack_active_transaction();
                     self.removed_hashes.insert(hash, ());
@@ -5323,6 +5497,7 @@ impl Queue {
             }
         }
 
+        let mut unresolved_routes = Vec::new();
         for entry in &self.txs {
             let tx = entry.value();
             if !self.is_pending(tx.as_ref(), state_view) {
@@ -5345,12 +5520,7 @@ impl Queue {
                         reason_label = err.as_label(),
                         "skipping reroute for queued transaction due to unresolved route"
                     );
-                    self.routing_decisions.remove(entry.key());
-                    self.routing_plans.remove(entry.key());
-                    #[cfg(feature = "telemetry")]
-                    {
-                        self.tx_teu.remove(entry.key());
-                    }
+                    unresolved_routes.push((*entry.key(), err.to_string()));
                     continue;
                 }
             };
@@ -5358,7 +5528,7 @@ impl Queue {
             self.routing_decisions.insert(*entry.key(), routing);
             self.routing_plans
                 .insert(*entry.key(), routing_plan.clone());
-            routing_ledger::record_plan(*entry.key(), routing_plan);
+            self.record_routing_plan_in_ledger(*entry.key(), routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -5383,6 +5553,18 @@ impl Queue {
                     })
                     .or_insert(PendingTeu { teu, tx_count: 1 });
             }
+        }
+
+        #[cfg(feature = "telemetry")]
+        let reroute_rejection_telemetry = Some(state_view.telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        let reroute_rejection_telemetry = None;
+        for (hash, reason) in unresolved_routes {
+            self.reject_queued_transaction_for_unresolved_route(
+                hash,
+                reason,
+                reroute_rejection_telemetry,
+            );
         }
 
         #[cfg(feature = "telemetry")]
@@ -5415,6 +5597,7 @@ impl Queue {
 
         let committed_transactions = state.transactions.view();
         let mut route_view: Option<StateView<'_>> = None;
+        let mut unresolved_routes = Vec::new();
         for entry in &self.txs {
             let tx = entry.value();
             if self.is_expired(tx.as_accepted())
@@ -5441,12 +5624,7 @@ impl Queue {
                                 reason_label = err.as_label(),
                                 "skipping reroute for queued transaction due to unresolved route"
                             );
-                            self.routing_decisions.remove(entry.key());
-                            self.routing_plans.remove(entry.key());
-                            #[cfg(feature = "telemetry")]
-                            {
-                                self.tx_teu.remove(entry.key());
-                            }
+                            unresolved_routes.push((*entry.key(), err.to_string()));
                             continue;
                         }
                     }
@@ -5470,12 +5648,7 @@ impl Queue {
                                 reason_label = err.as_label(),
                                 "skipping reroute for queued transaction due to unresolved route"
                             );
-                            self.routing_decisions.remove(entry.key());
-                            self.routing_plans.remove(entry.key());
-                            #[cfg(feature = "telemetry")]
-                            {
-                                self.tx_teu.remove(entry.key());
-                            }
+                            unresolved_routes.push((*entry.key(), err.to_string()));
                             continue;
                         }
                     }
@@ -5487,12 +5660,7 @@ impl Queue {
                         reason_label = err.as_label(),
                         "skipping reroute for queued transaction due to unresolved route"
                     );
-                    self.routing_decisions.remove(entry.key());
-                    self.routing_plans.remove(entry.key());
-                    #[cfg(feature = "telemetry")]
-                    {
-                        self.tx_teu.remove(entry.key());
-                    }
+                    unresolved_routes.push((*entry.key(), err.to_string()));
                     continue;
                 }
             };
@@ -5500,7 +5668,7 @@ impl Queue {
             self.routing_decisions.insert(*entry.key(), routing);
             self.routing_plans
                 .insert(*entry.key(), routing_plan.clone());
-            routing_ledger::record_plan(*entry.key(), routing_plan);
+            self.record_routing_plan_in_ledger(*entry.key(), routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -5525,6 +5693,18 @@ impl Queue {
                     })
                     .or_insert(PendingTeu { teu, tx_count: 1 });
             }
+        }
+
+        #[cfg(feature = "telemetry")]
+        let reroute_rejection_telemetry = Some(state.metrics());
+        #[cfg(not(feature = "telemetry"))]
+        let reroute_rejection_telemetry = None;
+        for (hash, reason) in unresolved_routes {
+            self.reject_queued_transaction_for_unresolved_route(
+                hash,
+                reason,
+                reroute_rejection_telemetry,
+            );
         }
 
         #[cfg(feature = "telemetry")]
@@ -5776,6 +5956,7 @@ pub mod tests {
         time::Duration,
     };
 
+    use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, MerkleTree,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -5787,11 +5968,11 @@ pub mod tests {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId,
-            DataSpaceMetadata, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
-            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId, LaneLifecyclePlan,
-            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, ManifestVersion,
-            ParticipantSelector,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
+            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, JurisdictionSet,
+            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
+            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -6078,6 +6259,148 @@ pub mod tests {
     }
 
     #[test]
+    fn reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let retired_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: retired_lane,
+                    alias: "retire-me".to_string(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog.clone();
+        nexus.routing_policy.default_lane = retired_lane;
+        nexus.routing_policy.default_dataspace = DataSpaceId::UNIVERSAL;
+        state
+            .set_nexus(nexus.clone())
+            .expect("apply initial Nexus config");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: retired_lane,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let lane_catalog = Arc::new(nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
+        let mut queue = Queue::from_config_with_router_limits_and_catalogs(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(8_usize),
+                capacity_per_user: nonzero!(4_usize),
+                ..Config::default()
+            },
+            tokio::sync::broadcast::Sender::new(1),
+            Arc::clone(&router),
+            QueueLimits::from_nexus(&nexus),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
+        );
+        queue.time_source = time_source.clone();
+
+        let tx = accepted_tx_with(
+            authority_id.clone(),
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "retired lane pending route".into(),
+            ))],
+            Metadata::default(),
+        );
+        let tx_hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push");
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&tx_hash)
+                .map(|entry| entry.value().lane_id),
+            Some(retired_lane)
+        );
+        #[cfg(feature = "telemetry")]
+        {
+            let info = queue.tx_teu.get(&tx_hash).expect("queued TEU metadata");
+            assert_eq!(info.lane_id, retired_lane);
+            assert!(info.teu > 0);
+            let retired_pending = queue
+                .lane_teu_pending
+                .get(&retired_lane)
+                .expect("retired lane TEU aggregate");
+            assert_eq!(retired_pending.tx_count, 1);
+            assert_eq!(retired_pending.teu, info.teu);
+        }
+        assert!(
+            routing_ledger::get_plan(&tx_hash).is_some(),
+            "queued transaction should publish its initial routing plan"
+        );
+
+        let active_catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
+        *queue.lane_catalog.write() = Arc::new(active_catalog.clone());
+        queue.reroute_pending_transactions_with_state(
+            &router,
+            &state,
+            &active_catalog,
+            dataspace_catalog.as_ref(),
+        );
+
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 0);
+        assert!(queue.txs.get(&tx_hash).is_none());
+        assert!(queue.routing_decisions.get(&tx_hash).is_none());
+        assert!(queue.routing_plans.get(&tx_hash).is_none());
+        assert!(routing_ledger::get(&tx_hash).is_none());
+        assert!(routing_ledger::get_plan(&tx_hash).is_none());
+        #[cfg(feature = "telemetry")]
+        {
+            assert!(queue.tx_teu.get(&tx_hash).is_none());
+            assert!(
+                queue.lane_teu_pending.get(&retired_lane).is_none(),
+                "retired lane must not retain TEU backlog after reroute rejection"
+            );
+            assert!(
+                queue
+                    .lane_teu_pending
+                    .iter()
+                    .all(|entry| entry.key() != &retired_lane
+                        && entry.value().teu == 0
+                        && entry.value().tx_count == 0),
+                "active lane TEU aggregates must be reset when the only queued transaction is rejected"
+            );
+            assert!(
+                queue
+                    .dataspace_teu_pending
+                    .iter()
+                    .all(|entry| entry.key().0 != retired_lane
+                        && entry.value().teu == 0
+                        && entry.value().tx_count == 0),
+                "active dataspace TEU aggregates must be reset when the only queued transaction is rejected"
+            );
+        }
+        assert!(
+            active_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != retired_lane)
+        );
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
     fn proposal_queue_syncs_stale_router_from_committed_nexus() {
         let NexusFeeFixture {
             mut state,
@@ -6096,7 +6419,6 @@ pub mod tests {
         nexus.routing_policy.default_lane = lane_id;
         nexus.routing_policy.default_dataspace = dataspace_id;
         nexus.fees.base_fee = Numeric::zero();
-        state.set_nexus(nexus.clone()).expect("set Nexus config");
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
@@ -6129,6 +6451,7 @@ pub mod tests {
             RoutingDecision::default()
         );
 
+        state.set_nexus(nexus.clone()).expect("set Nexus config");
         assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
         assert_eq!(
             *queue
@@ -6145,6 +6468,272 @@ pub mod tests {
         assert_eq!(
             popped[0].routing(),
             RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn proposal_queue_reconfigures_pending_default_route_to_autoscaled_elastic_lane() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.fees.base_fee = Numeric::zero();
+        state
+            .set_nexus(nexus.clone())
+            .expect("apply initial single-lane Nexus config");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(16_usize),
+                capacity_per_user: nonzero!(16_usize),
+                ..Config::default()
+            },
+            &time_source,
+        );
+
+        let tx = (0_u32..128)
+            .map(|idx| {
+                accepted_tx_with(
+                    authority_id.clone(),
+                    &authority_keypair,
+                    &time_source,
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("autoscale shard candidate {idx}").into(),
+                    ))],
+                    Metadata::default(),
+                )
+            })
+            .find(|tx| {
+                let hash = tx.as_ref().hash();
+                let mut bytes = [0_u8; core::mem::size_of::<u64>()];
+                bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+                u64::from_le_bytes(bytes) % 2 == 1
+            })
+            .expect("fixture should find a transaction hashing to the elastic shard");
+        let tx_hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push pending tx");
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("initial routing"),
+            RoutingDecision::default()
+        );
+
+        let mut elastic = LaneConfig {
+            id: LaneId::new(1),
+            alias: "elastic-lane-1".to_string(),
+            ..LaneConfig::default()
+        };
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic])
+            .expect("autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.last_transition_height = 2;
+        }
+        let committed_nexus = state.nexus_snapshot();
+
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("rerouted decision"),
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+        );
+        let rerouted_plan = queue
+            .routing_plans
+            .get(&tx_hash)
+            .expect("rerouted plan")
+            .clone();
+        assert_eq!(
+            rerouted_plan.coordinator_route(),
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL),
+            "autoscale scale-out must refresh the full proposal routing plan"
+        );
+        assert_eq!(
+            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
+            Some(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)),
+            "autoscale scale-out must refresh the local routing ledger plan"
+        );
+        assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
+    }
+
+    #[test]
+    fn proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let mut initial_lane_1 = LaneConfig {
+            id: LaneId::new(1),
+            alias: "elastic-lane-1".to_string(),
+            ..LaneConfig::default()
+        };
+        initial_lane_1
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        initial_lane_1
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        let mut initial_lane_2 = LaneConfig {
+            id: LaneId::new(2),
+            alias: "elastic-lane-2".to_string(),
+            ..LaneConfig::default()
+        };
+        initial_lane_2
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        initial_lane_2
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "3".to_string());
+        let initial_catalog = LaneCatalog::new(
+            nonzero!(3_u32),
+            vec![
+                LaneConfig::default(),
+                initial_lane_1.clone(),
+                initial_lane_2.clone(),
+            ],
+        )
+        .expect("initial autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.lane_catalog = initial_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.last_transition_height = 3;
+        }
+        let initial_nexus = state.nexus_snapshot();
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(16_usize),
+                capacity_per_user: nonzero!(16_usize),
+                ..Config::default()
+            },
+            &time_source,
+        );
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&initial_nexus, &state, None));
+
+        let tx = (0_u32..512)
+            .map(|idx| {
+                accepted_tx_with(
+                    authority_id.clone(),
+                    &authority_keypair,
+                    &time_source,
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("autoscale scale-in survivor {idx}").into(),
+                    ))],
+                    Metadata::default(),
+                )
+            })
+            .find(|tx| {
+                queue
+                    .route_with_state(tx, &state)
+                    .is_ok_and(|routing| routing.lane_id == LaneId::new(1))
+            })
+            .expect("fixture should find a transaction hashing to the lane that will retire");
+        let tx_hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push pending tx");
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("initial routing"),
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+        );
+
+        let survivor_catalog = LaneCatalog::new(
+            nonzero!(3_u32),
+            vec![LaneConfig::default(), initial_lane_2.clone()],
+        )
+        .expect("scale-in autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = survivor_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.autoscale.last_transition_height = 4;
+        }
+        let committed_nexus = state.nexus_snapshot();
+
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        let rerouted = *queue
+            .routing_decisions
+            .get(&tx_hash)
+            .expect("rerouted decision");
+        assert_ne!(rerouted.lane_id, LaneId::new(1));
+        assert!(
+            rerouted.lane_id == LaneId::SINGLE || rerouted.lane_id == LaneId::new(2),
+            "scale-in should reroute onto an active default-route candidate, got {rerouted:?}"
+        );
+        assert_eq!(
+            rerouted.dataspace_id,
+            DataSpaceId::UNIVERSAL,
+            "scale-in reroute should preserve the default dataspace"
+        );
+        assert_eq!(
+            queue
+                .lane_catalog
+                .read()
+                .lanes()
+                .iter()
+                .find(|lane| lane.id == rerouted.lane_id)
+                .expect("rerouted lane should remain active")
+                .dataspace_id,
+            rerouted.dataspace_id
+        );
+        let rerouted_plan = queue
+            .routing_plans
+            .get(&tx_hash)
+            .expect("rerouted plan")
+            .clone();
+        assert_eq!(
+            rerouted_plan.coordinator_route(),
+            rerouted,
+            "autoscale scale-in must refresh the full proposal routing plan"
+        );
+        assert_eq!(
+            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
+            Some(rerouted),
+            "autoscale scale-in must refresh the local routing ledger plan"
+        );
+        assert!(
+            queue
+                .lane_catalog
+                .read()
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != LaneId::new(1))
         );
     }
 
@@ -7465,6 +8054,56 @@ pub mod tests {
     }
 
     #[test]
+    fn retained_byte_cost_floor_scales_with_incoming_count() {
+        let one = Queue::retained_byte_cost_floor_for_transactions(1);
+        assert!(one > 0, "each incoming tx must carry a non-zero floor");
+        assert_eq!(Queue::retained_byte_cost_floor_for_transactions(0), 0);
+        assert_eq!(Queue::retained_byte_cost_floor_for_transactions(3), one * 3);
+    }
+
+    #[test]
+    fn retained_byte_budget_rejects_before_count_capacity_and_releases_on_remove() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        let first_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&first));
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(16_usize);
+        cfg.capacity_per_user = nonzero!(16_usize);
+        cfg.max_retained_bytes = NonZeroU64::new(first_cost).expect("non-zero retained cost");
+
+        let queue = Queue::test(cfg, &time_source);
+        queue
+            .push(first, state.view())
+            .expect("first tx fits budget");
+        assert_eq!(queue.retained_bytes(), first_cost);
+
+        let pressure = queue.pressure_snapshot();
+        assert!(pressure.saturated_by_bytes);
+        assert!(!pressure.saturated_by_count);
+        assert!(queue.current_backpressure().is_saturated());
+
+        let second = accepted_tx_by_someone(&time_source);
+        let err = queue
+            .push(second, state.view())
+            .expect_err("byte budget should reject second tx before count capacity");
+        assert!(matches!(err.err, Error::Full));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), first_cost);
+
+        assert_eq!(
+            queue.remove_committed_hashes(std::iter::once(first_hash), None),
+            1
+        );
+        assert_eq!(queue.retained_bytes(), 0);
+        assert!(!queue.pressure_snapshot().saturated_by_bytes);
+    }
+
+    #[test]
     fn queue_plan_journal_replays_matching_plan_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
@@ -7534,11 +8173,12 @@ pub mod tests {
                 .expect("replayed plan"),
             plan
         );
+        let replayed_tx = replay_queue.txs.get(&hash).expect("replayed transaction");
         assert_eq!(
-            replay_queue
-                .tx_gossip_payloads
-                .get(&hash)
-                .expect("replayed payload")
+            replayed_tx
+                .value()
+                .as_accepted()
+                .entrypoint_bytes()
                 .as_slice(),
             payload.as_slice()
         );
@@ -7556,15 +8196,11 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let lane = LaneId::new(2);
         let dataspace = DataSpaceId::new(20);
-        let router = Arc::new(MutableRouter::new(RoutingDecision::new(
-            LaneId::SINGLE,
-            DataSpaceId::UNIVERSAL,
-        )));
-        let queue_router: Arc<dyn LaneRouter> = router.clone();
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter { lane, dataspace });
         let queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
-            queue_router,
+            router,
             &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (lane, dataspace)],
         );
         queue
@@ -7573,14 +8209,17 @@ pub mod tests {
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.hash();
-        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
-        queue
-            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, plan, None)
-            .expect("push with plan");
+        let plan = RoutingPlan::single(RoutingDecision::new(lane, dataspace));
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
         drop(queue);
 
-        router.set(RoutingDecision::new(lane, dataspace));
-        let replay_router: Arc<dyn LaneRouter> = router.clone();
+        let replay_router: Arc<dyn LaneRouter> = Arc::new(StaticRouter { lane, dataspace });
         let replay_queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
@@ -7603,13 +8242,414 @@ pub mod tests {
         assert!(!replay_queue.txs.contains_key(&hash));
         drop(replay_queue);
 
-        let final_router: Arc<dyn LaneRouter> = router;
+        let final_router: Arc<dyn LaneRouter> = Arc::new(StaticRouter { lane, dataspace });
         let final_queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             final_router,
             &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (lane, dataspace)],
         );
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_stale_nexus_policy_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let old_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
+        let current_route = RoutingDecision::new(LaneId::new(4), DataSpaceId::UNIVERSAL);
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (old_route.lane_id, old_route.dataspace_id),
+            (current_route.lane_id, current_route.dataspace_id),
+        ]);
+        let matcher = LaneRoutingMatcher {
+            account: None,
+            instruction: Some("unregister::domain".to_string()),
+            description: None,
+        };
+
+        let mut current_nexus = state.nexus_snapshot();
+        current_nexus.enabled = true;
+        current_nexus.lane_catalog = (*lane_catalog).clone();
+        current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        current_nexus.fees.base_fee = Numeric::zero();
+        current_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane: current_route.lane_id,
+            dataspace: Some(current_route.dataspace_id),
+            matcher: matcher.clone(),
+        }];
+        state
+            .set_nexus(current_nexus.clone())
+            .expect("apply current Nexus state");
+
+        let mut stale_nexus = current_nexus.clone();
+        stale_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane: old_route.lane_id,
+            dataspace: Some(old_route.dataspace_id),
+            matcher,
+        }];
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by(authority_id, &authority_keypair, &time_source);
+        let hash = tx.hash();
+        let stale_plan = queue
+            .router
+            .read()
+            .try_route_plan_with_state(&tx, &state)
+            .and_then(|plan| {
+                resolve_routing_plan_against_catalogs(
+                    plan,
+                    &stale_nexus.lane_catalog,
+                    &stale_nexus.dataspace_catalog,
+                )
+            })
+            .expect("stale plan resolves against stale Nexus catalogs");
+        assert_eq!(stale_plan.coordinator_route(), old_route);
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &stale_plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
+        drop(queue);
+
+        let replay_queue = Queue::test(config_factory(), &time_source);
+        replay_queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        assert_eq!(
+            replay_queue.routing_policy.read().rules[0].lane,
+            old_route.lane_id,
+            "restart fixture should begin with stale queue-local Nexus policy"
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        assert_eq!(
+            replay_queue.routing_policy.read().rules[0].lane,
+            current_route.lane_id,
+            "journal replay must synchronize from committed Nexus before comparing plans"
+        );
+        drop(replay_queue);
+
+        let final_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_elastic_plan_when_range_corrupt_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        {
+            let mut elastic_lane = LaneConfig {
+                id: LaneId::new(1),
+                alias: "elastic-lane-1".to_owned(),
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+            elastic_lane
+                .metadata
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                    .expect("lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let mut selected = None;
+        for max_cycles in 1_u64..=256 {
+            let tx = accepted_ivm_tx_by(
+                authority_id.clone(),
+                &authority_keypair,
+                &time_source,
+                max_cycles,
+            );
+            let plan = queue
+                .route_plan_with_state(&tx, &state)
+                .expect("valid autoscale route should resolve");
+            if plan.coordinator_route().lane_id == LaneId::new(1) {
+                selected = Some((tx, plan));
+                break;
+            }
+        }
+        let (tx, stale_plan) =
+            selected.expect("fixture should find a transaction routed to elastic lane");
+        let hash = tx.hash();
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &stale_plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
+        drop(queue);
+
+        {
+            let nexus = state.nexus.get_mut();
+            let mut lanes = nexus.lane_catalog.lanes().to_vec();
+            lanes.push(LaneConfig {
+                id: LaneId::new(2),
+                alias: "manual-lane-inside-elastic-range".to_owned(),
+                ..LaneConfig::default()
+            });
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(3_u32), lanes).expect("corrupted lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let replay_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("corrupted elastic range should still resolve to base lane")
+                .coordinator_route(),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        drop(replay_queue);
+
+        let final_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_stale_native_amx_participant_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![],
+        };
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let stale_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: first_dataspace,
+                    alias: "acme-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(3),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let mut current_lanes = stale_lane_catalog.lanes().to_vec();
+        let stale_participant_lane = current_lanes
+            .iter_mut()
+            .find(|lane| lane.id == LaneId::new(2))
+            .expect("stale participant lane");
+        stale_participant_lane.alias = "elastic-lane-2".to_owned();
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "10".to_string());
+        let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
+            .expect("current lane catalog");
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.routing_policy = policy.clone();
+            nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            &time_source,
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+            Metadata::default(),
+        );
+        let stale_plan = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            stale_lane_catalog,
+        )
+        .try_route_plan(&tx)
+        .expect("stale Native AMX plan should resolve");
+        let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
+            .try_route_plan(&tx)
+            .expect("current Native AMX plan should resolve");
+        assert_eq!(
+            stale_plan.coordinator_route(),
+            current_plan.coordinator_route()
+        );
+        assert_ne!(stale_plan.digest(), current_plan.digest());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let hash = tx.hash();
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &stale_plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
+        drop(queue);
+
+        let replay_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("current Native AMX plan should resolve"),
+            current_plan
+        );
+
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        drop(replay_queue);
+
+        let final_queue = Queue::test(config_factory(), &time_source);
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
@@ -7726,7 +8766,7 @@ pub mod tests {
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test(config_factory(), &time_source);
@@ -7836,27 +8876,23 @@ pub mod tests {
         let hash = tx.as_ref().hash();
         queue.push(tx, state.view()).expect("push tx");
         let _ = queue.gossip_batch(1, &state.view());
-        assert!(!queue.tx_gossip_payloads.is_empty());
 
         let removed = queue.remove_committed_hashes(std::iter::once(hash), None);
         assert_eq!(removed, 1);
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
-        assert!(queue.tx_gossip_payloads.is_empty());
 
         let tx = accepted_tx_by_someone(&time_source);
         queue.push(tx, state.view()).expect("push tx");
         assert!(!queue.tx_encoded_len.is_empty());
         let _ = queue.gossip_batch(1, &state.view());
-        assert!(!queue.tx_gossip_payloads.is_empty());
         queue.clear_all();
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
-        assert!(queue.tx_gossip_payloads.is_empty());
     }
 
     #[test]
-    fn queue_accepts_gossip_payload_cache() {
+    fn queue_reuses_gossip_payload_without_side_cache() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -7897,9 +8933,6 @@ pub mod tests {
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
             .expect("push tx with payload");
 
-        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
-
         let encoded_len = queue
             .tx_encoded_len
             .get(&hash)
@@ -7907,13 +8940,17 @@ pub mod tests {
             .expect("encoded len stored");
         assert_eq!(encoded_len, payload.len());
 
-        let batch = queue.gossip_batch(1, &state.view());
+        let batch = queue.gossip_batch_with_state(1, &state);
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].payload.as_slice(), payload.as_slice());
+        assert!(
+            Arc::ptr_eq(&batch[0].payload, &payload),
+            "gossip should reuse inbound entrypoint bytes"
+        );
     }
 
     #[test]
-    fn queue_accepts_gossip_payload_cache_in_shared_view() {
+    fn queue_reuses_gossip_payload_without_side_cache_in_shared_view() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -7921,7 +8958,6 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let hash = tx.as_ref().hash();
         let payload = tx.entrypoint_bytes();
         let state_view = state.view();
 
@@ -7929,12 +8965,13 @@ pub mod tests {
             .push_with_gossip_payload_in_view(tx, &state_view, Some(Arc::clone(&payload)))
             .expect("push tx with payload through shared view");
 
-        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+        let batch = queue.gossip_batch(1, &state_view);
+        assert_eq!(batch.len(), 1);
+        assert!(Arc::ptr_eq(&batch[0].payload, &payload));
     }
 
     #[test]
-    fn queue_accepts_gossip_payload_cache_with_state() {
+    fn queue_reuses_gossip_payload_without_side_cache_with_state() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -7942,15 +8979,15 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let hash = tx.as_ref().hash();
         let payload = tx.entrypoint_bytes();
 
         queue
             .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
             .expect("push tx with payload through state");
 
-        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+        let batch = queue.gossip_batch_with_state(1, &state);
+        assert_eq!(batch.len(), 1);
+        assert!(Arc::ptr_eq(&batch[0].payload, &payload));
     }
 
     #[test]
@@ -8458,7 +9495,7 @@ pub mod tests {
     fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
         let mut fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
         let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
-            "xor#wonderland.universal".parse().expect("asset alias");
+            "xor#universal".parse().expect("asset alias");
         {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = fixture.state.block(header);
@@ -8669,7 +9706,7 @@ pub mod tests {
             StateTelemetry::new(metrics.clone(), true),
         ));
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -8719,14 +9756,22 @@ pub mod tests {
         #[cfg(feature = "telemetry")]
         let metrics = Arc::new(Metrics::default());
         #[cfg(feature = "telemetry")]
-        let state = Arc::new(State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        ));
+        let state = {
+            let mut state = State::with_telemetry(
+                world,
+                kura.clone(),
+                query_handle.clone(),
+                StateTelemetry::new(metrics.clone(), true),
+            );
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let state = {
+            let mut state = State::new(world, kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -8828,14 +9873,22 @@ pub mod tests {
         #[cfg(feature = "telemetry")]
         let metrics = Arc::new(Metrics::default());
         #[cfg(feature = "telemetry")]
-        let state = Arc::new(State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        ));
+        let state = {
+            let mut state = State::with_telemetry(
+                world,
+                kura.clone(),
+                query_handle.clone(),
+                StateTelemetry::new(metrics.clone(), true),
+            );
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let state = {
+            let mut state = State::new(world, kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -8918,7 +9971,9 @@ pub mod tests {
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test_with_router_for_routes(
@@ -8961,7 +10016,9 @@ pub mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test_with_router_for_routes(
@@ -9302,13 +10359,12 @@ pub mod tests {
         let authority_account = Account::new(authority_id.clone()).build(&authority_id);
         let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
         let sink_account = Account::new(sink_id.clone()).build(&sink_id);
-        let fee_asset_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("xor"));
-        let asset_definition = {
-            let __asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }
-        .build(&authority_id);
+        let fee_asset_selector = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+        let fee_asset_id = AssetDefinitionId::parse_address_literal(&fee_asset_selector)
+            .expect("default Nexus XOR fee asset id must be canonical");
+        let asset_definition =
+            AssetDefinition::numeric(fee_asset_id.clone()).with_name("xor".to_string());
+        let asset_definition = asset_definition.build(&authority_id);
         let mut assets = Vec::new();
         if let Some(balance) = authority_balance {
             assets.push(Asset::new(
@@ -9358,7 +10414,7 @@ pub mod tests {
             nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.sponsor_max_fee = Numeric::zero();
-            nexus.fees.fee_asset_id = fee_asset_id.to_string();
+            nexus.fees.fee_asset_id = fee_asset_selector;
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
@@ -9400,23 +10456,28 @@ pub mod tests {
     fn gossip_batch_refreshes_stale_routing_metadata() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
-        let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
-        let queue = Queue::test_with_router_for_routes(
-            config_factory(),
-            &time_source,
-            router.clone(),
-            &[
-                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                (refreshed.lane_id, refreshed.dataspace_id),
-            ],
-        );
+        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
+        let (fresh_lanes, fresh_dataspaces) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (refreshed.lane_id, refreshed.dataspace_id),
+        ]);
+        let queue = Queue::test(config_factory(), &time_source);
 
-        let tx = accepted_tx_by_someone(&time_source);
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "fresh gossip route".into(),
+            ))],
+            Metadata::default(),
+        );
         let hash = tx.as_ref().hash();
-        queue.push(tx, state.view()).expect("push tx");
+        queue.push(tx.clone(), state.view()).expect("push tx");
         assert_eq!(
             queue
                 .routing_decisions
@@ -9425,8 +10486,25 @@ pub mod tests {
             Some(RoutingDecision::default())
         );
 
-        router.set(refreshed);
-        let batch = queue.gossip_batch(1, &state.view());
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = (*fresh_lanes).clone();
+        nexus.dataspace_catalog = (*fresh_dataspaces).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.routing_policy.default_lane = refreshed.lane_id;
+        nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
+        state.set_nexus(nexus).expect("apply fresh Nexus state");
+
+        let directly_refreshed = queue
+            .route_plan_with_state(&tx, &state)
+            .map(|plan| plan.coordinator_route())
+            .expect("state-aware route should refresh");
+        assert_eq!(directly_refreshed, refreshed);
+
+        let batch = queue.gossip_batch_with_state(1, &state);
 
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].routing, refreshed);
@@ -9438,6 +10516,60 @@ pub mod tests {
             Some(refreshed)
         );
         assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
+    fn gossip_batch_refreshes_stale_native_amx_participant_plan() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut fixture = native_amx_participant_drift_fixture(&time_source);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan, fixture.current_plan);
+        let queue = Queue::test(config_factory(), &time_source);
+        let hash = fixture.tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                fixture.tx.clone(),
+                &fixture.state,
+                fixture.current_plan.clone(),
+                None,
+            )
+            .expect("current Native AMX plan should enqueue");
+        queue.routing_plans.insert(hash, fixture.stale_plan.clone());
+        queue
+            .routing_decisions
+            .insert(hash, fixture.stale_plan.coordinator_route());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
+
+        let batch = queue.gossip_batch_with_state(1, &fixture.state);
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].tx.as_ref().hash(), hash);
+        assert_eq!(batch[0].routing, fixture.current_plan.coordinator_route());
+        assert_eq!(batch[0].routing_plan, fixture.current_plan);
+        assert_eq!(
+            queue.routing_plans.get(&hash).map(|entry| entry.clone()),
+            Some(fixture.current_plan.clone())
+        );
+        assert_eq!(
+            crate::queue::routing_ledger::get_plan(&hash),
+            Some(fixture.current_plan)
+        );
+        let _ = crate::queue::routing_ledger::take_plan(&hash);
         let _ = crate::queue::routing_ledger::take(&hash);
     }
 
@@ -9570,6 +10702,347 @@ pub mod tests {
     }
 
     #[test]
+    fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let fresh = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
+        let (fresh_lanes, fresh_dataspaces) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (fresh.lane_id, fresh.dataspace_id),
+        ]);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = (*fresh_lanes).clone();
+        nexus.dataspace_catalog = (*fresh_dataspaces).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.routing_policy.default_lane = fresh.lane_id;
+        nexus.routing_policy.default_dataspace = fresh.dataspace_id;
+        state.set_nexus(nexus).expect("apply fresh Nexus state");
+
+        let queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            queue.routing_policy.read().default_lane,
+            LaneId::SINGLE,
+            "queue fixture should intentionally start with stale routing policy"
+        );
+
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "fresh default route".into(),
+            ))],
+            Metadata::default(),
+        );
+        let routing = queue
+            .route_plan_with_state(&tx, &state)
+            .map(|plan| plan.coordinator_route())
+            .expect("state-aware routing should sync to the fresh default lane");
+        assert_eq!(routing, fresh);
+        assert_eq!(queue.routing_policy.read().default_lane, fresh.lane_id);
+
+        let gossip_routing = queue
+            .route_plan_for_gossip_with_state(&tx, &state)
+            .map(|plan| plan.coordinator_route())
+            .expect("gossip routing should use the synchronized default lane");
+        assert_eq!(gossip_routing, fresh);
+    }
+
+    #[test]
+    fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let fresh = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
+        let (fresh_lanes, fresh_dataspaces) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (fresh.lane_id, fresh.dataspace_id),
+        ]);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = (*fresh_lanes).clone();
+        nexus.dataspace_catalog = (*fresh_dataspaces).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.routing_policy.default_lane = fresh.lane_id;
+        nexus.routing_policy.default_dataspace = fresh.dataspace_id;
+        state.set_nexus(nexus).expect("apply fresh Nexus state");
+
+        let queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            queue.routing_policy.read().default_lane,
+            LaneId::SINGLE,
+            "queue fixture should intentionally start with stale routing policy"
+        );
+
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "fresh default push route".into(),
+            ))],
+            Metadata::default(),
+        );
+        let hash = tx.hash();
+        queue
+            .push(tx, state.view())
+            .expect("push should sync route");
+
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(fresh)
+        );
+        assert_eq!(queue.routing_policy.read().default_lane, fresh.lane_id);
+    }
+
+    #[test]
+    fn route_plan_with_state_rejects_stale_policy_even_when_old_lane_still_exists() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let old_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
+        let current_route = RoutingDecision::new(LaneId::new(4), DataSpaceId::UNIVERSAL);
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (old_route.lane_id, old_route.dataspace_id),
+            (current_route.lane_id, current_route.dataspace_id),
+        ]);
+        let current_rule = LaneRoutingRule {
+            lane: current_route.lane_id,
+            dataspace: Some(current_route.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: None,
+                instruction: Some("unregister::domain".to_string()),
+                description: None,
+            },
+        };
+        let mut current_nexus = state.nexus_snapshot();
+        current_nexus.enabled = true;
+        current_nexus.lane_catalog = (*lane_catalog).clone();
+        current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        current_nexus.routing_policy.rules = vec![current_rule.clone()];
+        state
+            .set_nexus(current_nexus.clone())
+            .expect("apply current Nexus state");
+
+        let mut stale_nexus = current_nexus;
+        stale_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane: old_route.lane_id,
+            dataspace: Some(old_route.dataspace_id),
+            matcher: current_rule.matcher,
+        }];
+        let queue = Queue::test(config_factory(), &time_source);
+        queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        assert!(
+            queue
+                .routing_policy
+                .read()
+                .rules
+                .iter()
+                .any(|rule| rule.lane == old_route.lane_id),
+            "queue fixture should intentionally retain the stale routing rule"
+        );
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let routing = queue
+            .route_plan_with_state(&tx, &state)
+            .map(|plan| plan.coordinator_route())
+            .expect("state-aware routing should sync away from the stale routing rule");
+        assert_eq!(routing, current_route);
+        assert!(
+            queue
+                .routing_policy
+                .read()
+                .rules
+                .iter()
+                .any(|rule| rule.lane == current_route.lane_id)
+        );
+
+        let gossip_routing = queue
+            .route_plan_for_gossip_with_state(&tx, &state)
+            .map(|plan| plan.coordinator_route())
+            .expect("gossip routing should use the synchronized routing rule");
+        assert_eq!(gossip_routing, current_route);
+    }
+
+    #[test]
+    fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_exists() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let old_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
+        let current_route = RoutingDecision::new(LaneId::new(4), DataSpaceId::UNIVERSAL);
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (old_route.lane_id, old_route.dataspace_id),
+            (current_route.lane_id, current_route.dataspace_id),
+        ]);
+        let matcher = LaneRoutingMatcher {
+            account: None,
+            instruction: Some("unregister::domain".to_string()),
+            description: None,
+        };
+        let mut current_nexus = state.nexus_snapshot();
+        current_nexus.enabled = true;
+        current_nexus.lane_catalog = (*lane_catalog).clone();
+        current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        current_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane: current_route.lane_id,
+            dataspace: Some(current_route.dataspace_id),
+            matcher: matcher.clone(),
+        }];
+        state
+            .set_nexus(current_nexus.clone())
+            .expect("apply current Nexus state");
+
+        let mut stale_nexus = current_nexus;
+        stale_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane: old_route.lane_id,
+            dataspace: Some(old_route.dataspace_id),
+            matcher,
+        }];
+        let queue = Queue::test(config_factory(), &time_source);
+        queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let stale_plan = queue
+            .router
+            .read()
+            .try_route_plan_with_state(&tx, &state)
+            .and_then(|plan| {
+                resolve_routing_plan_against_catalogs(
+                    plan,
+                    &stale_nexus.lane_catalog,
+                    &stale_nexus.dataspace_catalog,
+                )
+            })
+            .expect("stale plan resolves against stale Nexus catalogs");
+        assert_eq!(stale_plan.coordinator_route(), old_route);
+
+        let err = queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, stale_plan, None)
+            .expect_err("stale precomputed plan should be rejected");
+        assert!(
+            matches!(
+                &err,
+                Failure {
+                    err: Error::UnresolvedRoute { .. },
+                    ..
+                }
+            ),
+            "unexpected stale-plan rejection: {err:?}"
+        );
+        assert!(!queue.txs.contains_key(&hash));
+        assert_eq!(
+            queue.routing_policy.read().rules[0].lane,
+            current_route.lane_id,
+            "admission should synchronize from committed Nexus before validating the plan"
+        );
+    }
+
+    #[test]
+    fn resolve_routing_plan_rejects_stale_native_amx_participant_legs() {
+        let coordinator = RoutingDecision::default();
+        let participant_lane = LaneId::new(2);
+        let participant_dataspace = DataSpaceId::new(8);
+        let mismatched_dataspace = DataSpaceId::new(9);
+        let unknown_dataspace = DataSpaceId::new(77);
+        let unknown_lane = LaneId::new(99);
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&[
+            (coordinator.lane_id, coordinator.dataspace_id),
+            (participant_lane, participant_dataspace),
+            (LaneId::new(3), mismatched_dataspace),
+        ]);
+
+        let stale_lane_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(
+                RoutingDecision::new(unknown_lane, participant_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let stale_lane_err = resolve_routing_plan_against_catalogs(
+            stale_lane_plan,
+            lane_catalog.as_ref(),
+            dataspace_catalog.as_ref(),
+        )
+        .expect_err("stale participant lane must be rejected");
+        assert_eq!(stale_lane_err.as_label(), "unknown_lane");
+        assert!(matches!(
+            stale_lane_err,
+            RoutingResolveError::UnknownLane { lane_id } if lane_id == unknown_lane
+        ));
+
+        let unknown_dataspace_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(
+                RoutingDecision::new(participant_lane, unknown_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let unknown_dataspace_err = resolve_routing_plan_against_catalogs(
+            unknown_dataspace_plan,
+            lane_catalog.as_ref(),
+            dataspace_catalog.as_ref(),
+        )
+        .expect_err("stale participant dataspace must be rejected");
+        assert_eq!(unknown_dataspace_err.as_label(), "unknown_dataspace");
+        assert!(matches!(
+            unknown_dataspace_err,
+            RoutingResolveError::UnknownDataspace { dataspace_id } if dataspace_id == unknown_dataspace
+        ));
+
+        let mismatch_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(
+                RoutingDecision::new(participant_lane, mismatched_dataspace),
+                RouteLegRole::Participant,
+            )],
+        );
+        let mismatch_err = resolve_routing_plan_against_catalogs(
+            mismatch_plan,
+            lane_catalog.as_ref(),
+            dataspace_catalog.as_ref(),
+        )
+        .expect_err("stale participant lane/dataspace binding must be rejected");
+        assert_eq!(mismatch_err.as_label(), "lane_dataspace_mismatch");
+        assert!(matches!(
+            mismatch_err,
+            RoutingResolveError::LaneDataspaceMismatch {
+                lane_id,
+                lane_dataspace_id,
+                dataspace_id,
+            } if lane_id == participant_lane
+                && lane_dataspace_id == participant_dataspace
+                && dataspace_id == mismatched_dataspace
+        ));
+    }
+
+    #[test]
     fn reroute_pending_transactions_with_state_uses_view_router_fallback() {
         struct ViewOnlyRouter {
             lane: LaneId,
@@ -9632,12 +11105,15 @@ pub mod tests {
     }
 
     #[test]
-    fn push_with_gossip_payload_with_state_and_routing_skips_router_lookup() {
-        struct PanicRouter;
+    fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() {
+        struct CountingRouter {
+            calls: Arc<AtomicUsize>,
+        }
 
-        impl LaneRouter for PanicRouter {
+        impl LaneRouter for CountingRouter {
             fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
-                panic!("route() should not be called when routing is precomputed");
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
             }
         }
 
@@ -9645,7 +11121,14 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test_with_router(config_factory(), &time_source, Arc::new(PanicRouter));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(CountingRouter {
+                calls: Arc::clone(&calls),
+            }),
+        );
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
@@ -9658,6 +11141,10 @@ pub mod tests {
                 Some(Arc::clone(&payload)),
             )
             .expect("push with precomputed routing should succeed");
+        assert!(
+            calls.load(Ordering::Relaxed) > 0,
+            "precomputed plan admission should validate against current routing"
+        );
 
         let routing = queue
             .routing_decisions
@@ -9665,11 +11152,6 @@ pub mod tests {
             .expect("routing decision should exist");
         assert_eq!(routing.lane_id, LaneId::SINGLE);
         assert_eq!(routing.dataspace_id, DataSpaceId::UNIVERSAL);
-        let stored_payload = queue
-            .tx_gossip_payloads
-            .get(&hash)
-            .expect("cached gossip payload should exist");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
         assert_eq!(
             queue.tx_gossip.pop(),
             Some(hash),
@@ -9677,8 +11159,432 @@ pub mod tests {
         );
     }
 
+    struct NativeAmxParticipantDriftFixture {
+        state: State,
+        tx: AcceptedTransaction<'static>,
+        stale_plan: RoutingPlan,
+        current_plan: RoutingPlan,
+    }
+
+    fn native_amx_participant_drift_fixture(
+        time_source: &TimeSource,
+    ) -> NativeAmxParticipantDriftFixture {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![],
+        };
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let stale_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: first_dataspace,
+                    alias: "acme-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(3),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let mut current_lanes = stale_lane_catalog.lanes().to_vec();
+        let stale_participant_lane = current_lanes
+            .iter_mut()
+            .find(|lane| lane.id == LaneId::new(2))
+            .expect("stale participant lane");
+        stale_participant_lane.alias = "elastic-lane-2".to_owned();
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "10".to_string());
+        let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
+            .expect("current lane catalog");
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.routing_policy = policy.clone();
+            nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            time_source,
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "acme").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("treasury", "bank").expect("domain id"),
+                ))),
+            ],
+            Metadata::default(),
+        );
+        let stale_plan = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            stale_lane_catalog,
+        )
+        .try_route_plan(&tx)
+        .expect("stale Native AMX plan should resolve");
+        let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
+            .try_route_plan(&tx)
+            .expect("current Native AMX plan should resolve");
+
+        NativeAmxParticipantDriftFixture {
+            state,
+            tx,
+            stale_plan,
+            current_plan,
+        }
+    }
+
     #[test]
-    fn batch_push_with_precomputed_routing_enqueues_in_order_and_caches_payloads() {
+    fn reconfigure_nexus_with_state_refreshes_stale_native_amx_participant_plan() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut fixture = native_amx_participant_drift_fixture(&time_source);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan, fixture.current_plan);
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let hash = fixture.tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                fixture.tx.clone(),
+                &fixture.state,
+                fixture.current_plan.clone(),
+                None,
+            )
+            .expect("current Native AMX plan should enqueue");
+        queue.routing_plans.insert(hash, fixture.stale_plan.clone());
+        queue
+            .routing_decisions
+            .insert(hash, fixture.stale_plan.coordinator_route());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
+
+        let nexus = fixture.state.nexus_snapshot();
+        queue.reconfigure_nexus_with_state(&nexus, &fixture.state, None);
+
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(fixture.current_plan.coordinator_route())
+        );
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&hash)
+                .map(|entry| entry.value().clone()),
+            Some(fixture.current_plan.clone())
+        );
+        assert_eq!(
+            crate::queue::routing_ledger::get_plan(&hash),
+            Some(fixture.current_plan)
+        );
+        let _ = crate::queue::routing_ledger::take_plan(&hash);
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
+    fn reconfigure_nexus_with_view_refreshes_stale_native_amx_participant_plan() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut fixture = native_amx_participant_drift_fixture(&time_source);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan, fixture.current_plan);
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let hash = fixture.tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                fixture.tx.clone(),
+                &fixture.state,
+                fixture.current_plan.clone(),
+                None,
+            )
+            .expect("current Native AMX plan should enqueue");
+        queue.routing_plans.insert(hash, fixture.stale_plan.clone());
+        queue
+            .routing_decisions
+            .insert(hash, fixture.stale_plan.coordinator_route());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
+
+        let nexus = fixture.state.nexus_snapshot();
+        let state_view = fixture.state.view();
+        queue.reconfigure_nexus(&nexus, &state_view, None);
+        drop(state_view);
+
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(fixture.current_plan.coordinator_route())
+        );
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&hash)
+                .map(|entry| entry.value().clone()),
+            Some(fixture.current_plan.clone())
+        );
+        assert_eq!(
+            crate::queue::routing_ledger::get_plan(&hash),
+            Some(fixture.current_plan)
+        );
+        let _ = crate::queue::routing_ledger::take_plan(&hash);
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
+    fn proposal_pop_refreshes_stale_native_amx_participant_plan() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut fixture = native_amx_participant_drift_fixture(&time_source);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan, fixture.current_plan);
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let hash = fixture.tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                fixture.tx.clone(),
+                &fixture.state,
+                fixture.current_plan.clone(),
+                None,
+            )
+            .expect("current Native AMX plan should enqueue");
+        queue.routing_plans.insert(hash, fixture.stale_plan.clone());
+        queue
+            .routing_decisions
+            .insert(hash, fixture.stale_plan.coordinator_route());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
+
+        let state_view = fixture.state.view();
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state_view, &mut expired)
+            .expect("proposal pop should refresh stale Native AMX plan");
+        drop(state_view);
+
+        assert!(expired.is_empty());
+        assert_eq!(guard.as_ref().hash(), hash);
+        assert_eq!(guard.routing(), fixture.current_plan.coordinator_route());
+        assert_eq!(guard.routing_plan(), fixture.current_plan);
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&hash)
+                .map(|entry| entry.value().clone()),
+            Some(fixture.current_plan.clone())
+        );
+        assert_eq!(
+            crate::queue::routing_ledger::get_plan(&hash),
+            Some(fixture.current_plan)
+        );
+        drop(guard);
+        let _ = crate::queue::routing_ledger::take_plan(&hash);
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participant_drift() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let fixture = native_amx_participant_drift_fixture(&time_source);
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let hash = fixture.tx.hash();
+        let payload = fixture.tx.entrypoint_bytes();
+        let err = queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                fixture.tx.clone(),
+                &fixture.state,
+                fixture.stale_plan,
+                Some(Arc::clone(&payload)),
+            )
+            .expect_err("direct admission must reject stale Native AMX participant legs");
+
+        assert!(
+            matches!(
+                &err,
+                Failure {
+                    err: Error::UnresolvedRoute { .. },
+                    ..
+                }
+            ),
+            "unexpected direct admission rejection: {err:?}"
+        );
+        if let Error::UnresolvedRoute { reason } = &err.err {
+            assert!(
+                reason.contains("does not match the current Nexus routing policy"),
+                "stale-plan rejection should explain current-policy mismatch: {reason}"
+            );
+        }
+        assert_eq!(
+            queue
+                .route_plan_with_state(&fixture.tx, &fixture.state)
+                .expect("current Native AMX plan should resolve"),
+            fixture.current_plan
+        );
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(queue.routing_decisions.get(&hash).is_none());
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(
+            queue.tx_gossip.pop().is_none(),
+            "rejected direct admission must not publish gossip notifications"
+        );
+    }
+
+    #[test]
+    fn batch_push_with_precomputed_routing_rejects_native_amx_participant_drift() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let fixture = native_amx_participant_drift_fixture(&time_source);
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let hash = fixture.tx.hash();
+        let err = queue
+            .push_batch_with_lane_with_state_and_routing_plans(
+                vec![(fixture.tx.clone(), fixture.stale_plan)],
+                &fixture.state,
+            )
+            .expect_err("batch admission must reject stale Native AMX participant legs");
+
+        assert!(
+            matches!(
+                &err,
+                Failure {
+                    err: Error::UnresolvedRoute { .. },
+                    ..
+                }
+            ),
+            "unexpected batch rejection: {err:?}"
+        );
+        if let Error::UnresolvedRoute { reason } = &err.err {
+            assert!(
+                reason.contains("does not match the current Nexus routing policy"),
+                "stale-plan rejection should explain current-policy mismatch: {reason}"
+            );
+        }
+        assert_eq!(
+            queue
+                .route_plan_with_state(&fixture.tx, &fixture.state)
+                .expect("current Native AMX plan should resolve"),
+            fixture.current_plan
+        );
+        assert!(!queue.txs.contains_key(&hash));
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(
+            queue.tx_gossip.pop().is_none(),
+            "rejected batch must not publish gossip notifications"
+        );
+    }
+
+    #[test]
+    fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_cache() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -9713,9 +11619,11 @@ pub mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
         assert_eq!(batch[0].payload.as_slice(), first_payload.as_slice());
+        assert!(Arc::ptr_eq(&batch[0].payload, &first_payload));
         assert_eq!(batch[0].routing, routing);
         assert_eq!(batch[1].tx.as_ref().hash(), second_hash);
         assert_eq!(batch[1].payload.as_slice(), second_payload.as_slice());
+        assert!(Arc::ptr_eq(&batch[1].payload, &second_payload));
         assert_eq!(batch[1].routing, routing);
     }
 
@@ -9858,6 +11766,23 @@ pub mod tests {
         }
     }
 
+    fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        // These queue unit tests use synthetic routers/catalogs that are not valid
+        // runtime Nexus configurations. Keep the state snapshot aligned with the
+        // queue so sync checks do not replace the explicit test router.
+        *state.nexus.write() = nexus;
+    }
+
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -9913,7 +11838,7 @@ pub mod tests {
     fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         // Prepare a representative transaction so we can size the lane capacity to its TEU weight.
@@ -9926,6 +11851,8 @@ pub mod tests {
 
         let test_lane = LaneId::new(7);
         let test_dataspace = DataSpaceId::new(1);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let state = Arc::new(state);
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -9937,10 +11864,6 @@ pub mod tests {
             router,
             &[(test_lane, test_dataspace)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
         let queue = Arc::new(queue_inner);
 
         let first_hash = first_tx.as_ref().hash();
@@ -9960,6 +11883,10 @@ pub mod tests {
             2,
             "expected both transactions before TEU gating"
         );
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let deferred = queue.enforce_lane_teu_limits(&mut guards);
         assert_eq!(
@@ -9981,6 +11908,7 @@ pub mod tests {
         assert_eq!(guards[0].routing().lane_id, test_lane);
 
         drop(guards);
+        *queue.nexus_limits.write() = QueueLimits::from_nexus(&state.nexus_snapshot());
         let deferred_tx = deferred.into_iter().next().expect("deferred tx present");
         queue
             .push(deferred_tx, state.view())
@@ -9999,10 +11927,20 @@ pub mod tests {
     fn enforce_lane_teu_limits_with_routing_plans_returns_requeue_hint() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let first_tx = accepted_tx_by_someone(&time_source);
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let first_tx = accepted_tx_with(
+            account_id.clone(),
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "teu requeue first".into(),
+            ))],
+            Metadata::default(),
+        );
         let lane_capacity = Queue::compute_teu_weight(&first_tx);
         assert!(
             lane_capacity > 0,
@@ -10011,29 +11949,50 @@ pub mod tests {
 
         let test_lane = LaneId::new(9);
         let test_dataspace = DataSpaceId::new(3);
-        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
-            lane: test_lane,
-            dataspace: test_dataspace,
-        });
-        let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router_for_routes(
-            config_factory(),
-            &time_source,
-            router,
-            &[(test_lane, test_dataspace)],
-        );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
-        let queue = Arc::new(queue_inner);
+        let (lane_catalog, dataspace_catalog) =
+            Queue::test_catalogs_for_routes(&[(test_lane, test_dataspace)]);
+        let mut lanes = lane_catalog.lanes().to_vec();
+        lanes
+            .iter_mut()
+            .find(|lane| lane.id == test_lane)
+            .expect("test lane should exist")
+            .metadata
+            .insert(
+                "scheduler.teu_capacity".to_string(),
+                lane_capacity.to_string(),
+            );
+        let lane_catalog =
+            LaneCatalog::new(lane_catalog.lane_count(), lanes).expect("lane catalog");
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog;
+        nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.routing_policy.default_lane = test_lane;
+        nexus.routing_policy.default_dataspace = test_dataspace;
+        state.set_nexus(nexus).expect("set Nexus config");
+        let state = Arc::new(state);
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
 
         let first_hash = first_tx.as_ref().hash();
         queue
             .push(first_tx, state.view())
             .expect("first push should succeed");
 
-        let second_tx = accepted_tx_by_someone(&time_source);
+        time_handle.advance(Duration::from_millis(1));
+        let second_tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "teu requeue second".into(),
+            ))],
+            Metadata::default(),
+        );
         let second_hash = second_tx.as_ref().hash();
         queue
             .push(second_tx, state.view())
@@ -10070,6 +12029,103 @@ pub mod tests {
     }
 
     #[test]
+    fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let first_fixture = native_amx_participant_drift_fixture(&time_source);
+        time_handle.advance(Duration::from_millis(1));
+        let second_fixture = native_amx_participant_drift_fixture(&time_source);
+        let mut state = first_fixture.state;
+        let first_tx = first_fixture.tx;
+        let second_tx = second_fixture.tx;
+        let first_plan = first_fixture.current_plan;
+        let second_plan = second_fixture.current_plan;
+        let coordinator = first_plan.coordinator_route();
+        assert_eq!(coordinator, second_plan.coordinator_route());
+        assert!(matches!(second_plan, RoutingPlan::NativeAmx(_)));
+
+        let first_teu = Queue::compute_teu_weight(&first_tx);
+        assert!(first_teu > 0, "expected positive TEU weight");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            let mut lanes = nexus.lane_catalog.lanes().to_vec();
+            lanes
+                .iter_mut()
+                .find(|lane| lane.id == coordinator.lane_id)
+                .expect("coordinator lane should exist")
+                .metadata
+                .insert("scheduler.teu_capacity".to_string(), first_teu.to_string());
+            nexus.lane_catalog =
+                LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        let state = Arc::new(state);
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let first_hash = first_tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                first_tx,
+                state.as_ref(),
+                first_plan,
+                None,
+            )
+            .expect("first Native AMX transaction should enqueue");
+        let second_hash = second_tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                second_tx,
+                state.as_ref(),
+                second_plan.clone(),
+                None,
+            )
+            .expect("second Native AMX transaction should enqueue");
+        assert_eq!(
+            queue
+                .queue_limits()
+                .for_lane(coordinator.lane_id)
+                .teu_capacity,
+            first_teu
+        );
+
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
+        assert_eq!(guards.len(), 2, "expected both transactions before gating");
+
+        let mut consumed = BTreeMap::new();
+        let deferred = queue
+            .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
+        assert_eq!(guards.len(), 1, "one Native AMX transaction should remain");
+        assert_eq!(deferred.len(), 1, "one Native AMX transaction should defer");
+        assert_eq!(guards[0].as_ref().hash(), first_hash);
+
+        let (deferred_tx, deferred_plan) = deferred.into_iter().next().expect("deferred tx");
+        assert_eq!(deferred_tx.as_ref().hash(), second_hash);
+        assert_eq!(
+            deferred_plan, second_plan,
+            "TEU deferral must preserve the full Native AMX routing plan"
+        );
+        assert!(matches!(deferred_plan, RoutingPlan::NativeAmx(_)));
+
+        drop(guards);
+        queue
+            .push_requeued_with_routing_plan(deferred_tx, deferred_plan, state.as_ref())
+            .expect("requeue with preserved Native AMX plan should succeed");
+
+        let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
+        assert_eq!(
+            next.len(),
+            1,
+            "deferred Native AMX transaction should requeue"
+        );
+        assert_eq!(next[0].as_ref().hash(), second_hash);
+        assert_eq!(next[0].routing_plan(), second_plan);
+    }
+
+    #[test]
     fn overweight_lane_not_starved_when_not_first_in_batch() {
         struct SequenceRouter {
             decisions: parking_lot::Mutex<Vec<RoutingDecision>>,
@@ -10082,15 +12138,17 @@ pub mod tests {
             }
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let lane_a = LaneId::new(1);
         let lane_b = LaneId::new(2);
         let dataspace_a = DataSpaceId::new(11);
         let dataspace_b = DataSpaceId::new(12);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(lane_a, dataspace_a), (lane_b, dataspace_b)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let first_tx = accepted_tx_by_someone(&time_source);
         let second_tx = accepted_tx_by_someone(&time_source);
@@ -10115,10 +12173,6 @@ pub mod tests {
             router,
             &[(lane_a, dataspace_a), (lane_b, dataspace_b)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: lane_b_bounds,
-            per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
-        };
         let queue = Arc::new(queue_inner);
 
         queue
@@ -10130,6 +12184,10 @@ pub mod tests {
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: lane_b_bounds,
+            per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
+        };
 
         let mut consumed = BTreeMap::new();
         let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
@@ -10146,17 +12204,19 @@ pub mod tests {
 
     #[test]
     fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
+        let test_lane = LaneId::new(11);
+        let test_dataspace = DataSpaceId::new(5);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let first_tx = accepted_tx_by_someone(&time_source);
         let lane_capacity = Queue::compute_teu_weight(&first_tx);
         assert!(lane_capacity > 0, "expected positive TEU weight");
 
-        let test_lane = LaneId::new(11);
-        let test_dataspace = DataSpaceId::new(5);
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -10168,10 +12228,6 @@ pub mod tests {
             router,
             &[(test_lane, test_dataspace)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
         let queue = Arc::new(queue_inner);
 
         queue
@@ -10185,6 +12241,10 @@ pub mod tests {
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let mut consumed = BTreeMap::new();
         consumed.insert(test_lane, lane_capacity);
@@ -10209,16 +12269,18 @@ pub mod tests {
         where
             F: FnMut(&mut Vec<TransactionGuard>),
         {
+            let test_lane = LaneId::new(17);
+            let test_dataspace = DataSpaceId::new(4);
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+            let mut state = State::new(world_with_test_domains(), kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+            let state = Arc::new(state);
             let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
             let lane_capacity = Queue::compute_teu_weight(first_tx);
             assert!(lane_capacity > 0, "expected positive TEU weight");
 
-            let test_lane = LaneId::new(17);
-            let test_dataspace = DataSpaceId::new(4);
             let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
                 lane: test_lane,
                 dataspace: test_dataspace,
@@ -10230,10 +12292,6 @@ pub mod tests {
                 router,
                 &[(test_lane, test_dataspace)],
             );
-            *queue_inner.nexus_limits.write() = QueueLimits {
-                fallback: scheduling,
-                per_lane: BTreeMap::from([(test_lane, scheduling)]),
-            };
             let queue = Arc::new(queue_inner);
 
             queue
@@ -10246,6 +12304,10 @@ pub mod tests {
             let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
             assert_eq!(guards.len(), 2, "expected both transactions before gating");
             reorder(&mut guards);
+            *queue.nexus_limits.write() = QueueLimits {
+                fallback: scheduling,
+                per_lane: BTreeMap::from([(test_lane, scheduling)]),
+            };
 
             let mut consumed = BTreeMap::new();
             let deferred =
@@ -10609,13 +12671,15 @@ pub mod tests {
             }
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let expected_lane = LaneId::new(5);
         let expected_dataspace = DataSpaceId::new(13);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected_lane, expected_dataspace)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
@@ -10693,11 +12757,19 @@ pub mod tests {
 
     #[test]
     fn proposal_pop_refreshes_stale_routing_metadata() {
+        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(
+            &mut state,
+            &[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (refreshed.lane_id, refreshed.dataspace_id),
+            ],
+        );
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
@@ -11471,6 +13543,55 @@ pub mod tests {
         assert_eq!(guard.as_ref().hash(), hash);
         assert_eq!(guard.routing(), routing);
         drop(guard);
+    }
+
+    #[test]
+    fn push_requeued_with_routing_plan_rejects_native_amx_participant_drift() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let fixture = native_amx_participant_drift_fixture(&time_source);
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let hash = fixture.tx.hash();
+        let err = queue
+            .push_requeued_with_routing_plan(fixture.tx.clone(), fixture.stale_plan, &fixture.state)
+            .expect_err("requeue must reject stale Native AMX participant legs");
+
+        assert!(
+            matches!(
+                &err,
+                Failure {
+                    err: Error::UnresolvedRoute { .. },
+                    ..
+                }
+            ),
+            "unexpected requeue rejection: {err:?}"
+        );
+        if let Error::UnresolvedRoute { reason } = &err.err {
+            assert!(
+                reason.contains("does not match the current Nexus routing policy"),
+                "stale-plan rejection should explain current-policy mismatch: {reason}"
+            );
+        }
+        assert_eq!(
+            queue
+                .route_plan_with_state(&fixture.tx, &fixture.state)
+                .expect("current Native AMX plan should resolve"),
+            fixture.current_plan
+        );
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(queue.routing_decisions.get(&hash).is_none());
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(
+            queue.tx_gossip.pop().is_none(),
+            "rejected requeue must not publish gossip notifications"
+        );
     }
 
     #[tokio::test]

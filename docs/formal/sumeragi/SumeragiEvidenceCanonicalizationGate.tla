@@ -309,7 +309,14 @@ EvidenceCanonicalizationMatchesSpec ==
        /\ ActualRecordedView(c) = SpecRecordedView(c)
        /\ ActualPenaltyFlagsClear(c) = SpecPenaltyFlagsClear(c)
 
-SafetyFast == EvidenceCanonicalizationMatchesSpec
+EvidenceCanonicalizationExactness ==
+  /\ EvidenceCanonicalizationMatchesSpec
+EvidenceCanonicalizationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EvidenceCanonicalizationExactness
+
+SafetyFast ==
+  EvidenceCanonicalizationExactness
 
 BugDoubleSwappedNotCanonical ==
   ActualKey("double_swapped") = SpecKey("double_swapped")

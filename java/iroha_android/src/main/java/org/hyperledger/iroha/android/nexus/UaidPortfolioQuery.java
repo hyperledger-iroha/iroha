@@ -28,11 +28,11 @@ public final class UaidPortfolioQuery {
 
   public Map<String, String> toQueryParameters() {
     final Map<String, String> params = new LinkedHashMap<>();
-    if (asset != null && !asset.isBlank()) {
-      params.put("asset", asset.trim());
+    if (asset != null) {
+      params.put("asset", asset);
     }
-    if (scope != null && !scope.isBlank()) {
-      params.put("scope", scope.trim());
+    if (scope != null) {
+      params.put("scope", scope);
     }
     return Collections.unmodifiableMap(params);
   }
@@ -66,10 +66,13 @@ public final class UaidPortfolioQuery {
       if (trimmed.isEmpty()) {
         throw new IllegalArgumentException(field + " must not be blank");
       }
+      if (!trimmed.equals(raw)) {
+        throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+      }
       if (trimmed.indexOf(':') >= 0) {
         throw new IllegalArgumentException(field + " must use a canonical asset selector");
       }
-      return trimmed;
+      return raw;
     }
   }
 }

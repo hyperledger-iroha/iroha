@@ -213,6 +213,17 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+BlockSyncQcStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+BlockSyncQcStatusExactness ==
+  /\ BlockSyncQcStatusActionsMatchSpec
+
+BlockSyncQcStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncQcStatusExactness
+
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

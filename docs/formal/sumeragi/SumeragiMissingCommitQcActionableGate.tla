@@ -449,4 +449,12 @@ MissingCommitQcActionableSafetyAnchors ==
 Safety ==
   MissingCommitQcActionableSafetyAnchors
 
+MissingCommitQcActionableExactness ==
+  /\ MissingCommitQcActionableCoreSafety
+  /\ MissingCommitQcActionableSafetyAnchors
+
+MissingCommitQcActionableCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingCommitQcActionableExactness
+
 ====

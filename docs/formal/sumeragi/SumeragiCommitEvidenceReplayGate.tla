@@ -305,6 +305,10 @@ CommitEvidenceReplayExactness ==
   /\ CommitEvidenceReplayKindExact
   /\ CommitEvidenceReplayTargetExact
 
+CommitEvidenceReplayCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitEvidenceReplayExactness
+
 SafetyFast ==
   CommitEvidenceReplayExactness
 

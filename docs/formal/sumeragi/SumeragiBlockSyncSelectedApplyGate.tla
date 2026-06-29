@@ -596,11 +596,18 @@ SparseAndReady ==
   /\ ActualQcToApply("ready_for_qc") = SpecQcToApply("ready_for_qc")
   /\ ActualQcToApply("not_ready_unknown_after") = SpecQcToApply("not_ready_unknown_after")
 
-SafetyFast ==
+BlockSyncSelectedApplyExactness ==
   /\ NonextendingAndOwner
   /\ RecoveryMode
   /\ SignedQuorumRepair
   /\ SparseAndReady
+
+BlockSyncSelectedApplyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedApplyExactness
+
+SafetyFast ==
+  BlockSyncSelectedApplyExactness
 
 =============================================================================
 ====

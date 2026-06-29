@@ -1,0 +1,35 @@
+{
+  "decision_id_hex": "26092e341f722c74262168aff9fac642892227085f7b9d54628b61825f1a6ddf",
+  "degradation_reasons": [
+    "feed:xor-usd-secondary:collector_degraded"
+  ],
+  "degraded": true,
+  "effective_at_unix": 1700604800,
+  "feeds": [
+    {
+      "evidence_digest_hex": "32c34bb15cd01eb770042b57990e1d393c31ea6aad097aed607fb530191d5a42",
+      "feed_id": "xor-usd-primary",
+      "observed_at_unix": 1700000000,
+      "source": "governance-primary",
+      "status": "ok",
+      "version": 1,
+      "weight_bps": 6000,
+      "xor_usd_micros": 2000000
+    },
+    {
+      "evidence_digest_hex": "fe241bccd335fb594ab50451b9bcec8a389b9585dcb039e82d9b3e93bbb9b2e8",
+      "feed_id": "xor-usd-secondary",
+      "observed_at_unix": 1700604690,
+      "source": "market-secondary",
+      "status": "degraded",
+      "version": 1,
+      "weight_bps": 4000,
+      "xor_usd_micros": 2050000
+    }
+  ],
+  "max_divergence_bps": 500,
+  "max_feed_age_secs": 300,
+  "norito_bytes_hex": "4e52543000001c86da3886ac282e47bc14a2aec4a4a9004701000000000000452afd65dda9780d0201012026092e341f722c74262168aff9fac642892227085f7b9d54628b61825f1a6ddf08802b5d650000000008a0d21e0000000000082c0100000000000002f401ce010200000000000000620101100f786f722d7573642d7072696d6172791312676f7665726e616e63652d7072696d6172790800f15365000000000880841e00000000000270172032c34bb15cd01eb770042b57990e1d393c31ea6aad097aed607fb530191d5a4204000000006201011211786f722d7573642d7365636f6e6461727911106d61726b65742d7365636f6e6461727908122b5d650000000008d0471f000000000002a00f20fe241bccd335fb594ab50451b9bcec8a389b9585dcb039e82d9b3e93bbb9b2e8040100000001013301000000000000002a29666565643a786f722d7573642d7365636f6e646172793a636f6c6c6563746f725f6465677261646564",
+  "version": 1,
+  "xor_usd_micros": 2020000
+}

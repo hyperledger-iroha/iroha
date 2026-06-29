@@ -255,9 +255,16 @@ TimingMonitorCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == TimingMonitorCoreSafety
+TimingMonitorExactness ==
+  /\ TimingMonitorCoreSafety
 
-SafetyFast == TimingMonitorCoreSafety
+TimingMonitorCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TimingMonitorExactness
+
+NoBugInvariant == TimingMonitorExactness
+
+SafetyFast == TimingMonitorExactness
 
 BugGapThresholdStrict == NoBugInvariant
 BugCostThresholdStrict == NoBugInvariant

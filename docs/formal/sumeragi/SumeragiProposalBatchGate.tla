@@ -326,8 +326,14 @@ ProposalBatchMatchesSpec ==
   /\ \A c \in TrimCases: ActualTrimOutput(c) = SpecTrimOutput(c)
   /\ \A c \in CanonCases: ActualCanonOutput(c) = SpecCanonOutput(c)
 
+ProposalBatchExactness ==
+  /\ ProposalBatchMatchesSpec
+ProposalBatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalBatchExactness
+
 SafetyFast ==
-  ProposalBatchMatchesSpec
+  ProposalBatchExactness
 
 BugTrimNoExcessRemoves ==
   ActualTrimOutput("trim_no_excess") = SpecTrimOutput("trim_no_excess")

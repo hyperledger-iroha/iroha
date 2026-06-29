@@ -560,8 +560,24 @@ BlockingPendingBlocksCoreSafety ==
   /\ ProgressVoteAndQcEvidenceBlocks
   /\ ProgressRescheduleAndAgeWindow
 
-NoBugInvariant == BlockingPendingBlocksCoreSafety
+BlockingPendingBlocksExactness ==
+  /\ ClassicResultMatchesSpec
+  /\ ProgressResultMatchesSpec
+  /\ ClassicCountsMatchPredicate
+  /\ ProgressCountsMatchPredicate
+  /\ ClassicCommitQcDominatesReschedule
+  /\ ClassicRescheduleAndFastUnblockRelease
+  /\ ClassicRequiresActiveTipPending
+  /\ ProgressZeroQuorumFallsBackToClassic
+  /\ ProgressRejectsAbortedAndOffTip
+  /\ ProgressVoteAndQcEvidenceBlocks
+  /\ ProgressRescheduleAndAgeWindow
+BlockingPendingBlocksCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockingPendingBlocksExactness
 
-SafetyFast == BlockingPendingBlocksCoreSafety
+NoBugInvariant == BlockingPendingBlocksExactness
+
+SafetyFast == BlockingPendingBlocksExactness
 
 ====

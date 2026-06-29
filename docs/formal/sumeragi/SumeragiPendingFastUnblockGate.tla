@@ -335,8 +335,22 @@ PendingFastUnblockCoreSafety ==
   /\ AgeGateRequiresTimeout
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == PendingFastUnblockCoreSafety
+PendingFastUnblockExactness ==
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ DueAgeAllowsFastUnblock
+  /\ TimeoutBoundaryIsInclusive
+  /\ ZeroTimeoutDisablesFastUnblock
+  /\ LocalEvidenceShortCircuits
+  /\ ConsensusEvidenceShortCircuits
+  /\ AgeGateRequiresTimeout
+  /\ LookupShapeMatchesShortCircuit
+PendingFastUnblockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingFastUnblockExactness
 
-SafetyFast == PendingFastUnblockCoreSafety
+NoBugInvariant == PendingFastUnblockExactness
+
+SafetyFast == PendingFastUnblockExactness
 
 ====

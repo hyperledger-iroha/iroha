@@ -334,7 +334,16 @@ RbcRebroadcastActionCoreSafety ==
   /\ ProgressMatchesActions
   /\ StableActions
 
+RbcRebroadcastActionExactness ==
+  /\ ActionExact
+  /\ ProgressMatchesActions
+  /\ StableActions
+
+RbcRebroadcastActionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcRebroadcastActionExactness
+
 SafetyFast ==
-  RbcRebroadcastActionCoreSafety
+  RbcRebroadcastActionExactness
 
 ====

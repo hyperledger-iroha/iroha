@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 49440dd90a3a1aa76725fe645e3d85f234e06a9d044a79dec879aaf91e29f658
-source_last_modified: "2026-06-25T04:27:05.429354+00:00"
+source_hash: 1b3a52b360818291e0a6e4876a6a9372cbe80ec8856504fc4bb7c5823943a1de
+source_last_modified: "2026-06-25T17:05:30+00:00"
 translation_last_reviewed: 2026-06-25
 ---
 
@@ -38,14 +38,21 @@ into the Governance DAG filesystem/CAR queue, optional signed runtime DAG
 external payloads, and Torii readback endpoints for locally published cycles,
 entry inclusion proofs, bounded proof-token issuance indexes, a bounded local
 explorer snapshot, a local browser transparency explorer UI, and gateway
-proof-token verification.
+proof-token verification, plus payload-free publication readback canary
+tooling.
 The local node can also derive and publish
 proof-token issuance records from signed `SFGT` frames after verifying the
 Ed25519 signer key. `iroha::client` and `iroha sorafs transparency
-cycles|explorer|explorer-canary|tokens|token-issuance|source-entry|privacy-aggregate`
+cycles|explorer|explorer-canary|publication-canary|tokens|token-issuance|source-entry|privacy-aggregate`
 now wrap the local readback, rollout-evidence canaries, signed proof-token
 issuance and source-entry ingest, and privacy aggregate source-event/publish-due
-surfaces for operator automation.
+surfaces for operator automation. `scripts/check_sorafs_transparency_rollout_evidence.py`
+now validates the collected source-entry, publication, privacy aggregate,
+proof-token issuance, and explorer canary artifacts before a rollout can claim
+ready status. The gate now also rejects mixed transparency bundles: publication
+evidence must bind to a valid source-entry `source_batch_digest_hex`, while
+privacy aggregate, proof-token issuance, and explorer evidence must bind to a
+source-bound publication `cycle_digest_hex` from the same rollout bundle.
 The local appeal-finance
 report, weekly rollup, and
 settlement receipt dashboards also bound their returned Governance DAG source
@@ -207,6 +214,13 @@ moderation ledger publication service described by the original plan.
   `limit` with a default of 50 and a max of 500. Cycle detail readback uses the
   same `limit` contract for the returned `publication.proofs` array while
   keeping verification counts over the full decoded publication.
+- `iroha sorafs transparency publication-canary [--cycle-id HEX...]
+  [--limit N] [--torii-url URL] [--out PATH]` probes the deployed/public cycle
+  list and optional cycle-detail routes, requires publisher identity fields
+  unless explicitly waived, checks anchor metadata and verification flags, and
+  emits `sorafs.transparency.publication_canary.v1` evidence with status,
+  sizes, and BLAKE3 response hashes without archiving publication bodies,
+  source entries, or private payload material.
 - Torii exposes `/v1/sorafs/transparency/explorer` as a local read-only
   explorer snapshot. The endpoint composes the Governance DAG publish-index into
   cycle summaries, proof-token issuance summaries, payload-kind counts, source
@@ -265,6 +279,37 @@ moderation ledger publication service described by the original plan.
   request/response sizes, status, and BLAKE3 hashes, and emits
   `sorafs.transparency.source_entry.canary.v1` evidence without archiving
   source payload fields, private payload material, or response bodies.
+- `scripts/check_sorafs_transparency_rollout_evidence.py --evidence-dir DIR
+  [--summary-out PATH]` validates collected SFM-4c rollout artifacts and emits
+  `sorafs.transparency.rollout_evidence_gate.v1` summary JSON. The gate
+  requires source-entry, publication, privacy aggregate, proof-token issuance,
+  and explorer canary schemas, requires every included canary to pass, verifies
+  all supported source-entry producer kinds, requires publication list and
+  cycle-detail probes, verifies publication anchor/publisher/verification
+  signals, requires both aggregate source-event and publish-due probes, checks
+  the explorer snapshot/UI/proof-token index routes, and recursively rejects raw
+  payload, request/response body, bearer-token, signed-transaction,
+  proof-token frame, private-key, and private digest-key fields. Publication
+  evidence must match a valid source-entry `source_batch_digest_hex`, and
+  privacy aggregate, proof-token issuance, and explorer evidence must match a
+  source-bound publication `cycle_digest_hex`; publication cycles that fail
+  source-entry binding do not anchor downstream rollout evidence. The checker
+  supports shell-style `@ARGFILE` inputs for direct replay of reviewed artifact
+  directories.
+- `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL
+  --out-dir DIR ...` is the operator harness for collecting the required
+  source-entry, privacy aggregate, proof-token issuance, publication, and
+  explorer canary artifacts and then running the rollout evidence verifier. It
+  fails before live submission when required source-entry kinds, privacy
+  source-event/publish-due payloads, proof-token issuance payloads, or
+  publication cycle-detail ids are missing, accepts repeated `--iroha-arg ARG`
+  values for runtime-only client config/signing options that must be passed
+  before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
+  operator inputs, and `--dry-run` emits the command plan without contacting
+  live services. `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
+  documents the required source-entry kinds, aggregate probes, proof-token
+  issuance probe, cycle id, Torii URL, and runtime-only client-config path
+  without storing signing material.
 
 ## Target Ledger Model
 
@@ -292,10 +337,10 @@ verify the same canonical payloads used for publication.
 | Component | Responsibility | Local state |
 |-----------|----------------|-------------|
 | Event ingestor | Consumes moderation, GAR, appeal, proof-token issuance, legal-hold/redaction notice, and evidence-viewer events. | Local generic source-entry intake, concrete GAR/moderation/appeal source adapters, canonical-authenticated Torii source-entry ingestion for those concrete payloads plus public legal-hold/redaction/evidence-access summaries, canonical-authenticated Torii proof-token issuance feed ingestion, automatic local moderation/appeal source recording, signed `SFGT` proof-token issuance frame ingest, client/CLI source-entry and proof-token issuance submission tooling, and payload-free source-entry/proof-token issuance producer canary evidence tooling are shipped; deployed GAR/moderation/appeal/legal-hold/redaction/evidence-viewer/proof-token issuance service producers and captured rollout evidence remain open. |
-| Ledger builder | Builds cycle headers, entry roots, proofs, and publisher signatures. | V1 payload/proof/publication helpers shipped in the data model; local source-entry cycle builder, local node publication to filesystem/CAR, and signed runtime DAG external payloads are shipped; deployed anchoring is not shipped. |
-| Proof API | Serves cycle metadata, entries, inclusion proofs, proof-token issuance indexes, explorer snapshots, and token verification. | Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped with bounded list/explorer arrays, local verifier throttling, local browser UI route, client/CLI readback helpers, and payload-free explorer canary tooling; deployed service hardening and captured public rollout evidence are not shipped. |
-| Receipt explorer | Public UI for browsing cycles and verifying entries. | Local explorer snapshot API, static Torii browser UI, CLI readback bridge, and `iroha sorafs transparency explorer-canary` rollout-evidence tooling are shipped; captured deployed public rollout evidence is not shipped. |
-| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, canonical-authenticated Torii source-event ingestion, a canonical-authenticated local publish-due trigger, client/CLI producer plus scheduler trigger tooling, and privacy aggregate canary evidence tooling are shipped; captured deployed source-event producer and scheduler rollout evidence remains open. |
+| Ledger builder | Builds cycle headers, entry roots, proofs, and publisher signatures. | V1 payload/proof/publication helpers shipped in the data model; local source-entry cycle builder, local node publication to filesystem/CAR, signed runtime DAG external payloads, payload-free publication readback canary tooling, and the rollout evidence verifier are shipped; deployed anchoring and captured service rollout evidence remain open. |
+| Proof API | Serves cycle metadata, entries, inclusion proofs, proof-token issuance indexes, explorer snapshots, and token verification. | Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped with bounded list/explorer arrays, local verifier throttling, local browser UI route, client/CLI readback helpers, payload-free explorer canary tooling, and rollout evidence summary validation; deployed service hardening and captured public rollout evidence are not shipped. |
+| Receipt explorer | Public UI for browsing cycles and verifying entries. | Local explorer snapshot API, static Torii browser UI, CLI readback bridge, `iroha sorafs transparency explorer-canary` rollout-evidence tooling, and summary-gate validation are shipped; captured deployed public rollout evidence is not shipped. |
+| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, canonical-authenticated Torii source-event ingestion, a canonical-authenticated local publish-due trigger, client/CLI producer plus scheduler trigger tooling, privacy aggregate canary evidence tooling, and rollout evidence summary validation are shipped; captured deployed source-event producer and scheduler rollout evidence remains open. |
 
 Document only the local `/v1/sorafs/transparency/*` readback,
 canonical-authenticated source-entry ingest, privacy aggregate source-event
@@ -314,7 +359,9 @@ shipped until the live builder, deployment, and explorer paths exist.
   the shipped `iroha sorafs transparency source-entry canary --source-entry
   KIND=PATH` tooling.
 - Attach deployed publisher identities, anchoring, and service rollout evidence
-  around the shipped deterministic source-entry cycle builder.
+  around the shipped deterministic source-entry cycle builder, then capture
+  payload-free readback evidence with the shipped `iroha sorafs transparency
+  publication-canary` tooling.
 - Wire deployed source-event producers and scheduler jobs, then capture
   operational rollout evidence with the shipped privacy aggregate canary around
   the shipped `/v1/sorafs/transparency/privacy-aggregates/source-events` route,
@@ -330,6 +377,19 @@ shipped until the live builder, deployment, and explorer paths exist.
   around the shipped signed-frame ingest adapter, canonical-authenticated feed,
   client/CLI submission wrapper, payload-free proof-token issuance canary, and
   readback index.
+- After collecting deployed source-entry, publication, privacy aggregate,
+  proof-token issuance, and explorer canary artifacts, either run
+  `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL
+  --out-dir DIR ...` end to end or run
+  `scripts/check_sorafs_transparency_rollout_evidence.py --evidence-dir DIR
+  --summary-out PATH` over an equivalent artifact directory. Keep production
+  promotion blocked unless the summary status is `ready`.
+- For reviewed operator runs, copy the shape from
+  `scripts/examples/sorafs_transparency_rollout_evidence.args.example` into a
+  runtime-only argument file, replace every payload and cycle placeholder, and
+  run the harness with `@ARGFILE --dry-run` before live submission. Do not store
+  signing keys, bearer tokens, private digest keys, or raw canary response
+  bodies in the argument file or rollout artifact directory.
 - Add end-to-end tests for live ingest, deployed ledger publication,
   live proof-token issuance/explorer linking, deployed redaction/legal-hold feed
   wiring, and deployed scheduler stale-cycle rollout evidence.
@@ -362,6 +422,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-adapte
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-source-api cargo test -j 1 -p iroha_torii transparency_source_entry_endpoint --lib --features app_api -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-privacy-source-api cargo test -j 1 -p iroha_torii privacy_aggregate_source_event_endpoint --lib --features app_api -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-privacy-source-api cargo test -j 1 -p iroha_torii privacy_aggregate_publish_due_endpoint --lib --features app_api -- --nocapture
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_publication_canary -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-client cargo test -j 1 -p iroha sorafs_transparency_privacy_aggregate --lib -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-operator-service cargo test -j 1 -p iroha_cli transparency_privacy_aggregate -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-proof-token-feed-api cargo test -j 1 -p iroha_torii transparency_proof_token_issuance_endpoint --lib --features app_api -- --nocapture
@@ -378,6 +439,7 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-proof-token-ingest 
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-api cargo test -j 1 -p iroha_torii transparency_ --lib --features app_api -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-proof-token-index cargo test -j 1 -p iroha_torii transparency_proof_token_issuance --lib --features app_api -- --nocapture
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-transparency-api cargo test -j 1 -p iroha_torii path_group_builders_expose_expected_routes --lib --features app_api -- --nocapture
+python3 -m pytest scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py
 ```
 
 Add dedicated SFM-4c live ingest, deployed publication, live proof-token feed,

@@ -1,0 +1,35 @@
+# Example arguments for the SF-12 Governance DAG rollout evidence collection planner.
+# Supply reviewed, payload-free staged evidence paths. Run with:
+#   python3 scripts/run_sorafs_governance_dag_rollout_evidence.py @scripts/examples/sorafs_governance_dag_rollout_collection.args.example --dry-run
+--out-dir
+artifacts/sorafs/governance-dag/staged
+--summary-out
+artifacts/sorafs/governance-dag/staged/rollout-summary.json
+--max-evidence-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-pin-lag-secs
+1800
+--max-head-age-secs
+1800
+--min-blocks
+4
+--min-payload-kinds
+6
+--ingest-service-evidence
+artifacts/sorafs/governance-dag/staged/ingest-service.json
+--publisher-service-evidence
+artifacts/sorafs/governance-dag/staged/publisher-service.json
+--mirror-datastore-evidence
+artifacts/sorafs/governance-dag/staged/mirror-datastore.json
+--operator-recovery-evidence
+artifacts/sorafs/governance-dag/staged/operator-recovery.json
+--dashboard-api-evidence
+artifacts/sorafs/governance-dag/staged/dashboard-api.json
+--observability-evidence
+artifacts/sorafs/governance-dag/staged/observability.json
+--ipfs-ipns-e2e-evidence
+artifacts/sorafs/governance-dag/staged/ipfs-ipns-e2e.json
+--governance-approval-evidence
+artifacts/sorafs/governance-dag/staged/governance-approval.json

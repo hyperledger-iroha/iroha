@@ -362,4 +362,16 @@ NoBugInvariant == FrontierBodyGapPayloadDrainUrgentCoreSafety
 
 SafetyFast == FrontierBodyGapPayloadDrainUrgentCoreSafety
 
+FrontierBodyGapPayloadDrainUrgentExactness ==
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ SlotShapeRequired
+  /\ EachEvidenceSourceCanDriveUrgency
+  /\ EvidenceRequiredBeforeBacklog
+  /\ RelevantBacklogRequired
+  /\ AnyPayloadBacklogCanDriveUrgency
+FrontierBodyGapPayloadDrainUrgentCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierBodyGapPayloadDrainUrgentExactness
+
 ====

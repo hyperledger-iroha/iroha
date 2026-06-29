@@ -296,7 +296,7 @@ LookupShapeMatchesShortCircuit ==
   /\ \A c \in Cases \ LocalAuthoritativeCases:
        CheckRbcSessions \in ImplementationActions(c)
 
-NoBugInvariant ==
+AuthoritativeBlockPayloadCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ LocalAuthoritativePayloadsShortCircuit
@@ -305,6 +305,20 @@ NoBugInvariant ==
   /\ AbsentPayloadRemainsMissing
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+AuthoritativeBlockPayloadExactness ==
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ LocalAuthoritativePayloadsShortCircuit
+  /\ RejectedLocalOwnersNeedRbcFallback
+  /\ RbcHashAndAuthorityFilter
+  /\ AbsentPayloadRemainsMissing
+  /\ LookupShapeMatchesShortCircuit
+AuthoritativeBlockPayloadCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ AuthoritativeBlockPayloadExactness
+
+NoBugInvariant == AuthoritativeBlockPayloadExactness
+
+SafetyFast == AuthoritativeBlockPayloadExactness
 
 ====

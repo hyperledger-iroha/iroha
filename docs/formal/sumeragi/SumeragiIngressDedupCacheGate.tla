@@ -341,10 +341,16 @@ BlockPayloadDedupAccountingMatchesBuckets ==
   /\ LenIncludesAllBuckets \in ImplementationActions(LenSumsBuckets)
   /\ LenForKeyUsesSelectedBucket \in ImplementationActions(LenForKeyRoutes)
 
-SafetyFast ==
+IngressDedupCacheExactness ==
   /\ ActionsMatchSpec
   /\ GenericDedupCacheMatchesContract
   /\ BlockPayloadDedupRoutesByKind
   /\ BlockPayloadDedupAccountingMatchesBuckets
+
+IngressDedupCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ IngressDedupCacheExactness
+
+SafetyFast == IngressDedupCacheExactness
 
 ====

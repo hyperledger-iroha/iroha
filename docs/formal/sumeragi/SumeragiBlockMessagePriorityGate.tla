@@ -133,10 +133,10 @@ BlockMessageProposalAndCertificatePriorityExactness ==
   /\ ProposalAndCertificatePrioritySafety
 
 BlockMessagePriorityExactness ==
-  /\ BlockMessageSyncPriorityExactness
-  /\ BlockMessageVrfAndExecPriorityExactness
-  /\ BlockMessageRbcPriorityExactness
-  /\ BlockMessageProposalAndCertificatePriorityExactness
+  /\ BlockSyncPrioritySafety
+  /\ VrfAndExecPrioritySafety
+  /\ RbcPrioritySafety
+  /\ ProposalAndCertificatePrioritySafety
   /\ BlockMessagePrioritySafetyAnchors
 
 Safety == BlockMessagePriorityExactness
@@ -145,7 +145,6 @@ SafetyFast == Safety
 
 BlockMessagePriorityCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ BlockMessagePrioritySafetyAnchors
+  /\ BlockMessagePriorityExactness
 
 ====

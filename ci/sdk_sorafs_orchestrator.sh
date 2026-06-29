@@ -22,18 +22,106 @@ fi
 
 mkdir -p "${RUN_DIR}" "${FIXTURE_SNAPSHOT_DIR}"
 ln -sfn "${RUN_DIR}" "${ARTIFACT_ROOT}/latest"
-: >"${RESULTS_TSV}"
+SORAFS_SDK_TRUNCATE_PATH="${RESULTS_TSV}" python3 <<'PY'
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(os.environ["SORAFS_SDK_TRUNCATE_PATH"])
+
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def validate_sdk_path(path: pathlib.Path, label: str) -> None:
+    if path.is_symlink():
+        sys.exit(f"[sorafs-sdk] {label} must not be a symlink: {path}")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            sys.exit(f"[sorafs-sdk] {label} parent must not be a symlink: {parent}")
+        if parent.exists() and not parent.is_dir():
+            sys.exit(f"[sorafs-sdk] {label} parent must be a directory: {parent}")
+
+validate_sdk_path(path, "results TSV")
+fd = os.open(path, write_open_flags(), 0o666)
+os.close(fd)
+PY
 
 echo "[sorafs-sdk] writing parity artefacts to ${RUN_DIR}"
 
 copy_fixture_file() {
   local source_file="${FIXTURE_DIR}/$1"
   local target_file="${FIXTURE_SNAPSHOT_DIR}/$1"
-  if [[ -f "${source_file}" ]]; then
-    cp "${source_file}" "${target_file}"
-  else
-    echo "[sorafs-sdk] warning: fixture file missing (${source_file})" >&2
-  fi
+  SORAFS_SDK_COPY_SOURCE="${source_file}" \
+  SORAFS_SDK_COPY_TARGET="${target_file}" \
+  python3 <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+source = pathlib.Path(os.environ["SORAFS_SDK_COPY_SOURCE"])
+target = pathlib.Path(os.environ["SORAFS_SDK_COPY_TARGET"])
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def validate_sdk_path(path: pathlib.Path, label: str) -> None:
+    if path.is_symlink():
+        sys.exit(f"[sorafs-sdk] {label} must not be a symlink: {path}")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            sys.exit(f"[sorafs-sdk] {label} parent must not be a symlink: {parent}")
+        if parent.exists() and not parent.is_dir():
+            sys.exit(f"[sorafs-sdk] {label} parent must be a directory: {parent}")
+
+def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
+    if not path.exists():
+        print(f"[sorafs-sdk] warning: fixture file missing ({path})", file=sys.stderr)
+        return None
+    validate_sdk_path(path, label)
+    path_stat = path.lstat()
+    if not stat.S_ISREG(path_stat.st_mode):
+        sys.exit(f"[sorafs-sdk] {label} must be a regular file: {path}")
+    if path_stat.st_size <= 0:
+        sys.exit(f"[sorafs-sdk] {label} missing or empty: {path}")
+    return path
+
+source = require_source(source, "fixture source")
+if source is None:
+    raise SystemExit(0)
+validate_sdk_path(target, "fixture snapshot")
+target.parent.mkdir(parents=True, exist_ok=True)
+validate_sdk_path(target, "fixture snapshot")
+
+read_fd = os.open(source, read_open_flags())
+write_fd = -1
+try:
+    write_fd = os.open(target, write_open_flags(), 0o666)
+    while True:
+        chunk = os.read(read_fd, 1024 * 1024)
+        if not chunk:
+            break
+        os.write(write_fd, chunk)
+finally:
+    os.close(read_fd)
+    if write_fd >= 0:
+        os.close(write_fd)
+PY
 }
 
 copy_fixture_file "metadata.json"
@@ -55,6 +143,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import stat
 from pathlib import Path
 
 (
@@ -68,39 +157,107 @@ from pathlib import Path
     fixture_dir,
 ) = sys.argv[1:9]
 
-def load_results(path: str) -> list[dict]:
-    results: list[dict] = []
-    if not os.path.exists(path):
-        return results
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            parts = line.split("\t", 4)
-            if len(parts) != 5:
-                continue
-            sdk, label, status, duration, command = parts
-            try:
-                duration_value = int(duration)
-            except ValueError:
-                duration_value = 0
-            results.append(
-                {
-                    "sdk": sdk,
-                    "label": label,
-                    "status": status,
-                    "duration_seconds": duration_value,
-                    "command": command,
-                }
+tsv_path = Path(tsv_path)
+metadata_path = Path(metadata_path)
+summary_path = Path(summary_path)
+matrix_path = Path(matrix_path)
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def validate_sdk_path(path: Path, label: str) -> None:
+    if path.is_symlink():
+        raise SystemExit(f"[sorafs-sdk] {label} must not be a symlink: {path}")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            raise SystemExit(
+                f"[sorafs-sdk] {label} parent must not be a symlink: {parent}"
             )
+        if parent.exists() and not parent.is_dir():
+            raise SystemExit(
+                f"[sorafs-sdk] {label} parent must be a directory: {parent}"
+            )
+
+def ensure_sdk_directory(path: Path, label: str) -> None:
+    validate_sdk_path(path, label)
+    path.mkdir(parents=True, exist_ok=True)
+    validate_sdk_path(path, label)
+    if not path.is_dir():
+        raise SystemExit(f"[sorafs-sdk] {label} must be a directory: {path}")
+
+def require_sdk_file(path: Path, label: str) -> Path:
+    validate_sdk_path(path, label)
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[sorafs-sdk] {label} missing: {path}") from exc
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise SystemExit(f"[sorafs-sdk] {label} must be a regular file: {path}")
+    return path
+
+def read_text_artifact(path: Path, label: str) -> str:
+    require_sdk_file(path, label)
+    fd = os.open(path, read_open_flags())
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def write_text_artifact(path: Path, body: str, label: str) -> None:
+    validate_sdk_path(path, label)
+    ensure_sdk_directory(path.parent, f"{label} parent directory")
+    validate_sdk_path(path, label)
+    fd = os.open(path, write_open_flags(), 0o666)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(body)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def load_results(path: Path) -> list[dict]:
+    results: list[dict] = []
+    if not path.exists():
+        return results
+    for line in read_text_artifact(path, "results TSV").splitlines():
+        if not line:
+            continue
+        parts = line.split("\t", 4)
+        if len(parts) != 5:
+            continue
+        sdk, label, status, duration, command = parts
+        try:
+            duration_value = int(duration)
+        except ValueError:
+            duration_value = 0
+        results.append(
+            {
+                "sdk": sdk,
+                "label": label,
+                "status": status,
+                "duration_seconds": duration_value,
+                "command": command,
+            }
+        )
     return results
 
-def load_metadata(path: str) -> dict:
-    if not os.path.exists(path):
+def load_metadata(path: Path) -> dict:
+    if not path.exists():
         return {}
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    return json.loads(read_text_artifact(path, "fixture metadata"))
 
 results = load_results(tsv_path)
 metadata = load_metadata(metadata_path)
@@ -117,7 +274,7 @@ summary: dict[str, object] = {
 
 if metadata:
     summary["fixture"] = {
-        "path": metadata_path,
+        "path": str(metadata_path),
         "name": metadata.get("fixture"),
         "version": metadata.get("version"),
         "profile_handle": metadata.get("profile_handle"),
@@ -127,9 +284,11 @@ if metadata:
         "timestamp_hint": metadata.get("now_unix_secs"),
     }
 
-with open(summary_path, "w", encoding="utf-8") as handle:
-    json.dump(summary, handle, indent=2)
-    handle.write("\n")
+write_text_artifact(
+    summary_path,
+    json.dumps(summary, indent=2) + "\n",
+    "SDK parity summary",
+)
 
 matrix_lines: list[str] = []
 matrix_lines.append("# SoraFS Orchestrator SDK Parity Matrix")
@@ -163,7 +322,11 @@ if results:
 else:
     matrix_lines.append("| (none) | — | — | — | — |")
 
-Path(matrix_path).write_text("\n".join(matrix_lines) + "\n", encoding="utf-8")
+write_text_artifact(
+    matrix_path,
+    "\n".join(matrix_lines) + "\n",
+    "SDK parity matrix",
+)
 
 print(f"[sorafs-sdk] parity summary written to {summary_path}")
 print(f"[sorafs-sdk] parity matrix written to {matrix_path}")
@@ -195,8 +358,46 @@ run_sdk_test() {
     status="failed"
     echo "[sorafs-sdk][${sdk}] ${label} failed" >&2
   fi
-  printf "%s\t%s\t%s\t%s\t%s\n" \
-    "${sdk}" "${label}" "${status}" "${duration}" "${command_str}" >>"${RESULTS_TSV}"
+  python3 - "${RESULTS_TSV}" "${sdk}" "${label}" "${status}" "${duration}" "${command_str}" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+fields = [field.replace("\n", " ") for field in sys.argv[2:7]]
+
+def append_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_APPEND
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def validate_sdk_path(path: pathlib.Path, label: str) -> None:
+    if path.is_symlink():
+        raise SystemExit(f"[sorafs-sdk] {label} must not be a symlink: {path}")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            raise SystemExit(
+                f"[sorafs-sdk] {label} parent must not be a symlink: {parent}"
+            )
+        if parent.exists() and not parent.is_dir():
+            raise SystemExit(
+                f"[sorafs-sdk] {label} parent must be a directory: {parent}"
+            )
+
+validate_sdk_path(path, "results TSV")
+if path.exists() and not stat.S_ISREG(path.lstat().st_mode):
+    raise SystemExit(f"[sorafs-sdk] results TSV must be a regular file: {path}")
+fd = os.open(path, append_open_flags(), 0o666)
+try:
+    os.write(fd, ("\t".join(fields) + "\n").encode("utf-8"))
+finally:
+    os.close(fd)
+PY
   return "${exit_code}"
 }
 

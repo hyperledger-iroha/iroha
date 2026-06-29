@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import kotlin.coroutines.resume
@@ -32,22 +33,38 @@ class OfflineCashConfigurationSnapshot(
         nowMs: Long,
         requiredNativeBridgeAbiVersion: Int? = null,
     ) {
+        val checkedNowMs = nonnegativeOfflineCashSnapshotTimestamp(nowMs, "nowMs")
         if (!offlinePaymentsEnabled) {
             throw OfflineCashConfigurationSnapshotException(
                 "offline_payments_disabled",
                 "Offline cash is disabled in the cached configuration snapshot.",
             )
         }
-        if (!isCanonicalOfflineCashSnapshotText(issuerPublicKeyBase64)) {
+        requireCanonicalOfflineCashSnapshotText(chainId, "chainId")
+        requireCanonicalOfflineCashSnapshotText(assetDefinitionId, "assetDefinitionId")
+        requireOptionalCanonicalOfflineCashSnapshotText(artifactSetId, "artifactSetId")
+        requireOptionalCanonicalOfflineCashSnapshotText(circuitId, "circuitId")
+        if (!isValidOfflineIssuerPublicKeyBase64(issuerPublicKeyBase64)) {
             throw OfflineCashConfigurationSnapshotException(
                 "missing_issuer_public_key",
                 "Offline cash requires a cached issuer public key before offline exchange.",
             )
         }
-        if (expiresAtMs != null && expiresAtMs <= nowMs) {
+        val checkedCreatedAtMs = nonnegativeOfflineCashSnapshotTimestamp(createdAtMs, "createdAtMs")
+        val checkedExpiresAtMs = optionalNonnegativeOfflineCashSnapshotTimestamp(
+            expiresAtMs,
+            "expiresAtMs",
+        )
+        if (checkedExpiresAtMs != null && checkedExpiresAtMs <= checkedCreatedAtMs) {
+            throw OfflineCashConfigurationSnapshotException(
+                "malformed_snapshot",
+                "Offline cash configuration snapshot field expiresAtMs must be after createdAtMs.",
+            )
+        }
+        if (checkedExpiresAtMs != null && checkedExpiresAtMs <= checkedNowMs) {
             throw OfflineCashConfigurationSnapshotException(
                 "expired",
-                "Offline cash configuration snapshot expired at $expiresAtMs.",
+                "Offline cash configuration snapshot expired at $checkedExpiresAtMs.",
             )
         }
         val checkedNativeBridgeAbiVersion = positiveNativeBridgeAbiVersion(
@@ -83,10 +100,55 @@ private fun positiveNativeBridgeAbiVersion(value: Int?, fieldName: String): Int?
     return value
 }
 
+private fun nonnegativeOfflineCashSnapshotTimestamp(value: Long, fieldName: String): Long {
+    if (value < 0L) {
+        throw OfflineCashConfigurationSnapshotException(
+            "malformed_snapshot",
+            "Offline cash configuration snapshot field $fieldName must be a nonnegative integer timestamp.",
+        )
+    }
+    return value
+}
+
+private fun optionalNonnegativeOfflineCashSnapshotTimestamp(value: Long?, fieldName: String): Long? {
+    if (value == null) return null
+    return nonnegativeOfflineCashSnapshotTimestamp(value, fieldName)
+}
+
+private fun requireCanonicalOfflineCashSnapshotText(value: String?, fieldName: String) {
+    if (!isCanonicalOfflineCashSnapshotText(value)) {
+        throw OfflineCashConfigurationSnapshotException(
+            "malformed_snapshot",
+            "Offline cash configuration snapshot field $fieldName must be a non-empty printable ASCII string with no whitespace.",
+        )
+    }
+}
+
+private fun requireOptionalCanonicalOfflineCashSnapshotText(value: String?, fieldName: String) {
+    if (value == null) return
+    requireCanonicalOfflineCashSnapshotText(value, fieldName)
+}
+
 private fun isCanonicalOfflineCashSnapshotText(value: String?): Boolean =
     value != null && value.isNotEmpty() && value.all { scalar ->
         scalar.code > 0x20 && scalar.code <= 0x7E
     }
+
+private fun isValidOfflineIssuerPublicKeyBase64(value: String?): Boolean {
+    if (!isCanonicalOfflineCashSnapshotText(value)) return false
+    if (value == null || value.contains("=")) return false
+    val normalized = value.replace('-', '+').replace('_', '/')
+    if (normalized.length % 4 == 1 || normalized.any { it !in BASE64_ALPHABET }) return false
+    val padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4)
+    val raw = try {
+        Base64.getDecoder().decode(padded)
+    } catch (_: IllegalArgumentException) {
+        return false
+    }
+    return raw.size == 32 && Base64.getEncoder().withoutPadding().encodeToString(raw) == normalized
+}
+
+private const val BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 interface OfflineCashAuditReceiptSynchronizer {
     suspend fun hasPendingAuditReceipts(): Boolean

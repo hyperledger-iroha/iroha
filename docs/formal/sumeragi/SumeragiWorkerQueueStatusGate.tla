@@ -266,9 +266,19 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-Safety ==
+WorkerQueueStatusActionsMatchSpec ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+WorkerQueueStatusExactness ==
+  /\ WorkerQueueStatusActionsMatchSpec
+
+Safety ==
+  WorkerQueueStatusExactness
+
+WorkerQueueStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerQueueStatusExactness
 
 BugVoteMapsToPayload ==
   ImplementationActions(VotesMapsCounter) = SpecActions(VotesMapsCounter)

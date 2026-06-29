@@ -272,6 +272,17 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+NexusEconomicsStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+NexusEconomicsStatusExactness ==
+  /\ NexusEconomicsStatusActionsMatchSpec
+
+NexusEconomicsStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NexusEconomicsStatusExactness
+
 BugResetKeepsFee ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

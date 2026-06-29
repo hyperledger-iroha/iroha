@@ -423,4 +423,12 @@ MissingQcReacquireActionSafetyAnchors ==
 Safety ==
   MissingQcReacquireActionSafetyAnchors
 
+MissingQcReacquireActionExactness ==
+  /\ MissingQcReacquireActionCoreSafety
+  /\ MissingQcReacquireActionSafetyAnchors
+
+MissingQcReacquireActionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcReacquireActionExactness
+
 ====

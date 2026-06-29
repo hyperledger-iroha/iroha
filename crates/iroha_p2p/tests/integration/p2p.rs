@@ -132,6 +132,8 @@ fn trust_config(
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -169,6 +171,14 @@ fn trust_config(
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:
@@ -270,6 +280,8 @@ async fn network_create() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -307,6 +319,14 @@ async fn network_create() {
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:
@@ -710,6 +730,8 @@ async fn ws_fallback_connects_and_handshakes() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -745,6 +767,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -979,6 +1005,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1014,6 +1042,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -1233,6 +1265,8 @@ async fn two_networks() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1270,6 +1304,14 @@ async fn two_networks() {
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:
@@ -1370,6 +1412,8 @@ async fn two_networks() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1407,6 +1451,14 @@ async fn two_networks() {
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:
@@ -1597,6 +1649,8 @@ async fn update_peers_triggers_immediate_connect() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1632,6 +1686,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -1733,6 +1791,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1768,6 +1828,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -1914,6 +1978,8 @@ async fn happy_eyeballs_parallel_dials() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1949,6 +2015,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -2051,6 +2121,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2086,6 +2158,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(8192).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(32_768).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -2256,6 +2332,8 @@ async fn low_topics_do_not_starve_each_other() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2291,6 +2369,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -2393,6 +2475,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2428,6 +2512,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(1024).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(1024).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -2628,6 +2716,8 @@ async fn relay_hub_routes_consensus_between_spokes() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2663,6 +2753,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -2896,6 +2990,8 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                 peer_gossip_period: PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: PEER_GOSSIP_PERIOD,
                 trust_decay_half_life:
@@ -2931,6 +3027,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 p2p_queue_cap_high: NonZeroUsize::new(4096).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(2048).unwrap(),
+                p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+                p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+                p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+                p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
                 p2p_subscriber_queue_cap:
                     iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
                 consensus_ingress_rate_per_sec:
@@ -3235,6 +3335,8 @@ async fn start_network(
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -3272,6 +3374,14 @@ async fn start_network(
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:
@@ -3447,6 +3557,8 @@ async fn tls_inbound_listener_smoke() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -3484,6 +3596,14 @@ async fn tls_inbound_listener_smoke() {
         p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:
@@ -3592,6 +3712,8 @@ async fn tls_inbound_listener_smoke() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -3625,6 +3747,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:

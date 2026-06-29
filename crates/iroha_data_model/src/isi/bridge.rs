@@ -63,9 +63,9 @@ pub struct SccpRouteManifest {
     pub disabled_reason: Option<String>,
     /// Hex-encoded destination network id used in binding evidence.
     pub network_id_hex: String,
-    /// Counterparty TairaXOR token contract address.
+    /// Counterparty `TairaXOR` token contract address.
     pub taira_xor_token_address: String,
-    /// Counterparty TairaXOR bridge contract address.
+    /// Counterparty `TairaXOR` bridge contract address.
     pub taira_xor_bridge_address: String,
     /// SCCP source bridge contract address.
     pub sccp_tron_source_bridge_address: String,

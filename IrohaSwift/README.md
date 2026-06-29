@@ -663,7 +663,11 @@ wallet flows.
 `OfflineNoteWallet` remains available for historical model and fixture
 compatibility, but its default issuer and transaction submitter surfaces fail
 closed for classic note issue, audit, redeem, and defund paths. Production
-offline payments use Kagemusha flows.
+offline payments use Kagemusha flows. When an injected compatibility issuer
+path is used, `load` records issued notes as `.issuePending` until `sync()`
+observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
+the pending note.
+
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof

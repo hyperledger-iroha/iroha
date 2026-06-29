@@ -1,0 +1,10 @@
+# Example arguments for the SFM-4c transparency rollout evidence gate.
+# Use runtime artifact locations; do not store signing keys, bearer tokens,
+# raw source-entry payloads, proof-token frames, response bodies, or private
+# digest keys.
+--evidence-dir
+artifacts/sorafs/transparency/staged
+--summary-out
+artifacts/sorafs/transparency/staged/rollout-summary.json
+--require-kind
+source_entry,publication,privacy_aggregate,proof_token_issuance,explorer

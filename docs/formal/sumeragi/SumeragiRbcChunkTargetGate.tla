@@ -199,7 +199,7 @@ PositiveSelectionRequiresCandidatesAndInput ==
     /\ CandidateCount(candidate) # 0
     /\ SelectionInput(candidate, target_count) # 0
 
-Safety ==
+RbcChunkTargetExactness ==
   /\ TargetCountMatchesSpec
   /\ SelectionMatchesSpec
   /\ NoPeersTargetZero
@@ -213,5 +213,11 @@ Safety ==
   /\ SelectionAllCandidatesWhenTargetLarge
   /\ SelectionNeverExceedsCandidates
   /\ PositiveSelectionRequiresCandidatesAndInput
+
+RbcChunkTargetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcChunkTargetExactness
+
+Safety == RbcChunkTargetExactness
 
 ====

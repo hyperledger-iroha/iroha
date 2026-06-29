@@ -16269,6 +16269,7 @@ mod tests {
                         payload: b"ciphertext".to_vec(),
                         payload_bytes: NonZeroU64::new(10).expect("nonzero"),
                         payload_commitment: Hash::new(b"ciphertext"),
+                        fhe_public_key_digest: None,
                         fhe_residual_multiple_bound: None,
                         fhe_bound_mode: None,
                         last_update_sequence: 1,

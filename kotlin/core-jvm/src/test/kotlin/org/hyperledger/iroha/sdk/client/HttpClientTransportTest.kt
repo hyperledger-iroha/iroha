@@ -25,6 +25,8 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
+import org.hyperledger.iroha.sdk.offline.OfflineListParams
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.sccp.EvmSccpPublicInputsInput
@@ -66,6 +68,99 @@ class HttpClientTransportTest {
         assertEquals("phone#retail", body["policy_id"])
         assertEquals("abcd", body["encrypted_input"])
         assertTrue(body["output_opening"] is Map<*, *>)
+    }
+
+    @Test
+    fun uaidPortfolioQueryRejectsPaddedAssetIdBeforeDispatch() {
+        val hex = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11"
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "uaid": "uaid:$hex",
+                  "totals": {"accounts": 0, "positions": 0},
+                  "dataspaces": []
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        transport.getUaidPortfolio("uaid:${hex.uppercase()}", UaidPortfolioQuery(assetId = "pkr#paynet")).join()
+        assertEquals(
+            "https://torii.example/v1/accounts/uaid%3A$hex/portfolio?asset_id=pkr%23paynet",
+            executor.lastRequest.uri.toString(),
+        )
+        val requestCount = executor.requestCount
+
+        val leading = assertFailsWith<IllegalArgumentException> {
+            transport.getUaidPortfolio("uaid:$hex", UaidPortfolioQuery(assetId = " pkr#paynet"))
+        }
+        assertTrue(leading.message?.contains("assetId must not contain surrounding whitespace") == true)
+        val trailing = assertFailsWith<IllegalArgumentException> {
+            transport.getUaidPortfolio("uaid:$hex", UaidPortfolioQuery(assetId = "pkr#paynet "))
+        }
+        assertTrue(trailing.message?.contains("assetId must not contain surrounding whitespace") == true)
+        val empty = assertFailsWith<IllegalArgumentException> {
+            transport.getUaidPortfolio("uaid:$hex", UaidPortfolioQuery(assetId = ""))
+        }
+        assertTrue(empty.message?.contains("assetId must not be blank") == true)
+        assertEquals(requestCount, executor.requestCount)
+    }
+
+    @Test
+    fun uaidPathLiteralRejectsPaddedInputBeforeDispatch() {
+        val hex = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11"
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "uaid": "uaid:$hex",
+                  "totals": {"accounts": 0, "positions": 0},
+                  "dataspaces": []
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        transport.getUaidPortfolio("UAID:${hex.uppercase()}").join()
+        assertEquals(
+            "https://torii.example/v1/accounts/uaid%3A$hex/portfolio",
+            executor.lastRequest.uri.toString(),
+        )
+        val requestCount = executor.requestCount
+
+        for (uaid in listOf(" uaid:$hex", "uaid:$hex ", "uaid: $hex")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                transport.getUaidPortfolio(uaid)
+            }
+            assertTrue(error.message?.contains("uaid portfolio must not contain surrounding whitespace") == true)
+            assertEquals(requestCount, executor.requestCount)
+        }
+    }
+
+    @Test
+    fun offlineListParamsRejectsPaddedAssetIdBeforeDispatch() {
+        val params = OfflineListParams(assetId = "pkr#paynet")
+        assertEquals("pkr#paynet", params.toQueryParameters()["asset_id"])
+
+        val leading = assertFailsWith<IllegalArgumentException> {
+            OfflineListParams(assetId = " pkr#paynet").toQueryParameters()
+        }
+        assertTrue(leading.message?.contains("assetId must not contain surrounding whitespace") == true)
+        val trailing = assertFailsWith<IllegalArgumentException> {
+            OfflineListParams(assetId = "pkr#paynet ").toQueryParameters()
+        }
+        assertTrue(trailing.message?.contains("assetId must not contain surrounding whitespace") == true)
+        val blank = assertFailsWith<IllegalArgumentException> {
+            OfflineListParams(assetId = " ").toQueryParameters()
+        }
+        assertTrue(blank.message?.contains("assetId must not be blank") == true)
     }
 
     @Test

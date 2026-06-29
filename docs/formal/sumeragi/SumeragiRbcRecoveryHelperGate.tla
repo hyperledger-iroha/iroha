@@ -162,6 +162,16 @@ RecoveryHelperSafetyAnchors ==
   /\ PayloadSkipAnchors
   /\ PayloadFetchAnchors
 
+RbcRecoveryHelperExactness ==
+  /\ AllCommittedMatches
+  /\ AllPayloadNeedsMatch
+  /\ CommittedAnchors
+  /\ PayloadSkipAnchors
+  /\ PayloadFetchAnchors
+RbcRecoveryHelperCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcRecoveryHelperExactness
+
 BugCommittedUsesStrictLess ==
   ActualCommitted("at_tip_absent") = SpecCommitted("at_tip_absent")
 

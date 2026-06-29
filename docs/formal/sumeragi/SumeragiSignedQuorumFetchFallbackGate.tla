@@ -252,8 +252,15 @@ TypeInvariant ==
 SignedQuorumFetchFallbackMatchesSpec ==
   \A c \in Cases: Matches(c)
 
+SignedQuorumFetchFallbackExactness ==
+  /\ SignedQuorumFetchFallbackMatchesSpec
+
+SignedQuorumFetchFallbackCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SignedQuorumFetchFallbackExactness
+
 SafetyFast ==
-  SignedQuorumFetchFallbackMatchesSpec
+  SignedQuorumFetchFallbackExactness
 
 CommittedHashGate ==
   Matches("uncommitted_permissioned_quorum")

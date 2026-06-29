@@ -148,11 +148,30 @@ where
         write_polynomial_slice(&self.permutations, writer, format);
         write_polynomial_slice(&self.polys, writer, format);
     }
+
+    /// Writes and drops the proving key as it is serialized.
+    pub(super) fn write_consuming<W: io::Write>(self, writer: &mut W, format: SerdeFormat) {
+        write_polynomial_vec_consuming(self.permutations, writer, format);
+        write_polynomial_vec_consuming(self.polys, writer, format);
+    }
 }
 
 impl<C: CurveAffine> ProvingKey<C> {
     /// Gets the total number of bytes in the serialization of `self`
     pub(super) fn bytes_length(&self) -> usize {
         polynomial_slice_byte_length(&self.permutations) + polynomial_slice_byte_length(&self.polys)
+    }
+}
+
+fn write_polynomial_vec_consuming<W: io::Write, F: SerdePrimeField, B>(
+    polynomials: Vec<Polynomial<F, B>>,
+    writer: &mut W,
+    format: SerdeFormat,
+) {
+    writer
+        .write_all(&(polynomials.len() as u32).to_be_bytes())
+        .unwrap();
+    for poly in polynomials {
+        poly.write(writer, format);
     }
 }

@@ -199,7 +199,14 @@ ActionsMatchSpec ==
   \A candidate \in Cases:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+SmtPathHashExactness ==
+  /\ ActionsMatchSpec
+
+SmtPathHashCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SmtPathHashExactness
+
 Safety ==
-  ActionsMatchSpec
+  SmtPathHashExactness
 
 ====

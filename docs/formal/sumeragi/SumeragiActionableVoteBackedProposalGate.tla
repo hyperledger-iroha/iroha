@@ -303,6 +303,21 @@ NoBugInvariant ==
   /\ SlotEvidenceRejectsWrongShapeAndMissingPayload
   /\ SlotEvidenceRejectsPrecommitMismatches
 
-SafetyFast == NoBugInvariant
+ActionableVoteBackedProposalExactness ==
+  /\ PrecommitMatchesSpec
+  /\ SlotEvidenceMatchesSpec
+  /\ PrecommitStrictCommitGate
+  /\ PrecommitOnlyExactCommitVotes
+  /\ SlotEvidenceAcceptsVoteAndQcSources
+  /\ SlotEvidenceAcceptsExactPrecommitVotes
+  /\ SlotEvidenceRejectsWrongShapeAndMissingPayload
+  /\ SlotEvidenceRejectsPrecommitMismatches
+
+ActionableVoteBackedProposalCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ActionableVoteBackedProposalExactness
+
+SafetyFast ==
+  ActionableVoteBackedProposalExactness
 
 ====

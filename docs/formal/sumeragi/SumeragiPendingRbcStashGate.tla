@@ -615,7 +615,7 @@ EvictionsReleaseDedupRecordAndRepair ==
 NoEvictedFrameReplay ==
   ~evicted_frame_replayed
 
-Safety ==
+PendingRbcStashExactness ==
   /\ FrameInsertedMatchesSpec
   /\ FrameDroppedMatchesSpec
   /\ ChunkEvictionMatchesSpec
@@ -649,5 +649,11 @@ Safety ==
   /\ FlushReplaysOnlyRetainedFrames
   /\ EvictionsReleaseDedupRecordAndRepair
   /\ NoEvictedFrameReplay
+
+PendingRbcStashCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingRbcStashExactness
+
+Safety == PendingRbcStashExactness
 
 ====

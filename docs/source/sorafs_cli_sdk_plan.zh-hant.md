@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_cli_sdk_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3d8fe44c775fa46e1655c98d8a57455a41b456397fe9853934a7bc5c4ea64a6c
-source_last_modified: "2026-01-05T09:28:12.081592+00:00"
+source_hash: f573c782631379eac7fc97f8bc8f2b3050da1f409d2f229ae1462d7dd18a6ea5
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CLI & SDK Plan
 summary: Implemented SF-6 CLI, validator, release, self-cert, and SDK parity surfaces.

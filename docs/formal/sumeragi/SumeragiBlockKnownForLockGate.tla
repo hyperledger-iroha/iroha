@@ -350,7 +350,7 @@ LookupShapeMatchesShortCircuit ==
        ~(PendingPass(c) \/ InflightPass(c) \/ ProcessingPresent(c)) =>
          CheckKura \in ImplementationActions(c)
 
-NoBugInvariant ==
+BlockKnownForLockCoreSafety ==
   /\ ActionsMatchSpec
   /\ KnownMatchesSpec
   /\ PendingValidityIsRequired
@@ -361,6 +361,22 @@ NoBugInvariant ==
   /\ DeferredOnlyAndAbsentDoNotCountAsKnown
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+BlockKnownForLockExactness ==
+  /\ ActionsMatchSpec
+  /\ KnownMatchesSpec
+  /\ PendingValidityIsRequired
+  /\ RejectedPendingFallsThroughToLaterSources
+  /\ InflightEntriesAreKnownUnlessAborted
+  /\ RejectedInflightFallsThroughToLaterSources
+  /\ HashOnlyAndKuraCountAsKnown
+  /\ DeferredOnlyAndAbsentDoNotCountAsKnown
+  /\ LookupShapeMatchesShortCircuit
+BlockKnownForLockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockKnownForLockExactness
+
+NoBugInvariant == BlockKnownForLockExactness
+
+SafetyFast == BlockKnownForLockExactness
 
 ====

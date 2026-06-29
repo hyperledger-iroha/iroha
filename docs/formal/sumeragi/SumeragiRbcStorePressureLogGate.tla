@@ -175,9 +175,11 @@ Next ==
 TypeInvariant ==
   checked \in 0..18
 
-Safety ==
+RbcStorePressureLogCoreSafety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+Safety == RbcStorePressureLogCoreSafety
 
 AllCandidatesMatchSpec ==
   \A candidate \in Candidates:
@@ -255,6 +257,21 @@ PressureLogSafetyAnchors ==
   /\ ThrottleAnchors
   /\ SuppressedStateAnchors
   /\ LoggedStateAnchors
+
+RbcStorePressureLogExactness ==
+  /\ AllCandidatesMatchSpec
+  /\ AllSpecActionsWithinDomain
+  /\ AllImplementationActionsWithinDomain
+  /\ ResetAnchors
+  /\ LabelAnchors
+  /\ TransitionAnchors
+  /\ ThrottleAnchors
+  /\ SuppressedStateAnchors
+  /\ LoggedStateAnchors
+
+RbcStorePressureLogCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStorePressureLogExactness
 
 BugResetEmptyKeepsLevel ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

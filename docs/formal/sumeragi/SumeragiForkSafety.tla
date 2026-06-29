@@ -240,4 +240,18 @@ CommitCertificateImpliesHonestSupport ==
 NoConflictingCommitCertificates ==
   ~("A" \in commitCerts /\ "B" \in commitCerts)
 
+ForkSafetyExactness ==
+  /\ HonestCommitVotesSingleBranch
+  /\ CommitCertificateImpliesCountQuorum
+  /\ CommitCertificateImpliesStakeQuorum
+  /\ CommitCertificateImpliesHonestSupport
+  /\ NoConflictingCommitCertificates
+
+Safety ==
+  ForkSafetyExactness
+
+ForkSafetyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ForkSafetyExactness
+
 ====

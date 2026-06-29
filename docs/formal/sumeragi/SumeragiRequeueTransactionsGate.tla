@@ -241,7 +241,14 @@ RequeueTransactionsMatchesSpec ==
   \A c \in Cases:
     ActualActions(c) = SpecActions(c)
 
+RequeueTransactionsExactness ==
+  /\ RequeueTransactionsMatchesSpec
+
+RequeueTransactionsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RequeueTransactionsExactness
+
 SafetyFast ==
-  RequeueTransactionsMatchesSpec
+  RequeueTransactionsExactness
 
 ====

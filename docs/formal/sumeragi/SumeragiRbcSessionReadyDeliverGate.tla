@@ -274,7 +274,18 @@ RbcSessionReadyDeliverCoreSafety ==
   /\ DeliverFirstRecordsAndAdvances
   /\ DeliverReplaysAreImmutable
 
+RbcSessionReadyDeliverExactness ==
+  /\ ActionsMatchSpec
+  /\ ReadyRecordingIsIdempotentAndConflictAware
+  /\ ReadyRosterHashIsSetOnceAndEnforced
+  /\ DeliverFirstRecordsAndAdvances
+  /\ DeliverReplaysAreImmutable
+
+RbcSessionReadyDeliverCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcSessionReadyDeliverExactness
+
 SafetyFast ==
-  RbcSessionReadyDeliverCoreSafety
+  RbcSessionReadyDeliverExactness
 
 ====

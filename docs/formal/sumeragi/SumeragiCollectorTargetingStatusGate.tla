@@ -158,9 +158,19 @@ Next ==
 TypeInvariant ==
   checked \in 0..16
 
-Safety ==
+CollectorTargetingStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+CollectorTargetingStatusExactness ==
+  /\ CollectorTargetingStatusActionsMatchSpec
+
+Safety ==
+  CollectorTargetingStatusExactness
+
+CollectorTargetingStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CollectorTargetingStatusExactness
 
 BugResetEmptyKeepsCurrent ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

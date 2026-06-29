@@ -64,6 +64,8 @@ const EXPECTED_DATA_MODEL_VERSION = 1;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const MAX_SIGNED_INT32 = 0x7fffffff;
+const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
@@ -2001,10 +2003,10 @@ export class ToriiClient {
       params.authority = ToriiClient._normalizeAccountId(rest.authority, "authority");
     }
     if (rest.contractAddress !== undefined && rest.contractAddress !== null) {
-      params.contract_address = requireNonEmptyString(rest.contractAddress, "contractAddress");
+      params.contract_address = requireExactNonEmptyString(rest.contractAddress, "contractAddress");
     }
     if (rest.contractAlias !== undefined && rest.contractAlias !== null) {
-      params.contract_alias = requireNonEmptyString(rest.contractAlias, "contractAlias");
+      params.contract_alias = requireExactNonEmptyString(rest.contractAlias, "contractAlias");
     }
     if (rest.module !== undefined && rest.module !== null) {
       params.module = requireNonEmptyString(rest.module, "module");
@@ -2013,10 +2015,10 @@ export class ToriiClient {
       params.event_kind = requireNonEmptyString(rest.eventKind, "eventKind");
     }
     if (rest.participant !== undefined && rest.participant !== null) {
-      params.participant = requireNonEmptyString(rest.participant, "participant");
+      params.participant = requireExactNonEmptyString(rest.participant, "participant");
     }
     if (rest.assetId !== undefined && rest.assetId !== null) {
-      params.asset_id = requireNonEmptyString(rest.assetId, "assetId");
+      params.asset_id = requireExactNonEmptyString(rest.assetId, "assetId");
     }
     if (rest.provenance !== undefined && rest.provenance !== null) {
       params.provenance = requireNonEmptyString(rest.provenance, "provenance");
@@ -5792,7 +5794,7 @@ export class ToriiClient {
   }
 
   _normalizeSnsDomainSelector(selector, context) {
-    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const normalizedSelector = requireExactNonEmptyString(selector, "selector");
     const dotIndex = normalizedSelector.indexOf(".");
     if (dotIndex <= 0 || dotIndex === normalizedSelector.length - 1) {
       throw createValidationError(
@@ -7287,13 +7289,13 @@ export class ToriiClient {
         params.authority = ToriiClient._normalizeAccountId(options.authority, "authority");
       }
       if (options.contractAddress !== undefined && options.contractAddress !== null) {
-        params.contract_address = requireNonEmptyString(
+        params.contract_address = requireExactNonEmptyString(
           options.contractAddress,
           "contractAddress",
         );
       }
       if (options.contractAlias !== undefined && options.contractAlias !== null) {
-        params.contract_alias = requireNonEmptyString(options.contractAlias, "contractAlias");
+        params.contract_alias = requireExactNonEmptyString(options.contractAlias, "contractAlias");
       }
       if (options.module !== undefined && options.module !== null) {
         params.module = requireNonEmptyString(options.module, "module");
@@ -7302,10 +7304,10 @@ export class ToriiClient {
         params.event_kind = requireNonEmptyString(options.eventKind, "eventKind");
       }
       if (options.participant !== undefined && options.participant !== null) {
-        params.participant = requireNonEmptyString(options.participant, "participant");
+        params.participant = requireExactNonEmptyString(options.participant, "participant");
       }
       if (options.assetId !== undefined && options.assetId !== null) {
-        params.asset_id = requireNonEmptyString(options.assetId, "assetId");
+        params.asset_id = requireExactNonEmptyString(options.assetId, "assetId");
       }
       if (options.provenance !== undefined && options.provenance !== null) {
         params.provenance = requireNonEmptyString(options.provenance, "provenance");
@@ -11182,13 +11184,13 @@ export class ToriiClient {
       normalizedOptions.contractAddress !== undefined &&
       normalizedOptions.contractAddress !== null
     ) {
-      params.contract_address = requireNonEmptyString(
+      params.contract_address = requireExactNonEmptyString(
         normalizedOptions.contractAddress,
         "contractAddress",
       );
     }
     if (normalizedOptions.contractAlias !== undefined && normalizedOptions.contractAlias !== null) {
-      params.contract_alias = requireNonEmptyString(
+      params.contract_alias = requireExactNonEmptyString(
         normalizedOptions.contractAlias,
         "contractAlias",
       );
@@ -11200,7 +11202,7 @@ export class ToriiClient {
       params.event_kind = requireNonEmptyString(normalizedOptions.eventKind, "eventKind");
     }
     if (normalizedOptions.participant !== undefined && normalizedOptions.participant !== null) {
-      params.participant = requireNonEmptyString(
+      params.participant = requireExactNonEmptyString(
         normalizedOptions.participant,
         "participant",
       );
@@ -14789,7 +14791,7 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
   }
   const platformByEnumKey = {
     EvmContractCall: "evm_contract_call",
-    EvmGroth16ContractCall: "evm_contract_call",
+    EvmGroth16ContractCall: "evm_groth16_contract_call",
     TronContractCall: "tron_contract_call",
     SolanaProgramInstruction: "solana_program_instruction",
     TonInternalMessage: "ton_internal_message",
@@ -14807,10 +14809,19 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
 
 function normalizeSccpPlatformSubmissionPayload(value, context) {
   const record = normalizeSccpPlatformSubmissionPayloadRecord(value, context);
-  const platform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const rawPlatform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const platform =
+    {
+      EvmContractCall: "evm_contract_call",
+      EvmGroth16ContractCall: "evm_groth16_contract_call",
+      TronContractCall: "tron_contract_call",
+      SolanaProgramInstruction: "solana_program_instruction",
+      TonInternalMessage: "ton_internal_message",
+    }[rawPlatform] ?? rawPlatform;
   const payload = ensureRecord(record.payload, `${context}.payload`);
   switch (platform) {
     case "evm_contract_call":
+    case "evm_groth16_contract_call":
     case "tron_contract_call":
       return {
         kind: platform,
@@ -15176,6 +15187,46 @@ function normalizeSccpProofManifest(value, context) {
   };
 }
 
+function normalizeSccpGroth16ProofSummary(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    platformPayload: requireNonEmptyString(record.platform_payload, `${context}.platform_payload`),
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    proofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.proof_len_bytes,
+      `${context}.proof_len_bytes`,
+      { allowZero: false },
+    ),
+    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_word_count,
+      `${context}.public_input_word_count`,
+      { allowZero: false },
+    ),
+    groth16PublicSignalCount: ToriiClient._normalizeUnsignedInteger(
+      record.groth16_public_signal_count,
+      `${context}.groth16_public_signal_count`,
+      { allowZero: false },
+    ),
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    sourceDomain: ToriiClient._normalizeUnsignedInteger(
+      record.source_domain,
+      `${context}.source_domain`,
+      { allowZero: true },
+    ),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    destinationBindingKey: requireNonEmptyString(
+      record.destination_binding_key,
+      `${context}.destination_binding_key`,
+    ),
+    destinationBindingHash: normalizeHex32String(
+      record.destination_binding_hash,
+      `${context}.destination_binding_hash`,
+    ),
+  };
+}
+
 function normalizeSccpMessageTransparentProofArtifact(payload) {
   const context = "sccp message proof artifact response";
   const record = ensureRecord(payload, context);
@@ -15258,6 +15309,14 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
             record.proof_envelope_summary,
             `${context}.proof_envelope_summary`,
           ),
+    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
+      ? {}
+      : {
+          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
+            record.groth16_proof_summary,
+            `${context}.groth16_proof_summary`,
+          ),
+        }),
     submissionPackage: normalizeSccpCounterpartySubmissionPackage(
       record.submission_package,
       `${context}.submission_package`,
@@ -15384,6 +15443,14 @@ function normalizeSccpCounterpartyProofJob(payload) {
             record.proof_envelope_summary,
             `${context}.proof_envelope_summary`,
           ),
+    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
+      ? {}
+      : {
+          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
+            record.groth16_proof_summary,
+            `${context}.groth16_proof_summary`,
+          ),
+        }),
     submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
       record.submission_template,
       `${context}.submission_template`,
@@ -17614,16 +17681,19 @@ function requireUnsignedIntegerArray(value, context) {
 }
 
 function normalizeUaidLiteral(value, context = "uaid") {
-  const literal = requireNonEmptyString(value, context);
-  const trimmed = literal.trim();
-  if (!trimmed) {
-    throw new TypeError(`${context} must be a non-empty string`);
-  }
+  const literal = requireExactNonEmptyString(value, context);
   let hexPortion;
-  if (trimmed.slice(0, 5).toLowerCase() === "uaid:") {
-    hexPortion = trimmed.slice(5).trim();
+  if (literal.slice(0, 5).toLowerCase() === "uaid:") {
+    hexPortion = literal.slice(5);
   } else {
-    hexPortion = trimmed;
+    hexPortion = literal;
+  }
+  if (hexPortion.trim() !== hexPortion) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain surrounding whitespace`,
+      context,
+    );
   }
   if (hexPortion.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPortion)) {
     throw new TypeError(`${context} must contain 64 hex characters`);
@@ -18859,6 +18929,41 @@ function requireNonNegativeIntegerLike(value, context) {
     throw new RangeError(`${context} must be >= 0`);
   }
   return numeric;
+}
+
+function requireExactPositiveIntegerLike(value, context) {
+  if (value === undefined || value === null) {
+    throw new TypeError(`${context} is required`);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`${context} must be a positive integer`);
+    }
+    if (value > MAX_SIGNED_INT32) {
+      throw new RangeError(`${context} must fit in signed 32-bit range`);
+    }
+    return value;
+  }
+  if (typeof value === "bigint") {
+    if (value <= 0n) {
+      throw new RangeError(`${context} must be a positive integer`);
+    }
+    if (value > MAX_SIGNED_INT32_BIGINT) {
+      throw new RangeError(`${context} must fit in signed 32-bit range`);
+    }
+    return Number(value);
+  }
+  if (typeof value === "string") {
+    if (value.trim() !== value || !/^[1-9][0-9]*$/.test(value)) {
+      throw new RangeError(`${context} must be an exact positive integer string`);
+    }
+    const integer = BigInt(value);
+    if (integer > MAX_SIGNED_INT32_BIGINT) {
+      throw new RangeError(`${context} must fit in signed 32-bit range`);
+    }
+    return Number(integer);
+  }
+  throw new TypeError(`${context} must be a positive integer`);
 }
 
 function requireEvidencePhase(value, context) {
@@ -30181,52 +30286,61 @@ function normalizeSubscriptionGetResponse(payload) {
 
 function normalizeOfflineReadinessResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const normalized = {
-    ...record,
-    offline_kagemusha_abi7: requireBooleanLike(
-      record.offline_kagemusha_abi7,
-      `${context}.offline_kagemusha_abi7`,
-    ),
-    offline_kagemusha_abi7_mode: requireNonEmptyString(
-      record.offline_kagemusha_abi7_mode,
-      `${context}.offline_kagemusha_abi7_mode`,
-    ),
-    offline_kagemusha_abi7_bridge_abi_version: requireNonNegativeIntegerLike(
-      record.offline_kagemusha_abi7_bridge_abi_version,
-      `${context}.offline_kagemusha_abi7_bridge_abi_version`,
-    ),
-    offline_kagemusha_abi7_circuit_id: requireNonEmptyString(
-      record.offline_kagemusha_abi7_circuit_id,
-      `${context}.offline_kagemusha_abi7_circuit_id`,
-    ),
-    offline_kagemusha_abi7_artifacts: requireBooleanLike(
-      record.offline_kagemusha_abi7_artifacts,
-      `${context}.offline_kagemusha_abi7_artifacts`,
-    ),
-    offline_kagemusha_recursive_compact_available: requireBooleanLike(
+  const hasOwn = (key) => Object.prototype.hasOwnProperty.call(record, key);
+  const removedAbi7Keys = [
+    "offline_kagemusha_abi7",
+    "offline_kagemusha_abi7_mode",
+    "offline_kagemusha_abi7_bridge_abi_version",
+    "offline_kagemusha_abi7_circuit_id",
+    "offline_kagemusha_abi7_artifacts",
+  ];
+  for (const key of removedAbi7Keys) {
+    if (hasOwn(key)) {
+      throw new TypeError(`${context}.${key} is not supported; use offline_kagemusha_recursive_compact_*`);
+    }
+  }
+
+  const requireExactBoolean = (value, field) => {
+    if (typeof value !== "boolean") {
+      throw new TypeError(`${context}.${field} must be boolean`);
+    }
+    return value;
+  };
+  const decodeRecursiveCompactFamily = () => ({
+    available: requireExactBoolean(
       record.offline_kagemusha_recursive_compact_available,
-      `${context}.offline_kagemusha_recursive_compact_available`,
+      "offline_kagemusha_recursive_compact_available",
     ),
-    offline_kagemusha_recursive_compact_mode: requireNonEmptyString(
+    mode: requireExactNonEmptyString(
       record.offline_kagemusha_recursive_compact_mode,
       `${context}.offline_kagemusha_recursive_compact_mode`,
     ),
-    offline_kagemusha_recursive_compact_required_native_bridge_abi_version:
-      requireNonNegativeIntegerLike(
-        record.offline_kagemusha_recursive_compact_required_native_bridge_abi_version,
-        `${context}.offline_kagemusha_recursive_compact_required_native_bridge_abi_version`,
-      ),
-    offline_kagemusha_recursive_compact_circuit_id: requireNonEmptyString(
+    bridgeAbiVersion: requireExactPositiveIntegerLike(
+      record.offline_kagemusha_recursive_compact_required_native_bridge_abi_version,
+      `${context}.offline_kagemusha_recursive_compact_required_native_bridge_abi_version`,
+    ),
+    circuitId: requireExactNonEmptyString(
       record.offline_kagemusha_recursive_compact_circuit_id,
       `${context}.offline_kagemusha_recursive_compact_circuit_id`,
     ),
-    offline_kagemusha_recursive_compact_artifacts_available: requireBooleanLike(
+    artifacts: requireExactBoolean(
       record.offline_kagemusha_recursive_compact_artifacts_available,
-      `${context}.offline_kagemusha_recursive_compact_artifacts_available`,
+      "offline_kagemusha_recursive_compact_artifacts_available",
     ),
-    offline_telemetry: requireBooleanLike(
+  });
+
+  const recursiveCompact = decodeRecursiveCompactFamily();
+  const normalized = {
+    ...record,
+    offline_kagemusha_recursive_compact_available: recursiveCompact.available,
+    offline_kagemusha_recursive_compact_mode: recursiveCompact.mode,
+    offline_kagemusha_recursive_compact_required_native_bridge_abi_version:
+      recursiveCompact.bridgeAbiVersion,
+    offline_kagemusha_recursive_compact_circuit_id: recursiveCompact.circuitId,
+    offline_kagemusha_recursive_compact_artifacts_available: recursiveCompact.artifacts,
+    offline_telemetry: requireExactBoolean(
       record.offline_telemetry,
-      `${context}.offline_telemetry`,
+      "offline_telemetry",
     ),
   };
   for (const key of [

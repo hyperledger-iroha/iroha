@@ -159,7 +159,16 @@ fn previous_roster_evidence_for_hash_only_parent(
         ConsensusMode::Permissioned => None,
         ConsensusMode::Npos => {
             let world = state.world_view();
-            CommitStakeSnapshot::from_roster(&world, roster).map(model_stake_snapshot)
+            let nexus = state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
+            CommitStakeSnapshot::from_roster_with_active_lanes(
+                &world,
+                roster,
+                active_lane_ids.as_ref(),
+            )
+            .map(model_stake_snapshot)
         }
     };
     Some(PreviousRosterEvidence {
@@ -285,6 +294,42 @@ fn trim_batch_for_size_cap_with_plans<T, U, V>(
         removed_count = removed_count.saturating_add(1);
     }
     removed_count
+}
+
+fn drain_aligned_batch<'a, T, U>(
+    tx_batch: &'a mut Vec<T>,
+    routing_plan_batch: &'a mut Vec<U>,
+) -> std::iter::Zip<std::vec::Drain<'a, T>, std::vec::Drain<'a, U>> {
+    assert_eq!(
+        tx_batch.len(),
+        routing_plan_batch.len(),
+        "routing plans must align with transactions"
+    );
+    tx_batch.drain(..).zip(routing_plan_batch.drain(..))
+}
+
+fn reorder_vec_by_indices<T>(vec: &mut Vec<T>, order: &[usize]) {
+    assert_eq!(
+        vec.len(),
+        order.len(),
+        "reorder index set must match vector length"
+    );
+    if vec.len() <= 1 {
+        return;
+    }
+
+    let mut slots = std::mem::take(vec)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    vec.reserve(slots.len());
+    for &idx in order {
+        let value = slots
+            .get_mut(idx)
+            .and_then(Option::take)
+            .expect("reorder index set must be a valid permutation");
+        vec.push(value);
+    }
 }
 
 #[cfg(test)]
@@ -425,10 +470,8 @@ fn refresh_proposal_routing_from_state(
     let mut refreshed_routing = Vec::with_capacity(tx_batch.len());
     let mut refreshed_plans = Vec::with_capacity(tx_batch.len());
     for (idx, tx) in tx_batch.iter().enumerate() {
-        let refreshed_plan = crate::queue::evaluate_policy_plan_with_catalog_and_world_at(
-            &nexus.routing_policy,
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
+        let refreshed_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+            nexus,
             tx,
             state_view.world(),
             ledger_time_ms,
@@ -1343,6 +1386,21 @@ impl Actor {
     }
 
     fn drop_stale_pending_block_for_fresh_proposal(
+        &mut self,
+        pending_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Option<(usize, usize, usize, usize)> {
+        self.drop_stale_pending_block_skipping_known_committed(
+            pending_hash,
+            height,
+            view,
+            false,
+            None,
+        )
+    }
+
+    pub(super) fn drop_pending_block_for_memory_cap(
         &mut self,
         pending_hash: HashOf<BlockHeader>,
         height: u64,
@@ -2842,17 +2900,10 @@ impl Actor {
             let order = interleave_lane_indices_for_slot(&routing_decisions, height, view);
 
             if order.iter().enumerate().any(|(idx, &value)| idx != value) {
-                fn reorder_vec<T: Clone>(vec: &mut Vec<T>, order: &[usize]) {
-                    let original = vec.clone();
-                    vec.clear();
-                    for &idx in order {
-                        vec.push(original[idx].clone());
-                    }
-                }
-                reorder_vec(&mut transactions, &order);
-                reorder_vec(&mut routing_decisions, &order);
-                reorder_vec(&mut routing_plans, &order);
-                reorder_vec(&mut tx_sizes, &order);
+                reorder_vec_by_indices(&mut transactions, &order);
+                reorder_vec_by_indices(&mut routing_decisions, &order);
+                reorder_vec_by_indices(&mut routing_plans, &order);
+                reorder_vec_by_indices(&mut tx_sizes, &order);
             }
         }
 
@@ -3062,12 +3113,6 @@ impl Actor {
             );
         }
 
-        let original_for_requeue: Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> =
-            tx_batch
-                .iter()
-                .cloned()
-                .zip(routing_plan_batch.iter().cloned())
-                .collect();
         let previous_roster_started_at = Instant::now();
         let previous_roster_evidence = prev_block
             .as_deref()
@@ -3125,8 +3170,6 @@ impl Actor {
                 payload_hash,
                 proposal,
                 proposal_hint,
-                transactions_for_plan,
-                tx_sizes_for_plan,
                 block_hash,
                 block_created_frame_len,
             ) = loop {
@@ -3389,9 +3432,9 @@ impl Actor {
                     let account_exists = |account: &iroha_data_model::account::AccountId| -> bool {
                         world.accounts().get(account).is_some()
                     };
-                    let (mut intents, rejected) = crate::da::sanitize_pin_intents(
+                    let (mut intents, rejected) = crate::da::sanitize_pin_intents_against_nexus(
                         bundle.intents,
-                        &lane_config,
+                        &nexus,
                         account_exists,
                     );
                     if let Some(first_rejection) = rejected.first().cloned() {
@@ -3455,7 +3498,7 @@ impl Actor {
                     }
                 }
 
-                let proof_policy_bundle = crate::da::proof_policy_bundle(&lane_config);
+                let proof_policy_bundle = crate::da::active_proof_policy_bundle(&nexus);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
                 if !tx_batch.is_empty() {
@@ -3673,8 +3716,6 @@ impl Actor {
                     payload_hash,
                     proposal,
                     proposal_hint,
-                    tx_batch.clone(),
-                    tx_sizes.clone(),
                     block_hash,
                     frame_len,
                 );
@@ -3685,10 +3726,8 @@ impl Actor {
             let base_stale_window = self
                 .quorum_timeout(da_enabled)
                 .max(Duration::from_millis(1));
-            let stale_window = Self::proposal_assembly_stale_window(
-                base_stale_window,
-                transactions_for_plan.len(),
-            );
+            let stale_window =
+                Self::proposal_assembly_stale_window(base_stale_window, tx_batch.len());
             if elapsed >= stale_window {
                 self.subsystems
                     .propose
@@ -3704,7 +3743,7 @@ impl Actor {
                     elapsed_ms = elapsed.as_millis(),
                     base_stale_window_ms = base_stale_window.as_millis(),
                     stale_window_ms = stale_window.as_millis(),
-                    tx_count = transactions_for_plan.len(),
+                    tx_count = tx_batch.len(),
                     block_hash = %block_hash,
                     preflight_elapsed_ms,
                     tx_select_ms,
@@ -3759,9 +3798,9 @@ impl Actor {
                 // their primary DA body transport.
                 self.prepare_rbc_plan(rbc::RbcPlanInputs {
                     signed_block: &signed_block,
-                    transactions: &transactions_for_plan,
+                    transactions: &tx_batch,
                     routing: &routing_batch,
-                    tx_sizes: &tx_sizes_for_plan,
+                    tx_sizes: &tx_sizes,
                     payload: &payload_bytes,
                     payload_hash,
                     height: proposal_height,
@@ -3774,12 +3813,12 @@ impl Actor {
             };
             drop(payload_bytes);
 
-            if let Some(plan) = rbc_plan.as_ref() {
+            if let Some(plan) = rbc_plan.as_mut() {
                 // Non-frontier recovery always uses RBC transport. Frontier proposals keep the
                 // inline fast path only when the exact body fits a consensus frame; multi-chunk
                 // or otherwise oversized BlockCreated bodies use Proposal + RBC.
-                self.install_rbc_session_plan(&plan.primary)?;
-                if let Some(dup) = plan.duplicate.as_ref() {
+                self.install_rbc_session_plan(&mut plan.primary)?;
+                if let Some(dup) = plan.duplicate.as_mut() {
                     self.install_rbc_session_plan(dup)?;
                 }
                 self.publish_rbc_backlog_snapshot();
@@ -3860,7 +3899,7 @@ impl Actor {
 
             self.record_phase_sample(PipelinePhase::Propose, proposal_height, view);
 
-            let tx_count = transactions_for_plan.len();
+            let tx_count = tx_batch.len();
             iroha_logger::info!(
                 height = proposal_height,
                 view,
@@ -3876,7 +3915,7 @@ impl Actor {
 
         if let Err(err) = assembly_result {
             self.queue.release_transaction_guards(&mut tx_guards);
-            for (tx, routing) in original_for_requeue {
+            for (tx, routing) in drain_aligned_batch(&mut tx_batch, &mut routing_plan_batch) {
                 if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
@@ -3989,7 +4028,8 @@ impl Actor {
     /// openings by the same count until proof summaries are threaded through the
     /// consensus path.
     pub(super) fn validate_da_bundle(&mut self, bundle: &DaCommitmentBundle) -> Result<()> {
-        let lane_config = self.state.nexus_snapshot().lane_config.clone();
+        let nexus = self.state.nexus_snapshot();
+        let lane_config = nexus.lane_config.clone();
         validate_da_bundle_caps(
             bundle,
             self.config.da.max_commitments_per_block,
@@ -3997,6 +4037,14 @@ impl Actor {
         )?;
 
         for record in &bundle.commitments {
+            crate::da::active_lane_proof_policy(&nexus, record.lane_id).map_err(|err| {
+                eyre!(
+                    "DA commitment active lane validation failed for lane {} epoch {} seq {}: {err}",
+                    record.lane_id.as_u32(),
+                    record.epoch,
+                    record.sequence
+                )
+            })?;
             let policy = lane_config.manifest_policy(record.lane_id);
             let (outcome, cache_outcome) = {
                 let da_rbc = &mut self.subsystems.da_rbc;
@@ -4044,7 +4092,7 @@ impl Actor {
             )?;
         }
 
-        crate::da::validate_commitment_bundle(bundle, &lane_config)
+        crate::da::validate_commitment_bundle_against_nexus(bundle, &nexus)
             .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
 
         Ok(())
@@ -4391,7 +4439,7 @@ impl Actor {
             (
                 pending.block.clone(),
                 pending.block.hash(),
-                pending.payload_bytes().to_vec(),
+                pending.payload_bytes_cow().into_owned(),
                 pending.payload_hash,
             )
         };
@@ -6969,22 +7017,29 @@ mod tests {
         ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
         cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
         canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
-        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
-        refresh_proposal_routing_from_state, trim_batch_for_size_cap,
-        trim_batch_for_size_cap_with_plans,
+        consensus_queue_backpressure, da_payload_budget, drain_aligned_batch,
+        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
+        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
     };
-    use crate::queue::{BackpressureState, RoutingDecision, RoutingPlan};
+    use crate::queue::{
+        BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
+    };
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
+    use iroha_config::parameters::actual::LaneRoutingPolicy;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, Level,
-        isi::Log,
-        nexus::{DataSpaceId, LaneId},
-        prelude::{AccountId, TransactionBuilder},
+        domain::{Domain, DomainId},
+        isi::{Log, Register},
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+            DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+        },
+        prelude::{AccountId, InstructionBox, TransactionBuilder},
     };
     use std::borrow::Cow;
-    use std::num::{NonZeroU64, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
     use std::time::{Duration, Instant};
 
     fn checked_key_pair() -> KeyPair {
@@ -7060,6 +7115,295 @@ mod tests {
     }
 
     #[test]
+    fn refresh_proposal_routing_from_state_uses_live_autoscale_elastic_range() {
+        let mut state = blank_state();
+        let mut elastic = LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: "elastic-lane-1".to_string(),
+            ..LaneConfig::default()
+        };
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![LaneConfig::default(), elastic],
+        )
+        .expect("autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+            nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let mut elastic_tx = None;
+        for idx in 0..512 {
+            let tx = accepted_log_transaction(&format!("proposal-autoscale-{idx}"));
+            let mut routing_batch = vec![RoutingDecision::default()];
+            let mut routing_plan_batch = vec![RoutingPlan::single(RoutingDecision::default())];
+            refresh_proposal_routing_from_state(
+                core::slice::from_ref(&tx),
+                &mut routing_batch,
+                &mut routing_plan_batch,
+                &state.view(),
+                0,
+            )
+            .expect("proposal refresh should resolve autoscale candidates");
+            if routing_batch[0].lane_id == LaneId::new(1) {
+                elastic_tx = Some(tx);
+                break;
+            }
+        }
+        let tx = elastic_tx.expect("fixture should find a transaction for the elastic shard");
+        let mut routing_batch = vec![RoutingDecision::default()];
+        let mut routing_plan_batch = vec![RoutingPlan::single(RoutingDecision::default())];
+
+        let changed = refresh_proposal_routing_from_state(
+            &[tx],
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("proposal refresh should use live Nexus autoscale range");
+
+        assert!(
+            changed,
+            "stale single-lane proposal vectors should be refreshed"
+        );
+        assert_eq!(
+            routing_batch,
+            vec![RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)]
+        );
+        assert_eq!(
+            routing_plan_batch,
+            vec![RoutingPlan::single(RoutingDecision::new(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL
+            ))]
+        );
+    }
+
+    #[test]
+    fn refresh_proposal_routing_from_state_ignores_autoscale_when_nexus_disabled() {
+        let mut state = blank_state();
+        let mut elastic = LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: "elastic-lane-1".to_string(),
+            ..LaneConfig::default()
+        };
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![LaneConfig::default(), elastic],
+        )
+        .expect("autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+            nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let stale_elastic_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+        let mut elastic_tx = None;
+        for idx in 0..512 {
+            let tx = accepted_log_transaction(&format!("proposal-disabled-autoscale-{idx}"));
+            let mut routing_batch = vec![RoutingDecision::default()];
+            let mut routing_plan_batch = vec![RoutingPlan::single(RoutingDecision::default())];
+            refresh_proposal_routing_from_state(
+                core::slice::from_ref(&tx),
+                &mut routing_batch,
+                &mut routing_plan_batch,
+                &state.view(),
+                0,
+            )
+            .expect("enabled Nexus should resolve autoscale candidates");
+            if routing_batch == vec![stale_elastic_route] {
+                elastic_tx = Some(tx);
+                break;
+            }
+        }
+        let tx = elastic_tx.expect("fixture should find a transaction for the elastic shard");
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = false;
+        }
+
+        let mut routing_batch = vec![stale_elastic_route];
+        let mut routing_plan_batch = vec![RoutingPlan::single(stale_elastic_route)];
+        let default_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+
+        let changed = refresh_proposal_routing_from_state(
+            &[tx],
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("disabled Nexus should refresh stale elastic proposal vectors");
+
+        assert!(
+            changed,
+            "stale elastic vectors must be replaced once Nexus is disabled"
+        );
+        assert_eq!(routing_batch, vec![default_route]);
+        assert_eq!(routing_plan_batch, vec![RoutingPlan::single(default_route)]);
+    }
+
+    #[test]
+    fn refresh_proposal_routing_from_state_refreshes_native_amx_participant_legs() {
+        let mut state = blank_state();
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![],
+        };
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let stale_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(4).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: first_dataspace,
+                    alias: "acme-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(3),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let mut current_lanes = stale_lane_catalog.lanes().to_vec();
+        let stale_participant_lane = current_lanes
+            .iter_mut()
+            .find(|lane| lane.id == LaneId::new(2))
+            .expect("stale participant lane");
+        stale_participant_lane.alias = "elastic-lane-2".to_owned();
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "10".to_string());
+        let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
+            .expect("current lane catalog");
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.routing_policy = policy.clone();
+            nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let chain: ChainId = "proposal-native-amx-refresh".parse().expect("chain id");
+        let key_pair = checked_key_pair();
+        let (_, private_key) = key_pair.clone().into_parts();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(
+            TransactionBuilder::new(chain, authority)
+                .with_instructions([
+                    InstructionBox::from(Register::domain(Domain::new(
+                        DomainId::try_new("merchant", "acme").expect("domain id"),
+                    ))),
+                    InstructionBox::from(Register::domain(Domain::new(
+                        DomainId::try_new("treasury", "bank").expect("domain id"),
+                    ))),
+                ])
+                .sign(&private_key),
+        ));
+        let stale_plan = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            stale_lane_catalog,
+        )
+        .try_route_plan(&tx)
+        .expect("stale Native AMX plan should resolve");
+        let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
+            .try_route_plan(&tx)
+            .expect("current Native AMX plan should resolve");
+        assert_eq!(
+            stale_plan.coordinator_route(),
+            current_plan.coordinator_route()
+        );
+        assert_ne!(stale_plan, current_plan);
+
+        let mut routing_batch = vec![stale_plan.coordinator_route()];
+        let mut routing_plan_batch = vec![stale_plan];
+        let changed = refresh_proposal_routing_from_state(
+            &[tx],
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("proposal refresh should replace stale Native AMX participant legs");
+
+        assert!(
+            changed,
+            "participant-only Native AMX drift should refresh proposal plan vectors"
+        );
+        assert_eq!(routing_batch, vec![current_plan.coordinator_route()]);
+        assert_eq!(routing_plan_batch, vec![current_plan]);
+    }
+
+    #[test]
     fn refresh_proposal_routing_from_state_rejects_vector_length_drift() {
         let state = blank_state();
         let tx_batch = vec![accepted_log_transaction("refresh-route-drift")];
@@ -7088,6 +7432,37 @@ mod tests {
             routing_plan_batch,
             vec![RoutingPlan::single(RoutingDecision::default())],
             "failed refresh must not mutate plan vector"
+        );
+    }
+
+    #[test]
+    fn drain_aligned_batch_moves_pairs_without_backup_clone() {
+        let mut tx_batch = vec![1, 2, 3];
+        let mut routing_plan_batch = vec![11, 12, 13];
+
+        let drained =
+            drain_aligned_batch(&mut tx_batch, &mut routing_plan_batch).collect::<Vec<_>>();
+
+        assert_eq!(drained, vec![(1, 11), (2, 12), (3, 13)]);
+        assert!(tx_batch.is_empty(), "transactions should be moved out");
+        assert!(
+            routing_plan_batch.is_empty(),
+            "routing plans should be moved out"
+        );
+    }
+
+    #[test]
+    fn reorder_vec_by_indices_moves_non_clone_values() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct NonClone(u8);
+
+        let mut values = vec![NonClone(1), NonClone(2), NonClone(3), NonClone(4)];
+
+        reorder_vec_by_indices(&mut values, &[2, 0, 3, 1]);
+
+        assert_eq!(
+            values,
+            vec![NonClone(3), NonClone(1), NonClone(4), NonClone(2)]
         );
     }
 
@@ -7207,6 +7582,43 @@ mod tests {
         );
         assert_eq!(size_batch, vec![10, 10], "trim_with_plans_align sizes");
         assert_eq!(removed, vec![(3, 23)], "trim_with_plans_align removed");
+
+        let first_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let second_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8));
+        let deferred_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(9));
+        let native_plan = RoutingPlan::native_amx(
+            deferred_route,
+            vec![
+                crate::queue::RouteLeg::new(first_route, crate::queue::RouteLegRole::Participant),
+                crate::queue::RouteLeg::new(second_route, crate::queue::RouteLegRole::Participant),
+            ],
+        );
+        let mut tx_batch = vec![1_u32, 2_u32];
+        let mut routing_batch = vec![first_route, deferred_route];
+        let mut routing_plan_batch = vec![RoutingPlan::single(first_route), native_plan.clone()];
+        let mut size_batch = vec![10_usize, 10_usize];
+        let mut removed = Vec::new();
+        let removed_count = trim_batch_for_size_cap_with_plans(
+            &mut tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &mut size_batch,
+            &mut removed,
+            1,
+        );
+        assert_eq!(removed_count, 1, "trim_native_amx removed_count");
+        assert_eq!(tx_batch, vec![1], "trim_native_amx txs");
+        assert_eq!(routing_batch, vec![first_route], "trim_native_amx routes");
+        assert_eq!(
+            routing_plan_batch,
+            vec![RoutingPlan::single(first_route)],
+            "trim_native_amx retained plan"
+        );
+        assert_eq!(
+            removed,
+            vec![(2, native_plan)],
+            "trim_native_amx removed plan preserves participants"
+        );
 
         fn assert_canon_case<K, F>(name: &str, mut tx_batch: Vec<u32>, key: F, expected_txs: &[u32])
         where

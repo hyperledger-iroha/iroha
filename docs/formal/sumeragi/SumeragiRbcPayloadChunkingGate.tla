@@ -263,6 +263,24 @@ RbcPayloadChunkingCoreSafety ==
   /\ FullChunksBeforeLast
   /\ PayloadCoverageMatchesLength
 
-Safety == RbcPayloadChunkingCoreSafety
+RbcPayloadChunkingExactness ==
+  /\ ChunkCountMatchesSpec
+  /\ ChunkVectorLenMatchesCount
+  /\ ChunkLengthsMatchSpec
+  /\ EmptyPayloadSingleEmptyChunk
+  /\ ZeroChunkSizeClampedToOne
+  /\ CeilDivisionForNonEmptyPayloads
+  /\ ExactBoundaryHasNoTrailingEmptyChunk
+  /\ LargeChunkSizeKeepsSingleChunk
+  /\ NonEmptyChunksAreNonEmpty
+  /\ LastChunkWithinEffectiveSize
+  /\ FullChunksBeforeLast
+  /\ PayloadCoverageMatchesLength
+
+RbcPayloadChunkingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcPayloadChunkingExactness
+
+Safety == RbcPayloadChunkingExactness
 
 ====

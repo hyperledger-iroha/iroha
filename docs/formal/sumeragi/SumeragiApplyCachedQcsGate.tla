@@ -248,7 +248,19 @@ NoBugInvariant ==
   /\ CommitVotesAttachmentMatchesSpec
   /\ NoSpuriousCheckpointWithoutQc
 
-SafetyFast == NoBugInvariant
+ApplyCachedQcsExactness ==
+  /\ CommitQcSelectionMatchesSpec
+  /\ CheckpointAttachmentMatchesSpec
+  /\ StakeSnapshotAttachmentMatchesSpec
+  /\ CommitVotesAttachmentMatchesSpec
+  /\ NoSpuriousCheckpointWithoutQc
+
+ApplyCachedQcsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ApplyCachedQcsExactness
+
+SafetyFast ==
+  ApplyCachedQcsExactness
 
 BugOverwriteExistingQc == NoBugInvariant
 BugSkipTopologyQc == NoBugInvariant

@@ -4,14 +4,9 @@ direction: ltr
 source: docs/source/sorafs_potr_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bee4dc2fcb6941387be4342337f29b7e256e44a518331f5cdfb61950f79612cd
-source_last_modified: "2026-01-03T18:08:00.777598+00:00"
-translation_last_reviewed: 2026-01-30
----
-
----
-title: PoTR-Lite Deadline Proofs Status
-summary: Implemented SF-14 timed-retrieval receipt capture, validation, and replay status.
+source_hash: 4ae28e47d11116f3f30833c3daabbfa29c428c16d573cc26921bdfd6388c1941
+source_last_modified: "2026-06-25T17:46:08+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # PoTR-Lite Deadline Proofs Status
@@ -27,6 +22,10 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > receipts through `/v1/sorafs/proof/stream` with `proof_kind=potr`. Remaining
 > SF-14 work is live multi-provider rollout evidence and PQ provider-signature
 > key distribution, not local receipt capture, validation, or replay wiring.
+> `scripts/check_sorafs_potr_rollout_evidence.py` now provides the fail-closed
+> SF-14 rollout evidence gate, and
+> `scripts/run_sorafs_potr_rollout_evidence.py` provides the reviewed
+> collection planner/runner.
 
 ## Workflow
 1. Orchestrator/gateway issues a timed retrieval request with
@@ -113,6 +112,48 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
   - These stats feed into the reputation scoring formula (`w_potr` weight in `sorafs_reputation_plan.md`).
 - **Alerts:** When a provider’s hot-tier success rate drops below 95% in the last 24h, trigger `sorafs_potr_degradation` alert and link to the reputation engine for investigation.
 
+## Rollout Evidence Gate
+
+Operators should keep SF-14 promotion fail-closed until payload-free deployment
+evidence passes the checked-in gate:
+
+```bash
+python3 scripts/check_sorafs_potr_rollout_evidence.py \
+  @scripts/examples/sorafs_potr_rollout_evidence.args.example
+```
+
+For reviewed collection planning, use the runner in dry-run mode before
+executing it against captured evidence paths:
+
+```bash
+python3 scripts/run_sorafs_potr_rollout_evidence.py \
+  @scripts/examples/sorafs_potr_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.potr.*` SF-14 rollout schemas for
+multi-provider probes, receipt validation, proof-stream replay, reputation
+integration, observability, and governance approval. It fails closed on stale
+evidence, raw receipts, raw fetch transcripts, response bodies, transactions,
+tokens, secrets, under-sized provider or receipt samples, missing hot/warm tier
+coverage, hot/warm latency above threshold, missing gateway or provider
+signature validation, missing governed ML-DSA provider key evidence, non-Norito
+proof-stream routes, missing proof-stream filters, missing reputation-weight
+governance, missing PoTR metrics or deadline-breach alert checks, critical
+alerts, receipt summary digest drift across validation/proof-stream/reputation/
+observability/governance artifacts, and governance packets not bound to
+`iroha_config`. Receipt summary binding failures are recorded on the offending
+artifact before required-kind validity is computed, so the JSON summary matches
+the fail-closed process result.
+
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_potr_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_potr_rollout_evidence_test.py`
+
 This status page is now a reference for the shipped local PoTR surface. Future
 updates should track live rollout evidence, governed provider PQ keys, and
-reputation-weight changes rather than reintroducing draft local wiring tasks.
+reputation-weight changes that pass the SF-14 gate with validation,
+proof-stream, reputation, observability, and governance artifacts bound to the
+same multi-provider probe receipt summary digest rather than reintroducing draft
+local wiring tasks.

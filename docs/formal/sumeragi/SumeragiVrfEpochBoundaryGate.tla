@@ -153,7 +153,16 @@ TypeInvariant ==
 BoundaryContractHolds ==
   ~ViolatesBoundaryContract(candidate)
 
+VrfEpochBoundaryExactness ==
+  /\ BoundaryContractHolds
+
+VrfEpochBoundaryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfEpochBoundaryExactness
+
+NoBugInvariant == VrfEpochBoundaryExactness
+
 Safety ==
-  BoundaryContractHolds
+  VrfEpochBoundaryExactness
 
 ====

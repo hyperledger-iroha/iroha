@@ -265,8 +265,8 @@ SelectionHasNoOutOfRange ==
 SelectionHasNoDuplicates ==
   ~has_duplicates
 
-SelectionSortedAfterDedup ==
-  sorted
+SelectionIsSorted ==
+  sorted = TRUE
 
 EveryStripeCoveredForReducedFanout ==
   returns_some =>
@@ -302,13 +302,36 @@ RbcRs16InitialFanoutCoreSafety ==
   /\ RequiredNeverExceedsStripeWidth
   /\ SelectionHasNoOutOfRange
   /\ SelectionHasNoDuplicates
-  /\ SelectionSortedAfterDedup
+  /\ SelectionIsSorted
   /\ EveryStripeCoveredForReducedFanout
   /\ PerStripeSelectionMatchesRequired
   /\ SelectionLengthEqualsPerStripeTotal
   /\ ReducedFanoutIsReconstructable
   /\ TotalSelectionWithinChunkRange
 
-Safety == RbcRs16InitialFanoutCoreSafety
+RbcRs16InitialFanoutExactness ==
+  /\ ReturnDecisionMatchesSpec
+  /\ RequiredCountMatchesSpec
+  /\ SelectedLenMatchesSpec
+  /\ FullFanoutReturnsNone
+  /\ NonRs16ReturnsNone
+  /\ ZeroRequiredReturnsNone
+  /\ DataFanoutUsesDataShardCount
+  /\ DataPlusOneAddsOneWhenAvailable
+  /\ RequiredNeverExceedsStripeWidth
+  /\ SelectionHasNoOutOfRange
+  /\ SelectionHasNoDuplicates
+  /\ SelectionIsSorted
+  /\ EveryStripeCoveredForReducedFanout
+  /\ PerStripeSelectionMatchesRequired
+  /\ SelectionLengthEqualsPerStripeTotal
+  /\ ReducedFanoutIsReconstructable
+  /\ TotalSelectionWithinChunkRange
+
+RbcRs16InitialFanoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcRs16InitialFanoutExactness
+
+Safety == RbcRs16InitialFanoutExactness
 
 ====

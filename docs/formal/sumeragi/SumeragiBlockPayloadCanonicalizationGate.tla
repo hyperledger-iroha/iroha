@@ -245,9 +245,16 @@ PayloadFieldsAreBound ==
   \A c \in FieldChangeCases:
     ActualPayload(c) # ActualPayload("base")
 
-SafetyFast ==
+BlockPayloadCanonicalizationExactness ==
   /\ PayloadMatchesSpec
   /\ ResultsSignaturesAndHeaderRootIgnored
   /\ PayloadFieldsAreBound
+
+BlockPayloadCanonicalizationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockPayloadCanonicalizationExactness
+
+SafetyFast ==
+  BlockPayloadCanonicalizationExactness
 
 ====

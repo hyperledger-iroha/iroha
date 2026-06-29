@@ -340,12 +340,6 @@ IdleViewProposalBudgetPreserveEligibilityExact ==
   /\ AllowedDueProposalPreservesBudget
   /\ NoQueueModeFlipCommitOrEarlyDeadlineDoNotPreserve
 
-IdleViewProposalBudgetPacingExact ==
-  AllowedDueProposalPreservesBudget
-
-IdleViewProposalBudgetHardStopExact ==
-  HardBackpressureDoesNotPreserveBudget
-
 IdleViewProposalBudgetEffectsExact ==
   /\ IdleRepairDeferralMatchesSpec
   /\ ProposalSlotReservationMatchesSpec
@@ -365,8 +359,8 @@ IdleViewProposalBudgetRetryExact ==
 
 IdleViewProposalBudgetExactness ==
   /\ IdleViewProposalBudgetPreserveEligibilityExact
-  /\ IdleViewProposalBudgetPacingExact
-  /\ IdleViewProposalBudgetHardStopExact
+  /\ AllowedDueProposalPreservesBudget
+  /\ HardBackpressureDoesNotPreserveBudget
   /\ IdleViewProposalBudgetEffectsExact
   /\ IdleViewProposalBudgetRetryExact
 

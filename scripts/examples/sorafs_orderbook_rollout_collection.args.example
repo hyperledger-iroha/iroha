@@ -1,0 +1,35 @@
+# Example arguments for the SFM-2 orderbook rollout evidence collection planner.
+# Supply reviewed, payload-free staged evidence paths. Run with:
+#   python3 scripts/run_sorafs_orderbook_rollout_evidence.py @scripts/examples/sorafs_orderbook_rollout_collection.args.example --dry-run
+--out-dir
+artifacts/sorafs/orderbook/staged
+--summary-out
+artifacts/sorafs/orderbook/staged/rollout-summary.json
+--max-evidence-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-stream-lag-ms
+2000
+--max-matcher-lag-ms
+1000
+--min-reconciliation-peers
+4
+--contract-surface-evidence
+artifacts/sorafs/orderbook/staged/contract-surface.json
+--matcher-service-evidence
+artifacts/sorafs/orderbook/staged/matcher-service.json
+--settlement-service-evidence
+artifacts/sorafs/orderbook/staged/settlement-service.json
+--api-gateway-evidence
+artifacts/sorafs/orderbook/staged/api-gateway.json
+--event-streams-evidence
+artifacts/sorafs/orderbook/staged/event-streams.json
+--sdk-release-evidence
+artifacts/sorafs/orderbook/staged/sdk-release.json
+--observability-evidence
+artifacts/sorafs/orderbook/staged/observability.json
+--reconciliation-evidence
+artifacts/sorafs/orderbook/staged/reconciliation.json
+--governance-approval-evidence
+artifacts/sorafs/orderbook/staged/governance-approval.json

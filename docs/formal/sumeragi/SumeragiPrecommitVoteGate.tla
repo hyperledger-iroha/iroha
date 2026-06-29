@@ -184,4 +184,23 @@ PermittedConflictCasesCanEmit ==
 PermittedLockCasesCanEmit ==
   "extendsLockedChain" \in tried => "extendsLockedChain" \in emitted
 
+PrecommitVoteExactness ==
+  /\ EmittedMatchesSpec
+  /\ RejectedMatchesSpec
+  /\ SafeCandidatesAreAccepted
+  /\ UnsafeCandidatesAreRejected
+  /\ InvalidValidationNeverEmits
+  /\ ObserversNeverEmit
+  /\ DuplicateSameSlotNeverEmits
+  /\ UnsupersededConflictNeverEmits
+  /\ OlderConflictCannotUseQuorumCompletion
+  /\ LockedConflictsNeverEmit
+  /\ MissingLockedPayloadNeverEmits
+  /\ PermittedConflictCasesCanEmit
+  /\ PermittedLockCasesCanEmit
+
+PrecommitVoteCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrecommitVoteExactness
+
 ====

@@ -199,6 +199,9 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
+    dispatch_instruction::<iroha_data_model::isi::offline::IssueOfflineNote>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>,
+    dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::KagemushaTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
@@ -726,6 +729,7 @@ pub mod prelude {
 mod tests {
     use std::{num::NonZeroU32, sync::Arc};
 
+    use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -1171,7 +1175,7 @@ mod tests {
         state_transaction.world.dataspace_catalog = dataspace_catalog;
         let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
             .expect("lane count must be nonzero");
-        state_transaction.nexus.lane_catalog = LaneCatalog::new(
+        let lane_catalog = LaneCatalog::new(
             lane_count,
             vec![LaneConfig {
                 id: lane_id,
@@ -1181,6 +1185,8 @@ mod tests {
             }],
         )
         .expect("lane catalog");
+        state_transaction.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+        state_transaction.nexus.lane_catalog = lane_catalog;
     }
 
     fn sample_lane_relay_envelope(
@@ -1534,6 +1540,84 @@ mod tests {
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
             .expect_err("unknown lane id must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("unknown lane id 4")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_stale_geometry_lane_id() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let catalog_lane = LaneId::new(3);
+        let stale_lane = LaneId::new(4);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, catalog_lane);
+        let stale_geometry_catalog = LaneCatalog::new(
+            NonZeroU32::new(stale_lane.as_u32() + 1).expect("nonzero lane count"),
+            vec![LaneConfig {
+                id: stale_lane,
+                dataspace_id: dsid,
+                alias: format!("stale-lane-{}", stale_lane.as_u32()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("stale lane geometry catalog");
+        state_transaction.nexus.lane_config =
+            RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
+        assert!(
+            state_transaction
+                .nexus
+                .lane_config
+                .entry(stale_lane)
+                .is_some(),
+            "test must seed derived geometry for the removed lane"
+        );
+        assert!(
+            state_transaction
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != stale_lane),
+            "test must keep the stale lane out of the authoritative catalog"
+        );
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            stale_lane,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-stale-geometry-lane",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+            effect_proof_blob: None,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("stale derived geometry must not register verified relay state");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(

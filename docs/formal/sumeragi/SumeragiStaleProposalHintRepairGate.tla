@@ -246,8 +246,19 @@ StaleProposalHintRepairCoreSafety ==
   /\ RejectedStaleHintsHaveNoSideEffects
   /\ DaDisabledNeverRepairs
 
-NoBugInvariant == StaleProposalHintRepairCoreSafety
+StaleProposalHintRepairExactness ==
+  /\ ActionsMatchSpec
+  /\ ExactCommittedQcStaleHintSeedsRepair
+  /\ RepairRequiresDaActiveHeightAndOneLateView
+  /\ RepairRequiresExactCommittedQcIdentity
+  /\ RejectedStaleHintsHaveNoSideEffects
+  /\ DaDisabledNeverRepairs
+StaleProposalHintRepairCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ StaleProposalHintRepairExactness
 
-SafetyFast == StaleProposalHintRepairCoreSafety
+NoBugInvariant == StaleProposalHintRepairExactness
+
+SafetyFast == StaleProposalHintRepairExactness
 
 ====

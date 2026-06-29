@@ -1991,16 +1991,28 @@ impl Actor {
         let sender = sender?;
         let roster = {
             let world = self.state.world_view();
-            let sender_lane_ids = crate::state::validator_lane_ids_for_peer(&world, sender);
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
+            let sender_lane_ids = crate::state::validator_lane_ids_for_peer(&world, sender)
+                .into_iter()
+                .filter(|lane_id| {
+                    active_lane_ids
+                        .as_ref()
+                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
+                })
+                .collect::<BTreeSet<_>>();
             if sender_lane_ids.is_empty() {
                 None
             } else {
                 let roster = super::roster::canonicalize_roster_for_mode(
                     super::roster::filter_roster_with_live_consensus_keys_at_height_world(
                         &world,
-                        super::roster::stake_active_validator_roster_for_lanes_from_world(
+                        super::roster::stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
                             &world,
                             &sender_lane_ids,
+                            active_lane_ids.as_ref(),
                         ),
                         block_height,
                     ),
@@ -3049,6 +3061,7 @@ impl Actor {
             );
             return true;
         }
+        let mut inserted_pending_block = false;
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut entry) => {
                 let pending = entry.get_mut();
@@ -3062,35 +3075,21 @@ impl Actor {
                     return false;
                 }
                 if pending.is_retry_aborted() {
-                    pending.revive_after_abort_with_payload_bytes(
-                        block.clone(),
-                        payload_hash,
-                        height,
-                        view,
-                        payload_bytes,
-                    );
+                    pending.revive_after_abort(block.clone(), payload_hash, height, view);
                 } else {
-                    pending.replace_block_with_payload_bytes(
-                        block.clone(),
-                        payload_hash,
-                        height,
-                        view,
-                        payload_bytes,
-                    );
+                    pending.replace_block(block.clone(), payload_hash, height, view);
                 }
                 pending.note_commit_qc_observed(response.commit_qc.epoch);
             }
             Entry::Vacant(entry) => {
-                let mut pending = PendingBlock::new_with_payload_bytes(
-                    block.clone(),
-                    payload_hash,
-                    height,
-                    view,
-                    payload_bytes,
-                );
+                let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
                 pending.note_commit_qc_observed(response.commit_qc.epoch);
                 entry.insert(pending);
+                inserted_pending_block = true;
             }
+        }
+        if inserted_pending_block {
+            self.enforce_pending_block_cap(block_hash, "certified_block_fetch_response");
         }
         self.maybe_cache_rehydrated_kura_body(&block);
         self.deferred_missing_payload_qcs
@@ -6708,7 +6707,11 @@ impl Actor {
         });
         let validated_qc = candidate_qc.as_ref().and_then(|qc| {
             let world_view = self.state.world_view();
-            match validate_block_sync_qc(
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
+            match validate_block_sync_qc_with_active_lanes(
                 qc,
                 &topology,
                 &world_view,
@@ -6721,6 +6724,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 aggregate_ok,
+                active_lane_ids.as_ref(),
             ) {
                 Ok((signers, present_signers)) => {
                     cached_qc_tally = Some(QcSignerTally {
@@ -6782,7 +6786,11 @@ impl Actor {
             )
             .and_then(|qc| {
                 let world_view = self.state.world_view();
-                validate_block_sync_qc(
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                validate_block_sync_qc_with_active_lanes(
                     &qc,
                     &topology,
                     &world_view,
@@ -6795,6 +6803,7 @@ impl Actor {
                     mode_tag,
                     prf_seed,
                     Some(true),
+                    active_lane_ids.as_ref(),
                 )
                 .ok()
                 .map(|_| qc)
@@ -7458,6 +7467,10 @@ impl Actor {
                         }
                         BlockSyncSelectedQcProcessTallySource::Fresh => {
                             let world_view = self.state.world_view();
+                            let nexus = self.state.nexus_snapshot();
+                            let active_lane_ids = nexus
+                                .enabled
+                                .then(|| crate::state::nexus_active_lane_ids(&nexus));
                             tally_qc_against_block_signers(
                                 &qc,
                                 &topology,
@@ -7471,6 +7484,7 @@ impl Actor {
                                 mode_tag,
                                 prf_seed,
                                 None,
+                                active_lane_ids.as_ref(),
                             )
                         }
                     };
@@ -7881,6 +7895,10 @@ impl Actor {
         let qc_signers = qc_signer_count(&qc);
         let tally_result = {
             let world_view = self.state.world_view();
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             tally_qc_against_block_signers(
                 &qc,
                 topology,
@@ -7894,6 +7912,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 None,
+                active_lane_ids.as_ref(),
             )
         };
         match tally_result {
@@ -8891,18 +8910,13 @@ impl Actor {
 
         let payload_bytes = super::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
-        let mut pending = PendingBlock::new_with_payload_bytes(
-            block.clone(),
-            payload_hash,
-            block_height,
-            block_view,
-            payload_bytes,
-        );
+        let mut pending = PendingBlock::new(block.clone(), payload_hash, block_height, block_view);
         if let Some(epoch) = observed_commit_qc_epoch.or(deferred_commit_qc_epoch) {
             pending.note_commit_qc_observed(epoch);
         }
 
         self.pending.pending_blocks.insert(block_hash, pending);
+        self.enforce_pending_block_cap(block_hash, "frontier_block_sync_payload");
         self.deferred_block_sync_updates
             .remove(&(block_height, block_view, block_hash));
         self.flush_frontier_body_requesters(block);
@@ -9067,6 +9081,44 @@ impl Actor {
                 "dropping duplicate known-block QC work item"
             );
             return;
+        }
+        match bounded_qc_insert_decision(&self.known_block_qc_work, key, KNOWN_BLOCK_QC_WORK_CAP) {
+            BoundedQcInsertDecision::Insert => {}
+            BoundedQcInsertDecision::DropIncoming => {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::Backpressure,
+                );
+                debug!(
+                    phase = ?work.qc.phase,
+                    height = work.qc.height,
+                    view = work.qc.view,
+                    block = %work.qc.subject_block_hash,
+                    cap = KNOWN_BLOCK_QC_WORK_CAP,
+                    "dropping known-block QC work because bounded queue is full"
+                );
+                return;
+            }
+            BoundedQcInsertDecision::Evict(evicted) => {
+                self.known_block_qc_work.remove(&evicted);
+                super::status::inc_qc_deferred_expired();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_qc_deferred_expired();
+                }
+                debug!(
+                    phase = ?work.qc.phase,
+                    height = work.qc.height,
+                    view = work.qc.view,
+                    block = %work.qc.subject_block_hash,
+                    evicted_height = evicted.2,
+                    evicted_view = evicted.3,
+                    evicted_block = %evicted.1,
+                    cap = KNOWN_BLOCK_QC_WORK_CAP,
+                    "evicting older known-block QC work from bounded queue"
+                );
+            }
         }
         self.known_block_qc_work.insert(key, work);
         self.record_consensus_message_handling(
@@ -9320,6 +9372,10 @@ impl Actor {
                 }
             };
             let world_view = self.state.world_view();
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             tally_qc_against_block_signers(
                 &qc,
                 &topology,
@@ -9333,6 +9389,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 aggregate_ok,
+                active_lane_ids.as_ref(),
             )
         };
         let tally = match tally {

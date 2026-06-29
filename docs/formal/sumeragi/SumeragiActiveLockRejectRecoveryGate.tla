@@ -297,6 +297,21 @@ NoBugInvariant ==
   /\ ViewChangeReportedOnlyForRotate
   /\ RejectedBranchNeverAdmitted
 
-SafetyFast == NoBugInvariant
+ActiveLockRejectRecoveryExactness ==
+  /\ ActionsMatchSpec
+  /\ NonActiveHeightReturnsEarly
+  /\ QcFetchFollowsEvidence
+  /\ ActiveRecoveryUsesMissingQcContext
+  /\ PristineNoneFallbackReentersViewChange
+  /\ NonPristineRecoveryIsPreserved
+  /\ ViewChangeReportedOnlyForRotate
+  /\ RejectedBranchNeverAdmitted
+
+ActiveLockRejectRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ActiveLockRejectRecoveryExactness
+
+SafetyFast ==
+  ActiveLockRejectRecoveryExactness
 
 ====
