@@ -552,6 +552,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal self-inequality exactness helper wrappers count as self-inequality helpers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Constant-relation exactness helpers count as literal helpers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Static and unary-temporal boolean-only exactness helper wrappers count as",
         f"Sumeragi formal README {readme} is missing required text: "
         "Static IF literal exactness helpers count as literal helpers",
@@ -655,6 +657,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Transitive allowlisted temporal helper chains must not hide self-equality helpers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Transitive allowlisted temporal helper chains must not hide self-inequality helpers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Constant-relation temporal helpers count as literal temporal helpers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Compound `[]`/`<>` temporal helper bodies are traversed for helper references",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -3124,6 +3128,21 @@ def test_tla_static_if_boolean_literal_evaluates_static_condition_branch() -> No
         )
         is None
     )
+
+
+def test_tla_static_constant_relation_detects_identifier_free_relations() -> None:
+    module = load_coverage_module()
+
+    assert module.tla_static_constant_relation("TRUE = TRUE") == "TRUE = TRUE"
+    assert module.tla_static_constant_relation("FALSE # TRUE") == "FALSE # TRUE"
+    assert module.tla_static_constant_relation("1 \\in {1}") == "1 \\in {1}"
+    assert module.tla_static_constant_relation('"a" = "a"') == '"a" = "a"'
+    assert module.tla_static_constant_relation("{} = {}") == "{} = {}"
+    assert module.tla_static_constant_relation("checked = ready") is None
+    assert module.tla_static_constant_relation('"case" \\in tried') is None
+    assert module.tla_static_constant_relation("TRUE") is None
+    assert module.tla_static_constant_relation("TRUE => FALSE") is None
+    assert module.tla_static_constant_relation("TRUE <=> FALSE") is None
 
 
 def test_temporal_helper_references_descend_into_compound_temporal_bodies() -> None:
@@ -6033,7 +6052,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_missing_type_invariant(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "FrontierDecisionMatchesSpec == 1 = 1",
+                "FrontierDecisionMatchesSpec == checked = ready",
                 "FrontierExactness ==",
                 "  /\\ FrontierDecisionMatchesSpec",
                 "FrontierCorrectnessEnvelope ==",
@@ -6120,7 +6139,7 @@ def test_cfg_correctness_envelope_shape_errors_accepts_exactness_envelope(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "FrontierDecisionMatchesSpec == 1 = 1",
+                "FrontierDecisionMatchesSpec == checked = ready",
                 "FrontierExactness ==",
                 "  /\\ FrontierDecisionMatchesSpec",
                 "FrontierCorrectnessEnvelope ==",
@@ -6309,7 +6328,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_safetyfast_exactness(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "SafetyFast == ModelPredicate",
                 "SafetyFastExactness == SafetyFast",
                 "SafetyFastCorrectnessEnvelope ==",
@@ -6355,7 +6374,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_safety_exactness(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "Safety == ModelPredicate",
                 "SafetyExactness == Safety",
                 "SafetyCorrectnessEnvelope ==",
@@ -6401,7 +6420,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_mixed_generic_exactness(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "Safety == ModelPredicate",
                 "MixedExactness ==",
                 "  /\\ Safety",
@@ -6449,7 +6468,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_exactness_direct_alias(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "AliasExactness == ModelPredicate",
                 "AliasCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
@@ -6623,6 +6642,54 @@ def test_cfg_correctness_envelope_shape_errors_rejects_static_if_literal_exactne
         f"StaticIfLiteralExactness at {tla}:7 contains literal exactness "
         f"conjunct StaticIfLiteral at {tla}:5 is static IF literal TRUE; "
         "compose concrete model predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_constant_relation_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiConstantRelationConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiConstantRelationConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiConstantRelationConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConstantRelation == TRUE = TRUE",
+                "ConstantRelationExactness ==",
+                "  /\\ ConstantRelation",
+                "ConstantRelationCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ConstantRelationExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ConstantRelationCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "constant-relation-conjunct-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"constant-relation-conjunct-envelope-fast: TLC cfg {cfg}:4 "
+        "references correctness envelope "
+        "ConstantRelationCorrectnessEnvelope, but exactness conjunct "
+        f"ConstantRelationExactness at {tla}:7 contains constant-relation "
+        f"exactness conjunct ConstantRelation at {tla}:5 is constant "
+        "relation TRUE = TRUE; compose concrete model predicates directly"
     ]
 
 
@@ -6829,7 +6896,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_exactness_c
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ParameterizedPredicate(c) == 1 = 1",
+                "ParameterizedPredicate(c) == checked = ready",
                 "ParameterizedExactness ==",
                 "  /\\ ParameterizedPredicate",
                 "ParameterizedCorrectnessEnvelope ==",
@@ -6876,7 +6943,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_parameterized_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "ParameterizedLeaf(c) == ModelPredicate",
                 "ParameterizedWrapper ==",
                 "  /\\ ParameterizedLeaf",
@@ -6929,7 +6996,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_transitive_param
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "ParameterizedLeaf(c) == ModelPredicate",
                 "ParameterizedWrapper == ParameterizedLeaf \\/ ModelPredicate",
                 "CompoundTransitiveParameterizedExactness ==",
@@ -7051,7 +7118,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_parameterized_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ParameterizedLeaf(c) == 1 = 1",
+                "ParameterizedLeaf(c) == checked = ready",
                 "ParameterizedCallWrapper == [] ParameterizedLeaf(1)",
                 "TransitiveParameterizedCallExactness ==",
                 "  /\\ ParameterizedCallWrapper",
@@ -7281,7 +7348,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_hidden_coverage_conjuncts
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
                 "SafetyFast == ModelPredicate",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "OtherExactness ==",
                 "  /\\ ModelPredicate",
                 "HiddenCoverageAnchors ==",
@@ -7338,7 +7405,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_hidden_coverag
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
                 "SafetyFast == ModelPredicate",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "OtherExactness ==",
                 "  /\\ ModelPredicate",
                 "HiddenCoverageLeaf ==",
@@ -7402,7 +7469,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_duplicate_exac
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "LeafPredicate == 1 = 1",
+                "LeafPredicate == checked = ready",
                 "DuplicateWrapper ==",
                 "  /\\ LeafPredicate",
                 "  /\\ LeafPredicate",
@@ -7455,7 +7522,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_wrapped_duplicate_exactne
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "LeafPredicate == 1 = 1",
+                "LeafPredicate == checked = ready",
                 "DuplicateWrapper == [] (LeafPredicate /\\ [] LeafPredicate)",
                 "WrappedDuplicateExactness ==",
                 "  /\\ DuplicateWrapper",
@@ -7506,7 +7573,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_duplicate_exact
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "LeafPredicate == 1 = 1",
+                "LeafPredicate == checked = ready",
                 "DuplicateWrapper == LeafPredicate /\\ (LET selected == LeafPredicate IN selected)",
                 "LetAliasDuplicateExactness ==",
                 "  /\\ DuplicateWrapper",
@@ -7556,7 +7623,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_duplicate_exactn
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "LeafPredicate == 1 = 1",
+                "LeafPredicate == checked = ready",
                 "OtherPredicate == 2 = 2",
                 "DuplicateWrapper == (LeafPredicate /\\ LeafPredicate) \\/ OtherPredicate",
                 "CompoundDuplicateExactness ==",
@@ -7859,7 +7926,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_control_flow_e
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "OtherPredicate == 2 = 2",
                 "ControlFlowWrapper == IF TRUE THEN ModelPredicate ELSE OtherPredicate",
                 "TransitiveControlFlowExactness ==",
@@ -7913,7 +7980,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_control_fl
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "OtherPredicate == 2 = 2",
                 "ControlFlowWrapper == [] (IF TRUE THEN ModelPredicate ELSE OtherPredicate)",
                 "UnaryTemporalControlFlowExactness ==",
@@ -9654,7 +9721,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_vacuous_exactn
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "LiteralLeaf == [] (TRUE /\\ TRUE)",
                 "AliasLeaf == ModelPredicate",
                 "LiteralWrapper ==",
@@ -9759,6 +9826,60 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_static_if_lite
     ]
 
 
+def test_cfg_correctness_envelope_shape_errors_rejects_transitive_constant_relation_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiTransitiveConstantRelationEnvelope.tla"
+    cfg = tmp_path / "SumeragiTransitiveConstantRelationEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveConstantRelationEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == checked = ready",
+                "ConstantRelationLeaf == 1 \\in {1}",
+                "ConstantRelationWrapper == ModelPredicate /\\ ConstantRelationLeaf",
+                "TransitiveConstantRelationExactness ==",
+                "  /\\ ConstantRelationWrapper",
+                "TransitiveConstantRelationCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ TransitiveConstantRelationExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT TransitiveConstantRelationCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "transitive-constant-relation-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"transitive-constant-relation-envelope-fast: Apalache cfg {cfg}:4 "
+        "references correctness envelope "
+        "TransitiveConstantRelationCorrectnessEnvelope, but exactness conjunct "
+        f"TransitiveConstantRelationExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with vacuous conjunct "
+        "ConstantRelationWrapper reaches ConstantRelationLeaf through "
+        f"ConstantRelationWrapper -> ConstantRelationLeaf at {tla}:6 is "
+        "constant relation 1 \\in {1}; keep literal, self-equality, "
+        "self-inequality, and alias helpers out of named exactness predicate "
+        "chains"
+    ]
+
+
 def test_cfg_correctness_envelope_shape_errors_rejects_compound_transitive_vacuous_exactness(
     tmp_path: Path,
 ) -> None:
@@ -9772,7 +9893,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_transitive_vacuo
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "LiteralLeaf == [] (TRUE /\\ TRUE)",
                 "AliasLeaf == ModelPredicate",
                 "CompoundLiteralWrapper == LiteralLeaf \\/ ModelPredicate",
@@ -10291,7 +10412,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_undefined_exactness_conju
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "KnownPredicate == 1 = 1",
+                "KnownPredicate == checked = ready",
                 "MissingConjunctExactness ==",
                 "  /\\ KnownPredicate",
                 "  /\\ MissingPredicate",
@@ -10388,7 +10509,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_transitive_undef
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "Wrapper == MissingPredicate \\/ ModelPredicate",
                 "CompoundTransitiveUndefinedExactness ==",
                 "  /\\ Wrapper",
@@ -11346,7 +11467,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_mixed_non_named_conjunct(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "NamedPredicate == 1 = 1",
+                "NamedPredicate == checked = ready",
                 "MixedNonNamedExactness ==",
                 "  /\\ NamedPredicate",
                 "  /\\ TRUE",
@@ -11493,7 +11614,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nested_exactness_conjunct
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ConcretePredicate == 1 = 1",
+                "ConcretePredicate == checked = ready",
                 "ChildExactness ==",
                 "  /\\ ConcretePredicate",
                 "ParentExactness ==",
@@ -11541,7 +11662,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_type_invariant_exactness(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "TypeMixedExactness ==",
                 "  /\\ TypeInvariant",
                 "  /\\ ModelPredicate",
@@ -11588,7 +11709,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nested_type_and_exactness
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "NestedExactness ==",
                 "  /\\ ModelPredicate",
                 "NestedCorrectnessEnvelope ==",
@@ -11642,7 +11763,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_duplicate_envelope_conjun
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "DuplicateExactness ==",
                 "  /\\ ModelPredicate",
                 "DuplicateCorrectnessEnvelope ==",
@@ -11689,7 +11810,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_mixed_non_named_envelope_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "NonNamedExactness ==",
                 "  /\\ ModelPredicate",
                 "NonNamedCorrectnessEnvelope ==",
@@ -11736,7 +11857,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_envelope_co
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant(c) == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "ParameterizedEnvelopeExactness ==",
                 "  /\\ ModelPredicate",
                 "ParameterizedEnvelopeCorrectnessEnvelope ==",
@@ -11784,7 +11905,7 @@ def test_cfg_correctness_envelope_shape_errors_accepts_parenthesized_direct_conj
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "ParenthesizedExactness ==",
                 "  /\\ ModelPredicate",
                 "ParenthesizedCorrectnessEnvelope ==",
@@ -11825,7 +11946,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_generic_envelope_body(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "SafetyFast == ModelPredicate",
                 "EnvelopeExactness ==",
                 "  /\\ ModelPredicate",
@@ -11874,7 +11995,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_non_exactness_body(
                 "TypeInvariant == TRUE",
                 "EnvelopeExactness ==",
                 "  /\\ ModelPredicate",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "ExtraAnchor == ModelPredicate",
                 "MixedAnchorCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
@@ -11919,7 +12040,7 @@ def test_cfg_correctness_envelope_shape_errors_accepts_top_level_temporal_extras
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -11984,7 +12105,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_self_equality_temporal_ex
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -12045,7 +12166,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_self_inequality_temporal_
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -12088,7 +12209,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_control_flow_temporal_ext
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -12160,7 +12281,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_boolean_composition_tempo
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     "TemporalCommitPredicate == [] (Gst => <> Committed)",
                     "TemporalRecoveryPredicate == [] (Gst => <> Recovered)",
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -12203,7 +12324,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_helper_boo
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalCommitPredicate == [] (gst => <> committed)",
                 "TemporalRecoveryPredicate == [] (gst => <> recovered)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -12295,7 +12416,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_unary_temporal_concrete_fo
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] (gst => <> committed)",
@@ -12340,7 +12461,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_control_flow_t
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalCommitPredicate == [] (Gst => <> Committed)",
                 "TemporalRecoveryPredicate == [] (Gst => <> Recovered)",
                 "TemporalControlFlowHelper == IF TRUE THEN TemporalCommitPredicate ELSE TemporalRecoveryPredicate",
@@ -12401,7 +12522,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_control_fl
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalCommitPredicate == [] (Gst => <> Committed)",
                 "TemporalRecoveryPredicate == [] (Gst => <> Recovered)",
                 "TemporalControlFlowHelper == [] (IF TRUE THEN TemporalCommitPredicate ELSE TemporalRecoveryPredicate)",
@@ -12958,7 +13079,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_boolean_compos
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     "TemporalCommitPredicate == [] (Gst => <> Committed)",
                     "TemporalRecoveryPredicate == [] (Gst => <> Recovered)",
                     f"TemporalBooleanWrapper == {temporal_body}",
@@ -13018,7 +13139,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_gated_negated_tem
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalCommitPredicate == [] (Gst => <> Committed)",
                 "TemporalBooleanWrapper == TRUE /\\ ~TemporalCommitPredicate",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -13140,7 +13261,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_concrete_boolean_formula_t
                 "TypeInvariant == TRUE",
                 "ConcreteTemporalLeaf == committed => commitVotes >= CommitQuorum",
                 "TemporalFormulaWrapper == [] ConcreteTemporalLeaf",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalFormulaWrapper",
@@ -13185,7 +13306,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_temporal_extra(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13236,7 +13357,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_static_if_literal_tempora
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13274,6 +13395,57 @@ def test_cfg_correctness_envelope_shape_errors_rejects_static_if_literal_tempora
     ]
 
 
+def test_cfg_correctness_envelope_shape_errors_rejects_constant_relation_temporal_extra(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == 1 \\in {1}",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 is "
+        "constant relation 1 \\in {1}; temporal correctness-envelope "
+        "exceptions must stay nontrivial"
+    ]
+
+
 def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_literal_extra(
     tmp_path: Path,
 ) -> None:
@@ -13287,7 +13459,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_literal_ex
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13338,7 +13510,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_negated_unary_temporal_li
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13389,7 +13561,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_unary_temporal_l
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13440,7 +13612,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_temporal_extra
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreStateSafetyEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13499,7 +13671,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_temporal_he
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreStateSafetyEnvelope(c) == SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13581,7 +13753,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_temporal_he
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     "SumeragiConsensusCoreStateSafetyEnvelope(c) == SumeragiConsensusCoreStateMatchesEnvelope",
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13628,7 +13800,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_temporal_he
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreStateSafetyEnvelope(c) == SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13686,7 +13858,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_parameterized_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreStateSafetyEnvelope(c) == SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreTemporalCallHelper == SumeragiConsensusCoreStateSafetyEnvelope(1)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -13743,7 +13915,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_undefined_temporal_helper
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] MissingTemporalPredicate",
@@ -13800,7 +13972,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_undefined_temp
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalWrapper == [] MissingTemporalPredicate",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -13856,7 +14028,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_quantified_undefined_temp
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "QuantifiedTemporalLeaf == \\A c \\in Cases: MissingTemporalHelper",
@@ -13913,7 +14085,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_existential_quantified_te
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "Predicate(c) == checked = c",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -14068,7 +14240,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_tempor
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     f"VacuousTemporalLeaf == {formula}",
@@ -14114,7 +14286,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_t
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "ConcreteTemporalPredicate == gst => <> committed",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -14173,7 +14345,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_control_flow_quantified_t
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "Predicate(c) == ready = c",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -14232,7 +14404,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nontransparent_let_quanti
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "NonTransparentLetTemporalLeaf == \\A c \\in Cases: LET local(x) == TRUE IN local(c)",
@@ -14290,7 +14462,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_negated_quantified_tempor
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "Predicate(c) == checked = c",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -14349,7 +14521,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_negated_quantif
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "Predicate(c) == checked = c",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -14467,7 +14639,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_undefined_tempor
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalKnown == [] (gst => <> committed)",
                 "TemporalWrapper == [] (TemporalKnown \\/ MissingTemporalPredicate)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -14523,7 +14695,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_uppercase_temporal_formula
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreStateSafetyEnvelope == [] (Gst => <> Committed)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -14569,7 +14741,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_duplicate_temp
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "TemporalDuplicateWrapper ==",
                 "  /\\ TemporalLeaf",
@@ -14628,7 +14800,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_wrapped_duplicate_tempora
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "TemporalDuplicateWrapper == [] (TemporalLeaf /\\ [] TemporalLeaf)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -14685,7 +14857,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_duplicate_tempo
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "TemporalDuplicateWrapper == TemporalLeaf /\\ (LET selected == TemporalLeaf IN selected)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -14742,7 +14914,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_compound_duplicate_tempor
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "OtherTemporal == [] (committed => gst)",
                 "TemporalDuplicateWrapper == [] ((TemporalLeaf /\\ TemporalLeaf) \\/ OtherTemporal)",
@@ -14800,7 +14972,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_repeated_boolean_operand_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "TemporalDuplicateWrapper == TemporalLeaf \\/ [] TemporalLeaf",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -14857,7 +15029,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_contradictory_temporal_he
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "TemporalContradictoryWrapper == TemporalLeaf /\\ ~TemporalLeaf",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -14915,7 +15087,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_excluded_middle_temporal_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == [] (gst => <> committed)",
                 "TemporalExcludedMiddleWrapper == TemporalLeaf \\/ ~TemporalLeaf",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -14973,7 +15145,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_complementary_equivalence
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLeaf == checked /\\ ready",
                 "TemporalComplementaryEquivalenceWrapper == TemporalLeaf <=> ~TemporalLeaf",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -15033,7 +15205,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_repeated_state_terms_in_te
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalConcrete ==",
                 "  /\\ gst",
                 "  /\\ gst",
@@ -15081,8 +15253,8 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_vacuous_tempor
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
-                "TemporalConcrete == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "TemporalConcrete == checked = ready",
                 "TemporalLiteralLeaf == [] (TRUE /\\ TRUE)",
                 "TemporalAliasLeaf == TemporalConcrete",
                 "TemporalWrapper ==",
@@ -15131,6 +15303,121 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_vacuous_tempor
     ]
 
 
+def test_cfg_correctness_envelope_shape_errors_rejects_transitive_static_if_literal_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "TemporalStaticIfLeaf == IF FALSE THEN TRUE ELSE FALSE",
+                "TemporalWrapper == [] TemporalStaticIfLeaf",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        f"SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:10 contains transitive temporal side-conjunct chain with "
+        "vacuous helper TemporalWrapper reaches TemporalStaticIfLeaf through "
+        f"TemporalWrapper -> TemporalStaticIfLeaf at {tla}:6 is static IF "
+        "literal FALSE; keep literal, self-equality, self-inequality, and "
+        "alias helpers out of allowlisted temporal side-conjunct chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_transitive_constant_relation_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "TemporalConstantRelationLeaf == TRUE = TRUE",
+                "TemporalWrapper == [] TemporalConstantRelationLeaf",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        f"SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:10 contains transitive temporal side-conjunct chain with "
+        "vacuous helper TemporalWrapper reaches TemporalConstantRelationLeaf "
+        "through TemporalWrapper -> TemporalConstantRelationLeaf at "
+        f"{tla}:6 is constant relation TRUE = TRUE; keep literal, "
+        "self-equality, self-inequality, and alias helpers out of "
+        "allowlisted temporal side-conjunct chains"
+    ]
+
+
 def test_cfg_correctness_envelope_shape_errors_rejects_negated_transitive_vacuous_temporal_helper(
     tmp_path: Path,
 ) -> None:
@@ -15144,7 +15431,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_negated_transitive_vacuou
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalLiteralLeaf == [] (TRUE /\\ TRUE)",
                 "TemporalNegatedWrapper == [] (~TemporalLiteralLeaf)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -15201,7 +15488,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_single_conjunct_temporal_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalFormulaLeaf == checked = ready",
                 "TemporalWrapper ==",
                 "  /\\ TemporalFormulaLeaf",
@@ -15260,7 +15547,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_single_con
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalFormulaLeaf == checked = ready",
                 "TemporalWrapper == [] (/\\ TemporalFormulaLeaf)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -15318,7 +15605,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_gated_single_conj
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalFormulaLeaf == checked = ready",
                 "TemporalWrapper == TRUE => (/\\ TemporalFormulaLeaf)",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -15376,7 +15663,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_gated_zero_arity_
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalFormulaLeaf == checked = ready",
                 "TemporalWrapper == TRUE /\\ TemporalFormulaLeaf",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
@@ -15434,7 +15721,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_direct_formula_temporal_he
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalFormulaLeaf == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -15537,7 +15824,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_self_equality_temporal_he
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "TemporalSelfEqualityLeaf == checked = checked",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -15614,7 +15901,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_self_inequality_temporal_
                     "Init == TRUE",
                     "Next == TRUE",
                     "TypeInvariant == TRUE",
-                    "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                     f"TemporalSelfInequalityLeaf == {formula}",
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
@@ -15660,7 +15947,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_stale_temporal_allowlist(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
@@ -15708,7 +15995,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_top_level_direct_alias_ex
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateSafetyEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateSafetyEnvelope == checked = ready",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  SumeragiConsensusCoreStateSafetyEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateSafetyEnvelope",
@@ -15759,7 +16046,7 @@ def test_cfg_direct_exactness_shape_errors_rejects_mixed_generic_exactness(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "Safety == ModelPredicate",
                 "DirectMixedExactness ==",
                 "  /\\ Safety",
@@ -15807,7 +16094,7 @@ def test_cfg_direct_exactness_shape_errors_rejects_direct_alias(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "DirectAliasExactness == ModelPredicate",
                 "DirectAliasCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
@@ -15852,7 +16139,7 @@ def test_cfg_direct_exactness_shape_errors_rejects_nested_exactness_conjunct(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ConcretePredicate == 1 = 1",
+                "ConcretePredicate == checked = ready",
                 "ChildExactness ==",
                 "  /\\ ConcretePredicate",
                 "ParentExactness ==",
@@ -15999,7 +16286,7 @@ def test_cfg_direct_exactness_shape_errors_rejects_type_invariant_exactness(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "DirectTypeExactness ==",
                 "  /\\ TypeInvariant",
                 "  /\\ ModelPredicate",
@@ -16099,7 +16386,7 @@ def test_cfg_direct_exactness_envelope_pairing_errors_rejects_unpaired_exactness
                 "  /\\ ModelPredicate",
                 "PairedExactness ==",
                 "  /\\ ModelPredicate",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "PairedCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ PairedExactness",
@@ -16145,7 +16432,7 @@ def test_cfg_direct_exactness_envelope_pairing_errors_accepts_paired_exactness(
                 "TypeInvariant == TRUE",
                 "PairedExactness ==",
                 "  /\\ ModelPredicate",
-                "ModelPredicate == 1 = 1",
+                "ModelPredicate == checked = ready",
                 "PairedCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ PairedExactness",
@@ -16188,7 +16475,7 @@ def test_cfg_correctness_envelope_shape_errors_accepts_fast_exactness_envelope(
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "SumeragiConsensusCoreStateSafetyEnvelope == 1 = 1",
+                "SumeragiConsensusCoreStateSafetyEnvelope == checked = ready",
                 "SumeragiConsensusCoreExactness ==",
                 "  /\\ SumeragiConsensusCoreStateSafetyEnvelope",
                 "SumeragiConsensusCoreFastCorrectnessEnvelope ==",

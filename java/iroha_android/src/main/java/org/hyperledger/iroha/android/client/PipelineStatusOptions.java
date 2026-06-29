@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -12,8 +13,10 @@ import java.util.Set;
  */
 public final class PipelineStatusOptions {
 
-  private static final List<String> DEFAULT_SUCCESS = List.of("Approved", "Committed", "Applied");
-  private static final List<String> DEFAULT_FAILURE = List.of("Rejected", "Expired");
+  private static final List<String> DEFAULT_SUCCESS =
+      Collections.unmodifiableList(Arrays.asList("Approved", "Committed", "Applied"));
+  private static final List<String> DEFAULT_FAILURE =
+      Collections.unmodifiableList(Arrays.asList("Rejected", "Expired"));
 
   public interface StatusObserver {
     void onStatus(String statusKind, Map<String, Object> payload, int attempt);

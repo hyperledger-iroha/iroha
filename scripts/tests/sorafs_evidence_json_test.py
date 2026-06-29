@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,10 +16,12 @@ if str(SCRIPTS_DIR) not in sys.path:
 from sorafs_evidence_json import (  # noqa: E402
     decode_evidence_json,
     EvidenceFileTooLargeError,
+    evidence_read_open_flags,
     load_evidence_json,
     load_evidence_json_with_sha256,
     load_evidence_json_with_sha256_or_record_error,
     read_evidence_bytes,
+    validate_evidence_file_for_read,
 )
 
 
@@ -52,6 +55,29 @@ def test_load_evidence_json_with_sha256_or_record_error_returns_payload(
 
     assert loaded == ({"schema": "test"}, hashlib.sha256(raw).hexdigest())
     assert errors == []
+
+
+def test_read_evidence_bytes_uses_no_follow_open_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    raw = b'{"schema":"test"}'
+    evidence.write_bytes(raw)
+    original_open = os.open
+    captured: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == evidence:
+            captured["flags"] = flags
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_path)
+
+    assert read_evidence_bytes(evidence, 1024) == raw
+    assert captured["flags"] == evidence_read_open_flags()
+    if hasattr(os, "O_NOFOLLOW"):
+        assert captured["flags"] & os.O_NOFOLLOW
 
 
 def test_load_evidence_json_with_sha256_or_record_error_records_failure(
@@ -185,20 +211,97 @@ def test_load_evidence_json_rejects_invalid_byte_limit_without_traceback(
             raise AssertionError(f"expected byte limit {max_bytes!r} to fail")
 
 
+def test_read_evidence_bytes_rejects_symlink_before_open(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    symlink = tmp_path / "evidence.json"
+    target.write_text('{"schema":"test"}', encoding="utf-8")
+    symlink.symlink_to(target)
+
+    try:
+        read_evidence_bytes(symlink, 1024)
+    except ValueError as error:
+        assert str(error) == f"evidence file `{symlink}` must not be a symlink"
+    else:
+        raise AssertionError("expected symlink evidence read to fail")
+
+
+def test_read_evidence_bytes_rejects_directory_before_open(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+
+    try:
+        read_evidence_bytes(evidence_dir, 1024)
+    except ValueError as error:
+        assert (
+            str(error)
+            == f"evidence file `{evidence_dir}` must exist and be a file"
+        )
+    else:
+        raise AssertionError("expected directory evidence read to fail")
+
+
+def test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink(
+    tmp_path: Path,
+) -> None:
+    target_root = tmp_path / "target-root"
+    symlink_root = tmp_path / "evidence-root"
+    target = target_root / "evidence.json"
+    target_root.mkdir()
+    target.write_text('{"schema":"test"}', encoding="utf-8")
+    symlink_root.symlink_to(target_root, target_is_directory=True)
+
+    evidence = symlink_root / "evidence.json"
+    errors: list[str] = []
+    loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
+
+    assert loaded is None
+    assert errors == [
+        f"{evidence}: failed to load evidence JSON: "
+        f"evidence file parent `{symlink_root}` must not be a symlink"
+    ]
+
+
+def test_validate_evidence_file_for_read_records_inspection_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"schema":"test"}', encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+
+    def is_symlink(path: Path) -> bool:
+        if path == evidence:
+            raise RuntimeError("evidence symlink stat denied")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+    try:
+        validate_evidence_file_for_read(evidence)
+    except RuntimeError as error:
+        assert (
+            str(error)
+            == f"evidence file `{evidence}` cannot be inspected: "
+            "evidence symlink stat denied"
+        )
+    else:
+        raise AssertionError("expected evidence inspection failure")
+
+
 def test_load_evidence_json_with_sha256_or_record_error_records_runtime_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     evidence = tmp_path / "evidence.json"
     evidence.write_text('{"schema":"test"}', encoding="utf-8")
-    original_open = Path.open
+    original_open = os.open
 
-    def open_path(path: Path, *args, **kwargs):
+    def open_path(path: Path, flags: int, *args, **kwargs):
         if path == evidence:
             raise RuntimeError("evidence read denied")
-        return original_open(path, *args, **kwargs)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", open_path)
+    monkeypatch.setattr(os, "open", open_path)
     errors: list[str] = []
 
     loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)

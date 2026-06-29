@@ -184,48 +184,47 @@ final class OfflineNoteV2Tests: XCTestCase {
         )
     }
 
-    func testOfflineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes() throws {
+    func testOfflineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes() throws {
         let fixture = try Self.loadFixture()
         let issue = try Self.issue(fixture)
         let audit = try Self.audit(fixture)
         let redeem = try Self.redeem(fixture)
+        let retiredIssueInstructionAlias = "iroha_data_model::isi::offline::IssueOfflineNoteV2"
+        let retiredAuditInstructionAlias = "iroha_data_model::isi::offline::AuditOfflineNoteV2"
+        let retiredRedeemInstructionAlias = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
         let issueAliasWirePayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.issueInstructionAlias,
+            typeName: retiredIssueInstructionAlias,
             modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
         )
         let auditAliasWirePayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.auditInstructionAlias,
+            typeName: retiredAuditInstructionAlias,
             modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
         )
         let redeemAliasWirePayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.redeemInstructionAlias,
+            typeName: retiredRedeemInstructionAlias,
             modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
         )
 
-        XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeIssueInstruction(issueAliasWirePayload).noritoEncoded().base64EncodedString(),
-            try issue.noritoEncoded().base64EncodedString()
-        )
-        XCTAssertEqual(
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeIssueInstruction(issueAliasWirePayload))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeAuditInstruction(auditAliasWirePayload))
+        XCTAssertThrowsError(try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemAliasWirePayload))
+        XCTAssertThrowsError(
             try OfflineNoteV2Decoding.decodeIssueInstruction(Self.rawInstructionPair(
-                wireName: OfflineNoteV2TypeNames.issueInstructionAlias,
+                wireName: retiredIssueInstructionAlias,
                 wirePayload: issueAliasWirePayload
-            )).noritoEncoded().base64EncodedString(),
-            try issue.noritoEncoded().base64EncodedString()
+            ))
         )
-        XCTAssertEqual(
+        XCTAssertThrowsError(
             try OfflineNoteV2Decoding.decodeAuditInstruction(Self.rawInstructionPair(
-                wireName: OfflineNoteV2TypeNames.auditInstructionAlias,
+                wireName: retiredAuditInstructionAlias,
                 wirePayload: auditAliasWirePayload
-            )).noritoEncoded().base64EncodedString(),
-            try audit.noritoEncoded().base64EncodedString()
+            ))
         )
-        XCTAssertEqual(
+        XCTAssertThrowsError(
             try OfflineNoteV2Decoding.decodeRedeemInstruction(Self.rawInstructionPair(
-                wireName: OfflineNoteV2TypeNames.redeemInstructionAlias,
+                wireName: retiredRedeemInstructionAlias,
                 wirePayload: redeemAliasWirePayload
-            )).noritoEncoded().base64EncodedString(),
-            try redeem.noritoEncoded().base64EncodedString()
+            ))
         )
     }
 
@@ -329,6 +328,11 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(registration.challengeHash.hexLowercased(), vector.challengeHash)
         XCTAssertEqual(registration.attestationReportHash.hexLowercased(), vector.attestationReportHash)
         XCTAssertEqual(registration.evidenceHash.hexLowercased(), vector.evidenceHash)
+        let keyCertificatePayload = try registration.keyCertificatePayload()
+        XCTAssertEqual(
+            IrohaHash.hash(try keyCertificatePayload.noritoEncoded()).hexLowercased(),
+            vector.keyCertificatePayloadHash
+        )
         XCTAssertEqual(try registration.keyCertificatePayloadHash().hexLowercased(), vector.keyCertificatePayloadHash)
         XCTAssertEqual(try registration.noritoEncoded().base64EncodedString(), vector.noritoBase64)
 
@@ -1291,6 +1295,41 @@ final class OfflineNoteV2Tests: XCTestCase {
             assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
             assertionPublicKey: certificate.assertionPublicKey,
             assertionUsageCountLimit: certificate.assertionUsageCountLimit,
+            oneUse: true,
+            issuerSignature: certificate.issuerSignature
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
+            version: OfflineNoteV2Constants.keyCertificateVersion,
+            platform: "ios-app-attest",
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: "apple-app-attest-v1",
+            assertionKeyAlgorithm: "ecdsa-p256-sha256",
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: nil,
+            oneUse: true
+        )) { error in
+            guard case OfflineNoteV2Error.unsupportedDeviceAttestationProfile = error else {
+                return XCTFail("expected unsupportedDeviceAttestationProfile, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
+            version: OfflineNoteV2Constants.keyCertificateVersion,
+            platform: "ios-app-attest",
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: "apple-app-attest-v1",
+            assertionKeyAlgorithm: "ecdsa-p256-sha256",
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: nil,
             oneUse: true,
             issuerSignature: certificate.issuerSignature
         )) { error in

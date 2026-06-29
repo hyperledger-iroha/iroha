@@ -426,7 +426,7 @@ pub struct QueuePressureSnapshot {
 }
 
 impl QueuePressureSnapshot {
-    /// Whether either saturation signal is active.
+    /// Whether any saturation signal is active.
     #[must_use]
     pub const fn is_saturated(self) -> bool {
         self.saturated_by_count || self.saturated_by_bytes || self.saturated_by_age
@@ -4414,6 +4414,13 @@ impl Queue {
         self.max_retained_bytes
     }
 
+    /// Override retained-byte accounting in tests and return the resulting pressure snapshot.
+    #[cfg(test)]
+    pub fn set_retained_bytes_for_tests(&self, retained_bytes: u64) -> QueuePressureSnapshot {
+        self.retained_bytes.store(retained_bytes, Ordering::Relaxed);
+        self.pressure_snapshot()
+    }
+
     fn track_active_transaction(&self) {
         self.active_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -4880,6 +4887,8 @@ impl Queue {
                 snapshot.max_retained_bytes.get(),
                 snapshot.saturated_by_count,
                 snapshot.saturated_by_bytes,
+                snapshot.saturated_by_age,
+                snapshot.oldest_queued_tx_age_ms,
             );
         }
         #[cfg(not(feature = "telemetry"))]
@@ -5969,10 +5978,11 @@ pub mod tests {
         name::Name,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
+            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorPolicy,
+            FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, JurisdictionSet, LaneCatalog,
+            LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId,
+            LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+            ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -9318,6 +9328,7 @@ pub mod tests {
         Grant::account_permission(
             CanUseFeeSponsor {
                 sponsor: fixture.sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
             fixture.authority_id.clone(),
         )
@@ -9352,6 +9363,15 @@ pub mod tests {
             .get_mut()
             .dataspace_fee_sponsors
             .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .dataspace_fee_sponsor_policies
+            .insert(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            );
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_dpn_contract_call_tx(
@@ -9378,6 +9398,15 @@ pub mod tests {
             .get_mut()
             .dataspace_fee_sponsors
             .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .dataspace_fee_sponsor_policies
+            .insert(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            );
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_dpn_contract_call_tx(
@@ -9409,6 +9438,7 @@ pub mod tests {
         Grant::account_permission(
             CanUseFeeSponsor {
                 sponsor: fixture.sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
             fixture.authority_id.clone(),
         )
@@ -9442,6 +9472,7 @@ pub mod tests {
         Grant::account_permission(
             CanUseFeeSponsor {
                 sponsor: fixture.sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
             fixture.authority_id.clone(),
         )
@@ -10347,6 +10378,18 @@ pub mod tests {
         fee_asset_definition_id: AssetDefinitionId,
     }
 
+    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
+        FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                sponsor.clone(),
+                "default".parse().expect("default fee sponsor policy"),
+            ),
+            enabled: true,
+            max_fee: None,
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        }
+    }
+
     fn nexus_fee_fixture(
         authority_balance: Option<Numeric>,
         sponsor_balance: Option<Numeric>,
@@ -10388,6 +10431,11 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
+        let policy = default_fee_sponsor_policy(&sponsor_id);
+        state
+            .world
+            .fee_sponsor_policies
+            .insert(policy.id.clone(), policy);
         let dpn_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
             &authority_id,

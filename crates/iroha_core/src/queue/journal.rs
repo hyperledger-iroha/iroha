@@ -425,7 +425,10 @@ fn repair_incomplete_tail(path: &Path, durable_writes: bool) -> io::Result<()> {
 
         let mut bytes = vec![0_u8; payload_len as usize];
         file.read_exact(&mut bytes)?;
-        norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&bytes).map_err(io::Error::other)?;
+        if norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&bytes).is_err() {
+            truncate_journal_tail(&mut file, valid_end, durable_writes)?;
+            return Ok(());
+        }
 
         valid_end = frame_end;
         position = frame_end;
@@ -796,5 +799,41 @@ mod tests {
         assert_eq!(replayed.len(), 2);
         assert!(replayed.contains(&first));
         assert!(replayed.contains(&second));
+    }
+
+    #[test]
+    fn journal_open_truncates_undecodable_tail_before_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queue-plan.norito");
+        let first = record("first");
+        let second = record("second");
+        let second_bytes =
+            norito::to_bytes(&QueuePlanJournalFrameV1::Put(second)).expect("encode second");
+
+        let valid_len;
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&path)
+                .expect("open raw journal");
+            write_frame(&mut file, &QueuePlanJournalFrameV1::Put(first.clone()))
+                .expect("write first frame");
+            valid_len = file.metadata().expect("valid metadata").len();
+            let second_len = u32::try_from(second_bytes.len()).expect("second frame length");
+            file.write_all(&second_len.to_le_bytes())
+                .expect("write corrupt length");
+            file.write_all(&vec![0xA5; second_bytes.len()])
+                .expect("write corrupt payload");
+        }
+
+        let journal = QueuePlanJournal::open(&path, 1024 * 1024, true).expect("repair journal");
+        assert_eq!(
+            path.metadata().expect("repaired metadata").len(),
+            valid_len,
+            "opening should truncate the undecodable trailing frame"
+        );
+        assert_eq!(journal.replay().expect("replay repaired"), vec![first]);
     }
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -76,6 +77,16 @@ def _checker_notice_message(message: Any) -> str:
     ):
         raise ValueError("checker notice message must be a non-empty canonical string")
     return message
+
+
+def checker_summary_write_open_flags() -> int:
+    """Return descriptor flags for writing checker summaries fail-closed."""
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
 
 
 def _checker_artifact_error_message(message: Any, *, label: str) -> str:
@@ -482,8 +493,13 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
             )
         ]
 
+    fd = -1
     try:
-        summary_out.write_text(summary_text, encoding="utf-8")
+        fd = os.open(summary_out, checker_summary_write_open_flags(), 0o666)
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with handle:
+            handle.write(summary_text)
     except (OSError, RuntimeError) as error:
         summary_label = path_diagnostic_label(summary_out)
         return [
@@ -492,6 +508,9 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
                 error_diagnostic_label(error, path_label=summary_label),
             )
         ]
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return []
 
 

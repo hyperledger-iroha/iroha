@@ -21,6 +21,10 @@ dist/sorafs-gateway-compliance-rollout-evidence
 4
 --feed-promotion-evidence
 /runtime/sorafs/gateway-compliance/feed-promotion-canary.json
+--controller-runtime-evidence
+/runtime/sorafs/gateway-compliance/controller-runtime-canary.json
+--moderation-toggle-evidence
+/runtime/sorafs/gateway-compliance/moderation-toggle-canary.json
 --gateway-reload-evidence
 /runtime/sorafs/gateway-compliance/gateway-reload-canary.json
 --enforcement-probe-evidence

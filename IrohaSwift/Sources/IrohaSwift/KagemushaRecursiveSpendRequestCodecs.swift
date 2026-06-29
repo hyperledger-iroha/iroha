@@ -259,11 +259,7 @@ public struct KagemushaRecursiveSpendVerifyResult: Equatable, Sendable {
     public let chainAdmissible: Bool
     public let chainAdmissionReason: String
     public let witnesslessRedeemSupported: Bool
-    public let lineageWitnessRequired: Bool
-
-    public var lineageWitnessRequiredForRedeem: Bool {
-        lineageWitnessRequired
-    }
+    public let lineageWitnessRequiredForRedeem: Bool
 }
 
 public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
@@ -408,12 +404,12 @@ public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
     }
 
     private static func requireAccumulatorAsset(_ asset: String) throws {
-        guard AssetDefinitionAddress.decode(asset) != nil || isHexAssetDefinitionFallback(asset) else {
+        guard AssetDefinitionAddress.decode(asset) != nil || isRawHexAssetDefinitionLiteral(asset) else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.asset")
         }
     }
 
-    private static func isHexAssetDefinitionFallback(_ asset: String) -> Bool {
+    private static func isRawHexAssetDefinitionLiteral(_ asset: String) -> Bool {
         guard asset.count == 36, asset.hasPrefix("hex:") else {
             return false
         }
@@ -530,9 +526,6 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         let normalizedOutput = KagemushaRecursiveSpendProver.normalizedAppendOutputCircuitId(
             request.outputProofCircuitId
         )
-        let outputWire = normalizedOutput == KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
-            ? ""
-            : normalizedOutput
         var previousRecordPayload: Data?
         if let previousLineageVerifierRecord = request.previousLineageVerifierRecord {
             previousRecordPayload = try compactPayloadForRequest(
@@ -555,7 +548,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         ))
         writer.writeField(encodeBytesVec(request.pallasOpenEnvelopes))
         writer.writeField(try encodeSpendableNote(request.currentNote))
-        writer.writeField(OfflineCompactNorito.encodeString(outputWire))
+        writer.writeField(OfflineCompactNorito.encodeString(normalizedOutput))
         writer.writeField(encodeOptionRaw(previousRecordPayload))
         writer.writeField(encodeBytesVec(request.previousProofOpenEnvelopes ?? Data()))
         writer.writeField(encodeOptionRaw(request.lineageVerifierKey.map(verifyingKeyBoxPayload)))
@@ -653,7 +646,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         let chainAdmissible = try readField(&reader, readBool)
         let chainAdmissionReason = try readField(&reader, readString)
         let witnesslessRedeemSupported = reader.remaining == 0 ? false : try readField(&reader, readBool)
-        let lineageWitnessRequired = reader.remaining == 0 ? false : try readField(&reader, readBool)
+        let lineageWitnessRequiredForRedeem = reader.remaining == 0 ? false : try readField(&reader, readBool)
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("verifyResult")
         }
@@ -665,7 +658,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             chainAdmissible: chainAdmissible,
             chainAdmissionReason: chainAdmissionReason,
             witnesslessRedeemSupported: witnesslessRedeemSupported,
-            lineageWitnessRequired: lineageWitnessRequired
+            lineageWitnessRequiredForRedeem: lineageWitnessRequiredForRedeem
         )
     }
 

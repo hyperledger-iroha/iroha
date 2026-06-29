@@ -70,6 +70,7 @@ fault_tolerance = 1
 [[nexus.dataspace_catalog]]
 alias = "governance"
 id = 1
+manifest_hash = "0100000000000000000000000000000000000000000000000000000000000000"
 description = "Governance dataspace"
 fault_tolerance = 1
 

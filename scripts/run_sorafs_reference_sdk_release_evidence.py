@@ -20,6 +20,7 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     DEFAULT_MIN_DOWNSTREAM_PACKAGES,
     DEFAULT_MIN_RELEASE_TARGETS,
     DEFAULT_REQUIRED_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
     SUMMARY_SCHEMA,
 )
@@ -156,6 +157,13 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             kind: [str(path) for path in paths]
             for kind, paths in evidence_paths_by_kind(args).items()
             if paths
+        },
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in args.required_kinds
         },
         "steps": [
             {

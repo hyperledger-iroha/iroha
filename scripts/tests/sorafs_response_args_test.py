@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -136,6 +137,37 @@ def test_directory_response_file_fails(tmp_path: Path) -> None:
         raise AssertionError("directory response file was accepted")
 
 
+def test_symlink_response_file_fails_before_read(tmp_path: Path) -> None:
+    target = tmp_path / "target.args"
+    symlink = tmp_path / "reviewed.args"
+    target.write_text("--dry-run\n", encoding="utf-8")
+    symlink.symlink_to(target)
+
+    try:
+        expand_response_args([f"@{symlink}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == f"@ARGFILE `{symlink}` must not be a symlink"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("symlink response file was accepted")
+
+
+def test_response_file_parent_symlink_fails_before_read(tmp_path: Path) -> None:
+    target_root = tmp_path / "target-root"
+    symlink_root = tmp_path / "reviewed-root"
+    target_root.mkdir()
+    target = target_root / "reviewed.args"
+    target.write_text("--dry-run\n", encoding="utf-8")
+    symlink_root.symlink_to(target_root, target_is_directory=True)
+
+    args_file = symlink_root / "reviewed.args"
+    try:
+        expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == f"@ARGFILE parent `{symlink_root}` must not be a symlink"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("parent-symlink response file was accepted")
+
+
 def test_response_file_resolve_failure_is_stable_value_error(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -215,14 +247,14 @@ def test_response_file_read_failure_is_stable_value_error(
 ) -> None:
     args_file = tmp_path / "reviewed.args"
     args_file.write_text("--dry-run\n", encoding="utf-8")
-    original_read_bytes = Path.read_bytes
+    original_open = os.open
 
-    def read_bytes(self: Path) -> bytes:
-        if self == args_file:
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == args_file:
             raise RuntimeError("argfile read denied")
-        return original_read_bytes(self)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(os, "open", open_path)
 
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
@@ -239,15 +271,15 @@ def test_response_file_read_failure_sanitizes_malformed_error(
 ) -> None:
     args_file = tmp_path / "reviewed.args"
     args_file.write_text("--dry-run\n", encoding="utf-8")
-    original_read_bytes = Path.read_bytes
+    original_open = os.open
     bad_message = "argfile read denied\nsecret"
 
-    def read_bytes(self: Path) -> bytes:
-        if self == args_file:
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == args_file:
             raise RuntimeError(bad_message)
-        return original_read_bytes(self)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(os, "open", open_path)
 
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
@@ -258,6 +290,30 @@ def test_response_file_read_failure_sanitizes_malformed_error(
         assert bad_message not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed read failure escaped response-file handling")
+
+
+def test_response_file_read_uses_no_follow_open_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args_file = tmp_path / "reviewed.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+    original_open = os.open
+    captured: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == args_file:
+            captured["flags"] = flags
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_path)
+
+    assert expand_response_args([f"@{args_file}"], EvidenceArgumentParser()) == [
+        "--dry-run"
+    ]
+    assert captured["flags"] & os.O_RDONLY == os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        assert captured["flags"] & os.O_NOFOLLOW
 
 
 def test_response_file_non_utf8_bytes_fail_stably(tmp_path: Path) -> None:

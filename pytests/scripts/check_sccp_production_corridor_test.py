@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "sccp_production_corridor.yml"
+IVM_MANIFEST = ROOT / "crates" / "ivm" / "Cargo.toml"
+IROHA_FUTURES_SUPERVISOR = ROOT / "crates" / "iroha_futures" / "src" / "supervisor.rs"
 EXPECTED_PHASES = {
     "rust-sccp",
     "evidence-scripts",
@@ -111,6 +113,26 @@ def assert_mobile_workflow_uses_jdk21(workflow: str) -> None:
         assert f"bash scripts/check_sccp_production_corridor.sh --phase {phase}" in job
 
 
+def assert_dotnet_workflow_uses_windows_runner(workflow: str) -> None:
+    """Assert the .NET SCCP phase can produce Windows-native evidence."""
+
+    job = workflow_job(workflow, "dotnet-sdk")
+    assert "    runs-on: windows-latest" in job
+    assert "    timeout-minutes: 60" in job
+    rust_setup = "      - uses: actions-rust-lang/setup-rust-toolchain@v1"
+    rust_cache = "      - uses: Swatinem/rust-cache@v2"
+    assert rust_setup in job
+    assert '          cache: "false"' in job
+    assert '          toolchain: "1.93.1-x86_64-pc-windows-msvc"' in job
+    assert "      - uses: Swatinem/rust-cache@v2" in job
+    assert '          cache-on-failure: "true"' in job
+    assert "      - uses: actions/setup-dotnet@v4" in job
+    assert '          dotnet-version: "8.0.x"' in job
+    assert "        shell: bash" in job
+    assert "bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk" in job
+    assert job.index(rust_setup) < job.index(rust_cache)
+
+
 def load_report_module():
     """Load release-readiness helpers without running the CLI."""
 
@@ -166,6 +188,7 @@ def test_sccp_production_corridor_workflow_tracks_runner_phases() -> None:
     assert "pull_request:" in workflow
     assert "schedule:" in workflow
     assert "scripts/check_sccp_production_corridor.sh" in workflow
+    assert '      - "rust-toolchain.toml"' in workflow
     assert workflow.count("uses: actions/upload-artifact@v4") >= len(EXPECTED_PHASES)
 
     for phase in EXPECTED_PHASES:
@@ -184,6 +207,7 @@ def test_sccp_production_corridor_workflow_has_aggregate_phase_gate() -> None:
     assert_sccp_aggregate_gate(workflow)
     assert_phase_artifact_uploads_are_strict(workflow)
     assert_mobile_workflow_uses_jdk21(workflow)
+    assert_dotnet_workflow_uses_windows_runner(workflow)
 
 
 def test_sccp_production_corridor_aggregate_rejects_missing_phase_need() -> None:
@@ -252,6 +276,161 @@ def test_sccp_production_corridor_mobile_jobs_reject_wrong_jdk_major() -> None:
 
     with pytest.raises(AssertionError):
         assert_mobile_workflow_uses_jdk21(mutated)
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_linux_runner() -> None:
+    """The .NET SCCP phase must stay on Windows for native DLL evidence."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace("    runs-on: windows-latest", "    runs-on: ubuntu-latest", 1)
+
+    with pytest.raises(AssertionError):
+        assert_dotnet_workflow_uses_windows_runner(mutated)
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_missing_rust_cache() -> None:
+    """The .NET SCCP phase must retain Rust setup for the native bridge build."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    dotnet_job = workflow_job(workflow, "dotnet-sdk")
+    rust_cache_block = (
+        "      - uses: Swatinem/rust-cache@v2\n"
+        "        with:\n"
+        '          cache-on-failure: "true"\n'
+    )
+    assert rust_cache_block in dotnet_job
+    mutated = workflow.replace(
+        dotnet_job,
+        dotnet_job.replace(rust_cache_block, "", 1),
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        assert_dotnet_workflow_uses_windows_runner(mutated)
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_missing_rust_setup() -> None:
+    """The Windows .NET SCCP phase must install the pinned Rust toolchain."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    dotnet_job = workflow_job(workflow, "dotnet-sdk")
+    rust_setup_block = (
+        "      - uses: actions-rust-lang/setup-rust-toolchain@v1\n"
+        "        with:\n"
+        '          cache: "false"\n'
+        '          toolchain: "1.93.1-x86_64-pc-windows-msvc"\n'
+    )
+    assert rust_setup_block in dotnet_job
+    mutated = workflow.replace(
+        dotnet_job,
+        dotnet_job.replace(rust_setup_block, "", 1),
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        assert_dotnet_workflow_uses_windows_runner(mutated)
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_rust_cache_before_setup() -> None:
+    """Rust cache restore must not run before the toolchain is installed."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    dotnet_job = workflow_job(workflow, "dotnet-sdk")
+    rust_setup_block = (
+        "      - uses: actions-rust-lang/setup-rust-toolchain@v1\n"
+        "        with:\n"
+        '          cache: "false"\n'
+        '          toolchain: "1.93.1-x86_64-pc-windows-msvc"\n'
+    )
+    rust_cache_block = (
+        "      - uses: Swatinem/rust-cache@v2\n"
+        "        with:\n"
+        '          cache-on-failure: "true"\n'
+    )
+    assert rust_setup_block in dotnet_job
+    assert rust_cache_block in dotnet_job
+    reordered_job = dotnet_job.replace(
+        f"{rust_setup_block}{rust_cache_block}",
+        f"{rust_cache_block}{rust_setup_block}",
+        1,
+    )
+    mutated = workflow.replace(dotnet_job, reordered_job, 1)
+
+    with pytest.raises(AssertionError):
+        assert_dotnet_workflow_uses_windows_runner(mutated)
+
+
+def test_sccp_production_corridor_rejects_missing_rust_toolchain_path_trigger() -> None:
+    """The SCCP workflow must run when the Rust toolchain pin changes."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace('      - "rust-toolchain.toml"\n', "", 1)
+
+    with pytest.raises(AssertionError):
+        test_workflow = mutated
+        assert "workflow_dispatch:" in test_workflow
+        assert "pull_request:" in test_workflow
+        assert "schedule:" in test_workflow
+        assert '      - "rust-toolchain.toml"' in test_workflow
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_missing_bash_shell() -> None:
+    """The Windows .NET SCCP phase must keep Bash for the corridor script."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace("        shell: bash\n", "", 1)
+
+    with pytest.raises(AssertionError):
+        assert_dotnet_workflow_uses_windows_runner(mutated)
+
+
+def test_sccp_production_corridor_windows_msvc_bridge_avoids_sha2_asm() -> None:
+    """The Windows MSVC bridge build must not inherit Unix assembly SHA-2."""
+
+    manifest = IVM_MANIFEST.read_text(encoding="utf-8")
+
+    assert (
+        '[target.\'cfg(all(target_arch = "x86_64", not(target_env = "msvc")))\''
+        ".dependencies]"
+    ) in manifest
+    assert "# sha2-asm uses Unix-style assembly sources" in manifest
+    assert (
+        '[target.\'cfg(target_arch = "x86_64")\'.dependencies]\n'
+        'sha2 = { version = "0.10.9", features = ["asm"] }'
+    ) not in manifest
+
+
+def test_sccp_production_corridor_rust_ffi_blocks_are_unsafe() -> None:
+    """Rust 2024 requires every foreign extern block to be unsafe."""
+
+    unsafe_block_pattern = re.compile(
+        r'(?m)^[ \t]*(?!unsafe\b)extern "(?:C|system|stdcall|win64)"[ \t]*\{'
+    )
+    offenders = []
+    for path in (ROOT / "crates").rglob("*.rs"):
+        if unsafe_block_pattern.search(path.read_text(encoding="utf-8")):
+            offenders.append(path.relative_to(ROOT).as_posix())
+
+    assert offenders == []
+
+
+def test_sccp_production_corridor_supervisor_os_signals_are_platform_gated() -> None:
+    """The Windows bridge dependency graph must not compile Unix signals."""
+
+    supervisor = IROHA_FUTURES_SUPERVISOR.read_text(encoding="utf-8")
+    method = re.search(
+        r"pub fn setup_shutdown_on_os_signals\(&mut self\) -> Result<\(\)> \{(?P<body>.*?)\n    \}",
+        supervisor,
+        re.S,
+    )
+
+    assert method is not None
+    assert "signal::unix" not in method.group("body")
+    assert "#[cfg(unix)]\nfn setup_shutdown_on_os_signals" in supervisor
+    assert "#[cfg(windows)]\nfn setup_shutdown_on_os_signals" in supervisor
+    assert "signal::unix::SignalKind::interrupt()" in supervisor
+    assert "signal::unix::SignalKind::terminate()" in supervisor
+    assert "tokio::signal::ctrl_c().await" in supervisor
 
 
 def test_sccp_production_corridor_java_android_phase_matches_test_surfaces() -> None:
@@ -723,15 +902,22 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "==> SCCP production corridor: dotnet-sdk" in completed.stdout
     assert "DOTNET_CLI_TELEMETRY_OPTOUT=1" in completed.stdout
     assert "DOTNET_CLI_UI_LANGUAGE=en" in completed.stdout
+    assert "DOTNET_NOLOGO=1" in completed.stdout
+    assert "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1" in completed.stdout
     assert "dotnet --version" in completed.stdout
     assert "dotnet --info" in completed.stdout
     assert "CARGO_TARGET_DIR=" in completed.stdout
+    assert "CARGO_INCREMENTAL=0" in completed.stdout
+    assert "CARGO_PROFILE_DEV_DEBUG=0" in completed.stdout
     assert "cargo build -p connect_norito_bridge" in completed.stdout
     assert "dotnet restore Hyperledger.Iroha.Sdk.sln" in completed.stdout
     assert (
         "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
         "Hyperledger.Iroha.Sdk.Tests.csproj"
     ) in completed.stdout
+    assert "--artifacts-path" in completed.stdout
+    assert "dotnet-artifacts" in completed.stdout
+    assert "-p:ProduceReferenceAssembly=false" in completed.stdout
     assert "FullyQualifiedName~Sccp" in completed.stdout
     assert "FullyQualifiedName~SccpEthereumMainnetTests|" not in completed.stdout
     assert "sccp-dotnet-sdk.trx" in completed.stdout
@@ -750,6 +936,8 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "exactly one canonical Windows RID" in script
     assert "exactly one OS Architecture" in script
     assert "exactly one Host Architecture" in script
+    assert "at most one Host Architecture" in script
+    assert "OS Architecture and Host Architecture to agree" in script
     assert "dotnet_info_field_value" in script
     assert "substr(line, length(label) + 2)" in script
     assert "awk -F:" not in script
@@ -774,7 +962,11 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "free of surrounding whitespace or control characters" in script
     assert 'reject_dotnet_runtime_path_text ".NET SDK root" "$DOTNET_ROOT" || return 1' in script
     assert "reject_dotnet_path_list_text" in script
-    assert "no empty path-list segments or control characters" in script
+    assert (
+        "contain no control characters, and contain no empty path-list segments "
+        "before native bridge loader setup"
+    ) in script
+    assert "no empty path-list segments before native bridge loader setup" in script
     assert 'reject_dotnet_path_list_text ".NET phase PATH" "$PATH"' in script
     assert "reject_dotnet_bridge_symlink_path" in script
     assert "native bridge output path to be non-symlinked" in script
@@ -1313,6 +1505,29 @@ def test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architec
             "exactly one OS Architecture from dotnet --info",
             "found: 2",
         ),
+        "duplicate-host-architecture": (
+            """Host:
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+""",
+            "at most one Host Architecture from dotnet --info",
+            "found: 2",
+        ),
+        "mismatched-os-and-host-architecture": (
+            """Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: arm64
+  RID:         win-arm64
+""",
+            "OS Architecture and Host Architecture to agree",
+            "found OS Architecture: arm64, Architecture: x64",
+        ),
         "duplicate-host-architecture-fallback": (
             """Host:
   Architecture: x64
@@ -1326,7 +1541,7 @@ Runtime Environment:
             "found: 2",
         ),
     }
-    for case_name, (runtime_environment, expected_error, expected_count) in (
+    for case_name, (runtime_environment, expected_error, expected_detail) in (
         cases.items()
     ):
         dotnet_root = tmp_path / case_name / "dotnet-root"
@@ -1372,7 +1587,7 @@ esac
 
         assert completed.returncode == 1, case_name
         assert expected_error in completed.stderr, case_name
-        assert expected_count in completed.stderr, case_name
+        assert expected_detail in completed.stderr, case_name
         assert "SCCP .NET SDK RID:" not in completed.stdout, case_name
         assert "SCCP .NET SDK Architecture:" not in completed.stdout, case_name
         assert (
@@ -1572,6 +1787,67 @@ esac
         in completed.stdout
     )
     assert "SCCP .NET SDK TRX bytes:" in completed.stdout
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_missing_architecture_metadata(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must reject missing architecture from all sources."""
+
+    dotnet_root = tmp_path / "dotnet-root"
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert (
+        "exactly one Host Architecture from dotnet --info when OS Architecture is absent"
+        in completed.stderr
+    )
+    assert "found: 0" in completed.stderr
+    assert "SCCP .NET SDK Architecture:" not in completed.stdout
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
 
 
 def test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values(
@@ -2166,9 +2442,14 @@ def test_sccp_production_corridor_dotnet_phase_rejects_bad_phase_path_before_tra
 
     assert completed.returncode == 1, case_name
     assert (
-        "SCCP .NET SDK validation requires .NET phase PATH to be non-empty "
-        "and contain no empty path-list segments or control characters"
+        "SCCP .NET SDK validation requires .NET phase PATH to be non-empty, "
+        "contain no control characters, and contain no empty path-list "
+        "segments before native bridge loader setup"
     ) in completed.stderr
+    assert (
+        "no empty path-list segments before native bridge loader setup"
+        in completed.stderr
+    )
     assert "secret-token" not in completed.stderr
     assert "secret-token" not in completed.stdout
     assert "+ " not in completed.stdout
@@ -2178,6 +2459,93 @@ def test_sccp_production_corridor_dotnet_phase_rejects_bad_phase_path_before_tra
     assert "cargo build -p connect_norito_bridge" not in completed.stdout
     assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
     assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("case_name", "path_template"),
+    (
+        ("leading-empty", ":{tool_dir}:{path}"),
+        ("trailing-empty", "{tool_dir}:{path}:"),
+        ("interior-empty", "{tool_dir}::{path}"),
+        ("semicolon-empty", "{tool_dir};:{path}"),
+    ),
+)
+def test_sccp_production_corridor_dotnet_phase_rejects_empty_inherited_path_segments(
+    tmp_path: Path,
+    case_name: str,
+    path_template: str,
+) -> None:
+    """Windows .NET evidence must fail before bridge build when PATH is ambiguous."""
+
+    tool_dir = tmp_path / case_name / "tools"
+    dotnet_root = tmp_path / case_name / "dotnet-root"
+    tool_dir.mkdir(parents=True)
+    dotnet_root.mkdir()
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["PATH"] = path_template.format(tool_dir=tool_dir, path=env["PATH"])
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 1, case_name
+    assert (
+        "SCCP .NET SDK validation requires .NET phase PATH to be non-empty, "
+        "contain no control characters, and contain no empty path-list "
+        "segments before native bridge loader setup"
+    ) in completed.stderr
+    assert (
+        "no empty path-list segments before native bridge loader setup"
+        in completed.stderr
+    )
+    assert "SCCP .NET SDK OS: Windows" not in completed.stdout, case_name
+    assert "SCCP .NET SDK RID: win-x64" not in completed.stdout, case_name
+    assert "SCCP .NET SDK Architecture: x64" not in completed.stdout, case_name
+    assert "cargo build -p connect_norito_bridge" not in completed.stdout, case_name
+    assert "connect_norito_bridge native bridge:" not in completed.stdout, case_name
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout, case_name
+    assert (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests"
+        not in completed.stdout
+    ), case_name
 
 
 def test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path(

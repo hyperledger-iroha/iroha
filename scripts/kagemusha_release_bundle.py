@@ -990,7 +990,7 @@ def _bundle_path(raw_path: str | Path, bundle_root: Path) -> Path:
 
 
 def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:
-    """Return CLI Android root values, preserving the legacy default."""
+    """Return CLI Android root values, preserving the configured default."""
 
     raw = getattr(args, "device_lab_root", None)
     if raw is None:
@@ -3239,8 +3239,15 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 or any(
                     not isinstance(key, str)
                     or not key
-                    or not isinstance(item, str)
-                    or not item
+                    or (
+                        not (
+                            section_name == "abi6_reserved_lineage"
+                            and field == "modes"
+                            and key == "preferred_when_recursive_unavailable"
+                            and item is None
+                        )
+                        and (not isinstance(item, str) or not item)
+                    )
                     for key, item in value.items()
                 )
             ):
@@ -5769,7 +5776,7 @@ def _expected_release_bundle_section_map_keys(
         if field == "modes":
             return {
                 "preferred_when_recursive_available",
-                "fallback_when_recursive_unavailable",
+                "preferred_when_recursive_unavailable",
             }
     if section_name == "lineage_proof_evidence":
         if field == "circuit_ids":
@@ -5895,7 +5902,7 @@ def _check_release_bundle_section_shapes(
             )
         expected_abi6_modes = {
             "preferred_when_recursive_available": "recursive_spend_v1",
-            "fallback_when_recursive_unavailable": "checked_prefold_v1",
+            "preferred_when_recursive_unavailable": None,
         }
         if abi6.get("modes") != expected_abi6_modes:
             blockers.append(

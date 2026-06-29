@@ -190,6 +190,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive exactness predicate chains must not hide self-inequality helpers",
     "Unary-temporal self-equality exactness helper wrappers count as self-equality helpers",
     "Unary-temporal self-inequality exactness helper wrappers count as self-inequality helpers",
+    "Constant-relation exactness helpers count as literal helpers",
     "Static and unary-temporal boolean-only exactness helper wrappers count as",
     "Static IF literal exactness helpers count as literal helpers",
     "Negated unary-temporal boolean-only helper wrappers count as literal helpers",
@@ -242,6 +243,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive allowlisted temporal helper chains must not hide single-helper conjunct aliases",
     "Transitive allowlisted temporal helper chains must not hide self-equality helpers",
     "Transitive allowlisted temporal helper chains must not hide self-inequality helpers",
+    "Constant-relation temporal helpers count as literal temporal helpers",
     "Compound `[]`/`<>` temporal helper bodies are traversed for helper references",
     "Parameterized temporal helper calls must be lifted behind zero-arity predicates",
     "Compound temporal helper traversal includes disjunction operands",
@@ -4571,6 +4573,92 @@ def tla_has_top_level_equality(expression: str) -> bool:
     return False
 
 
+def tla_top_level_relation_operator(expression: str) -> str | None:
+    """Return a top-level scalar relation operator, if present."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        if text.startswith("<=>", index):
+            index += len("<=>")
+            continue
+        if text.startswith("=>", index):
+            index += len("=>")
+            continue
+        if text.startswith("\\in", index):
+            before = text[index - 1] if index > 0 else ""
+            after_index = index + len("\\in")
+            after = text[after_index] if after_index < len(text) else ""
+            if (
+                not (before.isalnum() or before == "_")
+                and not (after.isalnum() or after == "_")
+            ):
+                return "\\in"
+        if text.startswith("/=", index):
+            return "/="
+        if text.startswith("<=", index):
+            return "<="
+        if text.startswith(">=", index):
+            return ">="
+        if char == "#":
+            return "#"
+        if char == "=":
+            previous_char = text[index - 1] if index > 0 else ""
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if previous_char not in "<>/" and next_char != ">":
+                return "="
+        if char == "<":
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if next_char not in "<=>":
+                return "<"
+        if char == ">":
+            previous_char = text[index - 1] if index > 0 else ""
+            if previous_char != ">":
+                return ">"
+        index += 1
+    return None
+
+
+def tla_static_constant_relation(expression: str) -> str | None:
+    """Return a whole-body constant relation with no model identifiers."""
+
+    compact = " ".join(strip_static_outer_parentheses(expression).split())
+    if tla_top_level_relation_operator(compact) is None:
+        return None
+    identifier_scan = tla_without_string_literals(compact).replace("\\in", " ")
+    if tla_static_identifiers(identifier_scan):
+        return None
+    return compact
+
+
 def tla_direct_operator_call_name(expression: str) -> str | None:
     """Return the callee for a whole-expression operator call."""
 
@@ -5093,6 +5181,7 @@ def exactness_definition_shape_errors(
     literal_conjuncts: list[str] = []
     self_equality_conjuncts: list[str] = []
     self_inequality_conjuncts: list[str] = []
+    constant_relation_conjuncts: list[str] = []
     aliased_conjuncts: list[str] = []
     undefined_conjuncts: list[str] = []
     hidden_coverage_conjuncts: list[str] = []
@@ -5116,6 +5205,14 @@ def exactness_definition_shape_errors(
                 f"{conjunct_operator} at {display_path(module_path)}:"
                 f"{conjunct_line} is static IF literal "
                 f"{conjunct_static_if_literal}"
+            )
+            continue
+        conjunct_constant_relation = tla_static_constant_relation(conjunct_body)
+        if conjunct_constant_relation is not None:
+            constant_relation_conjuncts.append(
+                f"{conjunct_operator} at {display_path(module_path)}:"
+                f"{conjunct_line} is constant relation "
+                f"{conjunct_constant_relation}"
             )
             continue
         conjunct_self_equality = tla_static_self_equality(conjunct_body)
@@ -5200,6 +5297,14 @@ def exactness_definition_shape_errors(
             "self-inequality exactness conjunct "
             f"{', '.join(self_inequality_conjuncts)}; compose satisfiable "
             "concrete model predicates directly"
+        ]
+    if constant_relation_conjuncts:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains "
+            "constant-relation exactness conjunct "
+            f"{', '.join(constant_relation_conjuncts)}; compose concrete "
+            "model predicates directly"
         ]
     if aliased_conjuncts:
         return [
@@ -5646,6 +5751,13 @@ def transitive_vacuous_exactness_conjuncts(
                 f"{root} reaches {current} through {' -> '.join(chain)} "
                 f"at {display_path(module_path)}:{line} is static IF literal "
                 f"{static_if_literal}"
+            )
+        constant_relation = tla_static_constant_relation(stripped_body)
+        if constant_relation is not None:
+            record(
+                f"{root} reaches {current} through {' -> '.join(chain)} "
+                f"at {display_path(module_path)}:{line} is constant relation "
+                f"{constant_relation}"
             )
         self_equality_body = tla_static_self_equality(stripped_body)
         if self_equality_body is not None:
@@ -8134,6 +8246,13 @@ def temporal_extra_definition_shape_errors(
             f"literal {temporal_static_if_literal}; temporal "
             "correctness-envelope exceptions must stay nontrivial"
         ]
+    temporal_constant_relation = tla_static_constant_relation(body)
+    if temporal_constant_relation is not None:
+        return [
+            f"{prefix} at {display_path(module_path)}:{line} is constant "
+            f"relation {temporal_constant_relation}; temporal "
+            "correctness-envelope exceptions must stay nontrivial"
+        ]
     self_equality_parts = temporal_self_equality_parts(body)
     if self_equality_parts:
         return [
@@ -9972,6 +10091,13 @@ def transitive_vacuous_temporal_extra_conjuncts(
                 f"{root} reaches {current} through {' -> '.join(chain)} "
                 f"at {display_path(module_path)}:{line} is static IF literal "
                 f"{static_if_literal}"
+            )
+        constant_relation = tla_static_constant_relation(stripped_body)
+        if constant_relation is not None:
+            record(
+                f"{root} reaches {current} through {' -> '.join(chain)} "
+                f"at {display_path(module_path)}:{line} is constant relation "
+                f"{constant_relation}"
             )
         self_equality_body = tla_static_self_equality(stripped_body)
         if self_equality_body is not None:

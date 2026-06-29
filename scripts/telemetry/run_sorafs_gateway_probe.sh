@@ -254,12 +254,32 @@ if [[ -f "${json_report}" ]]; then
         probe_meta_output="$(
             python3 - "${json_report}" <<'PY'
 import json
+import os
+import stat
 import sys
 
 path = sys.argv[1]
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
 try:
-    with open(path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    if os.path.islink(path):
+        raise OSError("probe JSON report must not be a symlink")
+    path_stat = os.lstat(path)
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise OSError("probe JSON report must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            raise OSError("probe JSON report must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            data = json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 except Exception:
     print()
     print()

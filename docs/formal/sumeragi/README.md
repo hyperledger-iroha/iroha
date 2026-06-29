@@ -136,6 +136,7 @@ Unary-temporal self-inequality exactness helper wrappers count as self-inequalit
 Static and unary-temporal boolean-only exactness helper wrappers count as
 literal helpers; use concrete model predicates instead of wrapping `TRUE`/`FALSE`.
 Static IF literal exactness helpers count as literal helpers too.
+Constant-relation exactness helpers count as literal helpers too.
 Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
 Compound boolean-only temporal helper wrappers count as literal helpers too.
 Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
@@ -165,6 +166,10 @@ Temporal-helper boolean-composition checks traverse boolean operands.
 Unary-temporal LET-alias temporal side conjuncts must name concrete temporal predicates.
 Unary `[]`/`<>` boolean-only temporal wrappers count as literal temporal helpers
 at every allowlisted temporal helper-chain depth.
+Static IF literal temporal helpers count as literal temporal helpers at every
+allowlisted temporal helper-chain depth.
+Constant-relation temporal helpers count as literal temporal helpers at every
+allowlisted temporal helper-chain depth.
 Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
 Compound boolean-only temporal helper wrappers count as literal helpers too.
 Transitive allowlisted temporal correctness-envelope conjunct chains must not
@@ -30592,6 +30597,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   and unary-temporal boolean-only exactness helper wrappers count as literal helpers.
   Static IF literal exactness helpers such as
   `IF TRUE THEN TRUE ELSE FALSE` count as literal helpers too.
+  Constant-relation exactness helpers such as `TRUE = TRUE` and `1 \in {1}`
+  count as literal helpers too.
   Quantified helper body control-flow checks reject non-transparent `LET` bodies.
   Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
   Compound boolean-only temporal helper wrappers count as literal helpers too.
@@ -30640,7 +30647,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Unary
   `[]`/`<>` boolean-only temporal wrappers
   count as literal temporal helpers at every allowlisted temporal helper-chain
-  depth. Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
+  depth. Static IF literal temporal helpers such as
+  `IF TRUE THEN TRUE ELSE FALSE` count as literal temporal helpers at every
+  allowlisted temporal helper-chain depth. Constant-relation temporal helpers
+  such as `TRUE = TRUE` and `1 \in {1}` count as literal temporal helpers at
+  every allowlisted temporal helper-chain depth. Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
   Compound boolean-only temporal helper wrappers count as literal helpers too.
   Temporal literal checks unwrap one-line `LET` helper aliases.
   LET helper alias unwrapping resolves chained one-line bindings.

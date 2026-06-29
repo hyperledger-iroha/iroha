@@ -186,7 +186,7 @@ Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
 const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_abi7);
+console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
 ```
 ## Torii requêtes et streaming (WebSockets)Les assistants de requête exposent l'état, les métriques Prometheus, les instantanés de télémétrie et les événements
 flux utilisant la grammaire de filtre Norito. Le streaming est automatiquement mis à niveau vers

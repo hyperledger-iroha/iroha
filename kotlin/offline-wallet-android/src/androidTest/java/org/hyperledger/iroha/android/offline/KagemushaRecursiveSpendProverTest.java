@@ -41,9 +41,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assertEquals(
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
         KagemushaRecursiveSpendProver.preferredMode(false, true));
-    assertEquals(
-        KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
-        KagemushaRecursiveSpendProver.preferredMode(false, false));
+    assertEquals(null, KagemushaRecursiveSpendProver.preferredMode(false, false));
     assertEquals(
         "kagemusha-recursive-compact-v1",
         KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1);

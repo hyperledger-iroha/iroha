@@ -114,16 +114,35 @@ public sealed class SccpBscTestnetTests
                 "0x" + new string('b', 64),
                 "0x" + new string('c', 64),
                 expectedKey: binding.Key + "-wrong"));
+        foreach (var paddedExpectedKey in new[]
+        {
+            " " + binding.Key,
+            binding.Key + " ",
+            binding.Key + "\n",
+        })
+        {
+            Assert.Throws<ArgumentException>(
+                () => BscTestnetSccp.DestinationBinding(
+                    "0x" + new string('1', 40),
+                    "0x" + new string('2', 40),
+                    "0x" + new string('b', 64),
+                    "0x" + new string('c', 64),
+                    expectedKey: paddedExpectedKey));
+        }
     }
 
     [Fact]
     public void LocalAdmissionSubmissionWrapsNativeBscTestnetOutput()
     {
+        var proofBytes = new byte[] { 1, 2, 3 };
+        var publicInputsBytes = new byte[] { 4, 5, 6 };
+        var bundleBytes = new byte[] { 7, 8, 9 };
+        var envelopeBytes = new byte[] { 10, 11, 12 };
         var input = new BscTestnetLocalAdmissionSubmissionInput(
-            ProofBytes: [1, 2, 3],
-            PublicInputsBytes: [4, 5, 6],
-            BundleBytes: [7, 8, 9],
-            EnvelopeBytes: [10, 11, 12],
+            ProofBytes: proofBytes,
+            PublicInputsBytes: publicInputsBytes,
+            BundleBytes: bundleBytes,
+            EnvelopeBytes: envelopeBytes,
             StatementHash: "0x" + new string('6', 64),
             SourceVerifierMaterialHash: "0x" + new string('7', 64),
             SourceAdapterEngineDeploymentHash: "0x" + new string('8', 64));
@@ -142,8 +161,88 @@ public sealed class SccpBscTestnetTests
         Assert.Equal([1, 2, 3], submission.LocalAdmission.ProofBytes);
         Assert.Equal("0x0a0b0c", submission.EnvelopeHex);
 
-        input.ProofBytes[0] = 99;
+        proofBytes[0] = 99;
+        publicInputsBytes[0] = 99;
+        bundleBytes[0] = 99;
+        envelopeBytes[0] = 99;
+        input.ProofBytes[0] = 98;
+        input.PublicInputsBytes[0] = 98;
+        input.BundleBytes[0] = 98;
+        input.EnvelopeBytes[0] = 98;
+        submission.ProofBytes[0] = 97;
+        submission.PublicInputsBytes[0] = 97;
+        submission.BundleBytes[0] = 97;
+        submission.EnvelopeBytes[0] = 97;
+        submission.LocalAdmission.ProofBytes[0] = 96;
+        submission.LocalAdmission.PublicInputsBytes[0] = 96;
+        submission.LocalAdmission.BundleBytes[0] = 96;
+        Assert.Equal([1, 2, 3], input.ProofBytes);
+        Assert.Equal([4, 5, 6], input.PublicInputsBytes);
+        Assert.Equal([7, 8, 9], input.BundleBytes);
+        Assert.Equal([10, 11, 12], input.EnvelopeBytes);
         Assert.Equal([1, 2, 3], submission.ProofBytes);
+        Assert.Equal([4, 5, 6], submission.PublicInputsBytes);
+        Assert.Equal([7, 8, 9], submission.BundleBytes);
+        Assert.Equal([10, 11, 12], submission.EnvelopeBytes);
+        Assert.Equal([1, 2, 3], submission.LocalAdmission.ProofBytes);
+        Assert.Equal([4, 5, 6], submission.LocalAdmission.PublicInputsBytes);
+        Assert.Equal([7, 8, 9], submission.LocalAdmission.BundleBytes);
+
+        var updatedPayload = submission.LocalAdmission with
+        {
+            ProofBytes = [0xaa],
+            PublicInputsBytes = [0xbb, 0xcc],
+            BundleBytes = [0xdd, 0xee, 0xff],
+        };
+        var updatedSubmission = submission with
+        {
+            ProofBytes = [0x11],
+            PublicInputsBytes = [0x22, 0x33],
+            BundleBytes = [0x44, 0x55, 0x66],
+            EnvelopeBytes = [0x77, 0x88],
+        };
+        Assert.Equal("0xaa", updatedPayload.ProofBytesHex);
+        Assert.Equal("0xbbcc", updatedPayload.PublicInputsBytesHex);
+        Assert.Equal("0xddeeff", updatedPayload.BundleBytesHex);
+        Assert.Equal("0x11", updatedSubmission.ProofBytesHex);
+        Assert.Equal("0x2233", updatedSubmission.PublicInputsBytesHex);
+        Assert.Equal("0x445566", updatedSubmission.BundleBytesHex);
+        Assert.Equal("0x7788", updatedSubmission.EnvelopeHex);
+
+        Assert.Throws<ArgumentNullException>(
+            () => new BscTestnetLocalAdmissionSubmissionInput(
+                ProofBytes: null!,
+                PublicInputsBytes: publicInputsBytes,
+                BundleBytes: bundleBytes,
+                EnvelopeBytes: envelopeBytes,
+                StatementHash: input.StatementHash,
+                SourceVerifierMaterialHash: input.SourceVerifierMaterialHash,
+                SourceAdapterEngineDeploymentHash: input.SourceAdapterEngineDeploymentHash));
+        Assert.Throws<ArgumentNullException>(() => input with { EnvelopeBytes = null! });
+        Assert.Throws<ArgumentNullException>(
+            () => new BscTestnetLocalAdmissionPayload(
+                ProofBytes: null!,
+                PublicInputsBytes: publicInputsBytes,
+                BundleBytes: bundleBytes,
+                StatementHash: input.StatementHash,
+                SourceVerifierMaterialHash: input.SourceVerifierMaterialHash,
+                SourceAdapterEngineDeploymentHash: input.SourceAdapterEngineDeploymentHash));
+        Assert.Throws<ArgumentNullException>(() => updatedPayload with { BundleBytes = null! });
+        Assert.Throws<ArgumentNullException>(
+            () => new BscTestnetLocalAdmissionSubmission(
+                submission.ProofFamily,
+                submission.VerifierBackend,
+                submission.SourceDomain,
+                submission.TargetDomain,
+                submission.StatementHash,
+                submission.SourceVerifierMaterialHash,
+                submission.SourceAdapterEngineDeploymentHash,
+                submission.LocalAdmission,
+                ProofBytes: null!,
+                PublicInputsBytes: publicInputsBytes,
+                BundleBytes: bundleBytes,
+                EnvelopeBytes: envelopeBytes));
+        Assert.Throws<ArgumentNullException>(() => updatedSubmission with { EnvelopeBytes = null! });
 
         Assert.Throws<ArgumentException>(
             () => BscTestnetSccp.BuildLocalAdmissionSubmission(input with

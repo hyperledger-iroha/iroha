@@ -1,3 +1,4 @@
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Transactions;
@@ -24,7 +25,7 @@ public sealed class SignedIterableQueryBuilder
 
     public SignedIterableQueryBuilder(string authorityAccountId)
     {
-        AuthorityAccountId = NormalizeRequiredValue(authorityAccountId, nameof(authorityAccountId));
+        AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
     }
 
     public string AuthorityAccountId { get; }
@@ -147,7 +148,7 @@ public sealed class SignedIterableQueryBuilder
         Reset();
         requestMode = RequestMode.Start;
         iterableQueryKind = ManagedIterableQueryKind.FindPermissionsByAccountId;
-        this.accountId = NormalizeRequiredValue(accountId, nameof(accountId));
+        this.accountId = NormalizeAccountId(accountId, nameof(accountId));
         return this;
     }
 
@@ -156,7 +157,7 @@ public sealed class SignedIterableQueryBuilder
         Reset();
         requestMode = RequestMode.Start;
         iterableQueryKind = ManagedIterableQueryKind.FindRolesByAccountId;
-        this.accountId = NormalizeRequiredValue(accountId, nameof(accountId));
+        this.accountId = NormalizeAccountId(accountId, nameof(accountId));
         return this;
     }
 
@@ -189,6 +190,11 @@ public sealed class SignedIterableQueryBuilder
         if (cursor == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(cursor), "Query cursor must be non-zero.");
+        }
+
+        if (gasBudget == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(gasBudget), "Continue query gas budget must be positive when provided.");
         }
 
         Reset();
@@ -324,9 +330,12 @@ public sealed class SignedIterableQueryBuilder
             ManagedIterableQueryKind.FindPeers => Array.Empty<byte>(),
             ManagedIterableQueryKind.FindActiveTriggerIds => Array.Empty<byte>(),
             ManagedIterableQueryKind.FindTriggers => Array.Empty<byte>(),
-            ManagedIterableQueryKind.FindAccountsWithAsset => EncodeSingleFieldStruct(context.EncodeAssetDefinitionId(assetDefinitionId!)),
-            ManagedIterableQueryKind.FindPermissionsByAccountId => EncodeSingleFieldStruct(context.EncodeAccountId(accountId!)),
-            ManagedIterableQueryKind.FindRolesByAccountId => EncodeSingleFieldStruct(context.EncodeAccountId(accountId!)),
+            ManagedIterableQueryKind.FindAccountsWithAsset => EncodeSingleFieldStruct(
+                context.EncodeAssetDefinitionId(RequireSelected(assetDefinitionId, nameof(assetDefinitionId)))),
+            ManagedIterableQueryKind.FindPermissionsByAccountId => EncodeSingleFieldStruct(
+                context.EncodeAccountId(RequireSelected(accountId, nameof(accountId)))),
+            ManagedIterableQueryKind.FindRolesByAccountId => EncodeSingleFieldStruct(
+                context.EncodeAccountId(RequireSelected(accountId, nameof(accountId)))),
             ManagedIterableQueryKind.FindBlocks => Array.Empty<byte>(),
             ManagedIterableQueryKind.FindBlockHeaders => Array.Empty<byte>(),
             ManagedIterableQueryKind.FindProofRecords => Array.Empty<byte>(),
@@ -371,10 +380,15 @@ public sealed class SignedIterableQueryBuilder
     private byte[] EncodeForwardCursor(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeString(continueQueryId!));
+        writer.WriteField(context.EncodeString(RequireSelected(continueQueryId, nameof(continueQueryId))));
         writer.WriteField(context.EncodeUInt64(continueCursor));
         writer.WriteField(context.EncodeOption(continueGasBudget, context.EncodeUInt64));
         return writer.ToArray();
+    }
+
+    private static string RequireSelected(string? value, string field)
+    {
+        return value ?? throw new InvalidOperationException($"{field} must be selected before encoding.");
     }
 
     private void Reset()
@@ -399,12 +413,30 @@ public sealed class SignedIterableQueryBuilder
         {
             throw new ArgumentException("Value cannot be null or empty.", paramName);
         }
-        if (value != value.Trim() || value.Any(char.IsControl))
+        if (value.Any(char.IsWhiteSpace))
         {
-            throw new ArgumentException("Value must not contain surrounding whitespace or control characters.", paramName);
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
         }
 
         return value;
+    }
+
+    private static string NormalizeAccountId(string value, string paramName)
+    {
+        var exact = NormalizeRequiredValue(value, paramName);
+        try
+        {
+            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
+                .ToI105(AccountAddress.DefaultChainDiscriminant);
+        }
+        catch (AccountAddressException exception)
+        {
+            throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
+        }
     }
 
     private static byte[] EncodeSingleFieldStruct(byte[] field)

@@ -1479,6 +1479,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             rayon_global_threads: 0,
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
+            sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
             guest_stack_bytes: defaults::concurrency::GUEST_STACK_BYTES,
             gas_to_stack_multiplier: defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         },

@@ -4,6 +4,8 @@ import java.math.BigDecimal
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.Locale
+import org.hyperledger.iroha.sdk.offline.OfflineNote
+import org.hyperledger.iroha.sdk.offline.OfflineNoteV2
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -41,7 +43,32 @@ data class OfflineCompactKeyCertificate(
     @SerialName("ios_environment") val iosEnvironment: String? = null,
     @SerialName("issuer_signature_base64") val issuerSignatureBase64: String,
     @SerialName("issuer_signature_payload_base64") val issuerSignaturePayloadBase64: String? = null
-)
+) {
+    init {
+        require(assertionScheme == expectedAssertionScheme(platform)) {
+            "assertion_scheme must be ${expectedAssertionScheme(platform)}"
+        }
+        require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform)) {
+            "assertion_key_algorithm must be ${expectedAssertionKeyAlgorithm(platform)}"
+        }
+    }
+
+    private companion object {
+        fun expectedAssertionScheme(platform: String): String =
+            when (platform) {
+                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
+                OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
+                else -> throw IllegalArgumentException("platform must be a supported first-release value")
+            }
+
+        fun expectedAssertionKeyAlgorithm(platform: String): String =
+            when (platform) {
+                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+                OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
+                else -> throw IllegalArgumentException("platform must be a supported first-release value")
+            }
+    }
+}
 
 @Serializable
 data class OfflineRecursiveProof(
@@ -95,7 +122,48 @@ data class OfflinePaymentTokenInputClaim(
     @SerialName("asset_id") val assetId: String,
     val amount: String,
     @SerialName("claim_hash") val claimHash: String? = null
-)
+) {
+    init {
+        val computedClaimHash = OfflineNote.IssuedClaim(
+            domain = domain,
+            noteCommitment = hexBytes32(noteCommitment, "note_commitment"),
+            keyCertificatePayloadHash = hexBytes32(keyCertificatePayloadHash, "key_certificate_payload_hash"),
+            assetId = assetId,
+            amount = amount,
+        ).claimHash().hexLower()
+        if (claimHash != null) {
+            require(claimHash.isNotEmpty() && claimHash.isLowerHex32()) {
+                "claim_hash must be 32-byte lowercase hex"
+            }
+            require(claimHash == computedClaimHash) {
+                "claim_hash must match issued claim"
+            }
+        }
+    }
+}
+
+private fun hexBytes32(value: String, field: String): ByteArray {
+    require(value.isLowerHex32()) { "$field must be 32-byte lowercase hex" }
+    val out = ByteArray(32)
+    for (idx in out.indices) {
+        val hi = value[idx * 2].hexDigit(field, idx * 2)
+        val lo = value[idx * 2 + 1].hexDigit(field, idx * 2 + 1)
+        out[idx] = ((hi shl 4) or lo).toByte()
+    }
+    return out
+}
+
+private fun String.isLowerHex32(): Boolean =
+    length == 64 && all { it in '0'..'9' || it in 'a'..'f' }
+
+private fun Char.hexDigit(field: String, index: Int): Int = when (this) {
+    in '0'..'9' -> this - '0'
+    in 'a'..'f' -> this - 'a' + 10
+    else -> throw IllegalArgumentException("$field has non-hex character at offset $index")
+}
+
+private fun ByteArray.hexLower(): String =
+    joinToString(separator = "") { byte -> String.format(Locale.ROOT, "%02x", byte.toInt() and 0xff) }
 
 @Serializable
 data class OfflineDeviceBinding(
@@ -428,11 +496,14 @@ object BearerOfflineWalletPolicy {
     }
 
     fun balanceAmount(value: String?): BigDecimal {
-        return value?.let(::parseNonNegativeAsciiDecimal) ?: BigDecimal.ZERO
+        val raw = value ?: return BigDecimal.ZERO
+        return parseNonNegativeAsciiDecimal(raw)
+            ?: throw IllegalArgumentException("Invalid amount")
     }
 
     fun normalizeAmountString(value: String): String {
-        val amount = parseNonNegativeAsciiDecimal(value) ?: return "0"
+        val amount = parseNonNegativeAsciiDecimal(value)
+            ?: throw IllegalArgumentException("Invalid amount")
         if (amount.compareTo(BigDecimal.ZERO) == 0) return "0"
         return amount.stripTrailingZeros().toPlainString()
     }

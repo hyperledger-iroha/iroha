@@ -2119,6 +2119,12 @@ def fixed_hex32(seed: int) -> str:
     return "0x" + f"{seed % 256:02x}" * 32
 
 
+def fixed_tron_address(seed: int) -> str:
+    """Return a non-zero canonical TRON 0x41-prefixed address fixture."""
+
+    return "0x41" + f"{seed % 256:02x}" * 20
+
+
 def test_release_readiness_report_boolean_domain_does_not_alias_eth_policy() -> None:
     """Boolean lane domains must not borrow ETH readiness-report policy."""
 
@@ -7381,6 +7387,10 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         'name == "CARGO_TARGET_DIR"',
         "def _dotnet_phase_block_bridge_path_matches_target_dir(",
         'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+        "path_list_has_empty_segment()",
+        "validate_nonempty_path_list()",
+        "no empty path-list segments before native bridge loader setup",
+        'dotnet_loader_path="$bridge_library_dir"',
         "test_release_readiness_report_rejects_dotnet_bridge_target_dir_drift",
         "test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades",
         "test_sccp_production_corridor_dotnet_phase_rejects_multiline_version",
@@ -7390,9 +7400,11 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
         "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_fallback",
+        "test_sccp_production_corridor_dotnet_phase_rejects_missing_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture",
+        "test_sccp_production_corridor_dotnet_phase_rejects_empty_inherited_path_segments",
         "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path",
         "missing-os-name",
         "duplicate-os-name",
@@ -7410,6 +7422,10 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "colon-injected-os-platform",
         "colon-injected-rid",
         "colon-injected-architecture",
+        "leading-empty",
+        "trailing-empty",
+        "interior-empty",
+        "semicolon-empty",
         "exactly one canonical SDK version line",
         "exactly one OS Name and one OS Platform",
         "dotnet_info_field_value",
@@ -7417,6 +7433,8 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "exactly one canonical Windows RID from dotnet --info",
         "exactly one OS Architecture from dotnet --info",
         "exactly one Host Architecture from dotnet --info when OS Architecture is absent",
+        "at most one Host Architecture from dotnet --info",
+        "OS Architecture and Host Architecture to agree",
         "found: X64",
         "SUMMARY_LIKE_RE",
         "ANSI_ESCAPE_PATTERN",
@@ -11830,6 +11848,79 @@ def test_release_readiness_phase_command_matchers_accept_corridor_dry_run() -> N
             ), f"{phase} dry-run command did not satisfy {fragment}"
 
 
+def test_release_readiness_phase_command_matchers_accept_dotnet_artifacts_path() -> None:
+    """The .NET SCCP matcher must accept Windows-local artifacts output."""
+
+    report = load_report_module()
+    command = (
+        "+ dotnet test "
+        "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+        "--artifacts-path C:/Users/runner/AppData/Local/Temp/iroha-dotnet-artifacts "
+        "--filter FullyQualifiedName~Sccp "
+        "-p:ProduceReferenceAssembly=false "
+        "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx"
+    )
+
+    for fragment in (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+        "FullyQualifiedName~Sccp",
+        "sccp-dotnet-sdk.trx",
+    ):
+        assert fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        assert report._phase_command_matches_required_fragment(
+            "dotnet-sdk",
+            command,
+            fragment,
+        ), f".NET artifacts-path command did not satisfy {fragment}"
+
+
+def test_release_readiness_phase_command_matchers_reject_bad_dotnet_artifacts_path() -> None:
+    """Malformed .NET artifacts-path commands must not satisfy readiness."""
+
+    report = load_report_module()
+    required_fragment = (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
+        "Hyperledger.Iroha.Sdk.Tests.csproj"
+    )
+    cases = (
+        (
+            "missing-artifacts-path-value",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=false "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+        ),
+        (
+            "wrong-produce-reference-assembly",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path C:/tmp/iroha-dotnet-artifacts "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=true "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+        ),
+        (
+            "trailing-extra-argument",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path C:/tmp/iroha-dotnet-artifacts "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=false "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx --list-tests",
+        ),
+    )
+
+    assert required_fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    for case_id, command in cases:
+        assert not report._phase_command_matches_required_fragment(
+            "dotnet-sdk",
+            command,
+            required_fragment,
+        ), f".NET accepted malformed artifacts-path command: {case_id}"
+
+
 def test_release_readiness_phase_command_matchers_reject_echoed_fragments() -> None:
     """Required phase fragments cannot be satisfied by traced echo commands."""
 
@@ -13650,11 +13741,13 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
 ) -> None:
     """A public readiness note must not pass without evidence and corridor proof."""
 
+    evidence_payload = "# intentionally no all-lanes evidence records\n"
     evidence = tmp_path / "empty.toml"
-    evidence.write_text("", encoding="utf-8")
+    evidence.write_text(evidence_payload, encoding="utf-8")
 
     completed = subprocess.run(
-        ["python3", str(SCRIPT), str(evidence)],
+        ["python3", str(SCRIPT), evidence.relative_to(tmp_path).as_posix()],
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -13664,13 +13757,7 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
     assert "# SCCP Release Readiness Report" in completed.stdout
     assert "Status: NOT READY" in completed.stdout
     assert "| Path | Bytes | SHA-256 |" in completed.stdout
-    assert "| `<invalid path>` | `<invalid bytes>` | `<invalid sha256>` |" in (
-        completed.stdout
-    )
-    assert (
-        "readiness report input_artifacts[0] bytes must be a positive integer"
-        in completed.stdout
-    )
+    assert hashlib.sha256(evidence_payload.encode("utf-8")).hexdigest() in completed.stdout
     assert "## Release Checklist" in completed.stdout
     assert "## User Prover Submission Surfaces" in completed.stdout
     assert "`ton` | `ton-contract-v1`" in completed.stdout
@@ -13695,8 +13782,9 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
 def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) -> None:
     """JSON output must separate evidence blockers from validation corridor status."""
 
+    evidence_payload = "# intentionally no all-lanes evidence records\n"
     evidence = tmp_path / "empty.toml"
-    evidence.write_text("", encoding="utf-8")
+    evidence.write_text(evidence_payload, encoding="utf-8")
 
     completed = subprocess.run(
         [
@@ -13706,9 +13794,10 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
             "json",
             "--phase-result",
             "all=passed",
-            str(evidence),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -13722,12 +13811,13 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     assert payload["corridor"]["phases"]["contract-smoke"] == "passed"
     assert payload["corridor"]["evidence_artifacts"] == {}
     assert payload["corridor"]["require_phase_evidence"] is False
-    assert "input_artifacts" not in payload
-    assert (
-        "readiness report input_artifacts[0] bytes must be a positive integer"
-        in payload["blockers"]
-    )
-    assert "readiness report input_artifacts is invalid" in payload["blockers"]
+    assert payload["input_artifacts"] == [
+        {
+            "path": evidence.relative_to(tmp_path).as_posix(),
+            "bytes": len(evidence_payload.encode("utf-8")),
+            "sha256": hashlib.sha256(evidence_payload.encode("utf-8")).hexdigest(),
+        }
+    ]
     assert "cryptographic_evidence" not in payload
     assert "evidence" not in payload
     assert payload["native_evm_prover_bundle"]["validation_status"] == "blocked"
@@ -14313,10 +14403,10 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"all={corridor_log.name}",
+            f"all={corridor_log.relative_to(tmp_path).as_posix()}",
             "--native-evm-prover-bundle",
-            native_bundle.name,
-            evidence.name,
+            native_bundle.relative_to(tmp_path).as_posix(),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
         cwd=tmp_path,
@@ -14335,7 +14425,10 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
         hashlib.sha256(corridor_payload.encode("utf-8")).hexdigest()
         in completed.stdout
     )
-    assert f"| `rust-sccp` | passed | `{corridor_log.name}` |" in completed.stdout
+    assert (
+        f"| `rust-sccp` | passed | `{corridor_log.relative_to(tmp_path).as_posix()}` |"
+        in completed.stdout
+    )
     assert "## Release Checklist" in completed.stdout
     assert "## Cryptographic Evidence" in completed.stdout
     assert "## Native Prover Bundle" in completed.stdout
@@ -14351,9 +14444,10 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "Source Gate | Source Gate Audits | Route Allowlist" in completed.stdout
     assert (
         "Canary Source | Canary Message Proof | Canary TRON Owner | "
-        "Canary TRON Signature | Canary Log Index | Canary Target Domain | "
-        "Canary Proof Version | Canary Proof Source | Canary Call Data | "
-        "Canary Payload | Canary Statement | Canary Commitment | "
+        "Canary TRON Signature | Canary TRON Tx ID | Canary TRON Tx Owner | "
+        "Canary TRON Signature Hash | Canary TRON Recovered | Canary Log Index | "
+        "Canary Target Domain | Canary Proof Version | Canary Proof Source | "
+        "Canary Call Data | Canary Payload | Canary Statement | Canary Commitment | "
         "Canary Finality Height | Canary Finality Block | Canary Tx"
     ) in completed.stdout
     assert "Canary Receipt Finalized | Canary Receipts Root" in completed.stdout
@@ -14396,8 +14490,8 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
             "--phase-result",
             "all=passed",
             "--native-evm-prover-bundle",
-            native_bundle.name,
-            evidence.name,
+            native_bundle.relative_to(tmp_path).as_posix(),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
         cwd=tmp_path,
@@ -20522,6 +20616,10 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
         "route_canary_message_proof_used": True,
         "route_canary_raw_data_owner_matches_transaction": None,
         "route_canary_signature_recovers_to_owner": None,
+        "route_canary_transaction_id": "",
+        "route_canary_transaction_owner_address": "",
+        "route_canary_signature_sha256": "",
+        "route_canary_signature_recovered_address": "",
         "route_canary_log_index": 0,
         "route_canary_target_domain": report.ACTIVE_LAUNCH_DOMAIN,
         "route_canary_proof_version": 1,
@@ -20558,6 +20656,12 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
             "route_canary_message_proof_used": "true",
             "route_canary_raw_data_owner_matches_transaction": "true",
             "route_canary_signature_recovers_to_owner": "true",
+            "route_canary_transaction_id": "operator secret-token-transaction-id",
+            "route_canary_transaction_owner_address": "operator secret-token-owner",
+            "route_canary_signature_sha256": "operator secret-token-signature",
+            "route_canary_signature_recovered_address": (
+                "operator secret-token-recovered"
+            ),
             "route_canary_log_index": "0",
             "route_canary_target_domain": "1",
             "route_canary_proof_version": "1",
@@ -20587,6 +20691,10 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
     del missing_row["route_canary_message_proof_used"]
     del missing_row["route_canary_raw_data_owner_matches_transaction"]
     del missing_row["route_canary_signature_recovers_to_owner"]
+    del missing_row["route_canary_transaction_id"]
+    del missing_row["route_canary_transaction_owner_address"]
+    del missing_row["route_canary_signature_sha256"]
+    del missing_row["route_canary_signature_recovered_address"]
     del missing_row["route_canary_log_index"]
     del missing_row["route_canary_target_domain"]
     del missing_row["route_canary_proof_version"]
@@ -20663,6 +20771,23 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
         "readiness report cryptographic_evidence[0] "
         "route_canary_signature_recovers_to_owner must be boolean"
     ) in blockers
+    for field in (
+        "route_canary_transaction_id",
+        "route_canary_signature_sha256",
+    ):
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            f"{field} must be a canonical non-zero bytes32 hex string"
+        ) in blockers
+    for field in (
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_recovered_address",
+    ):
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            f"{field} must be a non-zero canonical 0x41-prefixed 21-byte "
+            "hex string"
+        ) in blockers
     assert (
         "readiness report cryptographic_evidence[0] "
         "route_canary_log_index must be an integer"
@@ -20729,6 +20854,16 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
         "route_canary_signature_recovers_to_owner"
     ) in blockers
     for field in (
+        "route_canary_transaction_id",
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_sha256",
+        "route_canary_signature_recovered_address",
+    ):
+        assert (
+            "readiness report cryptographic_evidence[1] missing field: "
+            f"{field}"
+        ) in blockers
+    for field in (
         "route_canary_log_index",
         "route_canary_target_domain",
         "route_canary_proof_version",
@@ -20793,6 +20928,10 @@ def public_crypto_rows_for_all_domains(report) -> list[dict[str, object]]:
                 "route_canary_message_proof_used": None,
                 "route_canary_raw_data_owner_matches_transaction": None,
                 "route_canary_signature_recovers_to_owner": None,
+                "route_canary_transaction_id": "",
+                "route_canary_transaction_owner_address": "",
+                "route_canary_signature_sha256": "",
+                "route_canary_signature_recovered_address": "",
                 "route_canary_log_index": None,
                 "route_canary_target_domain": None,
                 "route_canary_proof_version": None,
@@ -20863,10 +21002,15 @@ def add_message_proof_route_canary_public_fields(
             }
         )
     if domain == report.SCCP_DOMAIN_TRON:
+        tron_owner = fixed_tron_address(seed_base + 11)
         row.update(
             {
                 "route_canary_raw_data_owner_matches_transaction": True,
                 "route_canary_signature_recovers_to_owner": True,
+                "route_canary_transaction_id": fixed_hex32(seed_base + 7),
+                "route_canary_transaction_owner_address": tron_owner,
+                "route_canary_signature_sha256": fixed_hex32(seed_base + 8),
+                "route_canary_signature_recovered_address": tron_owner,
                 "route_canary_block_number": 1000 + domain,
                 "route_canary_block_timestamp": 2000 + domain,
             }
@@ -21314,12 +21458,16 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
             "route_canary_message_proof_used": True,
             "route_canary_raw_data_owner_matches_transaction": False,
             "route_canary_signature_recovers_to_owner": None,
+            "route_canary_transaction_id": fixed_hex32(0xF7),
+            "route_canary_transaction_owner_address": fixed_tron_address(0xF7),
+            "route_canary_signature_sha256": fixed_hex32(0xF8),
+            "route_canary_signature_recovered_address": fixed_tron_address(0xF7),
             "route_canary_log_index": 0,
             "route_canary_target_domain": 5,
             "route_canary_proof_version": 1,
             "route_canary_proof_source_domain": report.SCCP_DOMAIN_SORA,
-            "route_canary_call_data_sha256": fixed_hex32(0xF7),
-            "route_canary_payload_hash": fixed_hex32(0xF8),
+            "route_canary_call_data_sha256": fixed_hex32(0xF9),
+            "route_canary_payload_hash": fixed_hex32(0xFA),
             "route_canary_statement_hash": fixed_hex32(0xF9),
             "route_canary_commitment_root": fixed_hex32(0xFA),
             "route_canary_finality_height": fixed_hex32(0xFB),
@@ -21366,6 +21514,100 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
             f"{row_label} route_canary_signature_recovers_to_owner must be null "
             "for non-TRON route canary evidence"
         ) in errors, domain
+
+
+def test_release_readiness_report_public_crypto_rejects_tron_transcript_drift() -> None:
+    """Public TRON canary rows must expose canonical tx and signature transcript."""
+
+    report = load_report_module()
+    rows = public_crypto_rows_for_all_domains(report)
+    tron_index, tron_row = next(
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.SCCP_DOMAIN_TRON
+    )
+    add_message_proof_route_canary_public_fields(
+        report,
+        tron_row,
+        report.SCCP_DOMAIN_TRON,
+    )
+    tron_row["route_canary_transaction_id"] = ""
+    tron_row["route_canary_signature_sha256"] = "0x" + "00" * 32
+    tron_row["route_canary_transaction_owner_address"] = "0x41" + "00" * 20
+    tron_row["route_canary_signature_recovered_address"] = fixed_tron_address(0x88)
+
+    errors = report._public_cryptographic_evidence_errors(rows)
+    row_label = f"readiness report cryptographic_evidence[{tron_index}]"
+
+    for field in (
+        "route_canary_transaction_id",
+        "route_canary_signature_sha256",
+    ):
+        assert (
+            f"{row_label} {field} must be a canonical non-zero bytes32 hex string "
+            "for TRON route canary evidence"
+        ) in errors, field
+    assert (
+        f"{row_label} route_canary_transaction_owner_address must be a non-zero "
+        "canonical 0x41-prefixed 21-byte hex string for TRON route canary evidence"
+    ) in errors
+    assert (
+        f"{row_label} route_canary_signature_recovered_address must match "
+        "route_canary_transaction_owner_address"
+    ) not in errors
+
+    rows = public_crypto_rows_for_all_domains(report)
+    tron_index, tron_row = next(
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.SCCP_DOMAIN_TRON
+    )
+    add_message_proof_route_canary_public_fields(
+        report,
+        tron_row,
+        report.SCCP_DOMAIN_TRON,
+    )
+    tron_row["route_canary_signature_recovered_address"] = fixed_tron_address(0x89)
+
+    errors = report._public_cryptographic_evidence_errors(rows)
+    row_label = f"readiness report cryptographic_evidence[{tron_index}]"
+
+    assert (
+        f"{row_label} route_canary_signature_recovered_address must match "
+        "route_canary_transaction_owner_address"
+    ) in errors
+
+    # Source-inventory marker: public crypto TRON transcript empty policy covers every non-TRON launch domain
+    for domain, chain in report.ALL_LANES_CHAIN_BY_DOMAIN.items():
+        if domain == report.SCCP_DOMAIN_TRON:
+            continue
+        rows = public_crypto_rows_for_all_domains(report)
+        target_index, target_row = next(
+            (index, row)
+            for index, row in enumerate(rows)
+            if row["domain"] == domain and row["chain"] == chain
+        )
+        target_row["route_canary_transaction_id"] = fixed_hex32(0x91 + domain)
+        target_row["route_canary_transaction_owner_address"] = fixed_tron_address(
+            0x92 + domain
+        )
+        target_row["route_canary_signature_sha256"] = fixed_hex32(0x93 + domain)
+        target_row["route_canary_signature_recovered_address"] = fixed_tron_address(
+            0x92 + domain
+        )
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+        row_label = f"readiness report cryptographic_evidence[{target_index}]"
+
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_sha256",
+            "route_canary_signature_recovered_address",
+        ):
+            assert (
+                f"{row_label} {field} must be empty for non-TRON lanes"
+            ) in errors, (domain, field)
 
 
 def test_release_readiness_report_public_crypto_rejects_non_tron_route_canary_block_metadata() -> None:
@@ -21695,12 +21937,15 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
 
     report = load_report_module()
     all_lanes = report._load_all_lanes_module()
-    transcript_field = "route_canary_message_id"
-
     # Source-inventory marker: public crypto route-canary transcript template replays cover every launch domain
     for domain, chain in report.ALL_LANES_CHAIN_BY_DOMAIN.items():
         profile = all_lanes.LANE_PROFILES[domain]
         template_hashes = all_lanes._source_material_template_hashes(profile)
+        transcript_field = (
+            "route_canary_signature_sha256"
+            if domain == report.SCCP_DOMAIN_TRON
+            else "route_canary_message_id"
+        )
         for template_field, template_hash in template_hashes.items():
             rows = public_crypto_rows_for_all_domains(report)
             target_index, target_row = next(
@@ -25027,6 +25272,7 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     phase_artifacts = write_downloaded_phase_artifacts(tmp_path)
+    js_log = phase_artifacts / "sccp-production-corridor-js-sdk" / "js-sdk.log"
 
     completed = subprocess.run(
         [
@@ -25036,10 +25282,10 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
             "--phase-result",
             "all=passed",
             "--phase-evidence-dir",
-            phase_artifacts.name,
+            phase_artifacts.relative_to(tmp_path).as_posix(),
             "--native-evm-prover-bundle",
-            native_bundle.name,
-            evidence.name,
+            native_bundle.relative_to(tmp_path).as_posix(),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
         cwd=tmp_path,
@@ -25051,8 +25297,7 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     assert completed.returncode == 0
     assert "Status: READY" in completed.stdout
     assert (
-        f"| `js-sdk` | passed | "
-        f"`{phase_artifacts.name}/sccp-production-corridor-js-sdk/js-sdk.log` |"
+        f"| `js-sdk` | passed | `{js_log.relative_to(tmp_path).as_posix()}` |"
         in completed.stdout
     )
     assert "## Blocking Items\n\n- None" in completed.stdout
@@ -35103,7 +35348,7 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "mutableReceiptProofNode[0] = 0x7c;",
             'Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]))',
             "callbackRequest.PublicSignalWords[0] = \"0x\" + new string('f', 64);",
-            "Assert.NotEqual(ExpectedPublicSignalWords[0], prover.Request.PublicSignalWords[0]);",
+            "Assert.Equal(expectedRequest.PublicSignalWords, prover.Request.PublicSignalWords);",
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",

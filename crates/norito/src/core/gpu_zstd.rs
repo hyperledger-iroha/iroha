@@ -34,7 +34,7 @@ unsafe extern "C" {
     fn dlclose(handle: *mut c_void) -> c_int;
 }
 #[cfg(windows)]
-extern "system" {
+unsafe extern "system" {
     fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
     fn LoadLibraryExW(
         lp_lib_file_name: *const u16,
@@ -407,20 +407,20 @@ unsafe fn init_backend() -> Option<Backend> {
                 .chain(Some(0))
                 .collect();
             let search_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
-            let lib = LoadLibraryExW(dll_name.as_ptr(), ptr::null_mut(), search_flags);
+            let lib = unsafe { LoadLibraryExW(dll_name.as_ptr(), ptr::null_mut(), search_flags) };
             if lib.is_null() {
                 continue;
             }
-            let compress = GetProcAddress(lib, b"gpu_zstd_compress\0".as_ptr());
-            let decompress = GetProcAddress(lib, b"gpu_zstd_decompress\0".as_ptr());
+            let compress = unsafe { GetProcAddress(lib, b"gpu_zstd_compress\0".as_ptr()) };
+            let decompress = unsafe { GetProcAddress(lib, b"gpu_zstd_decompress\0".as_ptr()) };
             if compress.is_null() || decompress.is_null() {
-                let _ = FreeLibrary(lib);
+                let _ = unsafe { FreeLibrary(lib) };
                 continue;
             }
             loaded = Some((
                 lib,
-                std::mem::transmute::<*mut c_void, CompressFn>(compress),
-                std::mem::transmute::<*mut c_void, DecompressFn>(decompress),
+                unsafe { std::mem::transmute::<*mut c_void, CompressFn>(compress) },
+                unsafe { std::mem::transmute::<*mut c_void, DecompressFn>(decompress) },
             ));
             break;
         }
@@ -428,7 +428,7 @@ unsafe fn init_backend() -> Option<Backend> {
             return None;
         };
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
-            let _ = FreeLibrary(lib);
+            let _ = unsafe { FreeLibrary(lib) };
             report_gpu_load_failure(format!("CUDA backend failed self-test ({})", err));
             return None;
         }

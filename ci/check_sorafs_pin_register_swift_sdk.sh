@@ -6,14 +6,51 @@ PYTHON_BIN="${SORAFS_PIN_REGISTER_SWIFT_PYTHON_BIN:-python3}"
 SWIFTC_BIN="${SORAFS_PIN_REGISTER_SWIFTC_BIN:-swiftc}"
 
 "${PYTHON_BIN}" - "${ROOT_DIR}" <<'PY'
+import os
+import stat
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
 
 
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def fail(path: Path, message: str) -> None:
+    raise SystemExit(f"error: Swift SoraFS pin-register source {message}: {path}")
+
+
+def read_text_no_follow(path: Path) -> str:
+    if path.is_symlink():
+        fail(path, "must not be a symlink")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            fail(parent, "parent must not be a symlink")
+        if parent.exists() and not parent.is_dir():
+            fail(parent, "parent must be a directory")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        fail(path, "is missing")
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(path, "must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            fail(path, "must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def read(path):
-    return (root / path).read_text(encoding="utf-8")
+    return read_text_no_follow(root / path)
 
 
 def require(text, needle, label):

@@ -720,6 +720,10 @@ CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS = (
     "route_canary_message_proof_used",
     "route_canary_raw_data_owner_matches_transaction",
     "route_canary_signature_recovers_to_owner",
+    "route_canary_transaction_id",
+    "route_canary_transaction_owner_address",
+    "route_canary_signature_sha256",
+    "route_canary_signature_recovered_address",
     "route_canary_log_index",
     "route_canary_target_domain",
     "route_canary_proof_version",
@@ -751,6 +755,8 @@ CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS = (
     "route_canary_receipt_block_hash",
     "route_canary_block_receipts_root",
     "route_canary_message_id",
+    "route_canary_transaction_id",
+    "route_canary_signature_sha256",
 )
 ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS = (
     "evidence_hash",
@@ -1880,6 +1886,8 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
             payload.get("route_canary_block_receipts_root"),
         ),
         ("route_canary_message_id", payload.get("route_canary_message_id")),
+        ("route_canary_transaction_id", payload.get("route_canary_transaction_id")),
+        ("route_canary_signature_sha256", payload.get("route_canary_signature_sha256")),
     ]
     for audit_key, audit_hash in sorted(
         audit_hashes.items(),
@@ -1916,6 +1924,8 @@ def _cryptographic_evidence_route_canary_hash_role_errors(
                 payload.get("route_canary_block_receipts_root"),
             ),
             ("route_canary_message_id", payload.get("route_canary_message_id")),
+            ("route_canary_transaction_id", payload.get("route_canary_transaction_id")),
+            ("route_canary_signature_sha256", payload.get("route_canary_signature_sha256")),
             (
                 "route_canary_evidence_hash",
                 payload.get("route_canary_evidence_hash"),
@@ -4747,6 +4757,16 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             and type(payload.get(field)) is not bool
         ):
             errors.append(f"{label} {field} must be true, false, or null")
+    for field in (
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_recovered_address",
+    ):
+        if field in payload and payload.get(field) not in (None, ""):
+            if not _is_canonical_tron_address_text(payload.get(field)):
+                errors.append(
+                    f"{label} {field} must be a non-zero canonical "
+                    "0x41-prefixed 21-byte hex string"
+                )
     if (
         "route_canary_receipt_block_finalized" in payload
         and payload.get("route_canary_receipt_block_finalized") is not None
@@ -4811,6 +4831,18 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 # Source-inventory marker: TRON route-canary public owner/signature flags must be null when route canary evidence is absent
                 errors.append(
                     f"{label} {field} must be null when route canary evidence "
+                    "is absent"
+                )
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_sha256",
+            "route_canary_signature_recovered_address",
+        ):
+            if payload.get(field) not in (None, ""):
+                # Source-inventory marker: TRON route-canary public transcript fields must be empty when route canary evidence is absent
+                errors.append(
+                    f"{label} {field} must be empty when route canary evidence "
                     "is absent"
                 )
         for field in (
@@ -4987,7 +5019,49 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                 errors.append(
                     f"{label} {field} must be true for TRON route canary evidence"
                 )
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_signature_sha256",
+        ):
+            if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+                # Source-inventory marker: TRON route-canary public transcript fields must be exact for TRON route canary evidence
+                errors.append(
+                    f"{label} {field} must be a non-zero canonical bytes32 hex "
+                    "string for TRON route canary evidence"
+                )
+        for field in (
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_recovered_address",
+        ):
+            if not _is_canonical_tron_address_text(payload.get(field)):
+                # Source-inventory marker: TRON route-canary public transcript fields must be exact for TRON route canary evidence
+                errors.append(
+                    f"{label} {field} must be a non-zero canonical "
+                    "0x41-prefixed 21-byte hex string for TRON route canary "
+                    "evidence"
+                )
+        transaction_owner = payload.get("route_canary_transaction_owner_address")
+        signature_recovered = payload.get("route_canary_signature_recovered_address")
+        if (
+            _is_canonical_tron_address_text(transaction_owner)
+            and _is_canonical_tron_address_text(signature_recovered)
+            and transaction_owner != signature_recovered
+        ):
+            # Source-inventory marker: TRON route-canary public recovered signature address must match transaction owner
+            errors.append(
+                f"{label} route_canary_signature_recovered_address must match "
+                "route_canary_transaction_owner_address"
+            )
     if domain in known_route_canary_domains and domain != _sccp_domain_tron():
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_sha256",
+            "route_canary_signature_recovered_address",
+        ):
+            if payload.get(field) not in (None, ""):
+                # Source-inventory marker: TRON route-canary public transcript fields must be empty for non-TRON lanes
+                errors.append(f"{label} {field} must be empty for non-TRON lanes")
         for field in (
             "route_canary_raw_data_owner_matches_transaction",
             "route_canary_signature_recovers_to_owner",
@@ -5086,6 +5160,8 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         "route_canary_receipt_block_hash",
         "route_canary_block_receipts_root",
         "route_canary_message_id",
+        "route_canary_transaction_id",
+        "route_canary_signature_sha256",
     ):
         errors.extend(_optional_bytes32_field_errors(label, payload, field))
     # Source-inventory marker: public crypto source-record hashes must reject built-in template material
@@ -5277,6 +5353,22 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
         (
             "route_canary_signature_recovers_to_owner",
             ("route_allowlist", "route_canary", "signature_recovers_to_owner"),
+        ),
+        (
+            "route_canary_transaction_id",
+            ("route_allowlist", "route_canary", "transaction_id"),
+        ),
+        (
+            "route_canary_transaction_owner_address",
+            ("route_allowlist", "route_canary", "transaction_owner_address"),
+        ),
+        (
+            "route_canary_signature_sha256",
+            ("route_allowlist", "route_canary", "signature_sha256"),
+        ),
+        (
+            "route_canary_signature_recovered_address",
+            ("route_allowlist", "route_canary", "signature_recovered_address"),
         ),
         ("route_canary_log_index", ("route_allowlist", "route_canary", "log_index")),
         (

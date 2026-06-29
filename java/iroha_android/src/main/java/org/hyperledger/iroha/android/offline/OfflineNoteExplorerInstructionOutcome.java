@@ -20,10 +20,10 @@ public final class OfflineNoteExplorerInstructionOutcome {
       final String transactionStatus,
       final String transactionHashHex,
       final byte[] encodedInstruction) {
-    if (kind == null || kind.isBlank()) {
+    if (kind == null || kind.trim().isEmpty()) {
       throw new IllegalArgumentException("kind must not be blank");
     }
-    if (transactionStatus == null || transactionStatus.isBlank()) {
+    if (transactionStatus == null || transactionStatus.trim().isEmpty()) {
       throw new IllegalArgumentException("transactionStatus must not be blank");
     }
     this.kind = kind;

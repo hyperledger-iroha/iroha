@@ -71,6 +71,60 @@ def feed_promotion(*, ack_count: int = 3) -> dict:
     return payload
 
 
+def controller_runtime() -> dict:
+    payload = base("sorafs.gateway_compliance.controller_runtime_canary.v1")
+    payload.update(
+        {
+            "bundle_digest_hex": DIGEST,
+            "controller_instance_id": "gateway-compliance-controller-a",
+            "iroha_config_bound": True,
+            "config_source": "iroha_config",
+            "external_feed_count": 2,
+            "fetched_feed_count": 2,
+            "normalized_feed_count": 2,
+            "signed_feed_count": 2,
+            "controller_service_enabled": True,
+            "scheduler_config_bound": True,
+            "external_feeds_fetched": True,
+            "feed_signature_verified": True,
+            "normalization_deterministic": True,
+            "bundle_pack_verified": True,
+            "update_history_persisted": True,
+            "gateway_reload_requested": True,
+            "failure_backoff_configured": True,
+            "rollback_plan_verified": True,
+            "raw_feeds_included": False,
+            "feed_payloads_included": False,
+            "response_bodies_included": False,
+        }
+    )
+    return payload
+
+
+def moderation_toggle() -> dict:
+    payload = base("sorafs.gateway_compliance.moderation_toggle_canary.v1")
+    payload.update(
+        {
+            "bundle_digest_hex": DIGEST,
+            "toggle_api_url": "https://gateway.example/v1/sorafs/gateway/moderation-toggles",
+            "toggle_count": 2,
+            "approved_toggle_count": 2,
+            "toggle_digest_hex": DIGEST,
+            "iroha_config_bound": True,
+            "config_source": "iroha_config",
+            "operator_role_enforced": True,
+            "approval_workflow_verified": True,
+            "expiry_enforced": True,
+            "cache_invalidation_verified": True,
+            "operator_audit_trail_persisted": True,
+            "rollback_verified": True,
+            "raw_toggle_payloads_included": False,
+            "response_bodies_included": False,
+        }
+    )
+    return payload
+
+
 def gateway_reload(*, reload_latency_ms: int = 1_000) -> dict:
     payload = base("sorafs.gateway_compliance.gateway_reload_canary.v1")
     payload.update(
@@ -204,6 +258,8 @@ def governance_approval() -> dict:
 
 def write_complete_evidence(root: Path) -> None:
     write_json(root / "feed-promotion.json", feed_promotion())
+    write_json(root / "controller-runtime.json", controller_runtime())
+    write_json(root / "moderation-toggle.json", moderation_toggle())
     write_json(root / "gateway-reload.json", gateway_reload())
     write_json(root / "enforcement-probe.json", enforcement_probe())
     write_json(root / "honey-audit.json", honey_audit())
@@ -270,6 +326,66 @@ def test_gateway_reload_requires_bundle_binding(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway-reload.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_controller_runtime_requires_feed_count_equality(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["signed_feed_count"] = 1
+    write_json(tmp_path / "controller-runtime.json", payload)
+
+    assert run_gate(tmp_path) == 1
+
+
+def test_controller_runtime_bundle_binding_must_match_feed_promotion(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["bundle_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["controller_runtime"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "controller_runtime bundle_digest_hex must match a valid feed_promotion bundle_digest_hex"
+    ]
+
+
+def test_moderation_toggle_requires_approved_toggle_count_equality(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_toggle()
+    payload["approved_toggle_count"] = 1
+    write_json(tmp_path / "moderation-toggle.json", payload)
+
+    assert run_gate(tmp_path) == 1
+
+
+def test_moderation_toggle_bundle_binding_must_match_feed_promotion(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_toggle()
+    payload["bundle_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "moderation-toggle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["moderation_toggle"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "moderation_toggle bundle_digest_hex must match a valid feed_promotion bundle_digest_hex"
+    ]
 
 
 def test_enforcement_bundle_binding_must_match_feed_promotion(tmp_path: Path) -> None:

@@ -6,6 +6,9 @@ use iroha_logger::prelude::*;
 
 use super::*;
 
+const AUTO_WORKER_MIN: usize = 2;
+const AUTO_WORKER_MAX: usize = 8;
+
 /// QC aggregate verification request payload.
 #[derive(Debug)]
 pub(super) struct QcVerifyWork {
@@ -36,11 +39,12 @@ fn resolve_worker_config(
     result_queue_cap: usize,
 ) -> (usize, usize, usize) {
     let threads = if worker_threads == 0 {
-        std::thread::available_parallelism()
+        let detected = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1)
+            .unwrap_or(1);
+        detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
-        worker_threads
+        worker_threads.max(1)
     };
     let work_queue_cap = if work_queue_cap == 0 {
         threads.saturating_mul(4).max(4)
@@ -200,11 +204,20 @@ mod tests {
     fn qc_verify_worker_config_auto_scales() {
         let expected_threads = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .clamp(super::AUTO_WORKER_MIN, super::AUTO_WORKER_MAX);
         let (threads, work_cap, result_cap) = resolve_worker_config(0, 0, 0);
         assert_eq!(threads, expected_threads);
         assert_eq!(work_cap, expected_threads.saturating_mul(4).max(4));
         assert_eq!(result_cap, expected_threads.saturating_mul(8).max(8));
+    }
+
+    #[test]
+    fn qc_verify_worker_config_preserves_explicit_count() {
+        let (threads, work_cap, result_cap) = resolve_worker_config(32, 0, 0);
+        assert_eq!(threads, 32);
+        assert_eq!(work_cap, 128);
+        assert_eq!(result_cap, 256);
     }
 
     #[test]

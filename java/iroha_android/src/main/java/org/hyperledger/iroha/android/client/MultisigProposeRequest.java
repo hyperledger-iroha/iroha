@@ -22,6 +22,7 @@ public final class MultisigProposeRequest {
   private final Long validationFeePolicyVersion;
   private final String validationFeePolicyHash;
   private final Long validationFeeInstructionIndex;
+  private final Long validationFeeTransferEntryIndex;
 
   private MultisigProposeRequest(final Builder builder) {
     this.multisigAccountId = builder.multisigAccountId;
@@ -36,6 +37,7 @@ public final class MultisigProposeRequest {
     this.validationFeePolicyVersion = builder.validationFeePolicyVersion;
     this.validationFeePolicyHash = builder.validationFeePolicyHash;
     this.validationFeeInstructionIndex = builder.validationFeeInstructionIndex;
+    this.validationFeeTransferEntryIndex = builder.validationFeeTransferEntryIndex;
   }
 
   public static Builder builder() {
@@ -54,6 +56,7 @@ public final class MultisigProposeRequest {
   public Long validationFeePolicyVersion() { return validationFeePolicyVersion; }
   public String validationFeePolicyHash() { return validationFeePolicyHash; }
   public Long validationFeeInstructionIndex() { return validationFeeInstructionIndex; }
+  public Long validationFeeTransferEntryIndex() { return validationFeeTransferEntryIndex; }
 
   private static List<byte[]> copyInstructions(final List<byte[]> source) {
     final List<byte[]> copy = new ArrayList<>();
@@ -78,6 +81,7 @@ public final class MultisigProposeRequest {
     private Long validationFeePolicyVersion;
     private String validationFeePolicyHash;
     private Long validationFeeInstructionIndex;
+    private Long validationFeeTransferEntryIndex;
 
     public Builder setMultisigAccountId(final String value) {
       this.multisigAccountId = value;
@@ -156,6 +160,11 @@ public final class MultisigProposeRequest {
 
     public Builder setValidationFeeInstructionIndex(final Long value) {
       this.validationFeeInstructionIndex = value;
+      return this;
+    }
+
+    public Builder setValidationFeeTransferEntryIndex(final Long value) {
+      this.validationFeeTransferEntryIndex = value;
       return this;
     }
 

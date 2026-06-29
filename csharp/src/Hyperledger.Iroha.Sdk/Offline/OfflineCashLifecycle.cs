@@ -66,11 +66,32 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 "Offline cash is disabled in the cached configuration snapshot.");
         }
 
-        if (!IsCanonicalSnapshotText(IssuerPublicKeyBase64))
+        RequireCanonicalSnapshotField(ChainId, "chain_id", "invalid_chain_id");
+        RequireCanonicalSnapshotField(AssetDefinitionId, "asset_definition_id", "invalid_asset_definition_id");
+        RequireOptionalCanonicalSnapshotField(ArtifactSetId, "artifact_set_id", "invalid_artifact_set_id");
+        RequireOptionalCanonicalSnapshotField(CircuitId, "circuit_id", "invalid_circuit_id");
+
+        if (!IsCanonicalBase64SnapshotText(IssuerPublicKeyBase64))
         {
             throw new OfflineCashConfigurationSnapshotException(
                 "missing_issuer_public_key",
                 "Offline cash requires a cached issuer public key before offline exchange.");
+        }
+
+        if (ExpiresAtMs is { } invalidExpiresAtMs
+            && CreatedAtMs != 0
+            && invalidExpiresAtMs <= CreatedAtMs)
+        {
+            throw new OfflineCashConfigurationSnapshotException(
+                "invalid_snapshot_timestamps",
+                "Offline cash configuration snapshot expiry must be after its creation time.");
+        }
+
+        if (CreatedAtMs != 0 && CreatedAtMs > nowMs)
+        {
+            throw new OfflineCashConfigurationSnapshotException(
+                "snapshot_created_in_future",
+                $"Offline cash configuration snapshot was created at {CreatedAtMs}, after the current time.");
         }
 
         if (ExpiresAtMs is { } expiresAtMs && expiresAtMs <= nowMs)
@@ -80,12 +101,44 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 $"Offline cash configuration snapshot expired at {expiresAtMs}.");
         }
 
+        if (NativeBridgeAbiVersion is 0)
+        {
+            throw new OfflineCashConfigurationSnapshotException(
+                "invalid_native_bridge_abi",
+                "Offline cash cached native bridge ABI version must be positive when present.");
+        }
+
+        if (requiredNativeBridgeAbiVersion is 0)
+        {
+            throw new OfflineCashConfigurationSnapshotException(
+                "invalid_required_native_bridge_abi",
+                "Offline cash required native bridge ABI version must be positive when present.");
+        }
+
         if (requiredNativeBridgeAbiVersion is { } required
             && (!NativeBridgeAbiVersion.HasValue || NativeBridgeAbiVersion.Value < required))
         {
             throw new OfflineCashConfigurationSnapshotException(
                 "unsupported_native_bridge_abi",
                 $"Offline cash requires native bridge ABI {required}.");
+        }
+    }
+
+    private static void RequireCanonicalSnapshotField(string? value, string field, string code)
+    {
+        if (!IsCanonicalSnapshotText(value))
+        {
+            throw new OfflineCashConfigurationSnapshotException(
+                code,
+                $"Offline cash configuration snapshot field {field} is invalid.");
+        }
+    }
+
+    private static void RequireOptionalCanonicalSnapshotField(string? value, string field, string code)
+    {
+        if (value is not null)
+        {
+            RequireCanonicalSnapshotField(value, field, code);
         }
     }
 
@@ -105,6 +158,33 @@ public sealed record class OfflineCashConfigurationSnapshot(
         }
 
         return true;
+    }
+
+    private static bool IsCanonicalBase64SnapshotText(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        var text = value;
+        if (!IsCanonicalSnapshotText(text))
+        {
+            return false;
+        }
+
+        byte[] decoded;
+        try
+        {
+            decoded = Convert.FromBase64String(text);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        return decoded.Length > 0
+            && string.Equals(Convert.ToBase64String(decoded), text, StringComparison.Ordinal);
     }
 }
 

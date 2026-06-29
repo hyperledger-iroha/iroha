@@ -6295,7 +6295,7 @@ pub mod json {
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
 
-            extern "system" {
+            unsafe extern "system" {
                 fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
                 fn LoadLibraryExW(
                     lp_lib_file_name: *const u16,
@@ -6329,20 +6329,20 @@ pub mod json {
             for path in candidates {
                 let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
                 let search_flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
-                let h = LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags);
+                let h = unsafe { LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags) };
                 if h.is_null() {
                     continue;
                 }
-                let sym = GetProcAddress(h, b"json_stage1_build_tape\0".as_ptr());
+                let sym = unsafe { GetProcAddress(h, b"json_stage1_build_tape\0".as_ptr()) };
                 if sym.is_null() {
-                    let _ = FreeLibrary(h);
+                    let _ = unsafe { FreeLibrary(h) };
                     continue;
                 }
                 let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
                 if !super::stage1_helper_self_test(|input| {
                     super::try_build_struct_index_with_helper(input, func)
                 }) {
-                    let _ = FreeLibrary(h);
+                    let _ = unsafe { FreeLibrary(h) };
                     continue;
                 }
                 return Some(CudaLib { _handle: h, func });

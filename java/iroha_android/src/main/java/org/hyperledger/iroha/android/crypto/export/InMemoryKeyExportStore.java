@@ -10,7 +10,7 @@ public final class InMemoryKeyExportStore implements KeyExportStore {
 
   @Override
   public Optional<String> load(final String alias) {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       return Optional.empty();
     }
     return Optional.ofNullable(entries.get(alias));
@@ -18,10 +18,10 @@ public final class InMemoryKeyExportStore implements KeyExportStore {
 
   @Override
   public void store(final String alias, final String bundleBase64) throws KeyExportException {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       throw new KeyExportException("alias must be provided");
     }
-    if (bundleBase64 == null || bundleBase64.isBlank()) {
+    if (bundleBase64 == null || bundleBase64.trim().isEmpty()) {
       throw new KeyExportException("bundleBase64 must be provided");
     }
     entries.put(alias, bundleBase64);
@@ -29,7 +29,7 @@ public final class InMemoryKeyExportStore implements KeyExportStore {
 
   @Override
   public void delete(final String alias) {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       return;
     }
     entries.remove(alias);

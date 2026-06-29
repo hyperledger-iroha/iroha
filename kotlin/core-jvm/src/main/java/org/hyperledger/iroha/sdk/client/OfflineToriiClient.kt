@@ -15,7 +15,7 @@ import org.hyperledger.iroha.sdk.offline.OfflineV2Readiness
 /**
  * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
- * The legacy offline HTTP routes have been removed
+ * The retired offline HTTP routes have been removed
  * from Torii. This client exposes the maintained offline readiness endpoints.
  */
 class OfflineToriiClient private constructor(builder: Builder) {

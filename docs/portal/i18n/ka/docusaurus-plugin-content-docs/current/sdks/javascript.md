@@ -185,7 +185,7 @@ Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts
 const readiness = await torii.getOfflineReadiness();
-console.log("kagemusha", readiness.offline_kagemusha_abi7);
+console.log("kagemusha", readiness.offline_kagemusha_recursive_compact_available);
 ```
 ## Torii მოთხოვნები და ნაკადი (WebSockets)
 

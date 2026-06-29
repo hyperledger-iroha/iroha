@@ -3255,15 +3255,12 @@ impl Kura {
             let BlockIndex { start, length } = index;
 
             if length == 0 {
-                if is_evicted && self.is_hard_fork_hash_only_block(block_index) {
-                    debug!(
-                        block_index,
-                        height = block_index.saturating_add(1),
-                        "hard-fork snapshot bootstrap: hash-only block body is unavailable"
-                    );
-                    return None;
-                }
-                error!(block_index, "Encountered zero-length block entry");
+                debug!(
+                    block_index,
+                    height = block_index.saturating_add(1),
+                    evicted = is_evicted,
+                    "Kura block body is unavailable for hash-only metadata"
+                );
                 return None;
             }
 
@@ -3363,6 +3360,38 @@ impl Kura {
 
     fn is_hard_fork_hash_only_block(&self, block_index: usize) -> bool {
         block_index < self.hard_fork_hash_only_block_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns `true` when the canonical block is represented only by its
+    /// hash from a hard-fork snapshot bootstrap and the local body is
+    /// intentionally unavailable.
+    pub(crate) fn is_hash_only_block_height(&self, block_height: NonZeroUsize) -> bool {
+        let idx = block_height.get().saturating_sub(1);
+        let data = self.block_data.lock();
+        if data.len() <= idx || data[idx].1.is_some() {
+            return false;
+        }
+        drop(data);
+        if self.is_hard_fork_hash_only_block(idx) {
+            return true;
+        }
+        let mut store = self.block_store.lock();
+        matches!(
+            store.read_block_index(idx as u64),
+            Ok(index) if index.length == 0
+        )
+    }
+
+    pub(crate) fn hash_only_unavailable_prefix_len(&self, limit: usize) -> usize {
+        let hash_only_count = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
+        if hash_only_count == 0 || limit == 0 {
+            return 0;
+        }
+        let data = self.block_data.lock();
+        data.iter()
+            .take(hash_only_count.min(limit).min(data.len()))
+            .take_while(|(_, block)| block.is_none())
+            .count()
     }
 
     fn wsv_checkpoint_dir_for(blocks_dir: &Path) -> PathBuf {
@@ -5233,13 +5262,13 @@ impl Kura {
         if target <= current && rewrite_from == current {
             if legacy_count.is_some() {
                 let previous = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
-                if previous < target {
+                if previous != target {
                     self.hard_fork_hash_only_block_count
                         .store(target, Ordering::Relaxed);
                     info!(
                         previous_hash_only_block_count = previous,
                         snapshot_height = target,
-                        "hard-fork snapshot bootstrap: activated existing Kura hash-only snapshot entries"
+                        "hard-fork snapshot bootstrap: aligned existing Kura hash-only snapshot entries"
                     );
                 }
             }
@@ -16092,6 +16121,34 @@ mod tests {
     }
 
     #[test]
+    fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let first = blocks.next();
+        let hash_only =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
+
+        {
+            let mut store = kura.block_store.lock();
+            store.create_files_if_they_do_not_exist().unwrap();
+            store.append_block_to_chain(&first).unwrap();
+            store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
+            store.write_block_hash(1, hash_only).unwrap();
+        }
+        {
+            let mut data = kura.block_data.lock();
+            data.clear();
+            data.push((first.hash(), Some(first)));
+            data.push((hash_only, None));
+        }
+        kura.hard_fork_hash_only_block_count
+            .store(1, Ordering::Relaxed);
+
+        assert!(kura.is_hash_only_block_height(nonzero!(2_usize)));
+        assert!(kura.get_block(nonzero!(2_usize)).is_none());
+    }
+
+    #[test]
     fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
         let temp_dir = TempDir::new().unwrap();
         populate_store(&temp_dir, 3);
@@ -16158,6 +16215,9 @@ mod tests {
         let first_hash = kura
             .block_hash_at_height(nonzero!(1_usize))
             .expect("first hash exists");
+        let _first_block = kura
+            .get_block(nonzero!(1_usize))
+            .expect("first block body should be cacheable before hash-only activation");
         let second_hash = kura
             .block_hash_at_height(nonzero!(2_usize))
             .expect("second hash exists");
@@ -16187,6 +16247,84 @@ mod tests {
             kura.get_block(nonzero!(2_usize)).is_none(),
             "matching hash-only suffix has no trusted block body"
         );
+        assert!(
+            !kura.is_hash_only_block_height(nonzero!(1_usize)),
+            "cached legacy body must remain usable while it is resident"
+        );
+        assert!(
+            kura.is_hash_only_block_height(nonzero!(2_usize)),
+            "uncached matching suffix must be reported as hash-only unavailable"
+        );
+        assert_eq!(
+            kura.hash_only_unavailable_prefix_len(2),
+            0,
+            "cached first block prevents a blind prefix skip"
+        );
+        {
+            let mut block_data = kura.block_data.lock();
+            block_data[0].1 = None;
+        }
+        assert!(
+            kura.is_hash_only_block_height(nonzero!(1_usize)),
+            "uncached hard-fork snapshot prefix must be reported as hash-only unavailable"
+        );
+        assert_eq!(
+            kura.hash_only_unavailable_prefix_len(2),
+            2,
+            "fully uncached snapshot prefix should be skippable without per-height body probes"
+        );
+    }
+
+    #[test]
+    fn hard_fork_extend_hash_only_shrinks_window_to_snapshot_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 3);
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, BlockCount(block_count)) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        assert_eq!(block_count, 3);
+
+        let first_hash = kura
+            .block_hash_at_height(nonzero!(1_usize))
+            .expect("first hash exists");
+        let second_hash = kura
+            .block_hash_at_height(nonzero!(2_usize))
+            .expect("second hash exists");
+        let third_hash = kura
+            .block_hash_at_height(nonzero!(3_usize))
+            .expect("third hash exists");
+        {
+            let mut block_data = kura.block_data.lock();
+            for (_, block) in block_data.iter_mut() {
+                *block = None;
+            }
+        }
+        kura.hard_fork_hash_only_block_count
+            .store(3, Ordering::Relaxed);
+        assert!(
+            kura.get_block(nonzero!(3_usize)).is_none(),
+            "pre-fix hard-fork window hides the post-snapshot body"
+        );
+
+        kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
+            &[first_hash, second_hash],
+            Some(2),
+        )
+        .expect("matching shorter snapshot should align the hash-only prefix");
+
+        assert_eq!(
+            kura.hard_fork_hash_only_block_count.load(Ordering::Relaxed),
+            2,
+            "hash-only window must shrink to the loaded snapshot height"
+        );
+        assert!(
+            kura.is_hash_only_block_height(nonzero!(2_usize)),
+            "snapshot prefix remains hash-only"
+        );
+        let third = kura
+            .get_block(nonzero!(3_usize))
+            .expect("post-snapshot block body should be replayable");
+        assert_eq!(third.hash(), third_hash);
     }
 
     #[test]

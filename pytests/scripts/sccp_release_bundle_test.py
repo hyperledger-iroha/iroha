@@ -4828,7 +4828,7 @@ def test_generated_bundle_self_verifier_rejects_malformed_summaries(
                 "errors": [],
                 "manifest_sha256": "A" * 64,
             },
-            "strict verifier summary manifest_sha256 must be a canonical "
+            "strict verifier summary manifest_sha256 must be a non-zero canonical "
             "SHA-256 hex string",
         ),
     )
@@ -14008,7 +14008,7 @@ def test_release_bundle_rejects_copied_evidence_summary_binding_before_render(
     monkeypatch,
     capsys,
 ) -> None:
-    """Copied embedded evidence must match the copied TOML evidence inputs."""
+    """Copied embedded evidence drift must be rejected before rendering."""
 
     bundle = load_bundle_module()
     real_report_module = load_report_module()
@@ -14029,9 +14029,11 @@ def test_release_bundle_rejects_copied_evidence_summary_binding_before_render(
             report = real_report_module._build_report(*args, **kwargs)
             if self.calls == 2:
                 evidence_summary = dict(report["evidence"])
-                evidence_summary["production_ready"] = not evidence_summary[
-                    "production_ready"
-                ]
+                lanes = [dict(lane) for lane in evidence_summary["lanes"]]
+                source_record_hashes = dict(lanes[0]["source_record_hashes"])
+                source_record_hashes["source_verifier_material_hash"] = fixed_hex32(0x11)
+                lanes[0]["source_record_hashes"] = source_record_hashes
+                evidence_summary["lanes"] = lanes
                 report["evidence"] = evidence_summary
             return report
 
@@ -14062,7 +14064,11 @@ def test_release_bundle_rejects_copied_evidence_summary_binding_before_render(
 
     captured = capsys.readouterr()
     assert "malformed SCCP release readiness report" in captured.err
-    assert "bundled report.evidence does not match copied evidence inputs" in captured.err
+    assert (
+        "source_verifier_material_hash must match "
+        "bundled report.evidence.lanes[0].source_record_hashes."
+        "source_verifier_material_hash"
+    ) in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -56179,6 +56185,10 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         'name == "CARGO_TARGET_DIR"',
         "def _dotnet_phase_block_bridge_path_matches_target_dir(",
         'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+        "path_list_has_empty_segment()",
+        "validate_nonempty_path_list()",
+        "no empty path-list segments before native bridge loader setup",
+        'dotnet_loader_path="$bridge_library_dir"',
         "test_release_bundle_verifier_rejects_dotnet_bridge_target_dir_drift",
         "test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades",
         "test_sccp_production_corridor_dotnet_phase_rejects_multiline_version",
@@ -56188,9 +56198,11 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
         "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_fallback",
+        "test_sccp_production_corridor_dotnet_phase_rejects_missing_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture",
+        "test_sccp_production_corridor_dotnet_phase_rejects_empty_inherited_path_segments",
         "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path",
         "missing-os-name",
         "duplicate-os-name",
@@ -56208,6 +56220,10 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "colon-injected-os-platform",
         "colon-injected-rid",
         "colon-injected-architecture",
+        "leading-empty",
+        "trailing-empty",
+        "interior-empty",
+        "semicolon-empty",
         "exactly one canonical SDK version line",
         "exactly one OS Name and one OS Platform",
         "dotnet_info_field_value",
@@ -56215,6 +56231,8 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "exactly one canonical Windows RID from dotnet --info",
         "exactly one OS Architecture from dotnet --info",
         "exactly one Host Architecture from dotnet --info when OS Architecture is absent",
+        "at most one Host Architecture from dotnet --info",
+        "OS Architecture and Host Architecture to agree",
         "found: X64",
         "TRX_IDENTIFIER_RE",
         "^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$",

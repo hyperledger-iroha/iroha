@@ -112,7 +112,7 @@ from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
 readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_abi7)
+print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
 ```
 ## 6. Hadisələri yayımlayın
 

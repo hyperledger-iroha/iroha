@@ -95,7 +95,7 @@ public final class SoftwareKeyProvider implements KeyProvider {
 
   @Override
   public Optional<KeyPair> load(final String alias) throws KeyManagementException {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       return Optional.empty();
     }
     final KeyPair cached = aliasCache.get(alias);
@@ -112,7 +112,7 @@ public final class SoftwareKeyProvider implements KeyProvider {
 
   @Override
   public KeyPair generate(final String alias) throws KeyManagementException {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       throw new KeyManagementException("alias must be provided for persistent keys");
     }
     final KeyPair keyPair = generateKeyPair();

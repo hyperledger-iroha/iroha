@@ -1,6 +1,6 @@
 //! Offline note models.
 //!
-//! Offline is the first production offline note surface. The legacy
+//! Offline is the first production offline note surface. The retired
 //! allowance, witness-lineage, plaintext receipt, and aggregate proof models are
 //! intentionally absent from this module.
 
@@ -95,11 +95,11 @@ pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-aggregation-v1";
 /// Canonical circuit id for compact tokens with in-circuit recursive aggregation.
 pub const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: &str = "kagemusha-recursive-compact-v1";
-/// Reserved chain-admission circuit id for lineage-proving recursive spend redemption.
+/// Reserved chain-admission circuit family id for lineage-proving recursive spend redemption.
 ///
-/// This is the legacy family selector accepted by ABI helpers. Production
-/// verifier records use the profile-specific one-hop or append ids below so
-/// both keys can coexist in the verifier registry.
+/// Production verifier records use the profile-specific one-hop or append ids
+/// below so both keys can coexist in the verifier registry. New append requests
+/// must select the append-specific id explicitly.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-spend-lineage-v1";
 /// Profile-specific Reserved-lineage circuit id for the first offline hop.
@@ -156,8 +156,6 @@ pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
 /// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";
-/// SDK-facing Kagemusha spend mode for legacy checked pre-fold compact tokens.
-pub const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: &str = "checked_prefold_v1";
 /// Canonical verifier-record namespace for Kagemusha proof admission.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Return `true` when this release accepts the Kagemusha aggregation mode.
@@ -169,33 +167,31 @@ pub const fn is_supported_kagemusha_aggregation_mode(mode: u16) -> bool {
 /// Return the default SDK Kagemusha spend mode for the available native surface.
 ///
 /// Recursive spend bundles are the default product path when ABI 6 recursive
-/// spend init/append/verify/redeem is available. Checked pre-fold remains the
-/// compatibility fallback for runtimes that only link the older record-backed
-/// compact-token surface.
+/// spend init/append/verify/redeem is available. If no recursive-capable
+/// surface is linked, this first release exposes no preferred production mode.
 #[must_use]
 pub const fn preferred_kagemusha_offline_spend_mode(
     recursive_spend_available: bool,
-) -> &'static str {
+) -> Option<&'static str> {
     preferred_kagemusha_offline_spend_mode_for_capabilities(false, recursive_spend_available)
 }
 
 /// Return the default SDK Kagemusha spend mode for advertised native capabilities.
 ///
 /// Prefer ABI-7 recursive compact when both the compact prover and verifier are
-/// linked, then fall back to ABI-6 recursive spend. Checked pre-fold remains the
-/// compatibility fallback for runtimes that only link the older record-backed
-/// compact-token surface.
+/// linked, then fall back to ABI-6 recursive spend. If neither recursive
+/// surface is linked, this first release exposes no preferred production mode.
 #[must_use]
 pub const fn preferred_kagemusha_offline_spend_mode_for_capabilities(
     recursive_compact_available: bool,
     recursive_spend_available: bool,
-) -> &'static str {
+) -> Option<&'static str> {
     if recursive_compact_available {
-        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)
     } else if recursive_spend_available {
-        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
     } else {
-        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+        None
     }
 }
 
@@ -235,11 +231,7 @@ pub fn is_kagemusha_recursive_spend_lineage_proof_circuit_id(proof_circuit_id: &
 pub fn is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
     output_proof_circuit_id: &str,
 ) -> bool {
-    matches!(
-        output_proof_circuit_id,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-            | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
-    )
+    output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
 }
 
 /// Return `true` when redeem construction must carry a record-backed lineage witness.
@@ -273,18 +265,16 @@ pub fn requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_appe
     ) && previous_hop_count >= 1
 }
 
-/// Normalize an append output proof circuit id for legacy ABI-6 compatibility.
+/// Return the append output proof circuit id without accepting aliases.
+///
+/// Empty selectors and the Reserved-lineage family id are invalid in the first
+/// release; callers must pass either the semantic aggregation id or the
+/// append-specific Reserved-lineage id.
 #[must_use]
 pub fn normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
     output_proof_circuit_id: &str,
 ) -> &str {
-    if output_proof_circuit_id.is_empty() {
-        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-    } else if output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 {
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
-    } else {
-        output_proof_circuit_id
-    }
+    output_proof_circuit_id
 }
 
 /// Return `true` when an append output proof circuit id is supported.
@@ -367,8 +357,8 @@ pub fn preferred_kagemusha_recursive_spend_append_output_proof_circuit_id(
 /// Return `true` when this release can actually prove the selected append output.
 ///
 /// Reserved-lineage append is bounded by the witnessless lineage circuit and hard
-/// hop cap. Semantic append remains available for legacy checked pre-fold
-/// compatibility.
+/// hop cap. Semantic append remains available only through the explicit
+/// semantic aggregation circuit id.
 #[must_use]
 pub fn can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
     output_proof_circuit_id: &str,
@@ -421,7 +411,7 @@ pub fn can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
 pub const fn unsupported_kagemusha_aggregation_mode_reason(mode: u16) -> &'static str {
     match mode {
         KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1 => {
-            "recursive compact mode requires ABI-7 recursive compact-token admission; the legacy checked pre-fold path does not accept mode 2"
+            "recursive compact mode requires recursive compact-token admission; the checked pre-fold compact-token path does not accept mode 2"
         }
         _ => "unsupported or unknown Kagemusha aggregation mode",
     }
@@ -1807,7 +1797,6 @@ mod model {
         /// spend proofs set it from `KagemushaRecursiveSpendAccumulatorV1` so
         /// append/redeem verifiers can bind the host transition contract that
         /// the Reserved-lineage circuits reproduce in-circuit.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub transition_profile_binding_digest: [u8; 32],
         /// Digest of the Reserved-lineage append opening preflight contract.
@@ -1818,7 +1807,6 @@ mod model {
         /// `KagemushaRecursiveSpendLineageAppendOpeningPreflightV1` digest so
         /// public proof inputs bind the exact previous-proof opening contract
         /// without carrying hop-count-dependent archives in the spend bundle.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub append_opening_preflight_digest: [u8; 32],
         /// Digest of the compact Reserved-lineage append boundary.
@@ -1829,7 +1817,6 @@ mod model {
         /// `KagemushaRecursiveSpendLineageAppendBoundaryV1` digest so public
         /// proof inputs bind the compact boundary that the circuit must
         /// reproduce without carrying hop-count-dependent archives.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub append_boundary_digest: [u8; 32],
         /// Scalar-projection digest emitted by the composed recursive verifier slice.
@@ -1948,7 +1935,6 @@ mod model {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub recursive_proof_chain_digest: [u8; 32],
         /// Non-circular digest of the transition profile that produced this accumulator.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub transition_profile_binding_digest: [u8; 32],
         /// Digest of the Reserved-lineage append opening preflight contract for this hop.
@@ -1957,19 +1943,17 @@ mod model {
         /// append outputs set it to the two-opening preflight contract digest
         /// that proves the previous recursive proof opening and the current
         /// checked-hop opening share the same verifier corridor.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub append_opening_preflight_digest: [u8; 32],
         /// Digest of the compact Reserved-lineage append boundary for this hop.
         ///
         /// This is zero for initial states, semantic append outputs, and
-        /// digest-only compatibility append outputs. Full Reserved-lineage
+        /// digest-only transition-profile append outputs. Full Reserved-lineage
         /// append outputs set it to the validated
         /// `KagemushaRecursiveSpendLineageAppendBoundaryV1` digest. The
         /// accumulator digest is intentionally computed with this field blanked
         /// so the boundary digest can be placed back into proof public inputs
         /// without creating a self-reference.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub append_boundary_digest: [u8; 32],
         /// Transparent parameter fingerprint used by the recursive verifier batch.
@@ -2033,7 +2017,6 @@ mod model {
         /// Previous spendable note descriptor, absent for the initial hop.
         pub previous_current_note: Option<KagemushaSpendableNoteDescriptorV1>,
         /// Previous top-up anchor nullifiers carried unchanged by append hops.
-        #[norito(default)]
         #[cfg_attr(
             feature = "json",
             norito(with = "crate::json_helpers::fixed_bytes::vec")
@@ -2070,10 +2053,9 @@ mod model {
         /// Digest of previous-proof plus current-hop opening preflight material.
         ///
         /// Production Reserved-lineage append circuits must prove this same
-        /// two-opening preflight in-circuit. Legacy evidence-only transition
+        /// two-opening preflight in-circuit. Evidence-only transition
         /// profiles leave it empty, and it is valid only when
         /// `previous_recursive_proof_open_envelopes_archive_digest` is present.
-        #[norito(default)]
         #[cfg_attr(
             feature = "json",
             norito(with = "crate::json_helpers::fixed_bytes::option")
@@ -2081,11 +2063,10 @@ mod model {
         pub append_opening_preflight_digest: Option<[u8; 32]>,
         /// Full two-opening append preflight contract, when native hosts computed it.
         ///
-        /// This is defaulted so archives emitted before the contract was promoted
-        /// still decode. When present it must hash to
+        /// First-release archives must carry this field explicitly. When present
+        /// it must hash to
         /// `append_opening_preflight_digest` and match the previous-recursive-proof
         /// plus current-hop fields in this transition profile.
-        #[norito(default)]
         pub append_opening_preflight:
             Option<KagemushaRecursiveSpendLineageAppendOpeningPreflightV1>,
         /// Previous streaming verifier-witness batch digest, absent for the initial hop.
@@ -2147,7 +2128,6 @@ mod model {
         ///
         /// Zero means the transition did not bind a Reserved-lineage append
         /// opening preflight contract.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub resulting_append_opening_preflight_digest: [u8; 32],
         /// Resulting streaming nullifier digest.
@@ -2259,7 +2239,6 @@ mod model {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub chain_asset_binding_digest: [u8; 32],
         /// Explicit final-root/current-note binding digest for the append transition.
-        #[norito(default)]
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub final_note_binding_digest: [u8; 32],
         /// Digest of the previous recursive spend accumulator.
@@ -2417,24 +2396,23 @@ mod model {
         ///
         /// Production SDKs should supply this key instead of asking the native
         /// bridge to synthesize the large recursive verifier-slice key at
-        /// runtime. The field defaults to `None` so older ABI-6 request
-        /// archives remain decodable.
-        #[norito(default)]
+        /// runtime. First-release archives must encode this field explicitly;
+        /// use `None` only when the request is intentionally missing lineage key
+        /// material.
         pub lineage_verifier_key: Option<VerifyingKeyBox>,
         /// Optional packaged Reserved-lineage proving key archive.
         ///
         /// The archive is circuit-family and verifier-key-commitment bound by
-        /// the core prover before use. It defaults to `None` for legacy archive
-        /// compatibility.
-        #[norito(default)]
+        /// the core prover before use. First-release archives must encode this
+        /// field explicitly; use `None` only when the request is intentionally
+        /// missing lineage key material.
         pub lineage_proving_key_archive: Option<Vec<u8>>,
         /// Optional chain height used for verifier-record activation windows.
         ///
         /// When set, native bridge entrypoints enforce all record-backed proof
-        /// checks at this exact height. When omitted, legacy callers remain
-        /// decodable but fail closed for verifier records that declare
-        /// activation or withdrawal windows.
-        #[norito(default)]
+        /// checks at this exact height. First-release archives must encode this
+        /// field explicitly; use `None` only when verifier-record activation
+        /// windows are not being evaluated by the wallet-side bridge call.
         pub block_height: Option<u64>,
     }
 
@@ -2455,48 +2433,47 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV1,
         /// Requested output recursive proof circuit id.
         ///
-        /// Missing or empty values preserve legacy ABI-6 behavior and select the
-        /// semantic `kagemusha-recursive-aggregation-v1` append output. Set this
-        /// to `kagemusha-recursive-spend-lineage-v1` to attempt the
+        /// Encode an empty string explicitly to select the semantic
+        /// `kagemusha-recursive-aggregation-v1` append output. Set this to
+        /// `kagemusha-recursive-spend-lineage-v1` to attempt the
         /// Reserved-lineage output circuit; that selection requires
         /// `previous_recursive_proof_open_envelopes_archive`.
-        #[norito(default)]
         pub output_proof_circuit_id: String,
         /// Optional verifier record for a previous reserved-lineage recursive proof.
         ///
         /// Semantic v1 previous proofs use the canonical recursive aggregation
         /// verifier and must leave this empty. Reserved-lineage previous proofs
         /// must provide the active lineage verifier record so append proving can
-        /// verify the previous proof before folding the next hop. This field is
-        /// defaulted so legacy ABI-6 semantic append archives decode as `None`.
-        #[norito(default)]
+        /// verify the previous proof before folding the next hop. First-release
+        /// archives must encode this field explicitly; use `None` for semantic
+        /// previous proofs.
         pub previous_lineage_verifier_record: Option<VerifyingKeyRecord>,
         /// Optional Norito archive of `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`
         /// for the previous recursive proof.
         ///
         /// This is reserved witness material for the production witnessless
-        /// Reserved-lineage append circuit. Legacy semantic append callers leave
-        /// it empty; when present it is decoded and shape-checked at the data-model
-        /// boundary so SDKs cannot forward malformed previous-proof opening
-        /// archives into the native prover.
-        #[norito(default)]
+        /// Reserved-lineage append circuit. Semantic append callers encode an
+        /// empty vector explicitly; when present it is decoded and shape-checked
+        /// at the data-model boundary so SDKs cannot forward malformed
+        /// previous-proof opening archives into the native prover.
         pub previous_recursive_proof_open_envelopes_archive: Vec<u8>,
         /// Optional packaged verifier key for a Reserved-lineage append output.
         ///
         /// This is used only when `output_proof_circuit_id` selects the
-        /// Reserved-lineage append circuit. Semantic append requests leave it
-        /// empty. The field is defaulted so legacy ABI-6 archives decode.
-        #[norito(default)]
+        /// Reserved-lineage append circuit. Semantic append requests encode
+        /// `None` explicitly.
         pub lineage_verifier_key: Option<VerifyingKeyBox>,
         /// Optional packaged proving key archive for a Reserved-lineage append output.
         ///
         /// The archive is validated against `lineage_verifier_key` before proof
-        /// generation. Semantic append requests leave it empty.
-        #[norito(default)]
+        /// generation. Semantic append requests encode `None` explicitly.
         pub lineage_proving_key_archive: Option<Vec<u8>>,
         /// Optional chain height used for current-hop and previous recursive
         /// verifier-record activation windows.
-        #[norito(default)]
+        ///
+        /// First-release archives must encode this field explicitly; use `None`
+        /// only when verifier-record activation windows are not being evaluated
+        /// by the wallet-side bridge call.
         pub block_height: Option<u64>,
     }
 
@@ -2548,12 +2525,14 @@ mod model {
         /// and must leave this empty. Reserved-lineage bundles must provide the
         /// active lineage verifier record so offline receivers can verify the
         /// constant-size D2D proof before accepting or re-spending the note.
-        /// This field is defaulted so legacy ABI-6 semantic verify archives
-        /// decode as `None`.
-        #[norito(default)]
+        /// First-release archives must encode this field explicitly; use `None`
+        /// for semantic recursive aggregation bundles.
         pub lineage_verifier_record: Option<VerifyingKeyRecord>,
         /// Optional chain height used for lineage verifier-record activation windows.
-        #[norito(default)]
+        ///
+        /// First-release archives must encode this field explicitly; use `None`
+        /// only when verifier-record activation windows are not being evaluated
+        /// by the wallet-side bridge call.
         pub block_height: Option<u64>,
     }
 
@@ -2582,10 +2561,8 @@ mod model {
         /// Stable chain-admission diagnostic; empty when [`Self::chain_admissible`] is true.
         pub chain_admission_reason: String,
         /// True when this verified bundle can redeem without a record-backed lineage witness.
-        #[norito(default)]
         pub witnessless_redeem_supported: bool,
         /// True when online redeem construction must attach a record-backed lineage witness.
-        #[norito(default)]
         pub lineage_witness_required_for_redeem: bool,
     }
 
@@ -2622,23 +2599,24 @@ mod model {
         /// final bundles must provide the active lineage verifier record when
         /// their record-backed lineage witness contains Reserved-lineage proofs
         /// that native hosts must verify before serializing an online redeem
-        /// instruction.
-        /// This field is defaulted so legacy ABI-6 semantic redeem archives
-        /// decode as `None`.
-        #[norito(default)]
+        /// instruction. First-release archives must encode this field
+        /// explicitly; use `None` for semantic final bundles with no
+        /// Reserved-lineage proof profiles in their witness.
         pub lineage_verifier_record: Option<VerifyingKeyRecord>,
         /// Optional chain height used for wallet-side bridge verification of
         /// lineage witnesses and reserved-lineage final proofs.
-        #[norito(default)]
+        ///
+        /// First-release archives must encode this field explicitly; use `None`
+        /// only when verifier-record activation windows are not being evaluated
+        /// by the wallet-side bridge call.
         pub block_height: Option<u64>,
         /// Additional active verifier records for Reserved-lineage recursive spend proofs.
         ///
-        /// The legacy `lineage_verifier_record` field remains the single-record
-        /// fast path. Multi-hop record-backed histories may contain both
-        /// one-hop and append Reserved-lineage proof profiles, so newer SDKs can
-        /// attach every required profile here while older archives decode with
-        /// an empty list.
-        #[norito(default)]
+        /// The single `lineage_verifier_record` field remains the fast path for
+        /// one active profile. Multi-hop record-backed histories may contain
+        /// both one-hop and append Reserved-lineage proof profiles, so SDKs can
+        /// attach every additional required profile here. Encode an empty vector
+        /// explicitly when no additional records are needed.
         pub lineage_verifier_records: Vec<VerifyingKeyRecord>,
     }
 
@@ -3583,7 +3561,7 @@ fn kagemusha_verifying_key_commitment(vk: &VerifyingKeyBox) -> [u8; Hash::LENGTH
 /// domain-separated from proof-statement, verifier-key, and host-side folded-hop
 /// hashes. The digest accepts both checked pre-fold and reserved recursive
 /// aggregation modes so recursive evidence can bind the same transcript shape.
-/// The legacy checked pre-fold validator still rejects mode `2` through
+/// The checked pre-fold validator still rejects mode `2` through
 /// [`KagemushaFoldedPublicInputs::validate_supported_context`]; ABI-7 recursive
 /// compact admission uses the narrower recursive-compact context and projection
 /// validators.
@@ -4227,10 +4205,10 @@ impl KagemushaRecursiveAggregationProof {
 impl KagemushaRecursiveAggregationProofBundle {
     /// Validate that recursive proof public inputs are derived from this evidence.
     ///
-    /// This still does not make aggregation mode `2` accepted by the legacy
-    /// compact-token admission path. It provides the canonical proof-carrying
-    /// surface that the ABI-7 recursive compact verifier checks before backend
-    /// proof verification.
+    /// This still does not make aggregation mode `2` accepted by the
+    /// checked-prefold compact-token admission path. It provides the canonical
+    /// proof-carrying surface that the ABI-7 recursive compact verifier checks
+    /// before backend proof verification.
     ///
     /// # Errors
     ///
@@ -7777,7 +7755,8 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
     /// Build and validate a semantic recursive spend append request.
     ///
     /// Semantic append requests leave the previous lineage verifier record and
-    /// previous-proof opening archive empty for ABI compatibility.
+    /// previous-proof opening archive empty because the semantic circuit does
+    /// not consume Reserved-lineage verifier material.
     ///
     /// # Errors
     ///
@@ -7803,8 +7782,8 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
     /// Build and validate an append request with previous-proof verifier material.
     ///
     /// Reserved-lineage previous proofs must provide the active lineage verifier
-    /// record. The previous-proof opening archive is optional for legacy semantic
-    /// append, but when supplied it must decode as exactly one
+    /// record. The previous-proof opening archive is optional for explicit
+    /// semantic append, but when supplied it must decode as exactly one
     /// `iroha_zkp_halo2::OpenVerifyEnvelope`.
     ///
     /// # Errors
@@ -7832,10 +7811,9 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
 
     /// Build and validate an append request with explicit output proof circuit selection.
     ///
-    /// Missing or empty `output_proof_circuit_id` values are accepted only after
-    /// archive decoding for legacy compatibility. New callers should pass either
+    /// `output_proof_circuit_id` must be explicit. Callers should pass either
     /// [`KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1`] or
-    /// [`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1`].
+    /// [`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1`].
     ///
     /// # Errors
     ///
@@ -7926,7 +7904,7 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
     /// Attach packaged Reserved-lineage proving artifacts to an append request.
     ///
     /// The request must select the Reserved-lineage append output circuit. The
-    /// semantic append output rejects these artifacts so legacy callers cannot
+    /// semantic append output rejects these artifacts so callers cannot
     /// accidentally smuggle unused key material through the ABI.
     ///
     /// # Errors
@@ -8167,7 +8145,7 @@ impl KagemushaRecursiveSpendVerifyRequestV1 {
 ///
 /// This witness is not part of the constant-size D2D bundle. Wallets keep it as
 /// redeem-side audit material for semantic recursive spend bundles and as a
-/// compatibility fallback outside the witnessless Reserved-lineage cap.
+/// record-backed redeem path outside the witnessless Reserved-lineage cap.
 ///
 /// # Errors
 ///
@@ -9808,7 +9786,7 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
                     field: "public_amount",
                 });
             }
-            Some(change_output) if self.public_amount >= current_amount => {
+            Some(_) if self.public_amount >= current_amount => {
                 return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
                     field: "public_amount",
                 });
@@ -10311,7 +10289,7 @@ pub fn kagemusha_folded_public_inputs(
 }
 
 impl KagemushaFoldedPublicInputs {
-    /// Validate the domain and aggregation mode supported by the legacy compact path.
+    /// Validate the domain and aggregation mode supported by the checked pre-fold compact path.
     ///
     /// # Errors
     ///
@@ -10375,8 +10353,8 @@ impl KagemushaFoldedPublicInputs {
     /// Validate the reserved recursive compact-token public-input context.
     ///
     /// This deliberately does not change [`Self::validate_supported_context`]:
-    /// checked pre-fold mode `1` remains the only mode accepted by the legacy
-    /// compact-token path. ABI-7 recursive compact admission calls this narrower
+    /// checked pre-fold mode `1` remains the only mode accepted by the
+    /// record-backed compact-token path. Recursive compact admission calls this narrower
     /// validator and then verifies a recursive proof whose
     /// `folded_public_inputs_hash` matches [`Self::public_inputs_hash`].
     ///
@@ -10466,7 +10444,7 @@ impl KagemushaCompactPaymentToken {
     /// This constructor is for recursive mode `2`; it validates the folded
     /// public-input projection against the recursive proof but does not route
     /// through [`Self::validate_public_input_binding`], which is intentionally
-    /// reserved for the legacy checked-prefold compact-token path.
+    /// reserved for the checked-prefold compact-token path.
     ///
     /// # Errors
     ///
@@ -10730,9 +10708,9 @@ mod offline_note_tests {
             "        {\"name\": \"record_bundle\", \"type\": \"KagemushaVerifiedFoldRecordBundle\", \"norito_default\": false},\n",
             "        {\"name\": \"pallas_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": false},\n",
             "        {\"name\": \"current_note\", \"type\": \"KagemushaSpendableNoteDescriptorV1\", \"norito_default\": false},\n",
-            "        {\"name\": \"lineage_verifier_key\", \"type\": \"Option<VerifyingKeyBox>\", \"norito_default\": true},\n",
-            "        {\"name\": \"lineage_proving_key_archive\", \"type\": \"Option<Vec<u8>>\", \"norito_default\": true},\n",
-            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "        {\"name\": \"lineage_verifier_key\", \"type\": \"Option<VerifyingKeyBox>\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_proving_key_archive\", \"type\": \"Option<Vec<u8>>\", \"norito_default\": false},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": false, \"semantics\": \"verifier_record_activation_height\"}\n",
             "      ]\n",
             "    },\n",
             "    {\n",
@@ -10742,20 +10720,20 @@ mod offline_note_tests {
             "        {\"name\": \"record_bundle\", \"type\": \"KagemushaVerifiedFoldRecordBundle\", \"norito_default\": false},\n",
             "        {\"name\": \"pallas_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": false},\n",
             "        {\"name\": \"current_note\", \"type\": \"KagemushaSpendableNoteDescriptorV1\", \"norito_default\": false},\n",
-            "        {\"name\": \"output_proof_circuit_id\", \"type\": \"String\", \"norito_default\": true},\n",
-            "        {\"name\": \"previous_lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
-            "        {\"name\": \"previous_recursive_proof_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": true},\n",
-            "        {\"name\": \"lineage_verifier_key\", \"type\": \"Option<VerifyingKeyBox>\", \"norito_default\": true},\n",
-            "        {\"name\": \"lineage_proving_key_archive\", \"type\": \"Option<Vec<u8>>\", \"norito_default\": true},\n",
-            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "        {\"name\": \"output_proof_circuit_id\", \"type\": \"String\", \"norito_default\": false},\n",
+            "        {\"name\": \"previous_lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": false},\n",
+            "        {\"name\": \"previous_recursive_proof_open_envelopes_archive\", \"type\": \"Vec<u8>\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_verifier_key\", \"type\": \"Option<VerifyingKeyBox>\", \"norito_default\": false},\n",
+            "        {\"name\": \"lineage_proving_key_archive\", \"type\": \"Option<Vec<u8>>\", \"norito_default\": false},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": false, \"semantics\": \"verifier_record_activation_height\"}\n",
             "      ]\n",
             "    },\n",
             "    {\n",
             "      \"norito_type\": \"KagemushaRecursiveSpendVerifyRequestV1\",\n",
             "      \"fields\": [\n",
             "        {\"name\": \"bundle\", \"type\": \"KagemushaRecursiveSpendBundleV1\", \"norito_default\": false},\n",
-            "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
-            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": false},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": false, \"semantics\": \"verifier_record_activation_height\"}\n",
             "      ]\n",
             "    },\n",
             "    {\n",
@@ -10767,9 +10745,9 @@ mod offline_note_tests {
             "        {\"name\": \"redeem_proof\", \"type\": \"ProofAttachment\", \"norito_default\": false},\n",
             "        {\"name\": \"lineage_witness\", \"type\": \"Option<KagemushaRecursiveSpendLineageWitnessV1>\", \"norito_default\": false},\n",
             "        {\"name\": \"change_output\", \"type\": \"Option<[u8; 32]>\", \"norito_default\": false, \"semantics\": \"private_change_commitment_for_partial_redeem\"},\n",
-            "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
-            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"},\n",
-            "        {\"name\": \"lineage_verifier_records\", \"type\": \"Vec<VerifyingKeyRecord>\", \"norito_default\": true, \"semantics\": \"additional_reserved_lineage_verifier_records\"}\n",
+            "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": false},\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": false, \"semantics\": \"verifier_record_activation_height\"},\n",
+            "        {\"name\": \"lineage_verifier_records\", \"type\": \"Vec<VerifyingKeyRecord>\", \"norito_default\": false, \"semantics\": \"additional_reserved_lineage_verifier_records\"}\n",
             "      ]\n",
             "    }\n",
             "  ]"
@@ -10819,6 +10797,12 @@ mod offline_note_tests {
             "shared recursive spend ABI-6 Norito archive fixtures drifted; rerun with \
              KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI6_ARCHIVES=1 to regenerate"
         );
+    }
+
+    fn retag_archive_schema<T: norito::NoritoSerialize>(mut bytes: Vec<u8>) -> Vec<u8> {
+        let schema_hash = T::schema_hash();
+        bytes[6..22].copy_from_slice(&schema_hash);
+        bytes
     }
 
     fn kagemusha_recursive_verifier_preflight_for_evidence(
@@ -12218,13 +12202,13 @@ mod offline_note_tests {
             unsupported_kagemusha_aggregation_mode_reason(
                 KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
             )
-            .contains("requires ABI-7 recursive compact-token admission")
+            .contains("requires recursive compact-token admission")
         );
         assert!(
             unsupported_kagemusha_aggregation_mode_reason(
                 KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
             )
-            .contains("legacy checked pre-fold path does not accept mode 2")
+            .contains("checked pre-fold compact-token path does not accept mode 2")
         );
         assert!(
             !unsupported_kagemusha_aggregation_mode_reason(
@@ -12238,28 +12222,25 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(true, true),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(true, false),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1)
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(false, true),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode_for_capabilities(false, false),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+            None
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+            Some(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1)
         );
-        assert_eq!(
-            preferred_kagemusha_offline_spend_mode(false),
-            KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
-        );
+        assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1, 64,
             "witnessless Reserved-lineage redemption keeps the hard compact-token hop cap"
@@ -12356,13 +12337,13 @@ mod offline_note_tests {
         ));
         assert!(
             requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 1
             )
         );
         assert_eq!(
             normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(""),
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ""
         );
         assert_eq!(
             normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -12374,7 +12355,7 @@ mod offline_note_tests {
             normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
             ),
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
         );
         assert_eq!(
             normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -12388,16 +12369,17 @@ mod offline_note_tests {
             ),
             "unknown-kagemusha-recursive-spend-circuit"
         );
-        assert!(is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(""));
+        assert!(!is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(""));
         assert!(
             is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
             )
         );
         assert!(
-            is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            !is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-            )
+            ),
+            "the Reserved-lineage family id is not an append output selector"
         );
         assert!(
             is_supported_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -12455,29 +12437,36 @@ mod offline_note_tests {
             )
         );
         assert!(
-            is_supported_kagemusha_recursive_spend_append_proof_transition(
-                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-            )
-        );
-        assert!(
-            is_supported_kagemusha_recursive_spend_append_proof_transition(
+            !is_supported_kagemusha_recursive_spend_append_proof_transition(
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 ""
             )
         );
         assert!(
             is_supported_kagemusha_recursive_spend_append_proof_transition(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
             )
         );
         assert!(
             is_supported_kagemusha_recursive_spend_append_proof_transition(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            )
+        );
+        assert!(
+            !is_supported_kagemusha_recursive_spend_append_proof_transition(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
             ),
-            "Reserved-lineage to Reserved-lineage is the enabled structural append transition"
+            "the Reserved-lineage family id is not an append output selector"
+        );
+        assert!(
+            is_supported_kagemusha_recursive_spend_append_proof_transition(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            ),
+            "Reserved-lineage to append-specific Reserved-lineage is the enabled structural append transition"
         );
         assert!(
             !is_supported_kagemusha_recursive_spend_append_proof_transition(
@@ -12526,7 +12515,7 @@ mod offline_note_tests {
                 1
             )
         );
-        assert!(can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id("", 1));
+        assert!(!can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id("", 1));
         assert!(
             can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -12547,10 +12536,10 @@ mod offline_note_tests {
         );
         assert!(
             can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 1
             ),
-            "one-hop previous Reserved-lineage can prove the two-hop append output"
+            "one-hop previous Reserved-lineage can prove the append-specific two-hop output"
         );
         assert!(
             can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -12561,16 +12550,23 @@ mod offline_note_tests {
         );
         assert!(
             can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 - 1
             )
         );
         assert!(
             !can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
             ),
             "append output beyond the witnessless cap must reject"
+        );
+        assert!(
+            !can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                1
+            ),
+            "the Reserved-lineage family id is not an append output selector"
         );
         assert!(
             !can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -12608,12 +12604,12 @@ mod offline_note_tests {
             "semantic previous proofs cannot select Reserved-lineage output"
         );
         assert!(
-            can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
+            !can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
                 1
             ),
-            "Reserved-lineage previous proofs can select Reserved-lineage output inside the cap"
+            "Reserved-lineage previous proofs must use the append-specific output id"
         );
         assert!(
             can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
@@ -12646,8 +12642,14 @@ mod offline_note_tests {
             )
         );
         assert!(
-            requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
+            !requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
                 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                64
+            )
+        );
+        assert!(
+            requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 64
             )
         );
@@ -14384,11 +14386,11 @@ mod offline_note_tests {
         );
         assert_eq!(
             transition_profile1.previous_recursive_proof_open_envelopes_archive_digest, None,
-            "legacy evidence-only append profiles omit host opening-archive bytes"
+            "evidence-only append profiles omit host opening-archive bytes"
         );
         assert_eq!(
             transition_profile1.append_opening_preflight_digest, None,
-            "legacy evidence-only append profiles omit append opening preflight bytes"
+            "evidence-only append profiles omit append opening preflight bytes"
         );
         let mut previous_bundle0 = KagemushaRecursiveSpendBundleV1 {
             accumulator: accumulator0.clone(),
@@ -14454,7 +14456,7 @@ mod offline_note_tests {
                 .expect("append transition profile with openings digest"),
             transition_profile1
                 .digest()
-                .expect("legacy append transition profile digest"),
+                .expect("evidence-only append transition profile digest"),
             "binding previous proof opening bytes must change the transition profile digest"
         );
         assert_eq!(
@@ -14472,7 +14474,7 @@ mod offline_note_tests {
                 .expect("attached previous proof transition profile binding digest"),
             transition_profile1
                 .binding_digest()
-                .expect("legacy append transition profile binding digest"),
+                .expect("evidence-only append transition profile binding digest"),
             "previous proof artifact changes remain visible to the transition binding"
         );
         let append_opening_preflight_digest =
@@ -14526,7 +14528,7 @@ mod offline_note_tests {
         assert_eq!(
             accumulator1_with_append_opening_preflight.append_boundary_digest,
             [0u8; Hash::LENGTH],
-            "digest-only compatibility appends do not invent a compact append boundary"
+            "digest-only transition-profile appends do not invent a compact append boundary"
         );
         assert_ne!(
             transition_profile1_with_append_opening_preflight
@@ -14534,7 +14536,7 @@ mod offline_note_tests {
                 .expect("append transition profile with preflight binding digest"),
             transition_profile1
                 .binding_digest()
-                .expect("legacy append transition profile binding digest"),
+                .expect("evidence-only append transition profile binding digest"),
             "accumulator transition binding must expose append opening preflight digest"
         );
         let digest_only_semantic_bundle =
@@ -16639,7 +16641,7 @@ mod offline_note_tests {
         let mut reserved_output_append_missing_previous_proof_open_envelopes =
             append_request_with_enveloped_previous.clone();
         reserved_output_append_missing_previous_proof_open_envelopes.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         assert!(matches!(
             reserved_output_append_missing_previous_proof_open_envelopes.validate_public_binding(),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -16690,7 +16692,7 @@ mod offline_note_tests {
         assert!(
             matches!(
                 KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
-                    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                     capped_lineage_previous,
                     Some(kagemusha_recursive_spend_active_lineage_verifier_record()),
                     capped_lineage_previous_openings,
@@ -20403,7 +20405,7 @@ mod offline_note_tests {
             })
         ));
 
-        fn assert_zero_legacy_compact_hash_rejected(
+        fn assert_zero_checked_prefold_compact_hash_rejected(
             source: &KagemushaCompactPaymentToken,
             field: &'static str,
             mutate: impl FnOnce(&mut KagemushaFoldedPublicInputs),
@@ -20413,42 +20415,46 @@ mod offline_note_tests {
             forged.folded_proof.public_inputs_hash = forged
                 .public_inputs
                 .public_inputs_hash()
-                .expect("self-consistent zero-prehash legacy compact hash");
+                .expect("self-consistent zero-prehash checked-prefold compact hash");
             let err = forged
                 .public_inputs
                 .validate_supported_context()
-                .expect_err("zero-prehash legacy compact digest must be rejected");
+                .expect_err("zero-prehash checked-prefold compact digest must be rejected");
             assert!(
                 matches!(
                     err,
                     KagemushaFoldError::ZeroFoldedPublicInputDigest { field: actual }
                     if actual == field
                 ),
-                "unexpected zero-prehash legacy compact digest error for {field}: {err:?}"
+                "unexpected zero-prehash checked-prefold compact digest error for {field}: {err:?}"
             );
             let err = forged
                 .validate_public_input_binding()
-                .expect_err("zero-prehash legacy compact token must be rejected");
+                .expect_err("zero-prehash checked-prefold compact token must be rejected");
             assert!(
                 matches!(
                     err,
                     KagemushaFoldError::ZeroFoldedPublicInputDigest { field: actual }
                     if actual == field
                 ),
-                "unexpected zero-prehash legacy compact token error for {field}: {err:?}"
+                "unexpected zero-prehash checked-prefold compact token error for {field}: {err:?}"
             );
         }
-        assert_zero_legacy_compact_hash_rejected(&token, "nullifier_digest", |public_inputs| {
-            public_inputs.nullifier_digest = Hash::prehashed([0u8; Hash::LENGTH]);
-        });
-        assert_zero_legacy_compact_hash_rejected(
+        assert_zero_checked_prefold_compact_hash_rejected(
+            &token,
+            "nullifier_digest",
+            |public_inputs| {
+                public_inputs.nullifier_digest = Hash::prehashed([0u8; Hash::LENGTH]);
+            },
+        );
+        assert_zero_checked_prefold_compact_hash_rejected(
             &token,
             "output_commitment_digest",
             |public_inputs| {
                 public_inputs.output_commitment_digest = Hash::prehashed([0u8; Hash::LENGTH]);
             },
         );
-        assert_zero_legacy_compact_hash_rejected(&token, "fold_digest", |public_inputs| {
+        assert_zero_checked_prefold_compact_hash_rejected(&token, "fold_digest", |public_inputs| {
             public_inputs.fold_digest = Hash::prehashed([0u8; Hash::LENGTH]);
         });
 
@@ -20520,7 +20526,7 @@ mod offline_note_tests {
             .expect_err("reserved recursive mode must be rejected");
         assert!(
             err.to_string()
-                .contains("requires ABI-7 recursive compact-token admission")
+                .contains("requires recursive compact-token admission")
         );
     }
 
@@ -20815,34 +20821,29 @@ mod offline_note_tests {
         assert_eq!(decoded_init, init);
 
         #[derive(Encode)]
-        struct LegacyKagemushaRecursiveSpendInitRequestV1 {
+        struct MissingFieldsKagemushaRecursiveSpendInitRequestV1 {
             record_bundle: KagemushaVerifiedFoldRecordBundle,
             pallas_open_envelopes_archive: Vec<u8>,
             current_note: KagemushaSpendableNoteDescriptorV1,
         }
 
-        let legacy_init = LegacyKagemushaRecursiveSpendInitRequestV1 {
+        let missing_fields_init = MissingFieldsKagemushaRecursiveSpendInitRequestV1 {
             record_bundle: init_record_bundle.clone(),
             pallas_open_envelopes_archive: init_pallas_open_envelopes_archive.clone(),
             current_note: note0.clone(),
         };
-        let mut legacy_init_bytes =
-            to_bytes(&legacy_init).expect("encode legacy recursive spend init request");
+        let mut missing_fields_init_bytes = to_bytes(&missing_fields_init)
+            .expect("encode recursive spend init request with missing fields");
         let init_request_schema =
             <KagemushaRecursiveSpendInitRequestV1 as norito::NoritoSerialize>::schema_hash();
-        legacy_init_bytes[6..22].copy_from_slice(&init_request_schema);
-        let decoded_legacy_init: KagemushaRecursiveSpendInitRequestV1 =
-            norito::decode_from_bytes(&legacy_init_bytes)
-                .expect("decode legacy recursive spend init request with defaults");
-        assert_eq!(decoded_legacy_init.record_bundle, legacy_init.record_bundle);
-        assert_eq!(
-            decoded_legacy_init.pallas_open_envelopes_archive,
-            legacy_init.pallas_open_envelopes_archive
+        missing_fields_init_bytes[6..22].copy_from_slice(&init_request_schema);
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendInitRequestV1>(
+                &missing_fields_init_bytes
+            )
+            .is_err(),
+            "recursive spend init requests must carry explicit first-release lineage fields"
         );
-        assert_eq!(decoded_legacy_init.current_note, legacy_init.current_note);
-        assert!(decoded_legacy_init.lineage_verifier_key.is_none());
-        assert!(decoded_legacy_init.lineage_proving_key_archive.is_none());
-        assert!(decoded_legacy_init.block_height.is_none());
 
         let transition_profile_init =
             kagemusha_recursive_spend_transition_profile_from_initial_evidence(&evidence0, &note0)
@@ -20875,6 +20876,227 @@ mod offline_note_tests {
         let decoded_witness0: KagemushaRecursiveSpendLineageWitnessV1 =
             norito::decode_from_bytes(&witness0_bytes).expect("decode initial lineage witness");
         assert_eq!(decoded_witness0, witness0);
+
+        #[derive(Encode)]
+        struct MissingAppendBindingsRecursiveAggregationProofPublicInputs {
+            domain: String,
+            evidence_digest: [u8; 32],
+            folded_public_inputs_hash: [u8; 32],
+            aggregation_transcript_digest: [u8; 32],
+            verifier_params_fingerprint: [u8; 32],
+            fixed_window_table_schedule_digest: [u8; 32],
+            fixed_window_shared_table_manifest_digest: [u8; 32],
+            fixed_window_table_base_digest: [u8; 32],
+            verifier_witness_batch_digest: [u8; 32],
+            recursive_proof_chain_digest: [u8; 32],
+            recursive_verifier_scalar_projection_digest: [u8; 32],
+            verifier_opening_len: u32,
+            verifier_witness_count: u32,
+            hop_count: u32,
+        }
+
+        let public_inputs = &init_lineage_bundle.recursive_proof.public_inputs;
+        let missing_public_input_bindings =
+            MissingAppendBindingsRecursiveAggregationProofPublicInputs {
+                domain: public_inputs.domain.clone(),
+                evidence_digest: public_inputs.evidence_digest,
+                folded_public_inputs_hash: public_inputs.folded_public_inputs_hash,
+                aggregation_transcript_digest: public_inputs.aggregation_transcript_digest,
+                verifier_params_fingerprint: public_inputs.verifier_params_fingerprint,
+                fixed_window_table_schedule_digest: public_inputs
+                    .fixed_window_table_schedule_digest,
+                fixed_window_shared_table_manifest_digest: public_inputs
+                    .fixed_window_shared_table_manifest_digest,
+                fixed_window_table_base_digest: public_inputs.fixed_window_table_base_digest,
+                verifier_witness_batch_digest: public_inputs.verifier_witness_batch_digest,
+                recursive_proof_chain_digest: public_inputs.recursive_proof_chain_digest,
+                recursive_verifier_scalar_projection_digest: public_inputs
+                    .recursive_verifier_scalar_projection_digest,
+                verifier_opening_len: public_inputs.verifier_opening_len,
+                verifier_witness_count: public_inputs.verifier_witness_count,
+                hop_count: public_inputs.hop_count,
+            };
+        let missing_public_input_bindings_bytes =
+            retag_archive_schema::<KagemushaRecursiveAggregationProofPublicInputs>(
+                to_bytes(&missing_public_input_bindings)
+                    .expect("encode recursive public inputs without append bindings"),
+            );
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveAggregationProofPublicInputs>(
+                &missing_public_input_bindings_bytes
+            )
+            .is_err(),
+            "recursive proof public inputs must carry explicit first-release append binding fields"
+        );
+
+        #[derive(Encode)]
+        struct MissingAppendBindingsKagemushaRecursiveSpendAccumulatorV1 {
+            domain: String,
+            chain_id: ChainId,
+            asset: AssetDefinitionId,
+            initial_root: [u8; 32],
+            final_root: [u8; 32],
+            topup_anchor_nullifiers: Vec<[u8; 32]>,
+            hop_count: u32,
+            lineage_digest: [u8; 32],
+            aggregation_transcript_digest: [u8; 32],
+            nullifier_digest: Hash,
+            output_commitment_digest: Hash,
+            fold_digest: Hash,
+            recursive_proof_chain_digest: [u8; 32],
+            verifier_params_fingerprint: [u8; 32],
+            fixed_window_table_schedule_digest: [u8; 32],
+            fixed_window_shared_table_manifest_digest: [u8; 32],
+            fixed_window_table_base_digest: [u8; 32],
+            verifier_witness_batch_digest: [u8; 32],
+            verifier_opening_len: u32,
+            current_note: KagemushaSpendableNoteDescriptorV1,
+        }
+
+        let accumulator = &init_lineage_bundle.accumulator;
+        let missing_accumulator_bindings =
+            MissingAppendBindingsKagemushaRecursiveSpendAccumulatorV1 {
+                domain: accumulator.domain.clone(),
+                chain_id: accumulator.chain_id.clone(),
+                asset: accumulator.asset.clone(),
+                initial_root: accumulator.initial_root,
+                final_root: accumulator.final_root,
+                topup_anchor_nullifiers: accumulator.topup_anchor_nullifiers.clone(),
+                hop_count: accumulator.hop_count,
+                lineage_digest: accumulator.lineage_digest,
+                aggregation_transcript_digest: accumulator.aggregation_transcript_digest,
+                nullifier_digest: accumulator.nullifier_digest,
+                output_commitment_digest: accumulator.output_commitment_digest,
+                fold_digest: accumulator.fold_digest,
+                recursive_proof_chain_digest: accumulator.recursive_proof_chain_digest,
+                verifier_params_fingerprint: accumulator.verifier_params_fingerprint,
+                fixed_window_table_schedule_digest: accumulator.fixed_window_table_schedule_digest,
+                fixed_window_shared_table_manifest_digest: accumulator
+                    .fixed_window_shared_table_manifest_digest,
+                fixed_window_table_base_digest: accumulator.fixed_window_table_base_digest,
+                verifier_witness_batch_digest: accumulator.verifier_witness_batch_digest,
+                verifier_opening_len: accumulator.verifier_opening_len,
+                current_note: accumulator.current_note.clone(),
+            };
+        let missing_accumulator_bindings_bytes =
+            retag_archive_schema::<KagemushaRecursiveSpendAccumulatorV1>(
+                to_bytes(&missing_accumulator_bindings)
+                    .expect("encode accumulator without append bindings"),
+            );
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendAccumulatorV1>(
+                &missing_accumulator_bindings_bytes
+            )
+            .is_err(),
+            "recursive spend accumulators must carry explicit first-release append binding fields"
+        );
+
+        #[derive(Encode)]
+        struct MissingAppendBindingsKagemushaRecursiveSpendTransitionProfileV1 {
+            domain: String,
+            chain_id: ChainId,
+            asset: AssetDefinitionId,
+            previous_accumulator_digest: Option<[u8; 32]>,
+            previous_initial_root: Option<[u8; 32]>,
+            previous_final_root: Option<[u8; 32]>,
+            previous_current_note: Option<KagemushaSpendableNoteDescriptorV1>,
+            previous_lineage_digest: Option<[u8; 32]>,
+            previous_recursive_proof_chain_digest: Option<[u8; 32]>,
+            previous_recursive_proof_artifact_digest: Option<[u8; 32]>,
+            previous_accumulator_public_inputs_hash: Option<Hash>,
+            previous_recursive_proof_public_inputs_hash: Option<Hash>,
+            previous_recursive_proof_open_envelopes_archive_digest: Option<[u8; 32]>,
+            previous_verifier_witness_batch_digest: Option<[u8; 32]>,
+            previous_fixed_window_table_base_digest: Option<[u8; 32]>,
+            hop_index: u32,
+            hop_count: u32,
+            current_hop_statement: KagemushaPoseidonAggregationStepStatement,
+            current_note: KagemushaSpendableNoteDescriptorV1,
+            current_hop_verifier_witness_batch_digest: [u8; 32],
+            current_hop_fixed_window_table_base_digest: [u8; 32],
+            verifier_params_fingerprint: [u8; 32],
+            fixed_window_table_schedule_digest: [u8; 32],
+            fixed_window_shared_table_manifest_digest: [u8; 32],
+            verifier_opening_len: u32,
+            resulting_initial_root: [u8; 32],
+            resulting_final_root: [u8; 32],
+            resulting_lineage_digest: [u8; 32],
+            resulting_verifier_witness_batch_digest: [u8; 32],
+            resulting_fixed_window_table_base_digest: [u8; 32],
+            resulting_recursive_proof_chain_digest: [u8; 32],
+            resulting_nullifier_digest: Hash,
+            resulting_output_commitment_digest: Hash,
+            resulting_fold_digest: Hash,
+            resulting_accumulator_digest: [u8; 32],
+            resulting_public_inputs_hash: Hash,
+        }
+
+        let missing_transition_bindings =
+            MissingAppendBindingsKagemushaRecursiveSpendTransitionProfileV1 {
+                domain: transition_profile_init.domain.clone(),
+                chain_id: transition_profile_init.chain_id.clone(),
+                asset: transition_profile_init.asset.clone(),
+                previous_accumulator_digest: transition_profile_init.previous_accumulator_digest,
+                previous_initial_root: transition_profile_init.previous_initial_root,
+                previous_final_root: transition_profile_init.previous_final_root,
+                previous_current_note: transition_profile_init.previous_current_note.clone(),
+                previous_lineage_digest: transition_profile_init.previous_lineage_digest,
+                previous_recursive_proof_chain_digest: transition_profile_init
+                    .previous_recursive_proof_chain_digest,
+                previous_recursive_proof_artifact_digest: transition_profile_init
+                    .previous_recursive_proof_artifact_digest,
+                previous_accumulator_public_inputs_hash: transition_profile_init
+                    .previous_accumulator_public_inputs_hash,
+                previous_recursive_proof_public_inputs_hash: transition_profile_init
+                    .previous_recursive_proof_public_inputs_hash,
+                previous_recursive_proof_open_envelopes_archive_digest: transition_profile_init
+                    .previous_recursive_proof_open_envelopes_archive_digest,
+                previous_verifier_witness_batch_digest: transition_profile_init
+                    .previous_verifier_witness_batch_digest,
+                previous_fixed_window_table_base_digest: transition_profile_init
+                    .previous_fixed_window_table_base_digest,
+                hop_index: transition_profile_init.hop_index,
+                hop_count: transition_profile_init.hop_count,
+                current_hop_statement: transition_profile_init.current_hop_statement.clone(),
+                current_note: transition_profile_init.current_note.clone(),
+                current_hop_verifier_witness_batch_digest: transition_profile_init
+                    .current_hop_verifier_witness_batch_digest,
+                current_hop_fixed_window_table_base_digest: transition_profile_init
+                    .current_hop_fixed_window_table_base_digest,
+                verifier_params_fingerprint: transition_profile_init.verifier_params_fingerprint,
+                fixed_window_table_schedule_digest: transition_profile_init
+                    .fixed_window_table_schedule_digest,
+                fixed_window_shared_table_manifest_digest: transition_profile_init
+                    .fixed_window_shared_table_manifest_digest,
+                verifier_opening_len: transition_profile_init.verifier_opening_len,
+                resulting_initial_root: transition_profile_init.resulting_initial_root,
+                resulting_final_root: transition_profile_init.resulting_final_root,
+                resulting_lineage_digest: transition_profile_init.resulting_lineage_digest,
+                resulting_verifier_witness_batch_digest: transition_profile_init
+                    .resulting_verifier_witness_batch_digest,
+                resulting_fixed_window_table_base_digest: transition_profile_init
+                    .resulting_fixed_window_table_base_digest,
+                resulting_recursive_proof_chain_digest: transition_profile_init
+                    .resulting_recursive_proof_chain_digest,
+                resulting_nullifier_digest: transition_profile_init.resulting_nullifier_digest,
+                resulting_output_commitment_digest: transition_profile_init
+                    .resulting_output_commitment_digest,
+                resulting_fold_digest: transition_profile_init.resulting_fold_digest,
+                resulting_accumulator_digest: transition_profile_init.resulting_accumulator_digest,
+                resulting_public_inputs_hash: transition_profile_init.resulting_public_inputs_hash,
+            };
+        let missing_transition_bindings_bytes =
+            retag_archive_schema::<KagemushaRecursiveSpendTransitionProfileV1>(
+                to_bytes(&missing_transition_bindings)
+                    .expect("encode transition profile without append bindings"),
+            );
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendTransitionProfileV1>(
+                &missing_transition_bindings_bytes
+            )
+            .is_err(),
+            "recursive spend transition profiles must carry explicit first-release append binding fields"
+        );
 
         let mut previous_lineage_verifier_record =
             kagemusha_recursive_spend_active_lineage_verifier_record();
@@ -21121,6 +21343,69 @@ mod offline_note_tests {
             norito::decode_from_bytes(&append_boundary_bytes).expect("decode append boundary");
         assert_eq!(decoded_append_boundary, append_boundary);
 
+        #[derive(Encode)]
+        struct MissingFinalNoteBindingKagemushaRecursiveSpendLineageAppendBoundaryV1 {
+            domain: String,
+            transition_profile_digest: [u8; 32],
+            transition_profile_binding_digest: [u8; 32],
+            chain_asset_binding_digest: [u8; 32],
+            previous_accumulator_digest: [u8; 32],
+            previous_recursive_proof_artifact_digest: [u8; 32],
+            previous_recursive_proof_open_envelopes_archive_digest: [u8; 32],
+            append_opening_preflight_digest: [u8; 32],
+            previous_recursive_proof_opening_aggregate_digest: [u8; 32],
+            current_hop_opening_aggregate_digest: [u8; 32],
+            current_hop_proof_hash: Hash,
+            resulting_accumulator_digest: [u8; 32],
+            resulting_public_inputs_hash: Hash,
+            verifier_opening_len: u32,
+            verifier_params_fingerprint: [u8; 32],
+            fixed_window_table_schedule_digest: [u8; 32],
+            fixed_window_shared_table_manifest_digest: [u8; 32],
+            append_boundary_digest: [u8; 32],
+        }
+
+        let missing_final_note_binding =
+            MissingFinalNoteBindingKagemushaRecursiveSpendLineageAppendBoundaryV1 {
+                domain: append_boundary.domain.clone(),
+                transition_profile_digest: append_boundary.transition_profile_digest,
+                transition_profile_binding_digest: append_boundary
+                    .transition_profile_binding_digest,
+                chain_asset_binding_digest: append_boundary.chain_asset_binding_digest,
+                previous_accumulator_digest: append_boundary.previous_accumulator_digest,
+                previous_recursive_proof_artifact_digest: append_boundary
+                    .previous_recursive_proof_artifact_digest,
+                previous_recursive_proof_open_envelopes_archive_digest: append_boundary
+                    .previous_recursive_proof_open_envelopes_archive_digest,
+                append_opening_preflight_digest: append_boundary.append_opening_preflight_digest,
+                previous_recursive_proof_opening_aggregate_digest: append_boundary
+                    .previous_recursive_proof_opening_aggregate_digest,
+                current_hop_opening_aggregate_digest: append_boundary
+                    .current_hop_opening_aggregate_digest,
+                current_hop_proof_hash: append_boundary.current_hop_proof_hash,
+                resulting_accumulator_digest: append_boundary.resulting_accumulator_digest,
+                resulting_public_inputs_hash: append_boundary.resulting_public_inputs_hash,
+                verifier_opening_len: append_boundary.verifier_opening_len,
+                verifier_params_fingerprint: append_boundary.verifier_params_fingerprint,
+                fixed_window_table_schedule_digest: append_boundary
+                    .fixed_window_table_schedule_digest,
+                fixed_window_shared_table_manifest_digest: append_boundary
+                    .fixed_window_shared_table_manifest_digest,
+                append_boundary_digest: append_boundary.append_boundary_digest,
+            };
+        let missing_final_note_binding_bytes =
+            retag_archive_schema::<KagemushaRecursiveSpendLineageAppendBoundaryV1>(
+                to_bytes(&missing_final_note_binding)
+                    .expect("encode append boundary without final-note binding"),
+            );
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendLineageAppendBoundaryV1>(
+                &missing_final_note_binding_bytes
+            )
+            .is_err(),
+            "recursive spend append boundaries must carry explicit first-release final-note binding"
+        );
+
         let accumulator1 =
             kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract(
                 &init_lineage_bundle.accumulator,
@@ -21162,61 +21447,31 @@ mod offline_note_tests {
         assert_eq!(decoded_witness1, witness1);
 
         #[derive(Encode)]
-        struct LegacyKagemushaRecursiveSpendAppendRequestV1 {
+        struct MissingFieldsKagemushaRecursiveSpendAppendRequestV1 {
             previous_bundle: KagemushaRecursiveSpendBundleV1,
             record_bundle: KagemushaVerifiedFoldRecordBundle,
             pallas_open_envelopes_archive: Vec<u8>,
             current_note: KagemushaSpendableNoteDescriptorV1,
         }
 
-        let legacy_append = LegacyKagemushaRecursiveSpendAppendRequestV1 {
+        let missing_fields_append = MissingFieldsKagemushaRecursiveSpendAppendRequestV1 {
             previous_bundle: bundle0.clone(),
             record_bundle: init_record_bundle.clone(),
             pallas_open_envelopes_archive: init_pallas_open_envelopes_archive,
             current_note: note0.clone(),
         };
-        let mut legacy_append_bytes =
-            to_bytes(&legacy_append).expect("encode legacy recursive spend append request");
+        let mut missing_fields_append_bytes = to_bytes(&missing_fields_append)
+            .expect("encode recursive spend append request with missing fields");
         let append_request_schema =
             <KagemushaRecursiveSpendAppendRequestV1 as norito::NoritoSerialize>::schema_hash();
-        legacy_append_bytes[6..22].copy_from_slice(&append_request_schema);
-        let decoded_legacy_append: KagemushaRecursiveSpendAppendRequestV1 =
-            norito::decode_from_bytes(&legacy_append_bytes)
-                .expect("decode legacy recursive spend append request with default verifier");
-        assert_eq!(
-            decoded_legacy_append.previous_bundle,
-            legacy_append.previous_bundle
-        );
-        assert_eq!(
-            decoded_legacy_append.record_bundle,
-            legacy_append.record_bundle
-        );
-        assert_eq!(
-            decoded_legacy_append.pallas_open_envelopes_archive,
-            legacy_append.pallas_open_envelopes_archive
-        );
-        assert_eq!(
-            decoded_legacy_append.current_note,
-            legacy_append.current_note
-        );
+        missing_fields_append_bytes[6..22].copy_from_slice(&append_request_schema);
         assert!(
-            decoded_legacy_append
-                .previous_lineage_verifier_record
-                .is_none()
+            norito::decode_from_bytes::<KagemushaRecursiveSpendAppendRequestV1>(
+                &missing_fields_append_bytes
+            )
+            .is_err(),
+            "recursive spend append requests must carry explicit first-release lineage fields"
         );
-        assert!(decoded_legacy_append.output_proof_circuit_id.is_empty());
-        assert_eq!(
-            decoded_legacy_append.output_proof_circuit_id(),
-            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-        );
-        assert!(
-            decoded_legacy_append
-                .previous_recursive_proof_open_envelopes_archive
-                .is_empty()
-        );
-        assert!(decoded_legacy_append.lineage_verifier_key.is_none());
-        assert!(decoded_legacy_append.lineage_proving_key_archive.is_none());
-        assert!(decoded_legacy_append.block_height.is_none());
 
         let mut final_lineage_verifier_record =
             kagemusha_recursive_spend_active_lineage_verifier_record();
@@ -21234,24 +21489,25 @@ mod offline_note_tests {
         assert_eq!(decoded_verify, verify);
 
         #[derive(Encode)]
-        struct LegacyKagemushaRecursiveSpendVerifyRequestV1 {
+        struct MissingFieldsKagemushaRecursiveSpendVerifyRequestV1 {
             bundle: KagemushaRecursiveSpendBundleV1,
         }
 
-        let legacy_verify = LegacyKagemushaRecursiveSpendVerifyRequestV1 {
+        let missing_fields_verify = MissingFieldsKagemushaRecursiveSpendVerifyRequestV1 {
             bundle: bundle0.clone(),
         };
-        let mut legacy_verify_bytes =
-            to_bytes(&legacy_verify).expect("encode legacy recursive spend verify request");
+        let mut missing_fields_verify_bytes = to_bytes(&missing_fields_verify)
+            .expect("encode recursive spend verify request with missing fields");
         let verify_request_schema =
             <KagemushaRecursiveSpendVerifyRequestV1 as norito::NoritoSerialize>::schema_hash();
-        legacy_verify_bytes[6..22].copy_from_slice(&verify_request_schema);
-        let decoded_legacy_verify: KagemushaRecursiveSpendVerifyRequestV1 =
-            norito::decode_from_bytes(&legacy_verify_bytes)
-                .expect("decode legacy recursive spend verify request with default verifier");
-        assert_eq!(decoded_legacy_verify.bundle, legacy_verify.bundle);
-        assert!(decoded_legacy_verify.lineage_verifier_record.is_none());
-        assert!(decoded_legacy_verify.block_height.is_none());
+        missing_fields_verify_bytes[6..22].copy_from_slice(&verify_request_schema);
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendVerifyRequestV1>(
+                &missing_fields_verify_bytes
+            )
+            .is_err(),
+            "recursive spend verify requests must carry explicit first-release lineage fields"
+        );
 
         let verify_result = KagemushaRecursiveSpendVerifyResultV1 {
             valid: false,
@@ -21276,6 +21532,37 @@ mod offline_note_tests {
         assert!(!decoded_verify_result.witnessless_redeem_supported);
         assert!(decoded_verify_result.lineage_witness_required_for_redeem);
         assert_eq!(decoded_verify_result, verify_result);
+
+        #[derive(Encode)]
+        struct MissingFieldsKagemushaRecursiveSpendVerifyResultV1 {
+            valid: bool,
+            hop_count: u32,
+            encoded_bytes: u32,
+            reason: String,
+            chain_admissible: bool,
+            chain_admission_reason: String,
+        }
+
+        let missing_fields_verify_result = MissingFieldsKagemushaRecursiveSpendVerifyResultV1 {
+            valid: verify_result.valid,
+            hop_count: verify_result.hop_count,
+            encoded_bytes: verify_result.encoded_bytes,
+            reason: verify_result.reason.clone(),
+            chain_admissible: verify_result.chain_admissible,
+            chain_admission_reason: verify_result.chain_admission_reason.clone(),
+        };
+        let mut missing_fields_verify_result_bytes = to_bytes(&missing_fields_verify_result)
+            .expect("encode recursive spend verify result with missing fields");
+        let verify_result_schema =
+            <KagemushaRecursiveSpendVerifyResultV1 as norito::NoritoSerialize>::schema_hash();
+        missing_fields_verify_result_bytes[6..22].copy_from_slice(&verify_result_schema);
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendVerifyResultV1>(
+                &missing_fields_verify_result_bytes
+            )
+            .is_err(),
+            "recursive spend verify results must carry explicit first-release redeem flags"
+        );
 
         let mut redeem_proof = ProofAttachment::new_ref(
             "halo2/ipa".to_owned(),
@@ -21303,7 +21590,7 @@ mod offline_note_tests {
         assert_eq!(decoded_redeem, redeem);
 
         #[derive(Encode)]
-        struct LegacyKagemushaRecursiveSpendRedeemRequestV1 {
+        struct MissingChangeKagemushaRecursiveSpendRedeemRequestV1 {
             bundle: KagemushaRecursiveSpendBundleV1,
             recipient: AccountId,
             public_amount: u128,
@@ -21313,7 +21600,7 @@ mod offline_note_tests {
             block_height: Option<u64>,
         }
 
-        let legacy_redeem = LegacyKagemushaRecursiveSpendRedeemRequestV1 {
+        let missing_change_redeem = MissingChangeKagemushaRecursiveSpendRedeemRequestV1 {
             bundle: redeem.bundle.clone(),
             recipient: redeem.recipient.clone(),
             public_amount: redeem.public_amount,
@@ -21322,17 +21609,50 @@ mod offline_note_tests {
             lineage_verifier_record: redeem.lineage_verifier_record.clone(),
             block_height: redeem.block_height,
         };
-        let mut legacy_redeem_bytes =
-            to_bytes(&legacy_redeem).expect("encode legacy recursive spend redeem request");
+        let mut missing_change_redeem_bytes = to_bytes(&missing_change_redeem)
+            .expect("encode recursive spend redeem request without change output");
         let redeem_request_schema =
             <KagemushaRecursiveSpendRedeemRequestV1 as norito::NoritoSerialize>::schema_hash();
-        legacy_redeem_bytes[6..22].copy_from_slice(&redeem_request_schema);
+        missing_change_redeem_bytes[6..22].copy_from_slice(&redeem_request_schema);
         assert!(
             norito::decode_from_bytes::<KagemushaRecursiveSpendRedeemRequestV1>(
-                &legacy_redeem_bytes
+                &missing_change_redeem_bytes
             )
             .is_err(),
             "recursive spend redeem requests must carry explicit change_output in first-release V1"
+        );
+
+        #[derive(Encode)]
+        struct MissingRecordsKagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: KagemushaRecursiveSpendBundleV1,
+            recipient: AccountId,
+            public_amount: u128,
+            redeem_proof: ProofAttachment,
+            lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+            change_output: Option<[u8; 32]>,
+            lineage_verifier_record: Option<VerifyingKeyRecord>,
+            block_height: Option<u64>,
+        }
+
+        let missing_records_redeem = MissingRecordsKagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: redeem.bundle.clone(),
+            recipient: redeem.recipient.clone(),
+            public_amount: redeem.public_amount,
+            redeem_proof: redeem.redeem_proof.clone(),
+            lineage_witness: redeem.lineage_witness.clone(),
+            change_output: redeem.change_output,
+            lineage_verifier_record: redeem.lineage_verifier_record.clone(),
+            block_height: redeem.block_height,
+        };
+        let mut missing_records_redeem_bytes = to_bytes(&missing_records_redeem)
+            .expect("encode recursive spend redeem request missing verifier-record vector");
+        missing_records_redeem_bytes[6..22].copy_from_slice(&redeem_request_schema);
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendRedeemRequestV1>(
+                &missing_records_redeem_bytes
+            )
+            .is_err(),
+            "recursive spend redeem requests must carry explicit first-release verifier-record vector"
         );
 
         let redeem_instruction =

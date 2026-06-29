@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from sorafs_checker_preflight import (  # noqa: E402
     artifact_path_label,
+    checker_summary_write_open_flags,
     emit_checker_error_block,
     emit_checker_exception,
     emit_checker_error_lines,
@@ -678,6 +680,35 @@ def test_write_checker_summary_creates_parent(tmp_path: Path) -> None:
     assert summary.read_text(encoding="utf-8") == '{"status":"ready"}'
 
 
+def test_write_checker_summary_uses_no_follow_descriptor_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary = tmp_path / "summary.json"
+    original_open = os.open
+    opened: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, mode: int = 0o777, *args, **kwargs):
+        if path == summary:
+            opened["flags"] = flags
+            opened["mode"] = mode
+        return original_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_path)
+
+    errors = write_checker_summary(summary, '{"status":"ready"}')
+
+    assert errors == []
+    assert summary.read_text(encoding="utf-8") == '{"status":"ready"}'
+    assert opened["flags"] & os.O_WRONLY
+    assert opened["flags"] & os.O_CREAT
+    assert opened["flags"] & os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        assert opened["flags"] & os.O_NOFOLLOW
+    assert opened["mode"] == 0o666
+    assert checker_summary_write_open_flags() == opened["flags"]
+
+
 def test_write_checker_summary_rejects_non_string_text(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
@@ -757,14 +788,14 @@ def test_write_checker_summary_sanitizes_write_failure(
     monkeypatch,
 ) -> None:
     summary = tmp_path / "bad\nsummary.json"
-    original_write_text = Path.write_text
+    original_open = os.open
 
-    def write_text(path: Path, *args, **kwargs):
+    def open_path(path: Path, flags: int, mode: int = 0o777, *args, **kwargs):
         if path == summary:
             raise OSError(f"write denied for {path}")
-        return original_write_text(path, *args, **kwargs)
+        return original_open(path, flags, mode, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(os, "open", open_path)
 
     errors = write_checker_summary(summary, "{}")
 

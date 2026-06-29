@@ -23,7 +23,11 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.queue_hard_limit == 0
     assert args.post_load_sample_seconds == 30.0
     assert args.load_runs == 1
+    assert args.deploy_queue_capacity == 4_096
+    assert args.kura_blocks_in_memory == 16
     assert not args.no_status_snapshots
+    assert not args.capture_diagnostics
+    assert args.diagnostic_timeout_seconds == 30.0
 
 
 def test_peer_count_below_four_is_rejected():
@@ -54,6 +58,51 @@ def test_tx_load_command_forwards_queue_limits(tmp_path):
     assert cmd[cmd.index("--queue-soft-limit") + 1] == "11"
     assert cmd[cmd.index("--queue-hard-limit") + 1] == "22"
     assert cmd[cmd.index("--queue-wait-timeout") + 1] == "33.0"
+
+
+def test_deploy_command_forwards_kura_hot_cache_limit(tmp_path):
+    args = MODULE.parse_args(
+        [
+            "--iroha-dir",
+            str(tmp_path),
+            "--out-dir",
+            str(tmp_path / "run"),
+            "--deploy-queue-capacity",
+            "123",
+            "--kura-blocks-in-memory",
+            "9",
+        ]
+    )
+    cmd = MODULE.build_deploy_cmd(args)
+    assert cmd[cmd.index("--queue-capacity") + 1] == "123"
+    assert cmd[cmd.index("--kura-blocks-in-memory") + 1] == "9"
+
+
+def test_deploy_queue_capacity_must_be_positive():
+    try:
+        MODULE.parse_args(["--deploy-queue-capacity", "0"])
+    except SystemExit as err:
+        assert err.code == 2
+    else:
+        raise AssertionError("expected --deploy-queue-capacity=0 to be rejected")
+
+
+def test_kura_hot_cache_limit_must_be_positive():
+    try:
+        MODULE.parse_args(["--kura-blocks-in-memory", "0"])
+    except SystemExit as err:
+        assert err.code == 2
+    else:
+        raise AssertionError("expected --kura-blocks-in-memory=0 to be rejected")
+
+
+def test_diagnostic_timeout_must_be_positive():
+    try:
+        MODULE.parse_args(["--diagnostic-timeout-seconds", "0"])
+    except SystemExit as err:
+        assert err.code == 2
+    else:
+        raise AssertionError("expected --diagnostic-timeout-seconds=0 to be rejected")
 
 
 def test_base_api_port_uses_generated_client_config(tmp_path):
@@ -108,6 +157,18 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
                 fields={"queue_size": 0, "rbc_store_bytes": 12},
             )
         ],
+        diagnostic_artifacts=[
+            MODULE.DiagnosticArtifact(
+                timestamp=4.0,
+                phase="final",
+                run_index=1,
+                peer_index=0,
+                pid=123,
+                kind="vmmap-summary",
+                path=str(tmp_path / "vmmap.txt"),
+                ok=True,
+            )
+        ],
         load_runs=2,
         tx_returncodes=[0, 0],
     )
@@ -123,6 +184,8 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
     assert payload["samples"][0]["run_index"] == 1
     assert payload["samples"][1]["phase"] == "post_load"
     assert payload["status_snapshots"][0]["fields"]["rbc_store_bytes"] == 12
+    assert payload["diagnostic_artifacts"][0]["kind"] == "vmmap-summary"
+    assert payload["diagnostic_artifacts"][0]["ok"] is True
 
 
 def test_status_url_for_peer_uses_base_port():
@@ -174,6 +237,78 @@ def test_tx_load_log_path_keeps_legacy_name_for_single_run(tmp_path):
 
 def test_tx_load_log_path_disambiguates_multiple_runs(tmp_path):
     assert MODULE.tx_load_log_path(tmp_path, 2, 3) == tmp_path / "tx_load_run_2.log"
+
+
+def test_diagnostic_artifact_path_sanitizes_phase(tmp_path):
+    path = MODULE.diagnostic_artifact_path(
+        tmp_path,
+        phase="post load/final",
+        run_index=2,
+        peer_index=3,
+        pid=456,
+        kind="heap-summary",
+    )
+    assert path == tmp_path / "diagnostics" / "run2_post_load_final_peer3_pid456_heap-summary.txt"
+
+
+def test_capture_peer_diagnostics_writes_tool_outputs(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_which(tool):
+        return f"/usr/bin/{tool}"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        assert kwargs["stdout"] == MODULE.subprocess.PIPE
+        assert kwargs["stderr"] == MODULE.subprocess.STDOUT
+        assert kwargs["timeout"] == 5.0
+
+        class Completed:
+            returncode = 0
+            stdout = f"captured {' '.join(cmd)}"
+
+        return Completed()
+
+    monkeypatch.setattr(MODULE.shutil, "which", fake_which)
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    artifacts = MODULE.capture_peer_diagnostics(
+        tmp_path,
+        [
+            MODULE.PeerProcess(
+                pid=123,
+                config_path=tmp_path / "peer0.toml",
+                command=f"irohad --config {tmp_path / 'peer0.toml'}",
+            )
+        ],
+        phase="final",
+        run_index=1,
+        timeout_seconds=5.0,
+    )
+
+    assert calls == [["vmmap", "-summary", "123"], ["heap", "-s", "123"]]
+    assert [artifact.kind for artifact in artifacts] == ["vmmap-summary", "heap-summary"]
+    assert all(artifact.ok for artifact in artifacts)
+    for artifact in artifacts:
+        assert artifact.path is not None
+        assert Path(artifact.path).read_text(encoding="utf-8").startswith("captured ")
+
+
+def test_capture_peer_diagnostics_records_missing_tools(tmp_path, monkeypatch):
+    monkeypatch.setattr(MODULE.shutil, "which", lambda _tool: None)
+
+    artifacts = MODULE.capture_peer_diagnostics(
+        tmp_path,
+        [MODULE.PeerProcess(pid=123, config_path=tmp_path / "peer0.toml", command="irohad")],
+        phase="final",
+        run_index=1,
+        timeout_seconds=5.0,
+    )
+
+    assert len(artifacts) == 2
+    assert all(not artifact.ok for artifact in artifacts)
+    assert all(artifact.path is None for artifact in artifacts)
+    assert {artifact.error for artifact in artifacts} == {"vmmap not found", "heap not found"}
 
 
 def test_command_ownership_requires_matching_config_path(tmp_path):

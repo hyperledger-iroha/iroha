@@ -5,7 +5,9 @@ ROOT_DIR="${SORAFS_PIN_REGISTER_SDK_GUARD_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0
 MODE="${1:-}"
 
 python3 - "${ROOT_DIR}" "${MODE}" <<'PY'
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -157,14 +159,44 @@ class GuardError(Exception):
     pass
 
 
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def read_text_no_follow(full_path: Path, label: str) -> str:
+    if full_path.is_symlink():
+        raise GuardError(f"{label} must not be a symlink: {full_path}")
+    for parent in (full_path.parent, *full_path.parent.parents):
+        if parent.is_symlink():
+            raise GuardError(f"{label} parent must not be a symlink: {parent}")
+        if parent.exists() and not parent.is_dir():
+            raise GuardError(f"{label} parent must be a directory: {parent}")
+    try:
+        path_stat = full_path.lstat()
+    except FileNotFoundError as exc:
+        raise GuardError(f"required file is missing: {label}") from exc
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise GuardError(f"{label} must be a regular file: {full_path}")
+    fd = os.open(full_path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            raise GuardError(f"{label} must be a regular file: {full_path}")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read()
+    except OSError as exc:
+        raise GuardError(f"failed to read required file {label}: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def read(path):
     if path in text_overrides:
         return text_overrides[path]
     full_path = root / path
-    try:
-        return full_path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise GuardError(f"required file is missing: {path}") from exc
+    return read_text_no_follow(full_path, path)
 
 
 def require(condition, message):

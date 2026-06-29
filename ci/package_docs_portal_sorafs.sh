@@ -439,9 +439,33 @@ fi
 
 PACKAGE_SUMMARY="${OUT_DIR}/package_summary.json"
 python3 - "$SUMMARY_TMP" "$OUT_DIR" "$REPO_ROOT" "$TIMESTAMP" >"$PACKAGE_SUMMARY" <<'PY'
-import json, os, sys
+import json, os, stat, sys
 
 summary_path, out_dir, repo_root, generated_at = sys.argv[1:5]
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def read_summary_lines_no_follow(path: str) -> list[str]:
+    if os.path.islink(path):
+        raise SystemExit(f"package summary input must not be a symlink: {path}")
+    try:
+        path_stat = os.lstat(path)
+    except FileNotFoundError:
+        raise SystemExit(f"package summary input missing: {path}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise SystemExit(f"package summary input must be a regular file: {path}")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            raise SystemExit(f"package summary input must be a regular file: {path}")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.readlines()
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 def maybe_rel(path):
     if not path:
@@ -452,37 +476,36 @@ def maybe_rel(path):
         return path
 
 artifacts = []
-with open(summary_path, "r", encoding="utf-8") as handle:
-    for raw in handle:
-        raw = raw.rstrip("\n")
-        if not raw:
-            continue
-        (
-            label,
-            input_path,
-            car_path,
-            plan_path,
-            summary_out,
-            manifest_path,
-            manifest_json,
-            proof_path,
-            bundle_path,
-            signature_path,
-        ) = raw.split("\t")
-        artifacts.append(
-            {
-                "name": label,
-                "input": maybe_rel(input_path),
-                "car": maybe_rel(car_path),
-                "plan": maybe_rel(plan_path),
-                "car_summary": maybe_rel(summary_out),
-                "manifest": maybe_rel(manifest_path),
-                "manifest_json": maybe_rel(manifest_json),
-                "proof": maybe_rel(proof_path),
-                "bundle": maybe_rel(bundle_path) if bundle_path else None,
-                "signature": maybe_rel(signature_path) if signature_path else None,
-            }
-        )
+for raw in read_summary_lines_no_follow(summary_path):
+    raw = raw.rstrip("\n")
+    if not raw:
+        continue
+    (
+        label,
+        input_path,
+        car_path,
+        plan_path,
+        summary_out,
+        manifest_path,
+        manifest_json,
+        proof_path,
+        bundle_path,
+        signature_path,
+    ) = raw.split("\t")
+    artifacts.append(
+        {
+            "name": label,
+            "input": maybe_rel(input_path),
+            "car": maybe_rel(car_path),
+            "plan": maybe_rel(plan_path),
+            "car_summary": maybe_rel(summary_out),
+            "manifest": maybe_rel(manifest_path),
+            "manifest_json": maybe_rel(manifest_json),
+            "proof": maybe_rel(proof_path),
+            "bundle": maybe_rel(bundle_path) if bundle_path else None,
+            "signature": maybe_rel(signature_path) if signature_path else None,
+        }
+    )
 
 output = {
     "generated_at": generated_at,

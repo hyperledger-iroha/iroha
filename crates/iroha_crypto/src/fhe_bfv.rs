@@ -61854,35 +61854,6 @@ mod tests {
             "evaluator artifact set digest must be distinct from artifact bundle digest",
             "release audit evidence must reject aggregate digest aliasing before recomputation",
         );
-        let mut rns_digest_copied_from_parameter_evidence = evidence.clone();
-        rns_digest_copied_from_parameter_evidence.rns_modulus_chain_digest =
-            rns_digest_copied_from_parameter_evidence.parameter_digest;
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_evidence_v1(
-                &rns_digest_copied_from_parameter_evidence,
-            ),
-            "RNS modulus-chain digest must be distinct from parameter digest",
-            "release audit evidence must reject RNS profile digests copied from parameter digests before registered-profile mismatch",
-        );
-        assert_error_contains(
-            bfv_full_bootstrap_release_audit_evidence_digest_v1(
-                &rns_digest_copied_from_parameter_evidence,
-            ),
-            "RNS modulus-chain digest must be distinct from parameter digest",
-            "release audit evidence digesting must reject RNS profile digests copied from parameter digests before hashing",
-        );
-
-        let mut key_switch_digest_copied_from_rns_evidence = evidence.clone();
-        key_switch_digest_copied_from_rns_evidence.key_switch_decomposition_chain_digest =
-            key_switch_digest_copied_from_rns_evidence.rns_modulus_chain_digest;
-        assert_error_contains(
-            validate_bfv_full_bootstrap_release_audit_evidence_v1(
-                &key_switch_digest_copied_from_rns_evidence,
-            ),
-            "key-switch decomposition-chain digest must be distinct from RNS modulus-chain digest",
-            "release audit evidence must reject key-switch profile digests copied from RNS digests before registered-profile mismatch",
-        );
-
         let mut stale_evaluator_set_digest_evidence = evidence.clone();
         stale_evaluator_set_digest_evidence.evaluator_artifact_set_digest =
             Hash::new(b"stale-release-audit-evaluator-artifact-set-digest");
@@ -73269,6 +73240,44 @@ mod tests {
             bfv_full_bootstrap_release_audit_evidence_digest_v1(&role_swapped_evidence),
             "role",
             "release audit evidence digesting must reject proof-key role drift",
+        );
+    }
+
+    #[test]
+    fn full_bootstrap_release_audit_evidence_rejects_registered_profile_digest_aliases() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
+        let material = sample_full_bootstrap_circuit_material_for_artifacts(&params, &artifacts);
+        let evidence = bfv_full_bootstrap_release_audit_evidence_v1(&params, &material, &artifacts)
+            .expect("derive full-bootstrap release audit evidence");
+
+        let mut rns_digest_copied_from_parameter_evidence = evidence.clone();
+        rns_digest_copied_from_parameter_evidence.rns_modulus_chain_digest =
+            rns_digest_copied_from_parameter_evidence.parameter_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &rns_digest_copied_from_parameter_evidence,
+            ),
+            "RNS modulus-chain digest must be distinct from parameter digest",
+            "release audit evidence must reject RNS profile digests copied from parameter digests before registered-profile mismatch",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_evidence_digest_v1(
+                &rns_digest_copied_from_parameter_evidence,
+            ),
+            "RNS modulus-chain digest must be distinct from parameter digest",
+            "release audit evidence digesting must reject RNS profile digests copied from parameter digests before hashing",
+        );
+
+        let mut key_switch_digest_copied_from_rns_evidence = evidence;
+        key_switch_digest_copied_from_rns_evidence.key_switch_decomposition_chain_digest =
+            key_switch_digest_copied_from_rns_evidence.rns_modulus_chain_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &key_switch_digest_copied_from_rns_evidence,
+            ),
+            "key-switch decomposition-chain digest must be distinct from RNS modulus-chain digest",
+            "release audit evidence must reject key-switch profile digests copied from RNS digests before registered-profile mismatch",
         );
     }
 

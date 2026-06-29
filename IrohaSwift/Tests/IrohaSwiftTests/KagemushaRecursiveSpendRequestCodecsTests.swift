@@ -15,8 +15,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertFalse(abi6.chainAdmissible)
         XCTAssertEqual(abi6.chainAdmissionReason, "offline verification failed")
         XCTAssertFalse(abi6.witnesslessRedeemSupported)
-        XCTAssertTrue(abi6.lineageWitnessRequired)
-        XCTAssertEqual(abi6.lineageWitnessRequiredForRedeem, abi6.lineageWitnessRequired)
+        XCTAssertTrue(abi6.lineageWitnessRequiredForRedeem)
 
         let abi7 = try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
             Self.sharedRecursiveSpendArchive(abi: .abi7, name: "verify_result")
@@ -24,8 +23,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(abi7.hopCount, 1)
         XCTAssertGreaterThan(abi7.encodedBytes, 0)
         XCTAssertEqual(abi7.chainAdmissionReason.isEmpty, abi7.chainAdmissible)
-        XCTAssertEqual(!abi7.lineageWitnessRequired, abi7.witnesslessRedeemSupported)
-        XCTAssertEqual(abi7.lineageWitnessRequiredForRedeem, abi7.lineageWitnessRequired)
+        XCTAssertEqual(!abi7.lineageWitnessRequiredForRedeem, abi7.witnesslessRedeemSupported)
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
                 Self.recursiveSpendVerifyResultWithTrailingField()
@@ -136,13 +134,13 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
         XCTAssertEqual(initBundle.chainId, "kagemusha-recursive-spend-abi-chain")
         XCTAssertEqual(initBundle.asset, "686w6ABhTWPaCrWNjjXs7X1SW6w9")
-        let fallbackAssetBundle = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+        let rawHexAssetBundle = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             Self.recursiveSpendBundleWithAccumulatorField(
                 fieldIndex: 2,
                 replacement: Self.fixedArrayPayload(0x01, count: 16)
             )
         )
-        XCTAssertEqual(fallbackAssetBundle.asset, "hex:01010101010101010101010101010101")
+        XCTAssertEqual(rawHexAssetBundle.asset, "hex:01010101010101010101010101010101")
         XCTAssertTrue(initBundle.initialRoot.contains { $0 != 0 })
         XCTAssertTrue(initBundle.finalRoot.contains { $0 != 0 })
         XCTAssertEqual(initBundle.currentNote.amount, "7")
@@ -272,7 +270,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 { try buildDirectSummary(asset: "hex:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") }
             ),
             (
-                "direct summary short fallback asset",
+                "direct summary short hex asset",
                 .invalidArchive("bundle.accumulator.asset"),
                 { try buildDirectSummary(asset: "hex:1111111111111111111111111111111") }
             ),

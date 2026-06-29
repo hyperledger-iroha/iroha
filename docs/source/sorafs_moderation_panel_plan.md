@@ -20,7 +20,9 @@ by adjacent SoraFS event/readback APIs.
 fail-closed SFM-4b rollout evidence gate for deployed moderation-panel
 promotion packets, and
 `scripts/run_sorafs_moderation_panel_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner.
+reviewed evidence collection planner/runner with dry-run `evidence_contract`
+output listing each selected evidence kind's schema and required payload
+fields.
 Every recognized rollout artifact must also carry reviewed `deployment_id` and
 `environment` context, so staging or production evidence cannot be satisfied by
 local, mock, dev, or otherwise unreviewed deployment packets. The gate also

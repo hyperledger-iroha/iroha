@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import importlib.util
 import json
 import re
@@ -16,6 +17,28 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPTS_DIR.parent
 DOCS_SOURCE_DIR = REPO_ROOT / "docs" / "source"
+SORAFS_AI_PRESCREEN_PLAN = DOCS_SOURCE_DIR / "sorafs_ai_prescreen_plan.md"
+SORAFS_APPEAL_PRICING_PLAN = DOCS_SOURCE_DIR / "sorafs_appeal_pricing_plan.md"
+SORAFS_CLI_DOC = DOCS_SOURCE_DIR / "sorafs_cli.md"
+SORAFS_CLI_SDK_PLAN = DOCS_SOURCE_DIR / "sorafs_cli_sdk_plan.md"
+SORAFS_EVIDENCE_VIEWER_PLAN = DOCS_SOURCE_DIR / "sorafs_evidence_viewer_plan.md"
+SORAFS_GATEWAY_COMPLIANCE_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_compliance_plan.md"
+SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
+SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
+SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
+SORAFS_ORDERBOOK_PLAN = DOCS_SOURCE_DIR / "sorafs_orderbook_plan.md"
+SORAFS_COMMIT_REVEAL_PLAN = DOCS_SOURCE_DIR / "sorafs_commit_reveal_plan.md"
+SORAFS_POP_CREDENTIALS_PLAN = DOCS_SOURCE_DIR / "sorafs_pop_credentials_plan.md"
+SORAFS_PDP_PLAN = DOCS_SOURCE_DIR / "sorafs_pdp_plan.md"
+SORAFS_POR_PLAN = DOCS_SOURCE_DIR / "sorafs_por_plan.md"
+SORAFS_POR_VALIDATOR_PLAN = DOCS_SOURCE_DIR / "sorafs_por_validator_plan.md"
+SORAFS_POTR_PLAN = DOCS_SOURCE_DIR / "sorafs_potr_plan.md"
+SORAFS_PROTO_PLAN = DOCS_SOURCE_DIR / "sorafs_proto_plan.md"
+SORAFS_REPAIR_PLAN = DOCS_SOURCE_DIR / "sorafs_repair_plan.md"
+SORAFS_REFERENCE_SDK_PLAN = DOCS_SOURCE_DIR / "sorafs_reference_sdk_plan.md"
+SORAFS_REPUTATION_PLAN = DOCS_SOURCE_DIR / "sorafs_reputation_plan.md"
+SORAFS_RESERVE_RENT_PLAN = DOCS_SOURCE_DIR / "sorafs_reserve_rent_plan.md"
+SORAFS_TRANSPARENCY_PLAN = DOCS_SOURCE_DIR / "sorafs_transparency_plan.md"
 EXAMPLES_DIR = SCRIPTS_DIR / "examples"
 DASHBOARDS_DIR = REPO_ROOT / "dashboards"
 TELEMETRY_METRICS_RS = REPO_ROOT / "crates" / "iroha_telemetry" / "src" / "metrics.rs"
@@ -27,6 +50,11 @@ HEDGING_FIXTURE_GENERATOR_RS = (
     / "bin"
     / "generate_hedging_fixtures.rs"
 )
+POP_CREDENTIALS_RS = REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "pop_credentials.rs"
+TORII_SORAFS_API_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "api.rs"
+TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
+SORAFS_CLI_RS = REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "bin" / "sorafs_cli.rs"
 HEDGING_FIXTURE_ROOT = REPO_ROOT / "fixtures" / "sorafs_manifest" / "hedging"
 HEDGING_FIXTURE_README = HEDGING_FIXTURE_ROOT / "README.md"
 HEDGING_FIXTURE_MANIFEST = (
@@ -689,19 +717,110 @@ def runner_example(path: Path) -> Path | None:
     )
 
 
-def transparency_required_source_kinds() -> set[str]:
-    source = ast.parse(read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py"))
-    for node in source.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(
-            isinstance(target, ast.Name)
-            and target.id == "DEFAULT_REQUIRED_SOURCE_KINDS"
-            for target in node.targets
+def required_source_entry_kinds(module: object) -> set[str]:
+    for attribute in (
+        "DEFAULT_REQUIRED_SOURCE_KINDS",
+        "REQUIRED_TRANSPARENCY_SOURCE_KINDS",
+    ):
+        value = getattr(module, attribute, None)
+        if value is not None:
+            return set(value)
+    return set()
+
+
+def required_field_contract_is_canonical(required_fields: object) -> bool:
+    if not isinstance(required_fields, tuple) or not required_fields:
+        return False
+    seen: set[str] = set()
+    for field in required_fields:
+        if (
+            not isinstance(field, str)
+            or not field
+            or field != field.strip()
+            or any(ord(char) < 32 for char in field)
+            or field in seen
         ):
+            return False
+        seen.add(field)
+    return True
+
+
+def render_runner_plan_json(module: object, plan: object, args: object) -> object:
+    plan_json_parameters = inspect.signature(module.plan_json).parameters
+    if len(plan_json_parameters) == 1:
+        return module.plan_json(plan)
+    if len(plan_json_parameters) == 2:
+        return module.plan_json(plan, args)
+    raise AssertionError("unexpected plan_json signature")
+
+
+def command_option_values(command: object, option: str) -> list[str]:
+    assert isinstance(command, list)
+    values: list[str] = []
+    prefix = f"{option}="
+    index = 0
+    while index < len(command):
+        if command[index] == option:
+            assert index + 1 < len(command)
+            values.append(command[index + 1])
+            index += 2
             continue
-        return set(ast.literal_eval(node.value))
-    raise AssertionError("DEFAULT_REQUIRED_SOURCE_KINDS not found")
+        if isinstance(command[index], str) and command[index].startswith(prefix):
+            values.append(command[index].split("=", 1)[1])
+        index += 1
+    return values
+
+
+def command_output_values(command: object) -> list[str]:
+    values: list[str] = []
+    for option in ("--out", "--json-out", "--summary-out", "--output"):
+        values.extend(command_option_values(command, option))
+    return values
+
+
+def evidence_path_from_cli_spec(spec: str) -> str:
+    return spec.split("=", 1)[1] if "=" in spec else spec
+
+
+def evidence_kind_from_cli_spec(spec: str) -> str | None:
+    return spec.split("=", 1)[0] if "=" in spec else None
+
+
+def rendered_external_evidence_values(rendered: dict[str, object]) -> list[str]:
+    external_evidence = rendered.get("external_evidence", {})
+    assert isinstance(external_evidence, dict)
+    values: list[str] = []
+    for value in external_evidence.values():
+        if isinstance(value, str):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(item for item in value if isinstance(item, str))
+    return values
+
+
+def rendered_plan_steps(rendered: dict[str, object]) -> list[dict[str, object]]:
+    steps = rendered.get("steps")
+    assert isinstance(steps, list)
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def rendered_gate_steps(rendered: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        step
+        for step in rendered_plan_steps(rendered)
+        if step.get("label") in {"rollout_evidence_gate", "release_evidence_gate"}
+    ]
+
+
+def expected_rendered_plan_steps(plan: object) -> list[dict[str, object]]:
+    return [
+        {
+            "label": step.label,
+            "artifact": None if step.artifact is None else str(step.artifact),
+            "command": step.command,
+        }
+        for step in plan
+    ]
 
 
 def test_rollout_gate_contract_fixtures_cover_every_checker() -> None:
@@ -712,6 +831,99 @@ def test_rollout_gate_contract_fixtures_cover_every_checker() -> None:
 def test_rollout_runner_contract_fixtures_cover_every_runner() -> None:
     assert RUNNERS
     assert len(runner_names()) == len(set(runner_names()))
+
+
+def test_top_level_sorafs_plan_localized_hashes_match_source() -> None:
+    mismatches: dict[str, str | None] = {}
+    checked_sources = 0
+    checked_localized = 0
+    for source in sorted(DOCS_SOURCE_DIR.glob("sorafs*plan.md")):
+        localized_paths = sorted(DOCS_SOURCE_DIR.glob(f"{source.stem}.*.md"))
+        if not localized_paths:
+            continue
+        checked_sources += 1
+        expected = hashlib.sha256(source.read_bytes()).hexdigest()
+        for path in localized_paths:
+            checked_localized += 1
+            actual = next(
+                (
+                    line.split(":", 1)[1].strip()
+                    for line in read(path).splitlines()
+                    if line.startswith("source_hash:")
+                ),
+                None,
+            )
+            if actual != expected:
+                mismatches[str(path.relative_to(REPO_ROOT))] = actual
+
+    assert checked_sources
+    assert checked_localized
+    assert mismatches == {}
+
+
+def test_rollout_evidence_gates_export_dry_run_field_contracts() -> None:
+    checker_failures: dict[str, list[str]] = {}
+    for path in CHECKERS:
+        module = load_script_module(path, f"{path.stem}_field_contract")
+        fields = getattr(module, "EVIDENCE_REQUIRED_FIELDS", None)
+        if not isinstance(fields, dict):
+            checker_failures[path.name] = ["EVIDENCE_REQUIRED_FIELDS"]
+            continue
+        allowed_kinds = set(getattr(module, "KIND_BY_NAME", {}))
+        required_kinds = set(getattr(module, "DEFAULT_REQUIRED_KINDS", ()))
+        missing = sorted(required_kinds - set(fields))
+        unknown = sorted(set(fields) - allowed_kinds)
+        malformed = sorted(
+            kind
+            for kind, required_fields in fields.items()
+            if not required_field_contract_is_canonical(required_fields)
+        )
+        failures = [
+            *[f"missing:{kind}" for kind in missing],
+            *[f"unknown:{kind}" for kind in unknown],
+            *[f"malformed:{kind}" for kind in malformed],
+        ]
+        if failures:
+            checker_failures[path.name] = failures
+
+    runner_failures = [
+        path.name
+        for path in RUNNERS
+        if "EVIDENCE_REQUIRED_FIELDS" not in read(path)
+        or '"evidence_contract"' not in read(path)
+        or '"required_payload_fields"' not in read(path)
+        or "list(EVIDENCE_REQUIRED_FIELDS" not in read(path)
+    ]
+
+    assert checker_failures == {}
+    assert runner_failures == []
+
+
+def test_rollout_evidence_contracts_disclose_reviewed_deployment_context() -> None:
+    expected_names = environment_validation_checkers() & deployment_id_validation_checkers()
+    required_context_fields = {
+        "deployment_id",
+        "environment",
+        "deployment_context_reviewed",
+    }
+    failures: dict[str, list[str]] = {}
+
+    for path in CHECKERS:
+        if path.name not in expected_names:
+            continue
+        module = load_script_module(path, f"{path.stem}_deployment_contract")
+        contracts = getattr(module, "EVIDENCE_REQUIRED_FIELDS", {})
+        default_required = getattr(module, "DEFAULT_REQUIRED_KINDS", ())
+        missing_for_checker = []
+        for kind in default_required:
+            required_fields = contracts.get(kind, ())
+            missing_fields = sorted(required_context_fields - set(required_fields))
+            if missing_fields:
+                missing_for_checker.append(f"{kind}:{','.join(missing_fields)}")
+        if missing_for_checker:
+            failures[path.name] = missing_for_checker
+
+    assert failures == {}
 
 
 def test_rollout_checkers_accept_reviewed_response_files() -> None:
@@ -875,6 +1087,28 @@ def test_rollout_runners_have_collection_argfile_examples() -> None:
     assert missing == []
 
 
+def test_flag_backed_rollout_collection_examples_cover_default_required_kinds() -> None:
+    missing: dict[str, list[str]] = {}
+    for path in RUNNERS:
+        module = load_script_module(path, f"sorafs_runner_example_flags_{path.stem}")
+        flags_by_kind = getattr(module, "EVIDENCE_FLAGS_BY_KIND", None)
+        if not isinstance(flags_by_kind, dict):
+            continue
+        example = runner_example_candidates(path)[0]
+        assert example.is_file()
+        source = read(example)
+        required_kinds = getattr(module, "DEFAULT_REQUIRED_KINDS", ())
+        missing_flags = [
+            flags_by_kind[kind]
+            for kind in required_kinds
+            if kind in flags_by_kind and flags_by_kind[kind] not in source
+        ]
+        if missing_flags:
+            missing[path.name] = missing_flags
+
+    assert missing == {}
+
+
 def test_rollout_runner_examples_show_dry_run_review() -> None:
     missing: dict[str, str] = {}
     for path in RUNNERS:
@@ -989,21 +1223,699 @@ def test_rollout_runner_examples_parse_with_runner_parsers() -> None:
     assert failures == {}
 
 
-def test_transparency_runner_example_covers_required_source_entry_kinds() -> None:
-    runner = SCRIPTS_DIR / "run_sorafs_transparency_rollout_evidence.py"
-    example = runner_example(runner)
-    assert example is not None
-    source = read(example)
-    required_kinds = transparency_required_source_kinds()
-    missing = sorted(
-        source_kind
-        for source_kind in required_kinds
-        if f"{source_kind}=" not in source
-    )
+def test_rollout_runners_parse_required_kinds_before_validation() -> None:
+    missing_parse: list[str] = []
+    late_parse: list[str] = []
 
-    assert required_kinds
-    assert source.count("--source-entry") >= len(required_kinds)
-    assert missing == []
+    for path in RUNNERS:
+        if "--require-kind" not in read(path):
+            continue
+        if "parse_required_evidence_kinds(" not in function_source(path, "parse_args"):
+            missing_parse.append(path.name)
+        if "parse_required_evidence_kinds(" in function_source(path, "main"):
+            late_parse.append(path.name)
+
+    assert missing_parse == []
+    assert late_parse == []
+
+
+def test_rollout_runner_example_dry_run_contracts_match_checker_fields() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_dry_run_contract_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        try:
+            rendered = render_runner_plan_json(module, plan, args)
+        except AssertionError as error:
+            failures[path.name] = [str(error)]
+            continue
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+
+        expected_kinds = list(
+            getattr(
+                args,
+                "required_kinds",
+                getattr(module, "DEFAULT_REQUIRED_KINDS", ()),
+            )
+        )
+        contract = rendered.get("evidence_contract")
+        if not isinstance(contract, dict):
+            failures[path.name] = ["evidence_contract shape"]
+            continue
+
+        runner_failures: list[str] = []
+        if rendered.get("required_kinds", expected_kinds) != expected_kinds:
+            runner_failures.append("required_kinds")
+        if sorted(contract) != sorted(expected_kinds):
+            runner_failures.append("evidence_contract keys")
+        for kind in expected_kinds:
+            entry = contract.get(kind)
+            if not isinstance(entry, dict):
+                runner_failures.append(f"{kind}:contract entry")
+                continue
+            expected_schema = module.KIND_BY_NAME[kind].schema
+            expected_fields = list(module.EVIDENCE_REQUIRED_FIELDS[kind])
+            if entry.get("schema") != expected_schema:
+                runner_failures.append(f"{kind}:schema")
+            if entry.get("required_payload_fields") != expected_fields:
+                runner_failures.append(f"{kind}:required_payload_fields")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_evidence_contract_schemas_are_canonical() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_contract_schema_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        contract = rendered.get("evidence_contract")
+        if not isinstance(contract, dict):
+            failures[path.name] = ["evidence_contract shape"]
+            continue
+        runner_failures: list[str] = []
+        for kind, entry in contract.items():
+            if not isinstance(kind, str) or not isinstance(entry, dict):
+                runner_failures.append(f"{kind!r}:contract entry")
+                continue
+            schema = entry.get("schema")
+            if (
+                not isinstance(schema, str)
+                or not schema.startswith("sorafs.")
+                or not schema.endswith(".v1")
+            ):
+                runner_failures.append(f"{kind}:schema:{schema!r}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_plan_schema_matches_checker_summary() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_plan_schema_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        runner_failures: list[str] = []
+        plan_schema = rendered.get("schema")
+        if not isinstance(plan_schema, str) or not plan_schema.startswith("sorafs."):
+            runner_failures.append("schema prefix")
+        if not isinstance(plan_schema, str) or not plan_schema.endswith(
+            (
+                ".rollout_evidence_collection_plan.v1",
+                ".release_evidence_collection_plan.v1",
+            )
+        ):
+            runner_failures.append("schema suffix")
+        if rendered.get("verifier_summary_schema") != module.SUMMARY_SCHEMA:
+            runner_failures.append("verifier_summary_schema")
+        if len(rendered_gate_steps(rendered)) != 1:
+            runner_failures.append("gate step")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_plan_uses_reviewed_top_level_keys() -> None:
+    allowed_keys = {
+        "schema",
+        "verifier_summary_schema",
+        "required_kinds",
+        "thresholds",
+        "external_evidence",
+        "deployment_context",
+        "evidence_contract",
+        "steps",
+    }
+    required_keys = {
+        "schema",
+        "verifier_summary_schema",
+        "evidence_contract",
+        "steps",
+    }
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_plan_keys_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        runner_failures = [
+            f"unexpected:{key}"
+            for key in sorted(set(rendered) - allowed_keys)
+        ]
+        missing = sorted(required_keys - set(rendered))
+        runner_failures.extend(f"missing:{key}" for key in missing)
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_deployment_context_matches_args() -> None:
+    failures: dict[str, list[str]] = {}
+    checked: list[str] = []
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_deployment_context_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        context = rendered.get("deployment_context")
+        if context is None:
+            continue
+        checked.append(path.name)
+        runner_failures: list[str] = []
+        if not isinstance(context, dict):
+            runner_failures.append("deployment_context shape")
+        elif not hasattr(args, "deployment_id") or not hasattr(args, "environment"):
+            runner_failures.append("deployment args")
+        else:
+            expected_context = {
+                "deployment_id": args.deployment_id,
+                "environment": args.environment.lower(),
+                "deployment_context_reviewed": True,
+            }
+            if context != expected_context:
+                runner_failures.append(f"deployment_context:{context}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert checked
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_steps_match_built_command_plan() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_steps_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        if rendered.get("steps") != expected_rendered_plan_steps(plan):
+            failures[path.name] = ["steps"]
+
+    assert failures == {}
+
+
+def test_rollout_runner_verifier_gate_is_final_step() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_final_gate_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        steps = rendered_plan_steps(rendered)
+        gate_indices = [
+            index
+            for index, step in enumerate(steps)
+            if step.get("label") in {"rollout_evidence_gate", "release_evidence_gate"}
+        ]
+        if gate_indices != [len(steps) - 1]:
+            failures[path.name] = [f"gate_indices:{gate_indices}"]
+
+    assert failures == {}
+
+
+def test_rollout_runner_verifier_summary_artifact_matches_gate_output() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_gate_summary_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        gate_steps = rendered_gate_steps(rendered)
+        runner_failures: list[str] = []
+        if len(gate_steps) != 1:
+            runner_failures.append("gate step")
+        else:
+            gate_step = gate_steps[0]
+            artifact = gate_step.get("artifact")
+            summary_outputs = command_option_values(gate_step.get("command"), "--summary-out")
+            if not isinstance(artifact, str):
+                runner_failures.append("gate artifact")
+            elif summary_outputs != [artifact]:
+                runner_failures.append(f"--summary-out:{summary_outputs}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_verifier_gate_uses_configured_checker() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_gate_checker_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        gate_steps = rendered_gate_steps(rendered)
+        runner_failures: list[str] = []
+        if len(gate_steps) != 1:
+            runner_failures.append("gate step")
+        else:
+            command = gate_steps[0].get("command")
+            expected_prefix = [sys.executable, str(args.verifier)]
+            if not isinstance(command, list):
+                runner_failures.append("gate command")
+            elif command[:2] != expected_prefix:
+                runner_failures.append(f"verifier prefix:{command[:2]}")
+            elif command.count(str(args.verifier)) != 1:
+                runner_failures.append("verifier path count")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_thresholds_match_gate_command() -> None:
+    failures: dict[str, list[str]] = {}
+    checked: list[str] = []
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_gate_thresholds_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        thresholds = rendered.get("thresholds")
+        if thresholds is None:
+            continue
+        checked.append(path.name)
+        runner_failures: list[str] = []
+        if not isinstance(thresholds, dict) or not thresholds:
+            runner_failures.append("thresholds shape")
+        gate_steps = rendered_gate_steps(rendered)
+        if len(gate_steps) != 1:
+            runner_failures.append("gate step")
+        elif isinstance(thresholds, dict):
+            command = gate_steps[0].get("command")
+            for name, value in thresholds.items():
+                if not isinstance(name, str) or not name:
+                    runner_failures.append(f"threshold name:{name!r}")
+                    continue
+                option = f"--{name.replace('_', '-')}"
+                values = command_option_values(command, option)
+                if values != [str(value)]:
+                    runner_failures.append(f"{option}:{values}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert checked
+    assert failures == {}
+
+
+def test_rollout_runner_dry_run_commands_match_rendered_evidence_inputs() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_dry_run_command_{path.stem}")
+        if not hasattr(module, "evidence_paths_by_kind"):
+            continue
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        assert isinstance(rendered, dict)
+        expected_external = {
+            kind: [str(evidence_path) for evidence_path in paths]
+            for kind, paths in module.evidence_paths_by_kind(args).items()
+            if paths
+        }
+        expected_evidence_args = [
+            evidence_path
+            for paths in expected_external.values()
+            for evidence_path in paths
+        ]
+        expected_required_kinds = list(getattr(args, "required_kinds", ()))
+        gate_steps = rendered_gate_steps(rendered)
+        runner_failures: list[str] = []
+        if rendered.get("external_evidence") != expected_external:
+            runner_failures.append("external_evidence")
+        if len(gate_steps) != 1:
+            runner_failures.append("gate step")
+        else:
+            command = gate_steps[0].get("command")
+            if command_option_values(command, "--evidence") != expected_evidence_args:
+                runner_failures.append("--evidence")
+            if command_option_values(command, "--require-kind") != expected_required_kinds:
+                runner_failures.append("--require-kind")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_generated_artifacts_are_under_verifier_evidence_dir() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        if "evidence_paths_by_kind" in read(path):
+            continue
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_generated_artifacts_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        assert isinstance(rendered, dict)
+        steps = rendered_plan_steps(rendered)
+        gate_steps = rendered_gate_steps(rendered)
+        runner_failures: list[str] = []
+        if len(gate_steps) != 1:
+            runner_failures.append("gate step")
+        else:
+            evidence_dirs = command_option_values(gate_steps[0].get("command"), "--evidence-dir")
+            if evidence_dirs != [str(args.out_dir)]:
+                runner_failures.append("--evidence-dir")
+        generated_artifacts = [
+            step.get("artifact")
+            for step in steps
+            if step.get("label") not in {"rollout_evidence_gate", "release_evidence_gate"}
+        ]
+        if not generated_artifacts:
+            runner_failures.append("generated artifacts")
+        for artifact in generated_artifacts:
+            if not isinstance(artifact, str):
+                runner_failures.append("artifact shape")
+                continue
+            artifact_path = Path(artifact)
+            if artifact_path.parent != args.out_dir:
+                runner_failures.append(f"artifact corridor:{artifact_path}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_rollout_runner_explicit_evidence_args_are_visible_in_dry_run_plan() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_explicit_evidence_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        assert isinstance(rendered, dict)
+        external_values = rendered_external_evidence_values(rendered)
+        missing: list[str] = []
+        for gate_step in rendered_gate_steps(rendered):
+            for spec in command_option_values(gate_step.get("command"), "--evidence"):
+                evidence_path = evidence_path_from_cli_spec(spec)
+                if evidence_path not in external_values:
+                    missing.append(evidence_path)
+        if missing:
+            failures[path.name] = sorted(missing)
+
+    assert failures == {}
+
+
+def test_rollout_runner_external_evidence_is_distinct_from_outputs() -> None:
+    failures: dict[str, list[str]] = {}
+    checked: list[str] = []
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_external_output_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        external_evidence = rendered.get("external_evidence")
+        if external_evidence is None:
+            continue
+        checked.append(path.name)
+        runner_failures: list[str] = []
+        external_paths: list[str] = []
+        if not isinstance(external_evidence, dict):
+            runner_failures.append("external_evidence shape")
+        else:
+            for key, value in external_evidence.items():
+                if not isinstance(key, str) or not key:
+                    runner_failures.append(f"external key:{key!r}")
+                    continue
+                if isinstance(value, str):
+                    if value:
+                        external_paths.append(value)
+                    else:
+                        runner_failures.append(f"{key}:empty path")
+                elif isinstance(value, list) and value:
+                    for item in value:
+                        if isinstance(item, str) and item:
+                            external_paths.append(item)
+                        else:
+                            runner_failures.append(f"{key}:malformed path")
+                else:
+                    runner_failures.append(f"{key}:evidence shape")
+
+        duplicate_paths = sorted(
+            path_value
+            for path_value in set(external_paths)
+            if external_paths.count(path_value) > 1
+        )
+        if duplicate_paths:
+            runner_failures.append(f"duplicate external evidence:{duplicate_paths}")
+
+        artifacts = {
+            artifact
+            for step in rendered_plan_steps(rendered)
+            if isinstance((artifact := step.get("artifact")), str)
+        }
+        overlaps = sorted(set(external_paths) & artifacts)
+        if overlaps:
+            runner_failures.append(f"external/output overlap:{overlaps}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert checked
+    assert failures == {}
+
+
+def test_rollout_runner_external_evidence_keys_have_contract_entries() -> None:
+    failures: dict[str, list[str]] = {}
+    checked: list[str] = []
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_external_contract_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        external_evidence = rendered.get("external_evidence")
+        if external_evidence is None:
+            continue
+        checked.append(path.name)
+        contract = rendered.get("evidence_contract")
+        runner_failures: list[str] = []
+        if not isinstance(external_evidence, dict):
+            runner_failures.append("external_evidence shape")
+        if not isinstance(contract, dict):
+            runner_failures.append("evidence_contract shape")
+        if isinstance(external_evidence, dict) and isinstance(contract, dict):
+            malformed_keys = [
+                key
+                for key in external_evidence
+                if not isinstance(key, str) or not key
+            ]
+            missing_contracts = [
+                key
+                for key in external_evidence
+                if isinstance(key, str) and key and key not in contract
+            ]
+            runner_failures.extend(f"malformed:{key!r}" for key in malformed_keys)
+            runner_failures.extend(f"missing:{key}" for key in sorted(missing_contracts))
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert checked
+    assert failures == {}
+
+
+def test_rollout_runner_typed_evidence_specs_match_external_evidence_keys() -> None:
+    failures: dict[str, list[str]] = {}
+    checked: list[str] = []
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_typed_evidence_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+        typed_specs = [
+            spec
+            for gate_step in rendered_gate_steps(rendered)
+            for spec in command_option_values(gate_step.get("command"), "--evidence")
+            if evidence_kind_from_cli_spec(spec) is not None
+        ]
+        if not typed_specs:
+            continue
+        checked.append(path.name)
+        external_evidence = rendered.get("external_evidence")
+        contract = rendered.get("evidence_contract")
+        runner_failures: list[str] = []
+        if not isinstance(external_evidence, dict):
+            runner_failures.append("external_evidence shape")
+        if not isinstance(contract, dict):
+            runner_failures.append("evidence_contract shape")
+        if isinstance(external_evidence, dict) and isinstance(contract, dict):
+            for spec in typed_specs:
+                kind = evidence_kind_from_cli_spec(spec)
+                evidence_path = evidence_path_from_cli_spec(spec)
+                if not isinstance(kind, str) or not kind or not evidence_path:
+                    runner_failures.append(f"typed evidence shape:{spec!r}")
+                    continue
+                if kind not in contract:
+                    runner_failures.append(f"{kind}:missing contract")
+                value = external_evidence.get(kind)
+                if isinstance(value, str):
+                    external_paths = [value]
+                elif isinstance(value, list):
+                    external_paths = [
+                        item for item in value if isinstance(item, str)
+                    ]
+                else:
+                    runner_failures.append(f"{kind}:external_evidence")
+                    continue
+                if evidence_path not in external_paths:
+                    runner_failures.append(f"{kind}:missing path:{evidence_path}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert checked
+    assert failures == {}
+
+
+def test_rollout_runner_step_artifacts_match_command_outputs() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_artifact_outputs_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        assert isinstance(rendered, dict)
+        runner_failures: list[str] = []
+        for step in rendered_plan_steps(rendered):
+            label = step.get("label")
+            artifact = step.get("artifact")
+            if artifact is None:
+                continue
+            if not isinstance(artifact, str):
+                runner_failures.append(f"{label}:artifact shape")
+                continue
+            outputs = command_output_values(step.get("command"))
+            if artifact not in outputs:
+                runner_failures.append(f"{label}:{artifact}")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert failures == {}
+
+
+def test_source_entry_runner_examples_cover_required_source_entry_kinds() -> None:
+    missing: dict[str, list[str]] = {}
+    checked: list[str] = []
+    for runner in RUNNERS:
+        source = read(runner)
+        if "--source-entry" not in source:
+            continue
+        module = load_script_module(runner, f"sorafs_source_entry_runner_{runner.stem}")
+        required_kinds = required_source_entry_kinds(module)
+        if not required_kinds:
+            continue
+        example = runner_example(runner)
+        assert example is not None
+        example_source = read(example)
+        checked.append(runner.name)
+        missing_kinds = sorted(
+            source_kind
+            for source_kind in required_kinds
+            if f"{source_kind}=" not in example_source
+        )
+        if missing_kinds:
+            missing[runner.name] = missing_kinds
+        assert example_source.count("--source-entry") >= len(required_kinds)
+
+    assert checked
+    assert missing == {}
 
 
 def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
@@ -1082,6 +1994,7 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "load_evidence_json_with_sha256" in checker
     assert "read_evidence_bytes" in checker
     assert "EvidenceFileTooLargeError" in checker
+    assert "validate_evidence_parent_chain" in checker
     assert 'str(error) == f"evidence file exceeds' not in checker
     assert "manifest is not valid bounded JSON object: {_error_label(error)}" not in checker
     assert "is not a valid bounded JSON object: \"\n            f\"{_error_label(error)}" not in checker
@@ -1097,6 +2010,17 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
         in checker_test
     )
     assert "test_read_file_bytes_uses_typed_oversize_error" in checker_test
+    assert "scan_generated_fixture_files" in checker
+    assert "path.is_symlink()" in checker
+    assert "test_full_mode_rejects_symlinked_generated_fixture_root" in checker_test
+    assert (
+        "test_full_mode_rejects_generated_fixture_root_parent_symlink"
+        in checker_test
+    )
+    assert (
+        "test_full_mode_rejects_symlinked_generated_fixture_inventory_entry"
+        in checker_test
+    )
     assert (
         "test_load_manifest_sanitizes_noncanonical_path_decode_error"
         in checker_test
@@ -1315,6 +2239,7 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
     assert "def _reserved_output_path_sequence" in helper
     assert "reserved_output_paths" in helper
     assert 'label="reserved output"' in helper
+    assert 'label="reserved output path"' in helper
     assert "paths must be a sequence" in helper
     assert "reserved output path" in helper
     assert "duplicate reserved output path" in helper
@@ -1498,10 +2423,334 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
 
     assert "path_diagnostic_label" in runner
     assert "error_diagnostic_label(error, path_label=path_label)" in runner
+    assert "def deployment_context_write_open_flags" in runner
+    assert "validate_runner_input_parent_chain" in runner
+    assert "os.open(path, deployment_context_write_open_flags())" in runner
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" in runner
+    assert "path.write_text(render_runner_plan(payload)" not in runner
     assert "failed to read generated evidence artifact `{path}`: {error}" not in runner
     assert "failed to write deployment context into `{path}`: {error}" not in runner
     assert "test_generated_artifact_read_error_is_sanitized" in runner_test
+    assert "test_deployment_context_write_uses_no_follow_descriptor_open" in runner_test
     assert "test_deployment_context_write_error_is_sanitized" in runner_test
+    assert "test_deployment_context_write_rejects_symlink_swap_before_open" in runner_test
+    assert (
+        "test_deployment_context_write_rejects_parent_symlink_swap_before_open"
+        in runner_test
+    )
+
+
+def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> None:
+    packager = read(SCRIPTS_DIR / "package_sorafs_validate_release.sh")
+    packager_test = read(
+        SCRIPTS_DIR / "tests" / "package_sorafs_validate_release_test.py"
+    )
+
+    assert "def validate_archive_path" in packager
+    assert "def scan_stage_entries" in packager
+    assert "def read_open_flags" in packager
+    assert "def write_open_flags" in packager
+    assert "def write_manifest_no_follow" in packager
+    assert "O_NOFOLLOW" in packager
+    assert "path.lstat()" in packager
+    assert "os.open(path, read_open_flags())" in packager
+    assert "os.open(path, write_open_flags(), 0o666)" in packager
+    assert "os.fstat(fd)" in packager
+    assert "write_manifest_no_follow(manifest_path, manifest)" in packager
+    assert "validate_archive_path(archive_path, \"release package archive\")" in packager
+    assert "os.open(archive_path, write_open_flags(), 0o666)" in packager
+    assert "path.open(\"rb\")" not in packager
+    assert "archive_path.open(\"wb\")" not in packager
+    assert "with open(sys.argv[1]" not in packager
+    assert "root.rglob(\"*\")" in packager
+    assert "for path in scan_stage_entries(stage_dir)" in packager
+    assert "test_release_packager_accepts_regular_staged_files" in packager_test
+    assert "test_release_packager_rejects_symlinked_staged_entries" in packager_test
+    assert (
+        "test_release_packager_rejects_symlinked_output_parent_before_archive"
+        in packager_test
+    )
+
+
+def test_sorafs_orchestrator_fixture_builder_uses_no_follow_io() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_orchestrator_fixture.py")
+    builder_test = read(SCRIPTS_DIR / "tests" / "build_sorafs_orchestrator_fixture_test.py")
+
+    assert "def validate_fixture_path" in builder
+    assert "def ensure_fixture_directory" in builder
+    assert "def read_open_flags" in builder
+    assert "def write_open_flags" in builder
+    assert "def fixture_file_size" in builder
+    assert "os.open(plan_path, read_open_flags())" in builder
+    assert "os.open(path, write_open_flags(), 0o666)" in builder
+    assert "os.fstat(fd).st_size" in builder
+    assert "plan_path.open(" not in builder
+    assert "path.open(\"w\"" not in builder
+    assert "stat().st_size" not in builder
+    assert "test_load_chunker_fixture_rejects_symlink_before_open" in builder_test
+    assert "test_write_json_uses_no_follow_descriptor_open" in builder_test
+    assert "test_ensure_fixture_directory_rejects_symlink_before_create" in builder_test
+    assert "test_fixture_file_size_uses_no_follow_descriptor_fstat" in builder_test
+
+
+def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
+    replay = read(SCRIPTS_DIR / "android_codegen_replay_sorafs_fixture.py")
+    replay_test = read(
+        SCRIPTS_DIR / "tests" / "android_codegen_replay_sorafs_fixture_test.py"
+    )
+
+    assert "def validate_codegen_path" in replay
+    assert "def ensure_codegen_directory" in replay
+    assert "def require_codegen_file" in replay
+    assert "def read_open_flags" in replay
+    assert "def write_open_flags" in replay
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in replay
+    assert "os.open(path, read_open_flags())" in replay
+    assert "os.open(path, write_open_flags(), 0o666)" in replay
+    assert "payload_path = require_codegen_file(" in replay
+    assert "plan_path = require_codegen_file(" in replay
+    assert 'path.open("r"' not in replay
+    assert 'path.open("w"' not in replay
+    assert "test_load_json_uses_no_follow_descriptor_open" in replay_test
+    assert "test_load_json_rejects_symlink_before_open" in replay_test
+    assert "test_write_json_uses_no_follow_descriptor_open" in replay_test
+    assert "test_write_json_rejects_symlinked_parent_before_create" in replay_test
+    assert "test_require_codegen_file_rejects_symlink_before_subprocess" in replay_test
+
+
+def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
+    adoption = read(REPO_ROOT / "ci" / "check_sorafs_orchestrator_adoption.sh")
+
+    assert "def read_open_flags() -> int" in adoption
+    assert "def write_open_flags() -> int" in adoption
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in adoption
+    assert "path.lstat()" in adoption
+    assert "stat.S_ISREG(path_stat.st_mode)" in adoption
+    assert "os.open(path, read_open_flags())" in adoption
+    assert "os.fstat(fd).st_size" in adoption
+    assert "os.open(path, write_open_flags(), 0o666)" in adoption
+    assert "def validate_adoption_path" in adoption
+    assert "def ensure_adoption_directory" in adoption
+    assert "def require_adoption_file" in adoption
+    assert "write_adoption_text(config_path" in adoption
+    assert "write_adoption_json(note_path" in adoption
+    assert 'require_nonempty_file "${CONFIG_PATH}" "fixture config"' in adoption
+    assert 'path.open("r"' not in adoption
+    assert 'config_path.open("w"' not in adoption
+    assert "note_path.write_text" not in adoption
+
+
+def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
+    sdk_gate = read(REPO_ROOT / "ci" / "sdk_sorafs_orchestrator.sh")
+
+    assert "def read_open_flags() -> int" in sdk_gate
+    assert "def write_open_flags() -> int" in sdk_gate
+    assert "def append_open_flags() -> int" in sdk_gate
+    assert "def validate_sdk_path" in sdk_gate
+    assert "def ensure_sdk_directory" in sdk_gate
+    assert "def require_sdk_file" in sdk_gate
+    assert "def read_text_artifact" in sdk_gate
+    assert "def write_text_artifact" in sdk_gate
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in sdk_gate
+    assert "stat.S_ISREG(path_stat.st_mode)" in sdk_gate
+    assert "os.open(source, read_open_flags())" in sdk_gate
+    assert "os.open(target, write_open_flags(), 0o666)" in sdk_gate
+    assert "os.open(path, read_open_flags())" in sdk_gate
+    assert "os.open(path, write_open_flags(), 0o666)" in sdk_gate
+    assert "os.open(path, append_open_flags(), 0o666)" in sdk_gate
+    assert "os.write(fd" in sdk_gate
+    assert "write_text_artifact(\n    summary_path" in sdk_gate
+    assert "write_text_artifact(\n    matrix_path" in sdk_gate
+    assert "with open(" not in sdk_gate
+    assert ".write_text(" not in sdk_gate
+    assert ".read_text(" not in sdk_gate
+    assert 'cp "${source_file}" "${target_file}"' not in sdk_gate
+    assert '>>"${RESULTS_TSV}"' not in sdk_gate
+    assert ': >"${RESULTS_TSV}"' not in sdk_gate
+
+
+def test_sorafs_gateway_denylist_gate_uses_no_follow_io() -> None:
+    denylist_gate = read(REPO_ROOT / "ci" / "check_sorafs_gateway_denylist.sh")
+
+    assert "copy_file_no_follow()" in denylist_gate
+    assert "require_nonempty_file()" in denylist_gate
+    assert "first_bundle_json()" in denylist_gate
+    assert "def read_open_flags() -> int" in denylist_gate
+    assert "def write_open_flags() -> int" in denylist_gate
+    assert "def validate_path" in denylist_gate
+    assert "def require_regular_file" in denylist_gate
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in denylist_gate
+    assert "path.lstat()" in denylist_gate
+    assert "stat.S_ISREG(path_stat.st_mode)" in denylist_gate
+    assert "os.open(source, read_open_flags())" in denylist_gate
+    assert "os.open(target, write_open_flags(), 0o666)" in denylist_gate
+    assert "os.open(path, read_open_flags())" in denylist_gate
+    assert "os.open(path, write_open_flags(), 0o666)" in denylist_gate
+    assert "os.fstat(fd).st_size" in denylist_gate
+    assert 'copy_file_no_follow "${SAMPLE_JSON}" "${new_json}"' in denylist_gate
+    assert 'copy_file_no_follow "${evidence_json}" "${evidence_copy_path}"' in denylist_gate
+    assert 'old_bundle="$(first_bundle_json "${old_out}" "old denylist")"' in denylist_gate
+    assert 'new_bundle="$(first_bundle_json "${new_out}" "new denylist")"' in denylist_gate
+    assert "require_nonempty_file \"${diff_report}\" \"diff report\"" in denylist_gate
+    assert "with open(" not in denylist_gate
+    assert "json.load(open(" not in denylist_gate
+    assert 'cp "${SAMPLE_JSON}" "${new_json}"' not in denylist_gate
+    assert 'cp "${evidence_json}" "${evidence_copy_path}"' not in denylist_gate
+    assert '[[ ! -s "${diff_report}" ]]' not in denylist_gate
+    assert 'ls "${old_out}"/*.json | head -n1' not in denylist_gate
+
+
+def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
+    header_gate = read(REPO_ROOT / "ci" / "check_sorafs_reference_ffi_header.sh")
+
+    assert "def read_open_flags() -> int" in header_gate
+    assert "def write_open_flags() -> int" in header_gate
+    assert "def read_text_no_follow" in header_gate
+    assert "copy_file_no_follow()" in header_gate
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in header_gate
+    assert "path.lstat()" in header_gate
+    assert "stat.S_ISREG(path_stat.st_mode)" in header_gate
+    assert "os.open(path, read_open_flags())" in header_gate
+    assert "os.fstat(fd)" in header_gate
+    assert "os.open(source, read_open_flags())" in header_gate
+    assert "os.open(target, write_open_flags(), 0o666)" in header_gate
+    assert "copy_file_no_follow \"${RUST_FFI}\"" in header_gate
+    assert "copy_file_no_follow \"${HEADER}\"" in header_gate
+    assert "read_text(" not in header_gate
+    assert 'cp "${RUST_FFI}"' not in header_gate
+    assert 'cp "${HEADER}"' not in header_gate
+
+
+def test_sorafs_fixtures_gate_uses_no_follow_alias_json_reads() -> None:
+    fixtures_gate = read(REPO_ROOT / "ci" / "check_sorafs_fixtures.sh")
+
+    assert "def read_open_flags() -> int" in fixtures_gate
+    assert "def read_json_no_follow" in fixtures_gate
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in fixtures_gate
+    assert "path.lstat()" in fixtures_gate
+    assert "stat.S_ISREG(path_stat.st_mode)" in fixtures_gate
+    assert "os.open(path, read_open_flags())" in fixtures_gate
+    assert "os.fstat(fd)" in fixtures_gate
+    assert "json.load(handle)" in fixtures_gate
+    assert "data = read_json_no_follow(path)" in fixtures_gate
+    assert "path.read_text()" not in fixtures_gate
+    assert "json.loads(path.read_text())" not in fixtures_gate
+
+
+def test_sorafs_pin_register_sdk_guards_use_no_follow_source_reads() -> None:
+    main_guard = read(REPO_ROOT / "ci" / "check_sorafs_pin_register_sdk_guard.sh")
+    swift_guard = read(REPO_ROOT / "ci" / "check_sorafs_pin_register_swift_sdk.sh")
+
+    for guard in (main_guard, swift_guard):
+        assert "def read_open_flags() -> int" in guard
+        assert "def read_text_no_follow" in guard
+        assert 'getattr(os, "O_NOFOLLOW", 0)' in guard
+        assert "path.lstat()" in guard or "full_path.lstat()" in guard
+        assert "stat.S_ISREG(path_stat.st_mode)" in guard
+        assert "os.fstat(fd)" in guard
+        assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in guard
+        assert ".read_text(" not in guard
+
+    assert "if path in text_overrides:" in main_guard
+    assert "return read_text_no_follow(full_path, path)" in main_guard
+    assert "return read_text_no_follow(root / path)" in swift_guard
+
+
+def test_sorafs_docs_portal_package_summary_uses_no_follow_read() -> None:
+    packager = read(REPO_ROOT / "ci" / "package_docs_portal_sorafs.sh")
+
+    assert "def read_open_flags() -> int" in packager
+    assert "def read_summary_lines_no_follow" in packager
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in packager
+    assert "os.path.islink(path)" in packager
+    assert "os.lstat(path)" in packager
+    assert "stat.S_ISREG(path_stat.st_mode)" in packager
+    assert "os.open(path, read_open_flags())" in packager
+    assert "os.fstat(fd)" in packager
+    assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in packager
+    assert "for raw in read_summary_lines_no_follow(summary_path)" in packager
+    assert "with open(summary_path" not in packager
+
+
+def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
+    release_cli = read(SCRIPTS_DIR / "release_sorafs_cli.sh")
+    direct_smoke = read(SCRIPTS_DIR / "sorafs_direct_mode_smoke.sh")
+    gateway_probe = read(SCRIPTS_DIR / "telemetry" / "run_sorafs_gateway_probe.sh")
+
+    for script in (release_cli, direct_smoke, gateway_probe):
+        assert "def read_open_flags() -> int" in script
+        assert 'getattr(os, "O_NOFOLLOW", 0)' in script
+        assert "os.lstat(path)" in script
+        assert "stat.S_ISREG(path_stat.st_mode)" in script
+        assert "os.open(path, read_open_flags())" in script
+        assert "os.fstat(fd)" in script
+        assert "json.load(" in script
+        assert "with open(" not in script
+
+    assert "identity_token_hash_blake3_hex" in release_cli
+    assert "sign summary must not be a symlink" in release_cli
+    assert "policy path must not be a symlink" in direct_smoke
+    assert "probe JSON report must not be a symlink" in gateway_probe
+
+
+def test_sorafs_operator_helpers_do_not_reintroduce_plain_file_io() -> None:
+    roots = (SCRIPTS_DIR, REPO_ROOT / "ci", REPO_ROOT / ".github")
+    allowed_rglob = {
+        SCRIPTS_DIR / "check_sorafs_hedging_fixture_manifest.py",
+        SCRIPTS_DIR / "sorafs_evidence_paths.py",
+        SCRIPTS_DIR / "package_sorafs_validate_release.sh",
+    }
+    allowed_tarfile_open = {SCRIPTS_DIR / "package_sorafs_validate_release.sh"}
+    offenders: list[str] = []
+
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*sorafs*")):
+            if not path.is_file():
+                continue
+            if SCRIPTS_DIR / "tests" in path.parents:
+                continue
+            source = read(path)
+            rel = path.relative_to(REPO_ROOT)
+            for needle in (".read_text(", ".write_text(", "shutil.copy"):
+                if needle in source:
+                    offenders.append(f"{rel}: {needle}")
+            if re.search(r"(?<![\w.])open\s*\(", source):
+                offenders.append(f"{rel}: plain open(")
+            if ".rglob(" in source and path not in allowed_rglob:
+                offenders.append(f"{rel}: unreviewed rglob(")
+            if "tarfile.open(" in source and path not in allowed_tarfile_open:
+                offenders.append(f"{rel}: unreviewed tarfile.open(")
+
+    assert offenders == []
+
+
+def test_sorafs_operator_helpers_use_shared_path_identity_for_resolution() -> None:
+    roots = (SCRIPTS_DIR, REPO_ROOT / "ci", REPO_ROOT / ".github")
+    offenders: list[str] = []
+
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*sorafs*")):
+            if not path.is_file():
+                continue
+            if SCRIPTS_DIR / "tests" in path.parents:
+                continue
+            for line_number, line in enumerate(read(path).splitlines(), start=1):
+                if ".resolve(" not in line and "os.path.realpath(" not in line:
+                    continue
+                stripped = line.strip()
+                bootstrap_resolve = "__file__" in line and ".resolve()" in line
+                shared_helper_resolve = (
+                    path == PATH_IDENTITY_HELPER and stripped == "return path.resolve()"
+                )
+                if not (bootstrap_resolve or shared_helper_resolve):
+                    rel = path.relative_to(REPO_ROOT)
+                    offenders.append(f"{rel}:{line_number}: {stripped}")
+
+    assert offenders == []
 
 
 def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
@@ -1528,7 +2777,17 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "def inspect_runner_path_exists" in helper
     assert "def inspect_runner_path_is_symlink" in helper
     assert "def inspect_runner_path_is_file" in helper
+    assert "def inspect_runner_path_size" in helper
+    assert "def runner_path_size_open_flags" in helper
+    assert "os.open(path, runner_path_size_open_flags())" in helper
+    assert "os.fstat(fd).st_size" in helper
+    assert "path.stat().st_size" not in helper
     assert "def inspect_runner_path_is_dir" in helper
+    assert "path_is_symlink = inspect_runner_path_is_symlink(" in helper
+    assert "def validate_runner_input_parent_chain" in helper
+    assert "validate_runner_input_parent_chain(path, error_list, label=path_label)" in helper
+    assert "validate_runner_input_parent_chain(path, errors, label=path_label)" in helper
+    assert "validate_runner_input_parent_chain(\n                verifier" in helper
     assert "cannot be inspected" in helper
     assert "def _record_path_inspection_failure" in helper
     assert "path_diagnostic_label(" in helper
@@ -1548,6 +2807,10 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert 'resolve_path_identity(path, errors, label="output path")' in helper
     assert "path.resolve()" not in helper
     assert "test_verifier_inspection_failure_fails_preflight" in helper_test
+    assert "test_verifier_symlink_fails_preflight" in helper_test
+    assert "test_verifier_parent_symlink_fails_preflight" in helper_test
+    assert "test_verifier_parent_chain_symlink_fails_preflight" in helper_test
+    assert "test_verifier_symlink_inspection_failure_fails_preflight" in helper_test
     assert "test_out_dir_inspection_failure_fails_preflight" in helper_test
     assert "test_validate_runner_output_dir_rejects_non_path_without_traceback" in helper_test
     assert (
@@ -1557,6 +2820,10 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "test_runner_preflight_sanitizes_malformed_non_path_targets" in helper_test
     assert "test_runner_path_inspectors_sanitize_malformed_path_labels" in helper_test
     assert "test_runner_path_inspectors_sanitize_noncanonical_failures" in helper_test
+    assert "test_runner_path_size_rejects_symlink_before_stat" in helper_test
+    assert "test_runner_path_size_rejects_parent_symlink_before_stat" in helper_test
+    assert "test_runner_path_size_uses_no_follow_descriptor_open" in helper_test
+    assert "test_runner_path_size_open_failure_is_sanitized" in helper_test
     assert (
         "test_runner_path_inspectors_reject_malformed_error_container"
         in helper_test
@@ -1568,6 +2835,10 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "test_runner_path_inspectors_reject_malformed_labels" in helper_test
     assert "test_input_file_rejects_scalar_and_mapping_path_collections" in helper_test
     assert "test_missing_input_file_sanitizes_noncanonical_path" in helper_test
+    assert "test_input_file_symlink_fails" in helper_test
+    assert "test_input_file_parent_symlink_fails" in helper_test
+    assert "test_input_file_parent_chain_symlink_fails" in helper_test
+    assert "test_input_file_symlink_inspection_failure_is_reported" in helper_test
     assert "test_input_file_rejects_malformed_label" in helper_test
     assert "test_input_file_rejects_malformed_seen_identity_map" in helper_test
     assert (
@@ -1575,6 +2846,10 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
         in helper_test
     )
     assert "test_missing_input_directory_sanitizes_noncanonical_path" in helper_test
+    assert "test_input_directory_symlink_fails" in helper_test
+    assert "test_input_directory_parent_symlink_fails" in helper_test
+    assert "test_input_directory_parent_chain_symlink_fails" in helper_test
+    assert "test_input_directory_symlink_inspection_failure_is_reported" in helper_test
     assert "test_input_directory_rejects_malformed_label" in helper_test
     assert (
         "test_input_directory_rejects_malformed_seen_identity_map" in helper_test
@@ -1591,10 +2866,16 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "test_validate_runner_output_dir_rejects_malformed_label" in helper_test
     assert "test_out_dir_symlink_fails_preflight" in helper_test
     assert "test_out_dir_parent_chain_symlink_fails_preflight" in helper_test
+    assert "test_existing_out_dir_parent_chain_symlink_fails_preflight" in helper_test
     assert "test_summary_out_directory_inspection_failure_fails_preflight" in helper_test
     assert "test_summary_out_symlink_fails_preflight" in helper_test
     assert "test_summary_out_parent_symlink_fails_preflight" in helper_test
     assert "test_summary_out_parent_chain_symlink_fails_preflight" in helper_test
+    assert "test_existing_summary_out_parent_symlink_fails_preflight" in helper_test
+    assert (
+        "test_existing_summary_out_parent_chain_symlink_fails_preflight"
+        in helper_test
+    )
     assert "test_summary_out_parent_chain_file_fails_preflight" in helper_test
     assert "test_emit_runner_error_lines_rejects_malformed_messages" in helper_test
     assert (
@@ -1619,14 +2900,41 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
         "test_run_command_plan_rejects_malformed_command_entries_before_output_creation"
         in helper_test
     )
+    assert (
+        "test_validate_command_plan_artifacts_rejects_reserved_output_symlink"
+        in helper_test
+    )
+    assert (
+        "test_validate_command_plan_artifacts_rejects_reserved_output_parent_symlink"
+        in helper_test
+    )
+    assert (
+        "test_validate_command_plan_artifacts_reserved_output_symlink_inspection_failure"
+        in helper_test
+    )
+    assert (
+        "test_validate_command_plan_artifacts_stops_after_reserved_output_symlink"
+        in helper_test
+    )
     assert "test_planned_artifact_symlink_fails" in helper_test
     assert "test_planned_artifact_parent_symlink_fails" in helper_test
     assert "test_planned_artifact_parent_chain_symlink_fails" in helper_test
     assert "test_planned_artifact_existing_file_fails" in helper_test
     assert "test_run_command_plan_rejects_output_dir_symlink_before_launch" in helper_test
+    assert (
+        "test_run_command_plan_rejects_output_dir_symlink_written_by_command"
+        in helper_test
+    )
+    assert (
+        "test_run_command_plan_rejects_output_dir_removed_by_command" in helper_test
+    )
     assert "test_run_command_plan_rejects_artifact_parent_symlink_before_create" in helper_test
     assert (
         "test_run_command_plan_rejects_artifact_parent_chain_symlink_before_create"
+        in helper_test
+    )
+    assert (
+        "test_run_command_plan_rejects_artifact_parent_symlink_written_by_command"
         in helper_test
     )
     assert "test_run_command_plan_rejects_empty_artifact_written_by_command" in helper_test
@@ -1656,11 +2964,13 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     helper_test = read(RESPONSE_ARGS_TEST)
 
     assert "class EvidenceArgumentParser" in helper
+    assert "import os" in helper
     assert "def convert_arg_line_to_args" in helper
     assert "shlex.split(line, comments=True)" in helper
     assert "MAX_RESPONSE_ARGFILE_BYTES" in helper
     assert "MAX_RESPONSE_ARGFILE_DEPTH" in helper
     assert "MAX_EXPANDED_ARGS" in helper
+    assert "RESPONSE_ARGFILE_CHUNK_BYTES" in helper
     assert "def require_expanded_arg_limit" in helper
     assert "require_expanded_arg_limit(expanded)" in helper
     assert "{label} must be a sequence of strings" in helper
@@ -1671,6 +2981,17 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "argument `{value}` must be a string" in helper
     assert "argument must be a non-empty canonical string" in helper
     assert "expanded arguments must be <=" in helper
+    assert "def _response_argfile_open_flags" in helper
+    assert "getattr(os, \"O_NOFOLLOW\", 0)" in helper
+    assert "def _validate_response_argfile_parent_chain" in helper
+    assert "def _read_response_argfile_bytes" in helper
+    assert "path.is_symlink()" in helper
+    assert "@ARGFILE `{path_label}` must not be a symlink" in helper
+    assert "@ARGFILE parent `{parent_label}` must not be a symlink" in helper
+    assert "os.open(path, _response_argfile_open_flags())" in helper
+    assert "os.fstat(fd).st_size" in helper
+    assert "os.fdopen(fd, \"rb\")" in helper
+    assert "os.close(fd)" in helper
     assert "must exist and be a file" in helper
     assert "failed to resolve @ARGFILE" in helper
     assert "failed to stat @ARGFILE" in helper
@@ -1681,12 +3002,17 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "@ARGFILE `{path}` line {line_number}: {error}" not in helper
     assert "error_diagnostic_label(error, path_label=path_label)" in helper
     assert "path_diagnostic_label(path)" in helper
+    assert "path.read_bytes()" not in helper
+    assert "path.stat().st_size" not in helper
     assert "RuntimeError" in helper
     assert '"@ARGFILE `{}` line {}: {}".format(' in helper
     assert "recursive @ARGFILE" in helper
     assert "must be UTF-8" in helper
     assert "test_response_file_stat_failure_is_stable_value_error" in helper_test
     assert "test_response_file_read_failure_is_stable_value_error" in helper_test
+    assert "test_symlink_response_file_fails_before_read" in helper_test
+    assert "test_response_file_parent_symlink_fails_before_read" in helper_test
+    assert "test_response_file_read_uses_no_follow_open_flags" in helper_test
     assert "test_response_file_non_utf8_bytes_fail_stably" in helper_test
     assert "test_response_file_stat_failure_sanitizes_malformed_error" in helper_test
     assert "test_response_file_read_failure_sanitizes_malformed_error" in helper_test
@@ -1910,6 +3236,7 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "error_messages = _checker_error_messages(errors)" in helper
     assert "def emit_checker_notice" in helper
     assert "checker notice message must be a non-empty canonical string" in helper
+    assert "import os" in helper
     assert "def _require_error_list" in helper
     assert "def _require_label" in helper
     assert "checker preflight errors must be a list of strings" in helper
@@ -1943,6 +3270,10 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "failed to render checker summary JSON: {error}" not in helper
     assert "failed to render checker summary JSON: {error_diagnostic_label(error)}" in helper
     assert "def write_checker_summary" in helper
+    assert "def checker_summary_write_open_flags" in helper
+    assert "os.open(summary_out, checker_summary_write_open_flags(), 0o666)" in helper
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" in helper
+    assert "summary_out.write_text" not in helper
     assert "checker summary text must be a string" in helper
     assert "failed to create --summary-out parent" in helper
     assert "failed to write --summary-out" in helper
@@ -2014,6 +3345,7 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
         in helper_test
     )
     assert "test_write_checker_summary_rejects_non_string_text" in helper_test
+    assert "test_write_checker_summary_uses_no_follow_descriptor_open" in helper_test
     assert "test_write_checker_summary_rejects_summary_symlink" in helper_test
     assert (
         "test_write_checker_summary_rejects_parent_chain_symlink_before_create"
@@ -2165,24 +3497,59 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "isinstance(paths, (str, bytes, bytearray, Mapping))" in helper
     assert "both --evidence and --evidence-dir" in helper
     assert "duplicate evidence file" in helper
+    assert "def inspect_evidence_file" in helper
+    assert "def validate_evidence_parent_chain" in helper
+    assert "evidence_label = _require_label(label)" in helper
+    assert "parent_label = f\"{evidence_label} parent\"" in helper
+    assert "evidence file `{_path_label(path)}` must be a path" in helper
+    assert "path.is_symlink()" in helper
+    assert "evidence file `{_path_label(path)}` must not be a symlink" in helper
+    assert "must exist and be a file" in helper
     assert "must exist and be a directory" in helper
     assert "evidence directory `{_path_label(directory)}` must be a path" in helper
+    assert (
+        "evidence directory `{_path_label(directory)}` must not be a symlink"
+        in helper
+    )
     assert "def inspect_evidence_directory" in helper
     assert "def scan_evidence_directory_json" in helper
+    assert "inspect_evidence_directory(directory, error_list)" in helper
     assert "cannot be inspected" in helper
     assert "failed to scan evidence directory" in helper
     assert "reserved_output_paths" in helper
     assert "reserved_output_path_identities" in helper
+    assert "validate_evidence_parent_chain(path, error_list, label=path_label)" in helper
     assert "reserved_error_count = len(error_list)" in helper
     assert "record_reserved_output_evidence_conflicts" in helper
+    assert "inspect_evidence_file(path, error_list)" in helper
     assert "reserved output" in helper
     assert "conflicts with reserved output" in helper
     assert "resolve_path_identity" in helper
     assert "resolve_path_identity(path, errors, label=label)" in helper
     assert "RuntimeError" in path_identity_helper
     assert "evidence_path_identities" in helper
+    assert "if error_list:\n        return identities" in helper
     assert "is_explicit_evidence_path" in helper
+    assert "if identities is None or not identities:" in helper
+    assert "inspect_evidence_file(path, errors)" in helper
     assert "def _evidence_path_identity_set" in helper
+    assert "test_missing_explicit_evidence_file_fails_closed" in helper_test
+    assert "test_explicit_evidence_directory_fails_closed" in helper_test
+    assert "test_explicit_evidence_symlink_fails_closed" in helper_test
+    assert "test_explicit_evidence_parent_symlink_fails_closed" in helper_test
+    assert "test_discovered_json_directory_fails_closed_without_hiding_files" in helper_test
+    assert "test_discovered_json_symlink_fails_closed_without_hiding_files" in helper_test
+    assert "test_noncanonical_evidence_file_labels_are_sanitized" in helper_test
+    assert "test_evidence_file_inspection_failure_fails_closed" in helper_test
+    assert "test_evidence_file_symlink_inspection_failure_fails_closed" in helper_test
+    assert "test_evidence_file_parent_inspection_failure_fails_closed" in helper_test
+    assert "test_discovered_evidence_file_inspection_failure_fails_closed" in helper_test
+    assert "test_evidence_directory_symlink_fails_closed" in helper_test
+    assert "test_evidence_directory_parent_symlink_fails_closed" in helper_test
+    assert (
+        "test_evidence_directory_symlink_inspection_failure_fails_closed"
+        in helper_test
+    )
     assert "test_noncanonical_evidence_directory_labels_are_sanitized" in helper_test
     assert (
         "test_noncanonical_missing_evidence_directory_label_is_sanitized"
@@ -2236,20 +3603,87 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         in helper_test
     )
     assert (
+        "test_discover_evidence_files_stops_after_reserved_output_symlink"
+        in helper_test
+    )
+    assert (
         "test_evidence_path_identities_rejects_malformed_path_collections"
         in helper_test
+    )
+    assert "test_evidence_path_identities_rejects_symlink_identity" in helper_test
+    assert (
+        "test_is_explicit_evidence_path_rejects_symlink_candidate" in helper_test
+    )
+    assert (
+        "test_is_explicit_evidence_path_rejects_parent_symlink_candidate"
+        in helper_test
+    )
+    assert (
+        "test_is_explicit_evidence_path_skips_empty_identity_set_without_resolving"
+        in helper_test
+    )
+    assert (
+        "test_evidence_path_identities_skip_after_discovery_errors" in helper_test
     )
     assert "test_non_path_evidence_directory_fails_closed_without_traceback" in helper_test
     assert "test_evidence_directory_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_directory_scan_failure_fails_closed" in helper_test
+    assert "test_scan_evidence_directory_json_rejects_file_path" in helper_test
+    assert (
+        "test_scan_evidence_directory_json_rejects_symlink_directory" in helper_test
+    )
+    assert (
+        "test_scan_evidence_directory_json_rejects_parent_symlink_directory"
+        in helper_test
+    )
     assert (
         "test_reserved_output_conflict_non_path_directory_fails_closed" in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_evidence_directory_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_explicit_evidence_directory_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_explicit_evidence_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_discovered_json_directory_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_discovered_json_symlink_fails_closed"
+        in helper_test
     )
     assert (
         "test_reserved_output_conflict_scan_inspection_failure_fails_closed"
         in helper_test
     )
     assert "test_reserved_output_conflict_scan_failure_fails_closed" in helper_test
+    assert (
+        "test_reserved_output_conflict_scan_stops_after_reserved_output_parent_symlink"
+        in helper_test
+    )
+    assert "test_reserved_output_path_identities_rejects_symlink" in helper_test
+    assert (
+        "test_reserved_output_path_identities_rejects_parent_symlink" in helper_test
+    )
+    assert (
+        "test_reserved_output_path_identities_symlink_inspection_failure"
+        in helper_test
+    )
     assert "test_evidence_path_resolution_uses_shared_identity_helper" in helper_test
     assert (
         "test_explicit_identity_helper_rejects_malformed_identity_container"
@@ -2292,6 +3726,8 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "evidence JSON errors must be a list of strings" in helper
     assert "evidence JSON errors must contain non-empty canonical strings" in helper
     assert "failed to load evidence JSON" in helper
+    assert "import os" in helper
+    assert "from sorafs_evidence_paths import validate_evidence_parent_chain" in helper
     assert "from sorafs_path_identity import" in helper
     assert "path_diagnostic_label(" in helper
     assert "error_diagnostic_label(" in helper
@@ -2303,6 +3739,16 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "<non-canonical-path>" in path_identity_helper
     assert "<non-canonical-error>" in path_identity_helper
     assert "evidence byte limit must be positive" in helper
+    assert "def validate_evidence_file_for_read" in helper
+    assert "path.is_symlink()" in helper
+    assert "validate_evidence_parent_chain(" in helper
+    assert "path.is_file()" in helper
+    assert "validate_evidence_file_for_read(path)" in helper
+    assert "def evidence_read_open_flags" in helper
+    assert "getattr(os, \"O_NOFOLLOW\", 0)" in helper
+    assert "os.open(path, evidence_read_open_flags())" in helper
+    assert "os.fdopen(fd, \"rb\")" in helper
+    assert "os.close(fd)" in helper
     assert "evidence file exceeds" in helper
     assert "raise EvidenceFileTooLargeError(max_bytes)" in helper
     assert "evidence JSON bytes must be bytes" in helper
@@ -2321,6 +3767,17 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
         in helper_test
     )
     assert "test_read_evidence_bytes_raises_typed_oversize_error" in helper_test
+    assert "test_read_evidence_bytes_rejects_symlink_before_open" in helper_test
+    assert "test_read_evidence_bytes_rejects_directory_before_open" in helper_test
+    assert (
+        "test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink"
+        in helper_test
+    )
+    assert (
+        "test_validate_evidence_file_for_read_records_inspection_failure"
+        in helper_test
+    )
+    assert "test_read_evidence_bytes_uses_no_follow_open_flags" in helper_test
     assert "test_load_evidence_json_rejects_non_path_without_traceback" in helper_test
     assert (
         "test_load_evidence_json_with_sha256_or_record_error_records_non_path"
@@ -5940,6 +7397,1539 @@ def test_sorafs_plan_docs_do_not_reopen_shipped_rollout_gates() -> None:
             stale[str(path.relative_to(REPO_ROOT))] = matches
 
     assert stale == {}
+
+
+def test_pop_credentials_docs_do_not_publish_unshipped_operator_commands() -> None:
+    commands = (
+        "sorafs pop sync",
+        "sorafs pop status",
+        "sorafs pop prove",
+        "sorafs pop revoke",
+    )
+    violations: dict[str, list[str]] = {}
+
+    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs*.md")):
+        lines = read(path).splitlines()
+        for index, line in enumerate(lines):
+            matched = [command for command in commands if command in line]
+            if not matched:
+                continue
+            context = " ".join(lines[max(0, index - 1) : index + 3]).lower()
+            if "do not document" in context and "shipped command" in context:
+                continue
+            violations.setdefault(str(path.relative_to(REPO_ROOT)), []).extend(matched)
+
+    assert violations == {}
+
+
+def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
+    source = read(SORAFS_POP_CREDENTIALS_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "SFM-4b1 now has local PoP credential payload foundations, but it is not shipped as a complete SoraFS proof-of-personhood credential service.",
+        "It does not yet contain the enrollment portal, credential issuer daemon, credential registry service, juror wallet, privacy-preserving ZK membership proof generator, or deployed SoraFS verifier service described by the original plan.",
+        "This checker is a rollout gate; it does not replace the missing runtime services or privacy proof backend.",
+        "Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures and a local issued-credential bundle helper are shipped; service is not shipped.",
+        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Payload schemas and local bundle validation are shipped; service is not shipped.",
+        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local transcript-policy payload verifier, production fail-closed proof verifier, `sorafs-validate pop`, and SDK/bridge reference gate shipped; deployed service and ZK verifier are not shipped.",
+        "Build the issuer and registry services, including key management, revocation updates, commitment-root publication, and audit digests.",
+        "Build juror client storage, revocation sync, proof generation, and local credential rotation.",
+        "Publish operator and juror docs only after the service CLI/API and verifier paths exist.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_pop_credentials_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/pop/enrollment",
+        "/v1/sorafs/pop/enrollment-portal",
+        "/v1/sorafs/pop/issuer",
+        "/v1/sorafs/pop/credential-issuer",
+        "/v1/sorafs/pop/registry",
+        "/v1/sorafs/pop/credential-registry",
+        "/v1/sorafs/pop/juror-client",
+        "/v1/sorafs/pop/juror-wallet",
+        "/v1/sorafs/pop/proof-generator",
+        "/v1/sorafs/pop/verifier",
+        "/v1/sorafs/pop/verifier-service",
+        "/v1/sorafs/pop/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "pop-enrollment",
+        "pop-enrollment-portal",
+        "pop-issuer",
+        "pop-issuer-serve",
+        "pop-registry",
+        "pop-registry-serve",
+        "pop-juror-client",
+        "pop-juror-wallet",
+        "pop-proof-generator",
+        "pop-verifier-service",
+        "pop-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_pop_membership_production_verifier_remains_fail_closed() -> None:
+    source = read(POP_CREDENTIALS_RS)
+    start = source.index("pub fn verify_pop_membership_proof_v1")
+    end = source.index("pub fn verify_pop_membership_transcript_policy_v1", start)
+    production_verifier = source[start:end]
+
+    assert "The production verifier is fail-closed" in source
+    assert "PopMembershipProofSystemV1::TranscriptDigestV1" in production_verifier
+    assert "Err(PopCredentialValidationError::PolicyOnlyProofSystem)" in production_verifier
+    assert "verify_pop_membership_transcript_policy_v1(" not in production_verifier
+    assert "Ok(())" not in production_verifier
+
+
+def test_unshipped_sorafs_operator_commands_stay_warning_only() -> None:
+    commands = (
+        "sorafs pdp challenge",
+        "sorafs pdp fetch",
+        "sorafs pdp respond",
+        "sorafs pdp verify",
+        "sorafs pdp status",
+        "sorafs pdp export",
+        "sorafs moderation jury-accept",
+        "sorafs moderation open-case",
+    )
+    violations: dict[str, list[str]] = {}
+
+    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs*.md")):
+        lines = read(path).splitlines()
+        for index, line in enumerate(lines):
+            matched = [command for command in commands if command in line]
+            if not matched:
+                continue
+            context = " ".join(lines[max(0, index - 12) : index + 6]).lower()
+            warning_context = (
+                "not shipped yet" in context
+                or ("do not document" in context and "shipped" in context)
+                or ("do not document" in context and "operator-ready" in context)
+            )
+            if not warning_context:
+                violations.setdefault(str(path.relative_to(REPO_ROOT)), []).extend(
+                    matched
+                )
+
+    assert violations == {}
+
+
+def test_unshipped_public_routes_stay_warning_only() -> None:
+    route_patterns = (
+        "/v1/transparency/",
+        "/v1/evidence/session",
+        "/v1/evidence/manifest",
+        "/v1/evidence/log",
+        "/v1/evidence/audit",
+    )
+    violations: dict[str, list[str]] = {}
+
+    for path in sorted(DOCS_SOURCE_DIR.rglob("*sorafs*.md")):
+        lines = read(path).splitlines()
+        for index, line in enumerate(lines):
+            matched = [route for route in route_patterns if route in line]
+            if not matched:
+                continue
+            context = " ".join(lines[max(0, index - 2) : index + 3]).lower()
+            transparency_warning = (
+                "/v1/transparency/" in matched
+                and "do not document generic" in context
+                and "shipped until" in context
+            )
+            evidence_warning = (
+                any(route.startswith("/v1/evidence/") for route in matched)
+                and "no production route should claim support" in context
+                and "until the" in context
+            )
+            if not (transparency_warning or evidence_warning):
+                violations.setdefault(str(path.relative_to(REPO_ROOT)), []).extend(
+                    matched
+                )
+
+    assert violations == {}
+
+
+def test_unshipped_public_routes_are_not_exposed_by_torii() -> None:
+    route_patterns = (
+        "/v1/transparency/",
+        "/v1/evidence/session",
+        "/v1/evidence/manifest",
+        "/v1/evidence/log",
+        "/v1/evidence/audit",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_ai_prescreen_deployed_workflow_services_stay_open_in_docs() -> None:
+    source = read(SORAFS_AI_PRESCREEN_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "It does not yet ship captured deployed juror notification transport service rollout evidence, captured deployed commit/reveal executor job rollout evidence, or end-to-end release workflow as runnable services.",
+        "`scripts/check_sorafs_ai_prescreen_rollout_evidence.py` fails closed until the deployed runner, committee, operator workflow, juror notification transport, commit/reveal executor, moderation transparency source entries, Governance DAG binding, and full workflow artifacts are captured.",
+        "requires operator workflow, notification transport, commit/reveal executor, transparency publication, and Governance DAG evidence to carry the same `workflow_digest_hex` as the end-to-end workflow artifact",
+        "Captured deployed juror notification transport service rollout evidence and deployed commit/reveal executor job rollout evidence.",
+        "End-to-end ingest -> quarantine -> appeal -> transparency workflow services and the corresponding live evidence bundle required by `scripts/check_sorafs_ai_prescreen_rollout_evidence.py`.",
+        "These commands and service do not replace deployed juror notification transport or captured live executor job evidence.",
+        "Wire deployed bridge automation to operate juror notification transport jobs, run the shipped notification transport canary against the deployed transport, install/run the generated commit/reveal executor job bundles, run the shipped executor canary against captured payload-free execution summaries, and publish transparency entries",
+        "Update the portal and OpenAPI/operator docs only after the above commands and services exist.",
+        "Remaining rollout work is captured deployed juror notification transport service rollout evidence, captured deployed commit/reveal executor job rollout evidence, and a live bundle that passes the AI pre-screening rollout evidence gate",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_ai_prescreen_deployed_workflow_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/moderation/deployed-runner",
+        "/v1/sorafs/moderation/runner/deployed",
+        "/v1/sorafs/moderation/deployed-committee",
+        "/v1/sorafs/moderation/committee/deployed",
+        "/v1/sorafs/moderation/deployed-juror-notification-transport",
+        "/v1/sorafs/moderation/juror-notification-transport/service",
+        "/v1/sorafs/moderation/deployed-commit-reveal-executor",
+        "/v1/sorafs/moderation/commit-reveal-executor/service",
+        "/v1/sorafs/moderation/end-to-end-workflow",
+        "/v1/sorafs/moderation/release-workflow",
+        "/v1/sorafs/moderation/workflow/promotion",
+        "/v1/sorafs/moderation/ai-prescreen/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "deployed-runner-promote",
+        "deployed-committee-promote",
+        "juror-notification-transport-service",
+        "deployed-juror-notification-transport",
+        "commit-reveal-executor-service",
+        "deployed-commit-reveal-executor",
+        "moderation-release-workflow",
+        "moderation-workflow-service",
+        "moderation-workflow-promote",
+        "ai-prescreen-release-workflow",
+        "ai-prescreen-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
+    source = read(SORAFS_MODERATION_PANEL_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "It does not yet ship the full moderation appeal service, SoraFS juror panel engine, secure evidence viewer, durable voting orchestrator, or portal workflow described in the original plan.",
+        "The production service still needs durable state that binds:",
+        "evidence access attestation",
+        "decision publication and appeal cache updates.",
+        "Do not document `sorafs moderation jury-accept`, `sorafs moderation open-case`, or similar portal commands as shipped until the corresponding service and CLI handlers exist.",
+        "Implement the moderation appeal intake API and persisted case lifecycle state.",
+        "Adapt policy-jury sortition to SoraFS moderation cases, PoP snapshots, juror eligibility, no-show failover, and roster privacy requirements.",
+        "Connect panel outcomes to gateway compliance caches, transparency publication, settlement reconciliation, and reputation scoring.",
+        "Promote local Governance DAG moderation event publication into the durable contract-backed and public IPFS/IPNS decision trail.",
+        "Capture reviewed, payload-free deployed evidence for appeal intake, sortition roster, evidence viewer, operator workflow, juror notification, commit/reveal, decision publication, settlement integration, transparency/reputation handoff, panel metrics, end-to-end panel simulation, and governance approval that passes the SFM-4b rollout evidence gate.",
+        "Use the rollout gate after the deployed moderation appeal service, panel sortition, evidence viewer, operator workflow, juror notification transport, commit/reveal voting path, decision publication, settlement handoff, transparency/reputation handoff, metrics, end-to-end panel simulation, and governance packet have produced reviewed, payload-free JSON evidence",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_moderation_panel_parent_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/moderation/appeals/intake",
+        "/v1/sorafs/moderation/appeals/cases",
+        "/v1/sorafs/moderation/panel/service",
+        "/v1/sorafs/moderation/panel/sortition",
+        "/v1/sorafs/moderation/panel/roster",
+        "/v1/sorafs/moderation/panel/decision",
+        "/v1/sorafs/moderation/panel/promotion",
+        "/v1/sorafs/moderation/portal",
+        "/v1/sorafs/moderation/jury",
+    )
+    unshipped_cli_subcommands = (
+        "open-case",
+        "appeal-intake",
+        "moderation-appeal-service",
+        "panel-service",
+        "panel-sortition",
+        "panel-roster",
+        "panel-decision-publish",
+        "panel-promote",
+        "jury-accept",
+        "juror-panel",
+        "moderation-portal",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_reputation_live_ingest_publisher_services_stay_open_in_docs() -> None:
+    source = read(SORAFS_REPUTATION_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "Remaining rollout work is deploying the live ingest/publisher service and archiving production evidence that passes the rollout evidence gate, not the local scoring, proof, API, CLI, SDK, dashboard, or verifier foundations.",
+        "Metrics ingest pipeline (`reputation_ingest`) | Streams PoR/PDP/PoTR verdicts, settlement logs, disputes, token violations from Governance DAG + telemetry exporters. | Validates payload signatures, persists raw events.",
+        "Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage.",
+        "Snapshot publisher (`reputation_publisher`) | Builds Merkle tree, updates Governance DAG, pushes snapshots to IPFS/S3, broadcasts Torii events. | Weekly full snapshot + daily incremental diff.",
+        "API gateway (`sorafs_reputation_api`) | Exposes REST/GraphQL endpoints, WebSocket updates, CLI hooks. | Deployed regionally; uses caching with ETag.",
+        "Implement ingestion (DAG listeners) and data schema; deploy staging environment drawing from test governance DAG.",
+        "Build scoring engine and snapshot publisher; verify results with synthetic data.",
+        "Production rollout:",
+        "Deploy the live ingest/publisher service against production proof, dispute, settlement, and reserve/rent event sources.",
+        "Capture live run evidence for snapshot freshness, ingest lag, low-score handling, SSE/WebSocket event delivery, and routing/incentive consumption",
+        "Publish governance-approved weights and the first production snapshot with archived `.to`/JSON artifacts and proof replay evidence.",
+        "Exercise rollback/stale-snapshot procedures before routing or incentives rely",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_reputation_live_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/reputation/ingest",
+        "/v1/sorafs/reputation/engine",
+        "/v1/sorafs/reputation/publisher",
+        "/v1/sorafs/reputation/api-gateway",
+        "/v1/sorafs/reputation/public-api",
+        "/v1/sorafs/reputation/graphql",
+        "/v1/sorafs/reputation/storage",
+        "/v1/sorafs/reputation/ipfs",
+        "/v1/sorafs/reputation/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "reputation-ingest",
+        "reputation-engine",
+        "reputation-publisher",
+        "reputation-api-gateway",
+        "reputation-public-api",
+        "reputation-graphql",
+        "reputation-storage",
+        "reputation-ipfs",
+        "reputation-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_cli_sdk_distribution_and_live_governance_stay_open_in_docs() -> None:
+    plan = read(SORAFS_CLI_SDK_PLAN)
+    cli_doc = read(SORAFS_CLI_DOC)
+    normalized_plan = re.sub(r"\s+", " ", plan)
+    normalized_cli_doc = re.sub(r"\s+", " ", cli_doc)
+
+    required_plan_open = (
+        "Use `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`, `scripts/sorafs_gateway_self_cert.sh`, and `cargo xtask sorafs-gateway-attest` for release and self-certification evidence.",
+        "Release signing and manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.",
+        "Runtime secrets such as identity tokens, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
+        "Remaining release work is signed distribution evidence and live deployment capture, not missing local command surfaces.",
+        "Package registries such as Homebrew, npm, crates.io, and Go modules should be populated only from signed release cuts using the existing release scripts and fixture smoke checks.",
+    )
+    required_cli_open = (
+        "Remaining CLI work is release distribution and live-network governance evidence collection:",
+        "Publish signed, reproducible release artefacts for the CLI and document the install path for Homebrew, npm, and crates.io consumers.",
+        "Capture live governance proposal and council-signature runbooks once the production deployment publishes its operator signing process.",
+    )
+    missing_plan = [
+        phrase for phrase in required_plan_open if phrase not in normalized_plan
+    ]
+    missing_cli = [
+        phrase for phrase in required_cli_open if phrase not in normalized_cli_doc
+    ]
+
+    assert missing_plan == []
+    assert missing_cli == []
+
+
+def test_unshipped_cli_sdk_distribution_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/cli/releases",
+        "/v1/sorafs/cli/distribution",
+        "/v1/sorafs/cli/live-governance",
+        "/v1/sorafs/cli/governance-runbooks",
+        "/v1/sorafs/sdk/distribution",
+        "/v1/sorafs/sdk/registries",
+        "/v1/sorafs/sdk/live-deployment",
+        "/v1/sorafs/release/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "release-distribute",
+        "release-publish",
+        "distribution-publish",
+        "homebrew-publish",
+        "npm-publish",
+        "crates-publish",
+        "go-module-publish",
+        "sdk-distribute",
+        "live-governance-capture",
+        "governance-runbook-capture",
+        "release-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
+    scheduler = read(SORAFS_POR_PLAN)
+    validator = read(SORAFS_POR_VALIDATOR_PLAN)
+    normalized_scheduler = re.sub(r"\s+", " ", scheduler)
+    normalized_validator = re.sub(r"\s+", " ", validator)
+
+    required_scheduler_open = (
+        "Remaining SF-9a rollout work is live deployment evidence for external drand, VRF, and auditor feeds, plus any production governance archive handoff required by the operator.",
+        "The local SF-9 runtime integration is implemented. Remaining rollout work is live deployment evidence for external drand/VRF/auditor feeds and any production governance archive handoff required by the deployment operator.",
+        "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
+        "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
+        "Archive a live drand/VRF/auditor run showing deterministic challenge generation and verdict replay that passes the SF-9 rollout evidence gate",
+        "Decide whether each deployment needs the SQL/Parquet warehouse layer in addition to the node-local Norito snapshot.",
+        "Capture governance DAG archive handoff evidence for production operators and include it in the SF-9 reporting/archive evidence packet.",
+    )
+    required_validator_open = (
+        "Remaining SF-9b work is live auditor rollout evidence, production archive handoff, and any richer proof-bundle inspection commands required by operators.",
+        "The SF-9 validator/reporting release claim is tied to the same fail-closed gate used by the scheduler plan:",
+        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, and the explicit `retired` decision for the manual-trigger server route.",
+        "Include the manual-trigger route retirement decision in the SF-9 gate evidence.",
+        "Add proof-bundle fetch/show/offline replay commands if operators need them beyond `sorafs-validate por`.",
+        "Archive live auditor, drand, VRF, report, and export evidence before treating SF-9 as fully released, and require that evidence to pass the SF-9 gate.",
+    )
+    missing_scheduler = [
+        phrase
+        for phrase in required_scheduler_open
+        if phrase not in normalized_scheduler
+    ]
+    missing_validator = [
+        phrase for phrase in required_validator_open if phrase not in normalized_validator
+    ]
+
+    assert missing_scheduler == []
+    assert missing_validator == []
+
+
+def test_unshipped_por_live_deployment_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/por/live-deployment",
+        "/v1/sorafs/por/external-drand",
+        "/v1/sorafs/por/drand-feed",
+        "/v1/sorafs/por/vrf-feed",
+        "/v1/sorafs/por/auditor-feed",
+        "/v1/sorafs/por/auditor-live",
+        "/v1/sorafs/por/production-archive",
+        "/v1/sorafs/por/archive-handoff",
+        "/v1/sorafs/por/sql-warehouse",
+        "/v1/sorafs/por/parquet-warehouse",
+        "/v1/sorafs/por/proof-bundle",
+        "/v1/sorafs/por/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "por-live-deployment",
+        "por-external-drand",
+        "por-drand-feed",
+        "por-vrf-feed",
+        "por-auditor-feed",
+        "por-live-auditor",
+        "por-production-archive",
+        "por-archive-handoff",
+        "por-sql-warehouse",
+        "por-parquet-warehouse",
+        "por-proof-bundle",
+        "por-proof-bundle-fetch",
+        "por-proof-bundle-show",
+        "por-proof-bundle-replay",
+        "por-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_POTR_PLAN)
+    normalized = re.sub(r"\s+", " ", source.replace("> ", ""))
+
+    required_open = (
+        "SF-14 work is live multi-provider rollout evidence and PQ provider-signature key distribution, not local receipt capture, validation, or replay wiring.",
+        "Operators should keep SF-14 promotion fail-closed until payload-free deployment evidence passes the checked-in gate:",
+        "The checker recognizes `sorafs.potr.*` SF-14 rollout schemas for multi-provider probes, receipt validation, proof-stream replay, reputation integration, observability, and governance approval.",
+        "missing governed ML-DSA provider key evidence, non-Norito proof-stream routes, missing proof-stream filters, missing reputation-weight governance",
+        "The collection planner exposes those exact required payload fields through `--dry-run` before contacting live PoTR services.",
+        "Future updates should track live rollout evidence, governed provider PQ keys, and reputation-weight changes that pass the SF-14 gate",
+        "proof-stream, reputation, observability, and governance artifacts bound to the same multi-provider probe receipt summary digest rather than reintroducing draft local wiring tasks.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/potr/live-probes",
+        "/v1/sorafs/potr/multi-provider-probes",
+        "/v1/sorafs/potr/live-rollout",
+        "/v1/sorafs/potr/provider-key-distribution",
+        "/v1/sorafs/potr/ml-dsa-keys",
+        "/v1/sorafs/potr/pq-provider-keys",
+        "/v1/sorafs/potr/reputation-weights",
+        "/v1/sorafs/potr/governance-approval",
+        "/v1/sorafs/potr/promotion",
+        "/v1/sorafs/proof/potr/promotion",
+        "/v1/sorafs/proof/stream/potr/live",
+    )
+    unshipped_cli_subcommands = (
+        "potr-live-probes",
+        "potr-multi-provider-probes",
+        "potr-live-rollout",
+        "potr-provider-key-distribution",
+        "potr-ml-dsa-keys",
+        "potr-pq-provider-keys",
+        "potr-reputation-weights",
+        "potr-governance-approval",
+        "potr-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_repair_live_operator_evidence_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_REPAIR_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "Remaining SF-8b work is live operator evidence: archive a production PoR/PoTR failure, repair, escalation, and governance handoff once the deployed auditor roster and SF-9 coordinator publish their runbooks.",
+        "Use the rollout gate after the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, repair event streams, governance handoff, observability, and governance packet have produced reviewed, payload-free JSON evidence:",
+        "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
+        "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
+        "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
+        "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
+        "Remaining rollout work is live operator evidence: collect production PoR failure, repair, and governance handoff artifacts once the deployed auditor roster and SF-9 coordinator publish their runbooks, then pass the SF-8b rollout evidence gate.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_repair_live_operator_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/repair/live-operator-evidence",
+        "/v1/sorafs/repair/deployed-auditor-roster",
+        "/v1/sorafs/repair/auditor-roster-live",
+        "/v1/sorafs/repair/sf9-coordinator-runbook",
+        "/v1/sorafs/repair/por-potr-failure-capture",
+        "/v1/sorafs/repair/live-failure-capture",
+        "/v1/sorafs/repair/live-governance-handoff",
+        "/v1/sorafs/repair/production-handoff",
+        "/v1/sorafs/repair/promotion",
+        "/v1/sorafs/audit/repair/deployed-roster",
+        "/v1/sorafs/audit/repair/live-coordinator",
+        "/v1/sorafs/audit/repair/production-handoff",
+        "/v1/sorafs/audit/repair/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "repair-live-operator-evidence",
+        "repair-deployed-auditor-roster",
+        "repair-auditor-roster-live",
+        "repair-sf9-coordinator-runbook",
+        "repair-por-potr-failure-capture",
+        "repair-live-failure-capture",
+        "repair-live-governance-handoff",
+        "repair-production-handoff",
+        "repair-promote",
+        "repair-promotion",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_REFERENCE_SDK_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "Remaining SF-11 work is release evidence and SDK distribution: per-target published archives, signed release manifests, published downstream binding packages, and live operator smoke records.",
+        "Remaining downstream work is signed release packaging, publication, and live SDK smoke evidence for those bindings.",
+        "Cross-target release evidence is still a production gate; archive published checksums and smoke outputs for each supported release target and require the SF-11 release evidence gate to pass before declaring those artifacts production-ready.",
+        "Final release-specific URLs, signatures, and package versions remain SF-11 release evidence.",
+        "Operators should keep SF-11 release promotion fail-closed until payload-free release evidence passes the checked-in gate:",
+        "The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for release archives, signed manifests, downstream bindings, cookbook smoke, FFI/header contract, and governance approval.",
+        "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
+        "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
+        "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers",
+        "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/reference-sdk/release-archives",
+        "/v1/sorafs/reference-sdk/signed-manifests",
+        "/v1/sorafs/reference-sdk/downstream-bindings",
+        "/v1/sorafs/reference-sdk/downstream-packages",
+        "/v1/sorafs/reference-sdk/live-smoke",
+        "/v1/sorafs/reference-sdk/published-cookbook-smoke",
+        "/v1/sorafs/reference-sdk/package-publication",
+        "/v1/sorafs/reference-sdk/release-promotion",
+        "/v1/sorafs/reference-sdk/promotion",
+        "/v1/sorafs/validate/published-archives",
+        "/v1/sorafs/validate/release-promotion",
+    )
+    unshipped_cli_subcommands = (
+        "reference-sdk-publish",
+        "reference-sdk-release-archives",
+        "reference-sdk-signed-manifests",
+        "reference-sdk-downstream-bindings",
+        "reference-sdk-downstream-packages",
+        "reference-sdk-live-smoke",
+        "reference-sdk-published-cookbook-smoke",
+        "reference-sdk-package-publication",
+        "reference-sdk-release-promote",
+        "reference-sdk-promote",
+        "sorafs-validate-publish",
+        "sorafs-validate-release-promote",
+        "published-archive-smoke",
+        "downstream-bindings-publish",
+        "release-manifest-publish",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_PDP_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "the provider protocol is not production ready yet. Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until real provider proof generation, signature verification, and governance archival are implemented.",
+        "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
+        "Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp` but returns `400 Bad Request` so clients do not mistake PoR samples for PDP provider proofs.",
+        "Do not remove the Torii fail-closed PDP guard until these local gates exist:",
+        "Provider challenge queue:",
+        "Deterministic proof generation from stored payloads",
+        "Provider signature verification over canonical PDP proof bytes with governance-controlled key material.",
+        "Governance DAG archival for accepted PDP proofs and PDP failure reports.",
+        "Repair pipeline handoff for `pdp_failure` events.",
+        "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
+        "Required before production enablement:",
+        "Storage-node integration tests that generate PDP proofs from persisted payloads and validate them against commitment roots.",
+        "Torii endpoint tests for challenge issuance, proof submission, governance archival, repair handoff, and telemetry counters.",
+        "Remaining production gates:",
+        "Ship operator CLI commands and SDK validators.",
+        "Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_pdp_provider_protocol_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/sorafs/pdp/challenge",
+        "/sorafs/pdp/next",
+        "/sorafs/pdp/proof",
+        "/v1/sorafs/pdp/challenge",
+        "/v1/sorafs/pdp/next",
+        "/v1/sorafs/pdp/proof",
+        "/v1/sorafs/pdp/provider-transport",
+        "/v1/sorafs/pdp/proof-generation",
+        "/v1/sorafs/pdp/provider-signatures",
+        "/v1/sorafs/pdp/inclusion-witnesses",
+        "/v1/sorafs/pdp/governance-archive",
+        "/v1/sorafs/pdp/repair-handoff",
+        "/v1/sorafs/pdp/operator-cli",
+        "/v1/sorafs/pdp/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "pdp-challenge",
+        "pdp-fetch",
+        "pdp-respond",
+        "pdp-verify",
+        "pdp-status",
+        "pdp-export",
+        "pdp-provider-transport",
+        "pdp-proof-generation",
+        "pdp-governance-archive",
+        "pdp-repair-handoff",
+        "pdp-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_governance_dag_ipfs_ipns_work_stays_unshipped_in_docs() -> None:
+    source = read(SORAFS_GOVERNANCE_DAG_PLAN)
+
+    outstanding_start = source.index("Still outstanding:")
+    outstanding_end = source.index("\n## Goals & Scope", outstanding_start)
+    outstanding = source[outstanding_start:outstanding_end]
+    normalized_outstanding = re.sub(r"\s+", " ", outstanding)
+
+    required_outstanding = (
+        "IPFS Cluster pinning and IPNS head publication",
+        "Runtime RocksDB/IPLD mirror datastore and query service",
+        "IPFS/IPNS-backed `sorafs governance dag` operations for live heads",
+        "public checkpoint publication, and public checkpoint recovery",
+        "Runtime/IPFS-backed dashboard REST/GraphQL API",
+        "Live IPFS/IPNS publisher metrics",
+        "End-to-end tests with local IPFS/IPNS infrastructure",
+    )
+    missing = [
+        phrase for phrase in required_outstanding if phrase not in normalized_outstanding
+    ]
+
+    assert "does not yet ship the\nfull IPFS/IPNS governance DAG pipeline" in source
+    assert "Add live-head, public checkpoint recovery, and dashboard runbooks only when" in source
+    assert "the IPFS/IPNS pipeline and metrics actually exist" in source
+    assert missing == []
+
+
+def test_unshipped_governance_dag_public_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/governance/dag/ipfs",
+        "/v1/sorafs/governance/dag/ipns",
+        "/v1/sorafs/governance/dag/live",
+        "/v1/sorafs/governance/dag/public",
+        "/v1/sorafs/governance/dag/checkpoints/public",
+        "/v1/sorafs/governance/dag/mirror-service",
+        "/v1/sorafs/governance/dag/graphql",
+    )
+    unshipped_cli_subcommands = (
+        "live-head",
+        "fetch-head",
+        "publish-checkpoint",
+        "checkpoint-publish",
+        "mirror-service",
+        "ipfs-publish",
+        "ipns-publish",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    cli_source = read(SORAFS_CLI_RS)
+    matched_commands = [
+        subcommand
+        for subcommand in unshipped_cli_subcommands
+        if f'"{subcommand}"' in cli_source or f"`{subcommand}`" in cli_source
+    ]
+    if matched_commands:
+        exposed[str(SORAFS_CLI_RS.relative_to(REPO_ROOT))] = matched_commands
+
+    assert exposed == {}
+
+
+def test_orderbook_contract_and_daemon_work_stays_unshipped_in_docs() -> None:
+    source = read(SORAFS_ORDERBOOK_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_unshipped = (
+        "does not ship an on-chain SoraFS orderbook contract",
+        "durable off-chain matcher service",
+        "on-chain/daemonized streaming-settlement receipt service",
+        "contract-backed authenticated orderbook streams",
+        "On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | Not shipped.",
+        "daemonized matcher service and contract submission are not shipped",
+        "durable receipt daemon and escrow custody mutation are not shipped",
+        "contract forwarding and durable streams are not shipped",
+        "live dashboard wiring and rollout evidence are not shipped",
+        "Remaining: implement on-chain contract surface, durable matcher service",
+        "daemonized settlement receipt service with escrow custody mutation",
+        "durable contract/matcher-backed WebSocket/SSE streams",
+    )
+    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_orderbook_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/orderbook/contract",
+        "/v1/sorafs/orderbook/contracts",
+        "/v1/sorafs/orderbook/matcher-service",
+        "/v1/sorafs/orderbook/settlement-service",
+        "/v1/sorafs/orderbook/escrow-custody",
+        "/v1/sorafs/orderbook/dashboard",
+        "/v1/sorafs/orderbook/contract-stream",
+    )
+    unshipped_cli_subcommands = (
+        "match-daemon",
+        "matcher-service",
+        "settlement-daemon",
+        "contract-submit",
+        "contract-forward",
+        "escrow-mutate",
+        "dashboard-serve",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    cli_source = read(SORAFS_CLI_RS)
+    matched_commands = [
+        subcommand
+        for subcommand in unshipped_cli_subcommands
+        if f'"{subcommand}"' in cli_source or f"`{subcommand}`" in cli_source
+    ]
+    if matched_commands:
+        exposed[str(SORAFS_CLI_RS.relative_to(REPO_ROOT))] = matched_commands
+
+    assert exposed == {}
+
+
+def test_hedging_runtime_services_stay_unshipped_in_docs() -> None:
+    source = read(SORAFS_HEDGING_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_unshipped = (
+        "This is not yet a production hedging and billing stack",
+        "There is still no shipped `hedgingd`, price-feed collector service, `billingd`, statement publisher, SoraFS hedging/billing REST API, service-management CLI",
+        "daemon, exposure tracking, and hedge execution are not shipped",
+        "Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging.",
+        "event ingestion and accrual service are not shipped",
+        "Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | Not shipped.",
+        "runtime service emission and service management are not shipped",
+        "Automated hedge execution must remain off until governance approves venues",
+        "No hedging or billing routes are currently shipped.",
+        "Remaining: implement collector service, daemonized pricing/exposure engine, billing aggregator, statement publisher, signed APIs, runtime CLI helpers",
+    )
+    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_hedging_billing_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/hedging",
+        "/v1/sorafs/billing",
+    )
+    unshipped_cli_subcommands = (
+        "hedgingd",
+        "billingd",
+        "hedging-daemon",
+        "billing-daemon",
+        "price-feed-collector",
+        "collector-service",
+        "hedge-execute",
+        "exposure-status",
+        "statement-publish",
+        "statement-ack",
+        "billing-api",
+        "hedging-status",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_evidence_viewer_runtime_services_stay_unshipped_in_docs() -> None:
+    source = read(SORAFS_EVIDENCE_VIEWER_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_unshipped = (
+        "SFM-4b3 is not yet shipped as a moderation evidence viewer.",
+        "it does not contain the browser viewer, streaming backend, watermark engine, WebAuthn session flow, or access-log service",
+        "That gate is a promotion blocker for deployed evidence; it does not replace the missing viewer service.",
+        "It is a media validation harness, not a moderation evidence viewer.",
+        "The production moderation evidence viewer still needs these services:",
+        "Viewer frontend | Browser UI for jurors, auditors, and legal reviewers with strict CSP and disabled offline mode.",
+        "Viewer backend | Authenticates sessions, issues short-lived segment URLs, and binds access to case and role scopes.",
+        "Watermark engine | Generates per-session visual and optional audio watermarks tied to juror pseudonyms and nonces.",
+        "Access logger | Writes append-only view, seek, pause, screenshot, download-attempt, and annotation events.",
+        "Transparency exporter | Publishes anonymized access reports and daily digests to the Governance DAG.",
+        "No production route should claim support for `/v1/evidence/session`, `/v1/evidence/manifest`, `/v1/evidence/log`, or `/v1/evidence/audit` until the service exists",
+        "Existing adjacent checks do not prove evidence-viewer readiness.",
+        "tests before removing the unshipped-service language from this page.",
+    )
+    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_evidence_viewer_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/evidence-viewer",
+        "/v1/sorafs/moderation/evidence-viewer",
+        "/v1/sorafs/moderation/evidence/session",
+        "/v1/sorafs/moderation/evidence/manifest",
+        "/v1/sorafs/moderation/evidence/log",
+        "/v1/sorafs/moderation/evidence/audit",
+        "/v1/evidence/session",
+        "/v1/evidence/manifest",
+        "/v1/evidence/log",
+        "/v1/evidence/audit",
+    )
+    unshipped_cli_subcommands = (
+        "evidence-viewer",
+        "viewer-serve",
+        "viewer-session",
+        "viewer-manifest",
+        "viewer-audit",
+        "watermark-engine",
+        "access-log",
+        "access-logger",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
+    source = read(SORAFS_COMMIT_REVEAL_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_unshipped = (
+        "repository does not yet ship the SoraFS moderation voting contract, durable ballot orchestrator, juror CLI, challenge monitor, or production service needed to run appeal-panel ballots end to end.",
+        "That gate blocks deployed promotion evidence; it does not replace the missing durable service or contract-backed workflow.",
+        "Persist or contract-back the local ballot lifecycle store and add the production orchestrator for retries, no-show handling, challenge disputes, and durable contested-outcome workflows.",
+        "Implement the on-chain contract or ledger workflow that records commitments, reveals, challenges, outcomes, and juror penalties.",
+        "Provide juror-facing CLI or portal commands for listing ballots, committing, revealing, challenging, and exporting audit evidence through the Torii API.",
+        "Extend Governance DAG publication beyond local lifecycle events to durable challenge/dispute records, contract-backed decisions, and public IPFS/IPNS rollout evidence.",
+        "Collect a passing payload-free `commit_reveal` canary through the SFM-4b rollout evidence gate after the durable service exists.",
+        "Until then, do not document `sorafs-juror` or SoraFS ballot service commands as shipped.",
+    )
+    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_commit_reveal_production_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/moderation/voting-contract",
+        "/v1/sorafs/moderation/ballots/contract",
+        "/v1/sorafs/moderation/ballots/coordinator",
+        "/v1/sorafs/moderation/ballots/challenges",
+        "/v1/sorafs/moderation/ballots/disputes",
+        "/v1/sorafs/moderation/decision-dag",
+        "/v1/sorafs/moderation/challenge-dag",
+        "/v1/sorafs/moderation/juror-portal",
+        "/v1/sorafs/juror",
+    )
+    unshipped_cli_subcommands = (
+        "voting-contract",
+        "ballot-service",
+        "ballot-orchestrator",
+        "commit-reveal-coordinator",
+        "challenge-monitor",
+        "challenge-open",
+        "dispute-open",
+        "decision-dag-publish",
+        "juror-portal",
+        "sorafs-juror",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_appeal_finance_live_dashboard_and_reconciliation_stay_open_in_docs() -> None:
+    source = read(SORAFS_APPEAL_PRICING_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "The repo still does not ship a standalone pricing daemon.",
+        "Deposit custody uses the returned native `OpenAssetLock` instruction, which the authenticated payer must sign and submit through the normal transaction path",
+        "The checker recognizes `sorafs.appeal_finance.*` SFM-4b2 rollout schemas for pricing config, quote APIs, deposit lifecycle, settlement execution, settlement submitter, moderation worker, Governance DAG publication, dashboard metrics, multi-peer reconciliation, and governance approval.",
+        "It reports `ready` only when every required kind is present",
+        "the multi-peer reconciliation run covers at least four peers",
+        "Capture hosted live/public dashboard and alert evidence that passes the SFM-4b2 rollout gate once the public Governance DAG and ledger reconciliation paths are deployed.",
+        "Capture end-to-end evidence that covers quote creation, deposit posting, decision ingestion, settlement submission, disbursement, and treasury reconciliation against a multi-peer runtime ledger with at least four peers",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_appeal_finance_public_promotion_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/appeals/pricing/daemon",
+        "/v1/sorafs/appeals/finance/pricing-daemon",
+        "/v1/sorafs/appeals/finance/public-dashboard",
+        "/v1/sorafs/appeals/finance/hosted-dashboard",
+        "/v1/sorafs/appeals/finance/dashboard/public",
+        "/v1/sorafs/appeals/finance/reconciliation/multi-peer",
+        "/v1/sorafs/appeals/finance/multi-peer-reconciliation",
+        "/v1/sorafs/appeals/finance/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "pricing-daemon",
+        "appeal-pricing-daemon",
+        "appeal-finance-dashboard",
+        "appeal-dashboard-serve",
+        "appeal-finance-public-dashboard",
+        "appeal-finance-reconcile-multi-peer",
+        "appeal-finance-multi-peer-reconcile",
+        "appeal-finance-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_transparency_deployed_services_stay_open_in_docs() -> None:
+    source = read(SORAFS_TRANSPARENCY_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "It does not yet ship deployed GAR/moderation/appeal producers that call the source-entry route, captured deployed aggregate producer/scheduler rollout evidence, proof service hardening, deployed public receipt explorer rollout evidence, deployed proof-token issuance producers/explorer-linking rollout evidence, or deployed moderation ledger publication service described by the original plan.",
+        "deployed GAR/moderation/appeal/legal-hold/redaction/evidence-viewer/proof-token issuance service producers and captured rollout evidence remain open",
+        "deployed anchoring and captured service rollout evidence remain open",
+        "deployed service hardening and captured public rollout evidence are not shipped",
+        "captured deployed public rollout evidence is not shipped",
+        "captured deployed source-event producer and scheduler rollout evidence remains open",
+        "Document only the local `/v1/sorafs/transparency/*` readback",
+        "Do not document generic `/v1/transparency/*` endpoints or deployed public receipt explorer rollout as shipped until the live builder, deployment, and explorer paths exist.",
+        "Wire deployed GAR receipt, moderation validator evidence, appeal outcome, legal-hold/redaction notice, and future evidence-viewer audit producers",
+        "Attach deployed publisher identities, anchoring, and service rollout evidence",
+        "Finish deployed proof API hardening and capture public receipt explorer rollout evidence",
+        "Wire deployed proof-token issuance producers and public explorer linking",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_transparency_deployed_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/transparency/",
+        "/v1/sorafs/transparency/deployed-producers",
+        "/v1/sorafs/transparency/producer-service",
+        "/v1/sorafs/transparency/anchoring-service",
+        "/v1/sorafs/transparency/public-explorer",
+        "/v1/sorafs/transparency/proof-api/public",
+        "/v1/sorafs/transparency/proof-token-producers",
+        "/v1/sorafs/transparency/moderation-ledger-service",
+        "/v1/sorafs/transparency/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "transparency-producer-service",
+        "transparency-anchoring-service",
+        "transparency-proof-api-serve",
+        "public-explorer-serve",
+        "transparency-public-explorer",
+        "proof-token-producer-service",
+        "privacy-aggregate-scheduler-service",
+        "moderation-ledger-service",
+        "transparency-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_gateway_compliance_controller_services_stay_unshipped_in_docs() -> None:
+    source = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_unshipped = (
+        "The repository does not yet ship an always-on central compliance controller daemon, moderation toggle service, SFM-4c transparency ledger builder, public receipt explorer, or full appeal-driven override workflow",
+        "promotion evidence now has to prove the controller runtime and moderation-toggle boundaries before gateway compliance can be marked ready.",
+        "Ship the always-on compliance controller daemon that fetches external feeds, normalizes updates, signs them, distributes them to gateways, and tracks acknowledgements.",
+        "the daemon itself still needs production deployment",
+        "Persist denylist/catalog state and update history through the configured production storage path instead of relying only on local bundle ingestion.",
+        "Implement moderation toggle APIs, approval workflows, expiry handling, and operator audit trails.",
+        "the service itself still needs production deployment",
+        "Connect appeal outcomes to gateway policy overrides and cache invalidation.",
+        "Publish GAR receipts, proof-token indexes, and moderation events through the SFM-4c transparency ledger once that builder exists.",
+        "Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence gate before promoting gateway compliance changes to production.",
+    )
+    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_gateway_compliance_service_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/gateway/compliance/controller",
+        "/v1/sorafs/gateway/compliance/controller-runtime",
+        "/v1/sorafs/gateway/compliance/moderation-toggle",
+        "/v1/sorafs/gateway/compliance/toggles",
+        "/v1/sorafs/gateway/compliance/appeal-overrides",
+        "/v1/sorafs/gateway/compliance/feed-sync",
+        "/v1/sorafs/gateway/compliance/acknowledgements",
+        "/v1/sorafs/gateway/compliance/history",
+        "/v1/sorafs/gateway/compliance/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "compliance-controller",
+        "controller-daemon",
+        "gateway-compliance-daemon",
+        "gateway-compliance-service",
+        "moderation-toggle-service",
+        "moderation-toggle",
+        "appeal-override-service",
+        "appeal-override-apply",
+        "gateway-compliance-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_reserve_rent_live_control_plane_stays_open_in_docs() -> None:
+    source = read(SORAFS_RESERVE_RENT_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "The production reserve/rent control plane is still incomplete.",
+        "Signed local movement routes now authenticate and record transfer intents, but they do not submit reserve transfers or verify chain finality.",
+        "live chain submission, automatic finality polling, and live account mutation for credit lines are still target service work.",
+        "Broader governance source-entry effects beyond current provider denylist projection and live scheduler canary evidence remain target downstream work.",
+        "live account mutation for local credit-line state",
+        "broader downstream compliance application evidence for governance source entries",
+        "staged provider bake evidence, including live scheduled lifecycle canaries",
+        "Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_reserve_rent_live_control_plane_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/reserve/live-custody-submit",
+        "/v1/sorafs/reserve/finality-poller",
+        "/v1/sorafs/reserve/finality-service",
+        "/v1/sorafs/reserve/credit-line-account-mutation",
+        "/v1/sorafs/reserve/credit-line-mutator",
+        "/v1/sorafs/reserve/provider-bake-service",
+        "/v1/sorafs/reserve/provider-bake/live",
+        "/v1/sorafs/reserve/governance-source-entries/apply",
+        "/v1/sorafs/reserve/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "reserve-live-submit",
+        "reserve-finality-poller",
+        "reserve-finality-service",
+        "reserve-credit-line-mutator",
+        "reserve-account-mutator",
+        "reserve-provider-bake-service",
+        "reserve-provider-bake-live",
+        "reserve-governance-apply",
+        "reserve-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_sorafs_proto_plan_documents_only_active_fixture_generators() -> None:
+    source = read(SORAFS_PROTO_PLAN)
+    documented_bins = re.findall(r"--bin\s+([A-Za-z0-9_-]+)", source)
+    documented_fixture_bins = [
+        name
+        for name in documented_bins
+        if name.startswith("generate_")
+        or name in {"provider_admission_fixtures", "sorafs_manifest_stub"}
+    ]
+    expected_fixture_bins = [
+        "provider_admission_fixtures",
+        "sorafs_manifest_stub",
+        "generate_orderbook_fixtures",
+        "generate_por_fixtures",
+    ]
+    existing_bins = {
+        path.stem
+        for crate in (REPO_ROOT / "crates").iterdir()
+        for path in (crate / "src" / "bin").glob("*.rs")
+        if (crate / "src" / "bin").is_dir()
+    }
+
+    assert documented_fixture_bins == expected_fixture_bins
+    assert [name for name in documented_fixture_bins if name not in existing_bins] == []
+    assert "Do not document retired generator names as required workflow" in source
+    assert "not defining a separate\n`sora-proto` codec outside Norito" in source
+
+
+def test_sorafs_proto_release_evidence_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_PROTO_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "Remaining work is live release evidence and SDK distribution hygiene, not defining a separate `sora-proto` codec outside Norito.",
+        "Every payload that crosses a SoraFS boundary must be encoded with Norito. JSON views are for operator readability and fixtures; they are not alternate wire formats.",
+        "SDKs should call the reference validator or C ABI facade for schema checks rather than reimplementing Norito layout rules.",
+        "Transport should preserve raw Norito bytes and may include decoded JSON only as commentary.",
+        "Unknown versions, missing required fields, invalid signatures, and broken fixture cross-links must fail closed.",
+        "Publish release bundles that include the refreshed `.to` fixtures, human-readable JSON commentary, validation outcomes, and digest manifests.",
+        "Keep portal error-catalog links synchronized with `ValidationOutcomeV1` codes.",
+        "Capture SDK smoke evidence that JavaScript/TypeScript, Python, Swift, Kotlin, Java, and C# consumers validate the same committed fixtures through shared validators or FFI bindings.",
+        "Re-run fixture and reference-validator smoke tests whenever Norito payload layouts, signing domains, or governance payload variants change.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_sorafs_proto_release_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/proto",
+        "/v1/sorafs/sora-proto",
+        "/v1/sorafs/schema-registry",
+        "/v1/sorafs/schema/service",
+        "/v1/sorafs/wire-format/service",
+        "/v1/sorafs/fixtures/release-bundle",
+        "/v1/sorafs/fixtures/sdk-smoke",
+        "/v1/sorafs/proto/release-bundle",
+        "/v1/sorafs/proto/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "sora-proto",
+        "sorafs-proto",
+        "proto-schema-service",
+        "schema-registry-service",
+        "wire-format-service",
+        "proto-release-bundle",
+        "fixture-release-bundle",
+        "fixture-bundle-publish",
+        "sdk-smoke-publish",
+        "proto-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_pdp_proof_stream_remains_fail_closed_until_provider_protocol_ships() -> None:
+    api = read(TORII_SORAFS_API_RS)
+    openapi = read(TORII_OPENAPI_RS)
+
+    precheck_start = api.index("if matches!(proof_kind, ProofStreamKind::Pdp)")
+    precheck_end = api.index("let nonce = match decode_nonce", precheck_start)
+    precheck = api[precheck_start:precheck_end]
+    assert "return json_error(" in precheck
+    assert "StatusCode::BAD_REQUEST" in precheck
+    assert "unsupported proof_kind; expected `por` or `potr`" in precheck
+
+    dispatch_start = api.index("ProofStreamKind::Pdp => json_error(")
+    dispatch_end = api.index("\n    }\n}", dispatch_start)
+    dispatch = api[dispatch_start:dispatch_end]
+    assert "StatusCode::BAD_REQUEST" in dispatch
+    assert "unsupported proof_kind; expected `por` or `potr`" in dispatch
+
+    assert "`proof_kind=pdp` is reserved for future SF-13 work" in openapi
+    assert "rejected as an unsupported proof kind" in openapi
 
 
 def test_sorafs_localized_plan_mirrors_have_single_front_matter_block() -> None:

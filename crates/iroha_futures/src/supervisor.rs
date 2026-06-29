@@ -60,32 +60,13 @@ impl Supervisor {
         self.children.push(child.into());
     }
 
-    /// Spawns a task that will initiate supervisor shutdown on SIGINT/SIGTERM signals.
+    /// Spawns a task that will initiate supervisor shutdown on operating-system signals.
+    ///
+    /// Unix builds listen for SIGINT and SIGTERM. Windows builds listen for Ctrl-C.
     /// # Errors
-    /// See [`tokio::signal::unix::signal`] errors.
+    /// On Unix, see [`tokio::signal::unix::signal`] errors.
     pub fn setup_shutdown_on_os_signals(&mut self) -> Result<()> {
-        use tokio::signal;
-
-        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .map_err(|err| Report::new(Error::from(err)).expand())?;
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .map_err(|err| Report::new(Error::from(err)).expand())?;
-
-        let shutdown_signal = self.shutdown_signal();
-        self.monitor(tokio::spawn(async move {
-            tokio::select! {
-                _ = sigint.recv() => {
-                    iroha_logger::info!("SIGINT received, shutting down...");
-                },
-                _ = sigterm.recv() => {
-                    iroha_logger::info!("SIGTERM received, shutting down...");
-                },
-            }
-
-            shutdown_signal.send();
-        }));
-
-        Ok(())
+        setup_shutdown_on_os_signals(self)
     }
 
     /// Spawns a task that will shut down the supervisor once the external
@@ -118,6 +99,55 @@ impl Supervisor {
             .run()
             .await
     }
+}
+
+#[cfg(unix)]
+fn setup_shutdown_on_os_signals(supervisor: &mut Supervisor) -> Result<()> {
+    use tokio::signal;
+
+    let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+        .map_err(|err| Report::new(Error::from(err)).expand())?;
+    let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+        .map_err(|err| Report::new(Error::from(err)).expand())?;
+
+    let shutdown_signal = supervisor.shutdown_signal();
+    supervisor.monitor(tokio::spawn(async move {
+        tokio::select! {
+            _ = sigint.recv() => {
+                iroha_logger::info!("SIGINT received, shutting down...");
+            },
+            _ = sigterm.recv() => {
+                iroha_logger::info!("SIGTERM received, shutting down...");
+            },
+        }
+
+        shutdown_signal.send();
+    }));
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn setup_shutdown_on_os_signals(supervisor: &mut Supervisor) -> Result<()> {
+    let shutdown_signal = supervisor.shutdown_signal();
+    supervisor.monitor(tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => iroha_logger::info!("Ctrl-C received, shutting down..."),
+            Err(err) => {
+                iroha_logger::error!(%err, "Ctrl-C listener failed, shutting down...");
+            }
+        }
+
+        shutdown_signal.send();
+    }));
+
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn setup_shutdown_on_os_signals(_supervisor: &mut Supervisor) -> Result<()> {
+    iroha_logger::warn!("OS signal shutdown handling is not supported on this platform");
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default)]

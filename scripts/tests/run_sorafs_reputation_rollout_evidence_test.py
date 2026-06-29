@@ -69,13 +69,21 @@ def write_args_file(path: Path, args: list[str]) -> Path:
 
 
 def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys) -> None:
-    exit_code = MODULE.main([*complete_args(tmp_path), "--dry-run"])
+    args = complete_args(tmp_path)
+    exit_code = MODULE.main([*args, "--dry-run"])
 
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.reputation.rollout_evidence_collection_plan.v1"
     assert plan["verifier_summary_schema"] == "sorafs.reputation.rollout_evidence_gate.v1"
-    assert plan["evidence_contract"]["publish"]["schema"] is None
+    assert plan["external_evidence"] == {
+        "metrics": args[args.index("--metrics-evidence") + 1],
+        "transport": args[args.index("--transport-evidence") + 1],
+        "consumption": args[args.index("--consumption-evidence") + 1],
+    }
+    assert plan["evidence_contract"]["publish"]["schema"] == (
+        "sorafs.reputation.publish_snapshot_summary.v1"
+    )
     assert (
         "generated_at_unix"
         in plan["evidence_contract"]["latest"]["required_payload_fields"]

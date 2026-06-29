@@ -43,9 +43,11 @@ from sorafs_evidence_validation import (  # noqa: E402
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
+    require_count_equal,
     require_false,
     require_hex,
     require_config_backed_governance_approval,
+    require_iroha_config_binding,
     validate_standard_evidence_payload,
     require_maximum_number,
     require_minimum_int,
@@ -101,6 +103,8 @@ REQUIRED_METRICS = (
     "sorafs_transparency_source_entries_total",
 )
 BUNDLE_BOUND_KINDS = (
+    "controller_runtime",
+    "moderation_toggle",
     "gateway_reload",
     "enforcement_probe",
     "honey_audit",
@@ -153,6 +157,14 @@ class EvidenceKind:
 
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
     EvidenceKind("feed_promotion", "sorafs.gateway_compliance.feed_promotion_canary.v1"),
+    EvidenceKind(
+        "controller_runtime",
+        "sorafs.gateway_compliance.controller_runtime_canary.v1",
+    ),
+    EvidenceKind(
+        "moderation_toggle",
+        "sorafs.gateway_compliance.moderation_toggle_canary.v1",
+    ),
     EvidenceKind("gateway_reload", "sorafs.gateway_compliance.gateway_reload_canary.v1"),
     EvidenceKind("enforcement_probe", "sorafs.gateway_compliance.enforcement_probe_canary.v1"),
     EvidenceKind("honey_audit", "sorafs.gateway_compliance.honey_audit_canary.v1"),
@@ -168,6 +180,159 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "feed_promotion": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "external_feeds_normalized",
+        "feed_signature_verified",
+        "bundle_pack_verified",
+        "bundle_diff_reviewed",
+        "merkle_root_bound",
+        "update_history_persisted",
+        "gateway_ack_count",
+        "denylist_entry_count",
+        "bundle_digest_hex",
+        "raw_feeds_included",
+        "feed_payloads_included",
+    ),
+    "controller_runtime": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "controller_instance_id",
+        "iroha_config_bound",
+        "config_source",
+        "external_feed_count",
+        "fetched_feed_count",
+        "normalized_feed_count",
+        "signed_feed_count",
+        "controller_service_enabled",
+        "scheduler_config_bound",
+        "external_feeds_fetched",
+        "feed_signature_verified",
+        "normalization_deterministic",
+        "bundle_pack_verified",
+        "update_history_persisted",
+        "gateway_reload_requested",
+        "failure_backoff_configured",
+        "rollback_plan_verified",
+        "raw_feeds_included",
+        "feed_payloads_included",
+        "response_bodies_included",
+    ),
+    "moderation_toggle": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "toggle_api_url",
+        "toggle_count",
+        "approved_toggle_count",
+        "toggle_digest_hex",
+        "iroha_config_bound",
+        "config_source",
+        "operator_role_enforced",
+        "approval_workflow_verified",
+        "expiry_enforced",
+        "cache_invalidation_verified",
+        "operator_audit_trail_persisted",
+        "rollback_verified",
+        "raw_toggle_payloads_included",
+        "response_bodies_included",
+    ),
+    "gateway_reload": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "reload_ack_count",
+        "max_reload_latency_ms",
+        "hot_reload_verified",
+        "cache_version_bound",
+        "denylist_catalog_readback_verified",
+        "persistence_path_configured",
+        "stale_bundle_rejected",
+        "rollback_plan_verified",
+        "raw_catalog_included",
+    ),
+    "enforcement_probe": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "denial_reasons_observed",
+        "structured_error_labels_verified",
+        "telemetry_labels_stable",
+        "fail_closed_missing_envelope",
+        "fail_closed_unadmitted_provider",
+        "rate_limit_verified",
+        "geofence_verified",
+        "proof_token_required",
+        "response_bodies_included",
+        "routes",
+    ),
+    "honey_audit": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "honey_probe_count",
+        "denied_response_verified",
+        "cache_version_binding_verified",
+        "proof_token_verified",
+        "json_report_generated",
+        "markdown_report_generated",
+        "audit_digest_hex",
+        "raw_probe_responses_included",
+    ),
+    "appeal_override": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "appeal_outcome_consumed",
+        "policy_override_signed",
+        "cache_invalidation_verified",
+        "override_expiry_enforced",
+        "operator_audit_trail_persisted",
+        "denylist_override_scoped",
+        "override_digest_hex",
+        "raw_appeal_payload_included",
+    ),
+    "transparency_publication": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "gar_receipts_published",
+        "proof_token_index_published",
+        "moderation_events_published",
+        "legal_hold_redaction_summaries_published",
+        "governance_dag_bound",
+        "transparency_cycle_verified",
+        "publication_digest_hex",
+        "raw_receipts_included",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bundle_digest_hex",
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "config_source",
+        "compliance_policy_bound",
+        "denylist_feed_roster_bound",
+        "transparency_policy_bound",
+        "operator_roles_bound",
+        "retention_policy_bound",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -238,6 +403,44 @@ def validate_feed_promotion(
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_false(payload, "raw_feeds_included", errors)
     require_false(payload, "feed_payloads_included", errors)
+
+
+def validate_controller_runtime(payload: dict[str, Any], errors: list[str]) -> None:
+    require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
+    require_string(payload, "controller_instance_id", errors)
+    require_iroha_config_binding(payload, errors)
+    require_count_equal(payload, "external_feed_count", "fetched_feed_count", errors)
+    require_count_equal(payload, "external_feed_count", "normalized_feed_count", errors)
+    require_count_equal(payload, "external_feed_count", "signed_feed_count", errors)
+    require_bool_true(payload, "controller_service_enabled", errors)
+    require_bool_true(payload, "scheduler_config_bound", errors)
+    require_bool_true(payload, "external_feeds_fetched", errors)
+    require_bool_true(payload, "feed_signature_verified", errors)
+    require_bool_true(payload, "normalization_deterministic", errors)
+    require_bool_true(payload, "bundle_pack_verified", errors)
+    require_bool_true(payload, "update_history_persisted", errors)
+    require_bool_true(payload, "gateway_reload_requested", errors)
+    require_bool_true(payload, "failure_backoff_configured", errors)
+    require_bool_true(payload, "rollback_plan_verified", errors)
+    require_false(payload, "raw_feeds_included", errors)
+    require_false(payload, "feed_payloads_included", errors)
+    require_false(payload, "response_bodies_included", errors)
+
+
+def validate_moderation_toggle(payload: dict[str, Any], errors: list[str]) -> None:
+    require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
+    require_string(payload, "toggle_api_url", errors)
+    require_count_equal(payload, "toggle_count", "approved_toggle_count", errors)
+    require_hex(payload, "toggle_digest_hex", HEX64_LEN, errors)
+    require_iroha_config_binding(payload, errors)
+    require_bool_true(payload, "operator_role_enforced", errors)
+    require_bool_true(payload, "approval_workflow_verified", errors)
+    require_bool_true(payload, "expiry_enforced", errors)
+    require_bool_true(payload, "cache_invalidation_verified", errors)
+    require_bool_true(payload, "operator_audit_trail_persisted", errors)
+    require_bool_true(payload, "rollback_verified", errors)
+    require_false(payload, "raw_toggle_payloads_included", errors)
+    require_false(payload, "response_bodies_included", errors)
 
 
 def validate_gateway_reload(
@@ -358,6 +561,10 @@ def validate_kind_specific(
 
     if kind.name == "feed_promotion":
         validate_feed_promotion(payload, errors, options)
+    elif kind.name == "controller_runtime":
+        validate_controller_runtime(payload, errors)
+    elif kind.name == "moderation_toggle":
+        validate_moderation_toggle(payload, errors)
     elif kind.name == "gateway_reload":
         validate_gateway_reload(payload, errors, options)
     elif kind.name == "enforcement_probe":

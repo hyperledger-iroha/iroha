@@ -2935,6 +2935,12 @@ function productionHandoffPlaceholderReason(
   seen.add(value);
   for (const [key, entry] of ownRecordEntries(value)) {
     const childPath = `${pathName}.${key}`;
+    if (
+      (key === "placeholder_material" || key === "placeholderMaterial") &&
+      typeof entry === "boolean"
+    ) {
+      continue;
+    }
     if (PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(key)) {
       return childPath;
     }
@@ -3800,28 +3806,50 @@ async function submitSignedTransactionRawToTairaPipeline(
   options = {},
 ) {
   const txBuffer = Buffer.from(signedTransaction);
-  const versionedPayload = Buffer.concat([Buffer.from([1]), txBuffer]);
   const pipelineUrl = new URL("/v1/pipeline/transactions", toriiUrl);
-  const response = await fetch(pipelineUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-norito",
-      Accept: "application/x-norito, application/json",
-    },
-    body: versionedPayload,
-  });
-  if (![200, 201, 202, 204].includes(response.status)) {
-    const preview = await responseBodyPreview(response);
-    throw new Error(
-      `Torii responded with HTTP ${response.status} while submitting raw signed transaction${
-        preview ? `: ${preview}` : ""
-      }`,
+  let submitReceipt;
+  let submitEncoding = "application/x-norito";
+  try {
+    submitReceipt = await client.submitTransaction(txBuffer);
+  } catch (error) {
+    const { getNativeBinding } = await import("../javascript/iroha_js/src/native.js");
+    const native = getNativeBinding();
+    if (!native || typeof native.decodeSignedTransactionJson !== "function") {
+      throw error;
+    }
+    const decodedContent = JSON.parse(native.decodeSignedTransactionJson(txBuffer));
+    const content = await canonicalizeDecodedSignedTransactionAccountIds(
+      decodedContent,
+      options.accountChainDiscriminant ?? 369,
     );
+    const response = await fetch(pipelineUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, application/x-norito",
+      },
+      body: JSON.stringify({ version: 1, content }),
+    });
+    if (![200, 201, 202, 204].includes(response.status)) {
+      const preview = await responseBodyPreview(response);
+      throw new Error(
+        `Torii responded with HTTP ${response.status} while submitting JSON signed transaction${
+          preview ? `: ${preview}` : ""
+        }`,
+        { cause: error },
+      );
+    }
+    submitEncoding = "application/json";
+    const contentType = response.headers.get("content-type") ?? "";
+    submitReceipt = contentType.toLowerCase().includes("application/json")
+      ? await response.json().catch(() => null)
+      : null;
   }
   const submission = {
     accepted: true,
-    httpStatus: response.status,
     pipelineUrl: pipelineUrl.toString(),
+    encoding: submitEncoding,
+    receipt: submitReceipt ?? null,
   };
   if (!options.waitForCommit) {
     return { hash: hashHex, submission };
@@ -3847,6 +3875,40 @@ async function submitSignedTransactionRawToTairaPipeline(
   error.submission = submission;
   error.status = status;
   throw error;
+}
+
+async function canonicalizeDecodedSignedTransactionAccountIds(
+  value,
+  accountChainDiscriminant,
+) {
+  const { AccountAddress } = await import("../javascript/iroha_js/src/address.js");
+  const canonicalizeAccountLiteral = (literal) => {
+    try {
+      return AccountAddress.fromAccountId(literal).toI105(accountChainDiscriminant);
+    } catch (_error) {
+      return literal;
+    }
+  };
+  const canonicalizeString = (literal) => {
+    const normalized = canonicalizeAccountLiteral(literal);
+    if (normalized !== literal) return normalized;
+    const parts = literal.split("#");
+    if (parts.length < 2) return literal;
+    const account = canonicalizeAccountLiteral(parts[1]);
+    if (account === parts[1]) return literal;
+    return [parts[0], account, ...parts.slice(2)].join("#");
+  };
+  const visit = (node) => {
+    if (typeof node === "string") return canonicalizeString(node);
+    if (Array.isArray(node)) return node.map((entry) => visit(entry));
+    if (node && typeof node === "object") {
+      return Object.fromEntries(
+        Object.entries(node).map(([key, entry]) => [key, visit(entry)]),
+      );
+    }
+    return node;
+  };
+  return visit(value);
 }
 
 function normalizeStrictBase64(value, label) {
@@ -14330,6 +14392,33 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
       "counterpartyAccountCodecKey",
       "counterparty_account_codec_key",
     ) ?? (route.counterpartyDomain === 2 ? "evm_hex" : null);
+  const sourceVerifierMaterial = readFirstRecord(
+    manifest,
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+    "bscSourceVerifierMaterial",
+    "bsc_source_verifier_material",
+    "sccpSourceVerifierMaterial",
+    "sccp_source_verifier_material",
+  );
+  const sourceAdapterEngineDeployment = readFirstRecord(
+    manifest,
+    "sourceAdapterEngineDeployment",
+    "source_adapter_engine_deployment",
+    "sourceAdapterDeployment",
+    "source_adapter_deployment",
+    "bscSourceAdapterEngineDeployment",
+    "bsc_source_adapter_engine_deployment",
+    "bscSourceAdapterDeployment",
+    "bsc_source_adapter_deployment",
+  );
+  const sourceAdapterEngine = readFirstRecord(
+    manifest,
+    "sourceAdapterEngine",
+    "source_adapter_engine",
+    "bscSourceAdapterEngine",
+    "bsc_source_adapter_engine",
+  );
   const payload = {
     version: route.version,
     route_id: route.routeId,
@@ -14356,6 +14445,9 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
     proving_key_hash: route.provingKeyHash ?? null,
     native_evm_prover_bundle_hash: route.nativeEvmProverBundleHash ?? null,
     native_evm_prover_bundle: route.nativeEvmProverBundle ?? null,
+    source_verifier_material: sourceVerifierMaterial ?? null,
+    source_adapter_engine_deployment: sourceAdapterEngineDeployment ?? null,
+    source_adapter_engine: sourceAdapterEngine ?? null,
     destination_browser_prover: sccpRouteBrowserProverRefIsi(
       route.destinationBrowserProver,
     ),

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.crypto.keystore.attestation;
 
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -29,7 +30,9 @@ public final class AttestationResult {
       final boolean teeAuthorisationsPresent,
       final boolean strongBoxAuthorisationsPresent) {
     this.alias = Objects.requireNonNull(alias, "alias");
-    this.certificateChain = List.copyOf(certificateChain);
+    this.certificateChain =
+        Collections.unmodifiableList(
+            new ArrayList<>(Objects.requireNonNull(certificateChain, "certificateChain")));
     if (certificateChain.isEmpty()) {
       throw new IllegalArgumentException("certificateChain must not be empty");
     }

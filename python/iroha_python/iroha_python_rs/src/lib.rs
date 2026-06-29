@@ -13226,39 +13226,39 @@ mod tests {
             request
                 .previous_recursive_proof_open_envelopes_archive
                 .clear();
-            let legacy_profile_archive = kagemusha_recursive_spend_transition_profile_append_py(
+            let evidence_only_profile_archive = kagemusha_recursive_spend_transition_profile_append_py(
                 py,
                 &norito::to_bytes(&request)
-                    .expect("encode Python legacy append transition-profile request"),
+                    .expect("encode Python evidence-only append transition-profile request"),
             )
-            .expect("Python legacy append transition profile without previous proof openings");
-            let legacy_profile: KagemushaRecursiveSpendTransitionProfileV1 =
-                decode_from_bytes(legacy_profile_archive.bind(py).as_bytes())
-                    .expect("decode Python legacy append transition profile");
+            .expect("Python evidence-only append transition profile without previous proof openings");
+            let evidence_only_profile: KagemushaRecursiveSpendTransitionProfileV1 =
+                decode_from_bytes(evidence_only_profile_archive.bind(py).as_bytes())
+                    .expect("decode Python evidence-only append transition profile");
             assert_eq!(
-                legacy_profile.append_opening_preflight_digest, None,
-                "Python legacy append profiles must not synthesize append opening preflight bytes"
+                evidence_only_profile.append_opening_preflight_digest, None,
+                "Python evidence-only append profiles must not synthesize append opening preflight bytes"
             );
             assert_eq!(
-                legacy_profile.append_opening_preflight, None,
-                "Python legacy append profiles must not synthesize append opening preflight contracts"
+                evidence_only_profile.append_opening_preflight, None,
+                "Python evidence-only append profiles must not synthesize append opening preflight contracts"
             );
             assert_eq!(
-                legacy_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
-                "Python legacy append profiles must not bind absent previous proof opening bytes"
+                evidence_only_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
+                "Python evidence-only append profiles must not bind absent previous proof opening bytes"
             );
             let profile_digest =
                 iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
                     &profile,
                 )
                 .expect("Python append opening profile digest");
-            let legacy_profile_digest =
+            let evidence_only_profile_digest =
                 iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
-                    &legacy_profile,
+                    &evidence_only_profile,
                 )
-                .expect("Python legacy append profile digest");
+                .expect("Python evidence-only append profile digest");
             assert_ne!(
-                profile_digest, legacy_profile_digest,
+                profile_digest, evidence_only_profile_digest,
                 "binding append opening preflight bytes must change the Python transition profile digest"
             );
         });

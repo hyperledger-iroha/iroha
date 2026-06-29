@@ -46,6 +46,10 @@ def complete_args(tmp_path: Path) -> list[str]:
         "4",
         "--feed-promotion-evidence",
         str(write_payload(payload_dir / "feed-promotion.json")),
+        "--controller-runtime-evidence",
+        str(write_payload(payload_dir / "controller-runtime.json")),
+        "--moderation-toggle-evidence",
+        str(write_payload(payload_dir / "moderation-toggle.json")),
         "--gateway-reload-evidence",
         str(write_payload(payload_dir / "gateway-reload.json")),
         "--enforcement-probe-evidence",
@@ -103,6 +107,46 @@ def test_dry_run_prints_complete_gateway_compliance_rollout_plan(
     assert plan["external_evidence"]["enforcement_probe"] == [
         str(tmp_path / "payloads" / "enforcement-probe.json")
     ]
+    assert plan["evidence_contract"]["feed_promotion"]["schema"] == (
+        "sorafs.gateway_compliance.feed_promotion_canary.v1"
+    )
+    assert plan["evidence_contract"]["controller_runtime"]["schema"] == (
+        "sorafs.gateway_compliance.controller_runtime_canary.v1"
+    )
+    assert (
+        "bundle_digest_hex"
+        in plan["evidence_contract"]["controller_runtime"]["required_payload_fields"]
+    )
+    assert (
+        "iroha_config_bound"
+        in plan["evidence_contract"]["controller_runtime"]["required_payload_fields"]
+    )
+    assert plan["evidence_contract"]["moderation_toggle"]["schema"] == (
+        "sorafs.gateway_compliance.moderation_toggle_canary.v1"
+    )
+    assert (
+        "approval_workflow_verified"
+        in plan["evidence_contract"]["moderation_toggle"]["required_payload_fields"]
+    )
+    assert (
+        "expiry_enforced"
+        in plan["evidence_contract"]["moderation_toggle"]["required_payload_fields"]
+    )
+    assert (
+        "bundle_digest_hex"
+        in plan["evidence_contract"]["gateway_reload"]["required_payload_fields"]
+    )
+    assert (
+        "denial_reasons_observed"
+        in plan["evidence_contract"]["enforcement_probe"]["required_payload_fields"]
+    )
+    assert "metrics" in plan["evidence_contract"]["observability"]["required_payload_fields"]
+    assert (
+        "iroha_config_bound"
+        in plan["evidence_contract"]["governance_approval"][
+            "required_payload_fields"
+        ]
+    )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_gateway_compliance_rollout_evidence.py" in verifier[1]
@@ -126,6 +170,7 @@ def test_response_file_dry_run_prints_complete_plan(tmp_path: Path, capsys) -> N
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["transparency_publication"]
+    assert "appeal_override" in plan["evidence_contract"]
 
 
 def test_non_dry_run_executes_without_printing_collection_plan(
@@ -164,6 +209,7 @@ def test_split_response_file_dry_run_prints_complete_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.gateway_compliance.rollout_evidence_collection_plan.v1"
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
+    assert "honey_audit" in plan["evidence_contract"]
 
 
 def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -175,6 +221,34 @@ def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys
 
     captured = capsys.readouterr()
     assert "missing --enforcement-probe-evidence" in captured.err
+    assert captured.out == ""
+
+
+def test_missing_controller_runtime_evidence_fails_before_plan(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    evidence_index = args.index("--controller-runtime-evidence")
+    del args[evidence_index : evidence_index + 2]
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "missing --controller-runtime-evidence" in captured.err
+    assert captured.out == ""
+
+
+def test_missing_moderation_toggle_evidence_fails_before_plan(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    evidence_index = args.index("--moderation-toggle-evidence")
+    del args[evidence_index : evidence_index + 2]
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "missing --moderation-toggle-evidence" in captured.err
     assert captured.out == ""
 
 
@@ -210,6 +284,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["feed_promotion"]
+    assert list(plan["evidence_contract"]) == ["feed_promotion"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "feed_promotion" in verifier

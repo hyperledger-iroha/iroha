@@ -33,7 +33,6 @@ import {
   SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
@@ -2772,7 +2771,6 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   const expected = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
@@ -2883,10 +2881,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "recursive_compact_v1",
   );
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
-  assert.equal(
-    KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
-    "checked_prefold_v1",
+  assert.ok(
+    !declarationExports.has("KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1"),
+    "checked-prefold must not be exported as a first-release spend mode",
   );
+  assert.doesNotMatch(
+    DIST_INDEX_TEXT,
+    /\bKAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1\b/u,
+  );
+  assert.doesNotMatch(DIST_INDEX_TEXT, /\bchecked_prefold_v1\b/u);
   assert.equal(
     KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
     7,
@@ -2993,6 +2996,13 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      "",
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     ),
@@ -3002,6 +3012,13 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ),
     true,
   );
@@ -3021,21 +3038,21 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
-    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "",
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
-    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "",
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
-    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "",
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     ),
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3044,16 +3061,23 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "unknown-kagemusha-recursive-spend-circuit",
   );
   for (const circuitId of [
-    undefined,
-    null,
-    "",
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   ]) {
     assert.equal(
       isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(circuitId),
       true,
+    );
+  }
+  for (const circuitId of [
+    undefined,
+    null,
+    "",
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  ]) {
+    assert.equal(
+      isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(circuitId),
+      false,
     );
   }
   assert.equal(
@@ -3310,12 +3334,6 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
-      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-    ),
-    true,
-  );
-  assert.equal(
-    requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     ),
     true,
@@ -3325,6 +3343,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     null,
     "",
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     "unknown-kagemusha-recursive-spend-circuit",
   ]) {
@@ -3520,10 +3539,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     true,
   );
-  assert.equal(
-    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1),
-    true,
-  );
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -3550,7 +3566,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3571,7 +3587,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       63,
     ),
-    true,
+    false,
   );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3643,7 +3659,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3684,7 +3700,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       1,
     ),
-    true,
+    false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
@@ -3698,7 +3714,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
       64,
     ),
-    true,
+    false,
   );
   assert.equal(
     requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
@@ -3743,12 +3759,16 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
   assert.equal(
-    preferredKagemushaOfflineSpendMode(true),
+    preferredKagemushaOfflineSpendMode(false, true),
     KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
   assert.equal(
-    preferredKagemushaOfflineSpendMode(false),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+    preferredKagemushaOfflineSpendMode(false, false),
+    null,
+  );
+  assert.throws(
+    () => preferredKagemushaOfflineSpendMode(true),
+    /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,
   );
   assert.equal(
     typeof isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
@@ -4480,24 +4500,20 @@ test("package dist Kagemusha recursive spend verify result decodes ABI fixtures"
   assert.equal(abi6Result.valid, false);
   assert.equal(abi6Result.hopCount, 2);
   assert.equal(abi6Result.witnesslessRedeemSupported, false);
-  assert.equal(abi6Result.lineageWitnessRequired, true);
-  assert.equal(abi6Result.lineageWitnessRequiredForRedeem, abi6Result.lineageWitnessRequired);
-  assert.equal(
-    abi6Result.lineage_witness_required_for_redeem,
-    abi6Result.lineage_witness_required,
-  );
+  assert.equal(abi6Result.lineageWitnessRequiredForRedeem, true);
+  assert.equal(abi6Result.lineage_witness_required_for_redeem, true);
+  assert.equal(Object.hasOwn(abi6Result, "lineageWitnessRequired"), false);
+  assert.equal(Object.hasOwn(abi6Result, "lineage_witness_required"), false);
 
   const abi7Result = decodeKagemushaRecursiveSpendVerifyResult(
     sharedRecursiveSpendAbi7Archive("verify_result"),
   );
   assert.equal(abi7Result.valid, true);
   assert.equal(abi7Result.witnesslessRedeemSupported, false);
-  assert.equal(abi7Result.lineageWitnessRequired, true);
-  assert.equal(abi7Result.lineageWitnessRequiredForRedeem, abi7Result.lineageWitnessRequired);
-  assert.equal(
-    abi7Result.lineage_witness_required_for_redeem,
-    abi7Result.lineage_witness_required,
-  );
+  assert.equal(abi7Result.lineageWitnessRequiredForRedeem, true);
+  assert.equal(abi7Result.lineage_witness_required_for_redeem, true);
+  assert.equal(Object.hasOwn(abi7Result, "lineageWitnessRequired"), false);
+  assert.equal(Object.hasOwn(abi7Result, "lineage_witness_required"), false);
   assert.throws(
     () =>
       decodeKagemushaRecursiveSpendVerifyResult(
@@ -6301,14 +6317,14 @@ test("package dist Kagemusha recursive spend bundle decodes canonical accumulato
     sharedRecursiveSpendAbi6Archive("init_bundle"),
   );
   assert.equal(initBundle.asset, "686w6ABhTWPaCrWNjjXs7X1SW6w9");
-  const fallbackAssetBundle = decodeKagemushaRecursiveSpendBundle(
+  const rawHexAssetBundle = decodeKagemushaRecursiveSpendBundle(
     recursiveSpendBundleWithAccumulatorField(
       2,
       kagemushaFixedArrayPayload(0x01, 16),
     ),
   );
   assert.equal(
-    fallbackAssetBundle.asset,
+    rawHexAssetBundle.asset,
     "hex:01010101010101010101010101010101",
   );
   assert.ok(initBundle.topupAnchorNullifiers.length >= 2);
@@ -7624,10 +7640,7 @@ test("package dist Kagemusha recursive spend availability rejects broken and per
       },
     });
     assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
-    assert.equal(
-      preferredKagemushaOfflineSpendMode(),
-      KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
-    );
+    assert.equal(preferredKagemushaOfflineSpendMode(), null);
     assert.throws(
       () => kagemushaRecursiveSpendInit(privacyNoritoFrameWithPayload(0x41)),
       /Kagemusha recursive spend helper 'kagemushaRecursiveSpendInit' is unavailable/,
@@ -7646,7 +7659,7 @@ test("package dist Kagemusha recursive spend availability rejects broken and per
       );
       assert.equal(
         preferredKagemushaOfflineSpendMode(),
-        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+        null,
         acceptedMethod,
       );
       assert.throws(
@@ -7716,7 +7729,7 @@ test("package dist Kagemusha recursive spend availability rejects partial ABI-6 
       );
       assert.equal(
         preferredKagemushaOfflineSpendMode(),
-        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+        null,
         missingMethod,
       );
       assert.throws(

@@ -144,6 +144,22 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
     verifier = plan["steps"][6]["command"]
     assert "check_sorafs_ai_prescreen_rollout_evidence.py" in verifier[1]
     assert str(plan["external_evidence"]["governance_dag"]).endswith("governance-dag.json")
+    assert plan["evidence_contract"]["runner"]["schema"] == (
+        "sorafs.moderation.runner.rollout_evidence.v1"
+    )
+    assert "manifest_id_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
+    assert (
+        "workflow_digest_hex"
+        in plan["evidence_contract"]["operator_workflow"]["required_payload_fields"]
+    )
+    assert "routes" in plan["evidence_contract"]["operator_workflow"]["required_payload_fields"]
+    assert (
+        "execution_summary"
+        in plan["evidence_contract"]["commit_reveal_executor"][
+            "required_payload_fields"
+        ]
+    )
+    assert "config_source" in plan["evidence_contract"]["governance_dag"]["required_payload_fields"]
 
 
 def test_response_file_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None:
@@ -154,6 +170,7 @@ def test_response_file_dry_run_prints_complete_collection_plan(tmp_path: Path, c
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "runner_canary"
     assert plan["steps"][6]["label"] == "rollout_evidence_gate"
+    assert "end_to_end_workflow" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_collection_plan(
@@ -165,6 +182,7 @@ def test_split_response_file_dry_run_prints_complete_collection_plan(
 
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][3]["label"] == "notification_transport_canary"
+    assert "notification_transport" in plan["evidence_contract"]
 
 
 def test_missing_transparency_source_kind_fails_before_plan(tmp_path: Path, capsys) -> None:

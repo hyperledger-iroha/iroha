@@ -1067,6 +1067,10 @@ CRYPTOGRAPHIC_EVIDENCE_KEYS = {
     "route_canary_message_proof_used",
     "route_canary_raw_data_owner_matches_transaction",
     "route_canary_signature_recovers_to_owner",
+    "route_canary_transaction_id",
+    "route_canary_transaction_owner_address",
+    "route_canary_signature_sha256",
+    "route_canary_signature_recovered_address",
     "route_canary_log_index",
     "route_canary_target_domain",
     "route_canary_proof_version",
@@ -1101,6 +1105,8 @@ CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS = (
     "route_canary_receipt_block_hash",
     "route_canary_block_receipts_root",
     "route_canary_message_id",
+    "route_canary_transaction_id",
+    "route_canary_signature_sha256",
 )
 ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS = (
     "evidence_hash",
@@ -1597,7 +1603,7 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "mutableReceiptProofNode[0] = 0x7c;",
             'Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]))',
             "callbackRequest.PublicSignalWords[0] = \"0x\" + new string('f', 64);",
-            "Assert.NotEqual(ExpectedPublicSignalWords[0], prover.Request.PublicSignalWords[0]);",
+            "Assert.Equal(expectedRequest.PublicSignalWords, prover.Request.PublicSignalWords);",
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",
@@ -11416,6 +11422,11 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
     (
         "scripts/check_sccp_production_corridor.sh",
         (
+            "path_list_has_empty_segment()",
+            "validate_nonempty_path_list()",
+            "no empty path-list segments before native bridge loader setup",
+            'dotnet_loader_path="$bridge_library_dir"',
+            '"PATH=$dotnet_loader_path"',
             "validate_dotnet_trx_content()",
             "SCCP_DOTNET_TRX_MAX_BYTES=16777216",
             "xml.etree.ElementTree",
@@ -11558,7 +11569,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "free of surrounding whitespace or control characters",
             'reject_dotnet_runtime_path_text ".NET SDK root" "$DOTNET_ROOT" || return 1',
             "reject_dotnet_path_list_text()",
-            "no empty path-list segments or control characters",
+            "contain no control characters",
             'reject_dotnet_path_list_text ".NET phase PATH" "$PATH"',
             "reject_symlinked_existing_path_components()",
             "drive_prefix",
@@ -11592,6 +11603,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
             "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
             "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_fallback",
+            "test_sccp_production_corridor_dotnet_phase_rejects_missing_architecture_metadata",
             "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
             "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
             "test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture",
@@ -11637,6 +11649,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "bridge-drive-forward-slash",
             "bridge-drive-backslash",
             "cargo build should not run through a symlinked native bridge path",
+            "test_sccp_production_corridor_dotnet_phase_rejects_empty_inherited_path_segments",
             "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path",
             "test_sccp_production_corridor_dotnet_phase_rejects_stale_trx_symlink_before_test",
             "dotnet test should not run through a symlinked TRX path",
@@ -11845,6 +11858,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "colon-injected-os-platform",
             "colon-injected-rid",
             "colon-injected-architecture",
+            "leading-empty",
+            "trailing-empty",
+            "interior-empty",
+            "semicolon-empty",
             "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g",
             "-Dkotlin.daemon.jvmargs=-Xmx6g",
             "-Dkotlin.daemon.jvm.options=-Xmx6g",
@@ -11858,8 +11875,11 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "exactly one canonical Windows RID from dotnet --info",
             "exactly one OS Architecture from dotnet --info",
             "exactly one Host Architecture from dotnet --info when OS Architecture is absent",
+            "at most one Host Architecture from dotnet --info",
+            "OS Architecture and Host Architecture to agree",
             "found: X64",
             "requires the Windows RID architecture to match",
+            "no empty path-list segments before native bridge loader setup",
             "assert completed.returncode == 2",
         ),
     ),
@@ -22260,6 +22280,26 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
                 "route_canary_signature_recovers_to_owner": route_canary.get(
                     "signature_recovers_to_owner"
                 ),
+                "route_canary_transaction_id": (
+                    route_canary.get("transaction_id")
+                    if exact_domain == SCCP_DOMAIN_TRON
+                    else ""
+                ),
+                "route_canary_transaction_owner_address": (
+                    route_canary.get("transaction_owner_address")
+                    if exact_domain == SCCP_DOMAIN_TRON
+                    else ""
+                ),
+                "route_canary_signature_sha256": (
+                    route_canary.get("signature_sha256")
+                    if exact_domain == SCCP_DOMAIN_TRON
+                    else ""
+                ),
+                "route_canary_signature_recovered_address": (
+                    route_canary.get("signature_recovered_address")
+                    if exact_domain == SCCP_DOMAIN_TRON
+                    else ""
+                ),
                 "route_canary_log_index": route_canary.get("log_index"),
                 "route_canary_target_domain": route_canary.get("target_domain"),
                 "route_canary_proof_version": route_canary.get("proof_version"),
@@ -26063,6 +26103,12 @@ def _readiness_markdown_hash_cell(value: Any) -> str:
     return "-"
 
 
+def _readiness_markdown_tron_address_cell(value: Any) -> str:
+    if _is_canonical_tron_address_text(value):
+        return f"`{value}`"
+    return "-"
+
+
 def _readiness_markdown_text_cell(value: Any) -> str:
     if (
         isinstance(value, str)
@@ -26188,6 +26234,14 @@ def _readiness_markdown_crypto_row_cells(row: Any) -> list[str]:
         ),
         _readiness_markdown_boolean_cell(
             row.get("route_canary_signature_recovers_to_owner")
+        ),
+        _readiness_markdown_hash_cell(row.get("route_canary_transaction_id")),
+        _readiness_markdown_tron_address_cell(
+            row.get("route_canary_transaction_owner_address")
+        ),
+        _readiness_markdown_hash_cell(row.get("route_canary_signature_sha256")),
+        _readiness_markdown_tron_address_cell(
+            row.get("route_canary_signature_recovered_address")
         ),
         _readiness_markdown_integer_cell(row.get("route_canary_log_index")),
         _readiness_markdown_integer_cell(row.get("route_canary_target_domain")),
@@ -27011,7 +27065,9 @@ def _render_readiness_markdown(
         "Destination Binding | Source Gate | Source Gate Audits | "
         "Route Allowlist | Route Canary | Canary Source | "
         "Canary Message Proof | Canary TRON Owner | Canary TRON Signature | "
-        "Canary Log Index | Canary Target Domain | Canary Proof Version | "
+        "Canary TRON Tx ID | Canary TRON Tx Owner | Canary TRON Signature Hash | "
+        "Canary TRON Recovered | Canary Log Index | Canary Target Domain | "
+        "Canary Proof Version | "
         "Canary Proof Source | "
         "Canary Call Data | Canary Payload | Canary Statement | "
         "Canary Commitment | Canary Finality Height | Canary Finality Block | "
@@ -27021,7 +27077,7 @@ def _render_readiness_markdown(
         "Canary Timestamp |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
     for row in _readiness_cryptographic_evidence_markdown_rows(
         report.get("cryptographic_evidence")
@@ -29398,6 +29454,8 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
             row.get("route_canary_block_receipts_root"),
         ),
         ("route_canary_message_id", row.get("route_canary_message_id")),
+        ("route_canary_transaction_id", row.get("route_canary_transaction_id")),
+        ("route_canary_signature_sha256", row.get("route_canary_signature_sha256")),
     ]
     role_fields.extend(
         (f"source_adapter_gate_audit_hashes.{field}", value)
@@ -29438,6 +29496,8 @@ def _cryptographic_evidence_route_canary_hash_role_errors(
                 row.get("route_canary_block_receipts_root"),
             ),
             ("route_canary_message_id", row.get("route_canary_message_id")),
+            ("route_canary_transaction_id", row.get("route_canary_transaction_id")),
+            ("route_canary_signature_sha256", row.get("route_canary_signature_sha256")),
             ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
         ),
         byte_length=32,
@@ -29592,6 +29652,18 @@ def _cryptographic_evidence_row_schema_errors(
                 "readiness report cryptographic evidence row "
                 f"{field} must be a boolean or null"
             )
+    for field in (
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_recovered_address",
+    ):
+        if field in row and row.get(field) not in (None, ""):
+            errors.extend(
+                _tron_address_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    field,
+                )
+            )
     if "route_canary_receipt_block_finalized" in row and (
         row.get("route_canary_receipt_block_finalized") is not None
         and type(row.get("route_canary_receipt_block_finalized")) is not bool
@@ -29660,6 +29732,18 @@ def _cryptographic_evidence_row_schema_errors(
                 errors.append(
                     "readiness report cryptographic evidence row "
                     f"{field} must be null when route canary evidence is absent"
+                )
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_sha256",
+            "route_canary_signature_recovered_address",
+        ):
+            if row.get(field) not in (None, ""):
+                # Source-inventory marker: TRON route-canary public transcript fields must be empty when route canary evidence is absent
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be empty when route canary evidence is absent"
                 )
         for field in (
             "route_canary_log_index",
@@ -29860,10 +29944,56 @@ def _cryptographic_evidence_row_schema_errors(
                     "readiness report cryptographic evidence row "
                     f"{field} must be true for TRON route canary evidence"
                 )
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_signature_sha256",
+        ):
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+        for field in (
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_recovered_address",
+        ):
+            if not _is_canonical_tron_address_text(row.get(field)):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be a non-zero canonical 0x41-prefixed "
+                    "21-byte hex string for TRON route canary evidence"
+                )
+        transaction_owner = row.get("route_canary_transaction_owner_address")
+        signature_recovered = row.get("route_canary_signature_recovered_address")
+        if (
+            _is_canonical_tron_address_text(transaction_owner)
+            and _is_canonical_tron_address_text(signature_recovered)
+            and transaction_owner != signature_recovered
+        ):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "route_canary_signature_recovered_address must match "
+                "route_canary_transaction_owner_address"
+            )
     if (
         domain in ALL_LANES_CHAIN_BY_DOMAIN
         and domain != SCCP_DOMAIN_TRON
     ):
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_sha256",
+            "route_canary_signature_recovered_address",
+        ):
+            if row.get(field) not in (None, ""):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be empty for non-TRON lanes"
+                )
         for field in (
             "route_canary_raw_data_owner_matches_transaction",
             "route_canary_signature_recovers_to_owner",
@@ -30296,6 +30426,30 @@ def _cryptographic_evidence_lane_binding_errors(
                         "route_allowlist",
                         "route_canary",
                         "signature_recovers_to_owner",
+                    ),
+                ),
+                (
+                    "route_canary_transaction_id",
+                    ("route_allowlist", "route_canary", "transaction_id"),
+                ),
+                (
+                    "route_canary_transaction_owner_address",
+                    (
+                        "route_allowlist",
+                        "route_canary",
+                        "transaction_owner_address",
+                    ),
+                ),
+                (
+                    "route_canary_signature_sha256",
+                    ("route_allowlist", "route_canary", "signature_sha256"),
+                ),
+                (
+                    "route_canary_signature_recovered_address",
+                    (
+                        "route_allowlist",
+                        "route_canary",
+                        "signature_recovered_address",
                     ),
                 ),
                 (

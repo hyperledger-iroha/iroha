@@ -82,13 +82,16 @@ verifier-batch reservation still reach the proof-composition reservation and
 remain reserved ABI-7 state. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
 when the native host reports native bridge ABI 6 or later and every required
 recursive-spend method rejects the malformed availability probe, and otherwise
-falls back to `checked_prefold_v1`: `kagemushaRecursiveSpendInit`,
+returns `null` rather than falling back to archived checked-prefold fixtures:
+`kagemushaRecursiveSpendInit`,
 `kagemushaRecursiveSpendAppend`,
 `kagemushaRecursiveSpendTransitionProfileInit`,
 `kagemushaRecursiveSpendTransitionProfileAppend`,
 the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, both
 lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
-`kagemushaRecursiveSpendRedeem`.
+`kagemushaRecursiveSpendRedeem`. Explicit capability selection must pass both
+`recursiveCompactAvailable` and `recursiveSpendAvailable`; single-argument
+compatibility selectors are not shipped.
 
 Typed Node callers can build the ABI-6 recursive spend request archives without
 hand-framing Norito payloads. Use
@@ -164,14 +167,13 @@ native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
 must omit it, and unsupported proof attachments are rejected as malformed
 requests rather than soft invalid proof results.
-Decoded verify results expose both `lineageWitnessRequiredForRedeem` /
-`lineage_witness_required_for_redeem` and the earlier
-`lineageWitnessRequired` / `lineage_witness_required` aliases for the same
-redeem decision.
+Decoded verify results expose only the redeem-specific
+`lineageWitnessRequiredForRedeem` /
+`lineage_witness_required_for_redeem` fields for the redeem decision.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
-Typed redeem request builders accept the legacy single
+Typed redeem request builders accept the single-record
 `lineageVerifierRecord` / `lineage_verifier_record` path plus
 `lineageVerifierRecords` / raw `lineage_verifier_records` for additional
 Reserved-lineage verifier records. Use the plural field for multi-profile

@@ -16,7 +16,6 @@ BytesLike = Union[bytes, bytearray, memoryview]
 KagemushaOfflineSpendMode = Literal[
     "recursive_compact_v1",
     "recursive_spend_v1",
-    "checked_prefold_v1",
 ]
 KagemushaInstructionArchiveType = Literal[
     "KagemushaTransfer",
@@ -25,7 +24,6 @@ KagemushaInstructionArchiveType = Literal[
 
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
-KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER = "KagemushaTransfer"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE = "RedeemKagemushaRecursive"
 KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME = (
@@ -164,7 +162,6 @@ _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD = (
 __all__ = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
     "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
@@ -963,17 +960,21 @@ def _probe_recursive_spend_surface(module: object) -> bool:
 
 
 def preferred_kagemusha_offline_spend_mode(
-    recursive_spend_available: bool | None = None,
+    *,
     recursive_compact_available: bool | None = None,
-) -> KagemushaOfflineSpendMode:
-    if recursive_compact_available is None:
+    recursive_spend_available: bool | None = None,
+) -> Optional[KagemushaOfflineSpendMode]:
+    if recursive_compact_available is None and recursive_spend_available is None:
         recursive_compact_available = (
             is_kagemusha_recursive_compact_payment_token_prover_available()
-            if recursive_spend_available is None
-            else False
         )
-    if recursive_spend_available is None:
         recursive_spend_available = is_kagemusha_recursive_spend_available()
+    elif recursive_compact_available is None or recursive_spend_available is None:
+        raise ValueError(
+            "preferred_kagemusha_offline_spend_mode requires either no "
+            "capability arguments or both recursive_compact_available and "
+            "recursive_spend_available"
+        )
     return preferred_kagemusha_offline_spend_mode_for_capabilities(
         recursive_compact_available,
         recursive_spend_available,
@@ -983,12 +984,12 @@ def preferred_kagemusha_offline_spend_mode(
 def preferred_kagemusha_offline_spend_mode_for_capabilities(
     recursive_compact_available: bool,
     recursive_spend_available: bool,
-) -> KagemushaOfflineSpendMode:
+) -> Optional[KagemushaOfflineSpendMode]:
     if recursive_compact_available:
         return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
     if recursive_spend_available:
         return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
-    return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+    return None
 
 
 def can_redeem_kagemusha_recursive_spend_witnessless(
@@ -1034,10 +1035,7 @@ def is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
 ) -> bool:
     """Return whether a circuit id selects Reserved-lineage append output."""
 
-    return output_proof_circuit_id in (
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-    )
+    return output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
 
 
 @dataclass(frozen=True)
@@ -1225,12 +1223,10 @@ def can_append_kagemusha_recursive_spend_witnessless_lineage(
 def normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
     output_proof_circuit_id: str | None,
 ) -> str:
-    """Normalize an append output selector to the Norito request default."""
+    """Normalize an append output selector without accepting aliases."""
 
     if output_proof_circuit_id in (None, ""):
-        return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-    if output_proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
-        return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        return ""
     return output_proof_circuit_id
 
 
@@ -1654,11 +1650,7 @@ class KagemushaRecursiveSpendVerifyResult:
     chain_admissible: bool
     chain_admission_reason: str
     witnessless_redeem_supported: bool = False
-    lineage_witness_required: bool = False
-
-    @property
-    def lineage_witness_required_for_redeem(self) -> bool:
-        return self.lineage_witness_required
+    lineage_witness_required_for_redeem: bool = False
 
 
 @dataclass(frozen=True)
@@ -1873,11 +1865,6 @@ def encode_kagemusha_recursive_spend_append_request(
     normalized_output = normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
         request.output_proof_circuit_id,
     )
-    output_wire = (
-        ""
-        if normalized_output == KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-        else normalized_output
-    )
     previous_record_payload = None
     if request.previous_lineage_verifier_record is not None:
         previous_record_payload = _kagemusha_compact_payload_for_request(
@@ -1903,7 +1890,7 @@ def encode_kagemusha_recursive_spend_append_request(
             ),
             _kagemusha_field(_kagemusha_bytes_vec(request.pallas_open_envelopes)),
             _kagemusha_field(_kagemusha_spendable_note_payload(request.current_note)),
-            _kagemusha_field(_kagemusha_string(output_wire)),
+            _kagemusha_field(_kagemusha_string(normalized_output)),
             _kagemusha_field(_kagemusha_option_raw(previous_record_payload)),
             _kagemusha_field(
                 _kagemusha_bytes_vec(request.previous_proof_open_envelopes or b"")
@@ -2034,11 +2021,13 @@ def decode_kagemusha_recursive_spend_verify_result(
     chain_admissible, cursor = _kagemusha_read_field_value(payload, cursor, flags, "verify_result", _kagemusha_read_bool)
     chain_admission_reason, cursor = _kagemusha_read_field_value(payload, cursor, flags, "verify_result", lambda data, f: _kagemusha_read_string_payload(data, f, "verify_result"))
     witnessless_redeem_supported = False
-    lineage_witness_required = False
+    lineage_witness_required_for_redeem = False
     if cursor < len(payload):
         witnessless_redeem_supported, cursor = _kagemusha_read_field_value(payload, cursor, flags, "verify_result", _kagemusha_read_bool)
     if cursor < len(payload):
-        lineage_witness_required, cursor = _kagemusha_read_field_value(payload, cursor, flags, "verify_result", _kagemusha_read_bool)
+        lineage_witness_required_for_redeem, cursor = _kagemusha_read_field_value(
+            payload, cursor, flags, "verify_result", _kagemusha_read_bool
+        )
     if cursor != len(payload):
         raise ValueError("Trailing bytes after verify_result")
     return KagemushaRecursiveSpendVerifyResult(
@@ -2049,7 +2038,7 @@ def decode_kagemusha_recursive_spend_verify_result(
         chain_admissible=chain_admissible,
         chain_admission_reason=chain_admission_reason,
         witnessless_redeem_supported=witnessless_redeem_supported,
-        lineage_witness_required=lineage_witness_required,
+        lineage_witness_required_for_redeem=lineage_witness_required_for_redeem,
     )
 
 

@@ -139,6 +139,28 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
     }
 
+    func testArtifactManifestCandidateSearchHonorsAscentLimit() {
+        let binaryURL = URL(fileURLWithPath:
+            "/tmp/NoritoBridge.xcframework/ios-arm64/Library/Frameworks/libNoritoBridge.a")
+        let xcframeworkManifest = URL(fileURLWithPath:
+            "/tmp/NoritoBridge.xcframework/NoritoBridge.artifacts.json")
+        let siblingManifest = URL(fileURLWithPath: "/tmp/NoritoBridge.artifacts.json")
+
+        let limited = NoritoBridgeLoader.candidateArtifactManifestURLsForTests(
+            near: binaryURL,
+            maxAscents: 1
+        )
+        XCTAssertFalse(limited.contains(xcframeworkManifest))
+        XCTAssertFalse(limited.contains(siblingManifest))
+
+        let full = NoritoBridgeLoader.candidateArtifactManifestURLsForTests(
+            near: binaryURL,
+            maxAscents: 4
+        )
+        XCTAssertTrue(full.contains(xcframeworkManifest))
+        XCTAssertTrue(full.contains(siblingManifest))
+    }
+
     private func bundledBridgeBinary() throws -> (url: URL, identifier: String) {
         #if os(macOS)
         let identifier = "macos-arm64"

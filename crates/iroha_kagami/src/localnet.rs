@@ -376,6 +376,26 @@ const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 const LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST: u32 = 1;
 /// Tx gossip frame cap for Nexus-enabled localnets so large public transactions still fit.
 const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS: usize = 1_048_576;
+/// Base P2P frame cap for generated localnets.
+///
+/// Global defaults allow 16 MiB frames for production block-sync headroom. Local
+/// development networks use a tighter cap so a saturated laptop run cannot hold
+/// dozens of full-size frame buffers per peer.
+const LOCALNET_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Consensus message frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_CONSENSUS: usize = LOCALNET_MAX_FRAME_BYTES;
+/// Block-sync frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC: usize = LOCALNET_MAX_FRAME_BYTES;
+/// Control message frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_CONTROL: usize = 131_072;
+/// Default tx-gossip frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP: usize = 262_144;
+/// Peer-gossip frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP: usize = 65_536;
+/// Health-check frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_HEALTH: usize = 32_768;
+/// Miscellaneous frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_OTHER: usize = 131_072;
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -408,8 +428,19 @@ const LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 128;
 /// This value intentionally trades peak stress throughput for bounded memory
 /// usage when consensus stalls or clients oversubmit.
 const LOCALNET_QUEUE_CAPACITY: usize = 20_000;
-/// Queue capacity used for perf-profile localnets (keeps stress bursts in-memory).
-const LOCALNET_PERF_QUEUE_CAPACITY: usize = 262_144;
+/// Queue capacity used for perf-profile localnets.
+///
+/// The queue also enforces a retained-byte budget, which is the binding limit for
+/// high-throughput localnet bursts. Keep the count cap only high enough to avoid
+/// count-based rejection before the byte guard engages; larger values preallocate
+/// fixed queue slots that sit mostly empty under the byte budget.
+const LOCALNET_PERF_QUEUE_CAPACITY: usize = 4_096;
+/// Runtime proposal cap used by perf-profile localnets.
+///
+/// The on-chain block parameter remains 10k for throughput targets, but local
+/// development nodes should not assemble thousand-transaction DA/RBC proposals
+/// while the queue is saturated.
+const LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS: usize = 256;
 /// Default transaction TTL in the queue for localnet (ms).
 const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
@@ -1001,6 +1032,8 @@ fn generate_localnet_with_line<T: Write>(
     };
     let logger_filter = perf_spec.map(|_| LOCALNET_PERF_LOGGER_FILTER);
     let signature_batch_max_ed25519 = perf_spec.map(|_| LOCALNET_SIGNATURE_BATCH_MAX_ED25519);
+    let runtime_block_max_transactions =
+        perf_spec.map(|_| LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS);
     // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
     let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
     let dataspace_fault_tolerance =
@@ -1137,6 +1170,7 @@ fn generate_localnet_with_line<T: Write>(
         tx_gossip_overrides,
         logger_filter,
         signature_batch_max_ed25519,
+        runtime_block_max_transactions,
         queue_capacity,
     );
     // Iroha2 localnets intentionally keep DA disabled, so the rendered config does not satisfy
@@ -1216,6 +1250,7 @@ fn generate_localnet_with_line<T: Write>(
             tx_gossip_overrides,
             logger_filter,
             signature_batch_max_ed25519,
+            runtime_block_max_transactions,
             queue_capacity,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
@@ -1716,6 +1751,7 @@ fn render_peer_config(
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
     signature_batch_max_ed25519: Option<usize>,
+    runtime_block_max_transactions: Option<usize>,
     queue_capacity: usize,
 ) -> String {
     use toml::{Table, Value};
@@ -1984,6 +2020,14 @@ fn render_peer_config(
     }
 
     let mut block = Table::new();
+    if let Some(max_transactions) = runtime_block_max_transactions {
+        block.insert(
+            "max_transactions".into(),
+            Value::Integer(
+                i64::try_from(max_transactions).expect("runtime block max transactions fits i64"),
+            ),
+        );
+    }
     block.insert(
         "proposal_queue_scan_multiplier".into(),
         Value::Integer(
@@ -2169,6 +2213,60 @@ fn render_peer_config(
         ),
     );
     network.insert(
+        "max_frame_bytes".into(),
+        Value::Integer(i64::try_from(LOCALNET_MAX_FRAME_BYTES).expect("frame cap fits i64")),
+    );
+    network.insert(
+        "max_frame_bytes_consensus".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_CONSENSUS)
+                .expect("consensus frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_control".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_CONTROL).expect("control frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_block_sync".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC)
+                .expect("block sync frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_tx_gossip".into(),
+        Value::Integer(
+            i64::try_from(if nexus_enabled {
+                LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS
+            } else {
+                LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP
+            })
+            .expect("tx gossip frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_peer_gossip".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP)
+                .expect("peer gossip frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_health".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_HEALTH).expect("health frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_other".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_OTHER).expect("other frame cap fits i64"),
+        ),
+    );
+    network.insert(
         "connect_startup_delay_ms".into(),
         Value::Integer(
             i64::try_from(LOCALNET_CONNECT_STARTUP_DELAY_MS)
@@ -2207,15 +2305,6 @@ fn render_peer_config(
         "consensus_ingress_critical_bytes_burst".into(),
         Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST)),
     );
-    if nexus_enabled {
-        network.insert(
-            "max_frame_bytes_tx_gossip".into(),
-            Value::Integer(
-                i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
-                    .expect("LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS fits i64"),
-            ),
-        );
-    }
     if let Some(overrides) = tx_gossip_overrides {
         network.insert(
             "transaction_gossip_period_ms".into(),
@@ -4739,6 +4828,38 @@ mod tests {
             "localnet should raise P2P subscriber queue cap for fast pipelines"
         );
         assert_eq!(
+            parsed.network.max_frame_bytes, LOCALNET_MAX_FRAME_BYTES,
+            "localnet should bound the base P2P frame cap"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_consensus, LOCALNET_MAX_FRAME_BYTES_CONSENSUS,
+            "localnet should bound consensus frame buffers"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_control, LOCALNET_MAX_FRAME_BYTES_CONTROL,
+            "localnet should keep control frames small"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_block_sync, LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC,
+            "localnet should bound block-sync frame buffers"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_tx_gossip, LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS,
+            "Nexus localnet should keep tx gossip frame buffers bounded while allowing public writes"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_peer_gossip, LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP,
+            "localnet should keep peer gossip frames small"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_health, LOCALNET_MAX_FRAME_BYTES_HEALTH,
+            "localnet should keep health-check frames small"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_other, LOCALNET_MAX_FRAME_BYTES_OTHER,
+            "localnet should keep miscellaneous frames small"
+        );
+        assert_eq!(
             parsed
                 .network
                 .consensus_ingress_rate_per_sec
@@ -4918,6 +5039,30 @@ mod tests {
             parsed.sumeragi.collectors.redundant_send_r,
             expected_redundant_send_r
         );
+        assert_eq!(
+            parsed.queue.capacity.get(),
+            LOCALNET_PERF_QUEUE_CAPACITY,
+            "perf localnet should keep the fixed queue allocation bounded"
+        );
+        assert_eq!(
+            parsed.queue.capacity_per_user.get(),
+            LOCALNET_PERF_QUEUE_CAPACITY,
+            "perf localnet per-user capacity should match the bounded queue capacity"
+        );
+        assert_eq!(
+            parsed.torii.api_high_load_tx_threshold,
+            Some(LOCALNET_PERF_QUEUE_CAPACITY),
+            "perf localnet should expose backpressure at the bounded queue capacity"
+        );
+        assert_eq!(
+            parsed
+                .sumeragi
+                .block
+                .max_transactions
+                .map(std::num::NonZeroUsize::get),
+            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            "perf localnet should cap runtime proposal assembly below the semantic block max"
+        );
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()
             .expect("perf logger filter should parse");
@@ -4979,6 +5124,15 @@ mod tests {
         assert_eq!(
             parsed.pipeline.signature_batch_max_ed25519,
             LOCALNET_SIGNATURE_BATCH_MAX_ED25519
+        );
+        assert_eq!(
+            parsed
+                .sumeragi
+                .block
+                .max_transactions
+                .map(std::num::NonZeroUsize::get),
+            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            "NPoS perf localnet should use the same bounded runtime proposal cap"
         );
 
         let genesis_path = temp.path().join("genesis.json");

@@ -3550,6 +3550,7 @@ public final class HttpClientTransportTests {
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
                     .setValidationFeeInstructionIndex(1L)
+                    .setValidationFeeTransferEntryIndex(2L)
                     .build())
             .join();
 
@@ -3580,6 +3581,8 @@ public final class HttpClientTransportTests {
         : "validation_fee_policy_hash mismatch";
     assert "1".equals(payload.get("validation_fee_instruction_index"))
         : "validation_fee_instruction_index mismatch";
+    assert "2".equals(payload.get("validation_fee_transfer_entry_index"))
+        : "validation_fee_transfer_entry_index mismatch";
     assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
         : "creation_time_ms mismatch";
     @SuppressWarnings("unchecked")
@@ -3711,11 +3714,46 @@ public final class HttpClientTransportTests {
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
+                    .setValidationFeeTransferEntryIndex(2L)
+                    .build()),
+        "validation fee transfer entry index without policy metadata must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .setValidationFeeTransferEntryIndex(2L)
+                    .build()),
+        "validation fee transfer entry index without instruction index must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
                     .setValidationFeePolicyVersion(1L)
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .setValidationFeeInstructionIndex(-1L)
                     .build()),
         "negative validation fee instruction index must be rejected");
+    expectIllegalArgument(
+        () ->
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId("alice")
+                    .addInstructionBytes(instruction)
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .setValidationFeeInstructionIndex(1L)
+                    .setValidationFeeTransferEntryIndex(-2L)
+                    .build()),
+        "negative validation fee transfer entry index must be rejected");
   }
 
   private static void multisigResponseParserRejectsMalformedFields() {
