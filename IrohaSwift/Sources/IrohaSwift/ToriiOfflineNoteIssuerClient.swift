@@ -31,7 +31,7 @@ public enum ToriiOfflineNoteIssuerClientError: Error, LocalizedError, Equatable 
         case let .commitmentHex(value):
             return "Offline Note issuer returned an invalid commitment: \(value)."
         case let .invalidBase64(field):
-            return "Offline Note issuer field \(field) must be base64."
+            return "Offline Note issuer field \(field) must be canonical base64."
         case .retiredOfflineNoteIssue:
             return "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows."
         }
@@ -39,6 +39,11 @@ public enum ToriiOfflineNoteIssuerClientError: Error, LocalizedError, Equatable 
 }
 
 public struct OfflineNoteIssuerDeviceBinding {
+    private static let retiredAssertionPublicKeyAliasFields = [
+        "device_public_key",
+        "app_attest_public_key_base64"
+    ]
+
     public let deviceId: String
     public let offlinePublicKey: String
     private let binding: [String: Any]
@@ -61,6 +66,10 @@ public struct OfflineNoteIssuerDeviceBinding {
         if let bindingPublicKey = deviceBinding["offline_public_key"] as? String,
            bindingPublicKey != trimmedPublicKey {
             throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.offline_public_key")
+        }
+        for retiredKey in Self.retiredAssertionPublicKeyAliasFields
+            where deviceBinding.keys.contains(retiredKey) {
+            throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.\(retiredKey)")
         }
         self.deviceId = trimmedDeviceId
         self.offlinePublicKey = trimmedPublicKey
@@ -118,7 +127,7 @@ public protocol OfflineNoteIssuerDeviceBindingProvider {
 
 public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
     private static let keysRefillPath = ToriiOfflineCashAPI.Endpoint.keyRefill.path
-    private static let legacyCanonicalAuthHeaders: Set<String> = [
+    private static let retiredCanonicalBodyAuthHeaders: Set<String> = [
         ToriiCanonicalRequest.headerAccount.lowercased(),
         ToriiCanonicalRequest.headerSignature.lowercased(),
         ToriiCanonicalRequest.headerTimestampMs.lowercased(),
@@ -150,14 +159,14 @@ public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
         self.session = session
         self.canonicalAuth = canonicalAuth
         self.deviceBindingProvider = deviceBindingProvider
-        self.defaultHeaders = Self.stripLegacyCanonicalAuthHeaders(defaultHeaders)
+        self.defaultHeaders = Self.stripRetiredCanonicalBodyAuthHeaders(defaultHeaders)
         self.clock = clock
         self.nonceGenerator = nonceGenerator
     }
 
-    private static func stripLegacyCanonicalAuthHeaders(_ headers: [String: String]) -> [String: String] {
+    private static func stripRetiredCanonicalBodyAuthHeaders(_ headers: [String: String]) -> [String: String] {
         var filtered: [String: String] = [:]
-        for (key, value) in headers where !legacyCanonicalAuthHeaders.contains(key.lowercased()) {
+        for (key, value) in headers where !retiredCanonicalBodyAuthHeaders.contains(key.lowercased()) {
             filtered[key] = value
         }
         return filtered
@@ -384,19 +393,39 @@ private func sortedJSONData(_ value: [String: Any]) throws -> Data {
 }
 
 private func parseKeyCertificate(_ value: [String: Any]) throws -> OfflineNoteKeyCertificate {
-    try OfflineNoteKeyCertificate(
-        version: try requiredKeyCertificateVersion(value),
-        platform: try requiredString(value, "platform"),
-        keyId: try requiredString(value, "key_id"),
-        deviceId: try requiredString(value, "device_id"),
-        accountId: try requiredString(value, "account_id"),
-        publicKey: try requiredBase64(value, "public_key"),
-        assertionScheme: try requiredString(value, "assertion_scheme"),
-        assertionKeyAlgorithm: try requiredString(value, "assertion_key_algorithm"),
-        assertionPublicKey: try requiredBase64(value, "assertion_public_key"),
-        assertionUsageCountLimit: try optionalAssertionUsageCountLimit(value["assertion_usage_count_limit"]),
-        oneUse: try requiredBool(value, "one_use"),
-        issuerSignature: try requiredBase64(value, "issuer_signature_base64")
+    let version = try requiredKeyCertificateVersion(value)
+    let platform = try requiredString(value, "platform")
+    let keyId = try requiredString(value, "key_id")
+    let deviceId = try requiredString(value, "device_id")
+    let accountId = try requiredString(value, "account_id")
+    let publicKey = try requiredExactBase64(value, "public_key")
+    let assertionScheme = try requiredAssertionScheme(value, platform: platform)
+    let assertionKeyAlgorithm = try requiredAssertionKeyAlgorithm(value, platform: platform)
+    let assertionPublicKey = try requiredExactBase64(value, "assertion_public_key")
+    let assertionUsageCountLimit = try optionalAssertionUsageCountLimit(value["assertion_usage_count_limit"])
+    let oneUse = try requiredBool(value, "one_use")
+    let issuerSignature = try requiredExactBase64(value, "issuer_signature_base64")
+    try OfflineNoteV2Validation.validateKeyCertificateProfile(
+        platform: platform,
+        keyId: keyId,
+        assertionScheme: assertionScheme,
+        assertionKeyAlgorithm: assertionKeyAlgorithm,
+        assertionPublicKey: assertionPublicKey,
+        assertionUsageCountLimit: assertionUsageCountLimit
+    )
+    return try OfflineNoteKeyCertificate(
+        version: version,
+        platform: platform,
+        keyId: keyId,
+        deviceId: deviceId,
+        accountId: accountId,
+        publicKey: publicKey,
+        assertionScheme: assertionScheme,
+        assertionKeyAlgorithm: assertionKeyAlgorithm,
+        assertionPublicKey: assertionPublicKey,
+        assertionUsageCountLimit: assertionUsageCountLimit,
+        oneUse: oneUse,
+        issuerSignature: issuerSignature
     )
 }
 
@@ -462,6 +491,46 @@ private func optionalAssertionUsageCountLimit(_ value: Any?) throws -> UInt32? {
     return 1
 }
 
+private func requiredAssertionScheme(_ value: [String: Any], platform: String) throws -> String {
+    let scheme = try requiredString(value, "assertion_scheme")
+    let expected = try expectedAssertionScheme(platform: platform)
+    guard scheme == expected else {
+        throw ToriiOfflineNoteIssuerClientError.invalidJSON("assertion_scheme")
+    }
+    return scheme
+}
+
+private func requiredAssertionKeyAlgorithm(_ value: [String: Any], platform: String) throws -> String {
+    let algorithm = try requiredString(value, "assertion_key_algorithm")
+    let expected = try expectedAssertionKeyAlgorithm(platform: platform)
+    guard algorithm == expected else {
+        throw ToriiOfflineNoteIssuerClientError.invalidJSON("assertion_key_algorithm")
+    }
+    return algorithm
+}
+
+private func expectedAssertionScheme(platform: String) throws -> String {
+    switch platform {
+    case OfflineNoteV2Constants.androidKeyMintPlatform:
+        return OfflineNoteV2Constants.androidKeyMintAssertionScheme
+    case OfflineNoteV2Constants.iosAppAttestPlatform:
+        return OfflineNoteV2Constants.iosAppAttestAssertionScheme
+    default:
+        throw ToriiOfflineNoteIssuerClientError.invalidJSON("platform")
+    }
+}
+
+private func expectedAssertionKeyAlgorithm(platform: String) throws -> String {
+    switch platform {
+    case OfflineNoteV2Constants.androidKeyMintPlatform:
+        return OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm
+    case OfflineNoteV2Constants.iosAppAttestPlatform:
+        return OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm
+    default:
+        throw ToriiOfflineNoteIssuerClientError.invalidJSON("platform")
+    }
+}
+
 private func optionalUInt64(_ value: Any?) throws -> UInt64? {
     guard let value else { return nil }
     if value is NSNull {
@@ -495,9 +564,13 @@ private func optionalUInt64(_ value: Any?) throws -> UInt64? {
     throw ToriiOfflineNoteIssuerClientError.invalidJSON("integer")
 }
 
-private func requiredBase64(_ value: [String: Any], _ key: String) throws -> Data {
+private func requiredExactBase64(_ value: [String: Any], _ key: String) throws -> Data {
     let string = try requiredString(value, key)
-    guard let data = Data(base64Encoded: string) else {
+    guard !string.isEmpty,
+          string.trimmingCharacters(in: .whitespacesAndNewlines) == string,
+          let data = Data(base64Encoded: string),
+          !data.isEmpty,
+          data.base64EncodedString() == string else {
         throw ToriiOfflineNoteIssuerClientError.invalidBase64(key)
     }
     return data

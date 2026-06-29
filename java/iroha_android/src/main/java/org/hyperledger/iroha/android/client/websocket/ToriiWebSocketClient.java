@@ -1,9 +1,11 @@
 package org.hyperledger.iroha.android.client.websocket;
 
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,8 +42,8 @@ public final class ToriiWebSocketClient {
 
   private ToriiWebSocketClient(final Builder builder) {
     this.baseUri = builder.baseUri;
-    this.defaultHeaders = Map.copyOf(builder.defaultHeaders);
-    this.observers = List.copyOf(builder.observers);
+    this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
+    this.observers = Collections.unmodifiableList(new ArrayList<>(builder.observers));
     this.connector =
         builder.connector != null
             ? builder.connector
@@ -100,7 +102,7 @@ public final class ToriiWebSocketClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return baseUri;
     }
     if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("ws://") || path.startsWith("wss://")) {
@@ -135,12 +137,20 @@ public final class ToriiWebSocketClient {
         builder.append('&');
       }
       builder
-          .append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8))
+          .append(urlEncode(entry.getKey()))
           .append('=')
-          .append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+          .append(urlEncode(entry.getValue()));
       first = false;
     }
     return builder.toString();
+  }
+
+  private static String urlEncode(final String value) {
+    try {
+      return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
+    } catch (final UnsupportedEncodingException ex) {
+      throw new IllegalStateException("UTF-8 not supported", ex);
+    }
   }
 
   private static URI toWebSocketUri(final URI httpUri) {

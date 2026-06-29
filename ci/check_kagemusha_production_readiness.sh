@@ -67,7 +67,7 @@ EXPECTED_ABI6_LIMIT_VALUES = {
 }
 EXPECTED_ABI6_MODES = {
     "preferred_when_recursive_available": "recursive_spend_v1",
-    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+    "preferred_when_recursive_unavailable": None,
 }
 EXPECTED_ABI6_HOP_POLICY = {
     "preferred_append_output": [
@@ -281,7 +281,7 @@ ABI6_LIMIT_FIELDS = frozenset(
 ABI6_MODE_FIELDS = frozenset(
     (
         "preferred_when_recursive_available",
-        "fallback_when_recursive_unavailable",
+        "preferred_when_recursive_unavailable",
     )
 )
 ABI6_HOP_POLICY_FIELDS = frozenset(
@@ -506,7 +506,9 @@ TEXT_REQUIREMENTS = {
         "64-by-4 fixed-window Vesta verifier witness profile",
         "The routine readiness route still validates the ABI-6 reserved-lineage",
         "recursive spend verifier and redemption surface",
-        "SDK preferred-mode selection can choose ABI-7 compact",
+        "Zero-argument SDK preferred-mode helpers probe the native bridge",
+        "explicit capability selection requires both compact and recursive-spend booleans",
+        "in compact-first order",
         "ABI-7 recursive compact-token symbols now route one-hop",
         "LEN=4 compact-token proof path",
         "packaged compact one-hop and append proving-key archives",
@@ -2643,6 +2645,8 @@ TEXT_REQUIREMENTS = {
         "DEFAULT_COMPACT_KEY_EVIDENCE_PATH",
         "DEFAULT_MIN_SIGNED_AT_UTC = \"2026-06-06T00:00:00Z\"",
         "DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS = 300",
+        "Return CLI device-lab root values, preserving the configured default",
+        "abi6_manifest_recursive_unavailable_mode",
         "LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL",
         "COMPACT_KEY_EVIDENCE_SUMMARY_LABEL",
         "EVIDENCE_CONTROL_STRING_REDACTION",
@@ -4764,6 +4768,7 @@ TEXT_REQUIREMENTS = {
         "def build_release_bundle(",
         "def verify_release_bundle(",
         "def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:",
+        "Return CLI Android root values, preserving the configured default",
         "def _device_lab_root_list(root: Path | Iterable[Path]) -> list[Path]:",
         "action=\"append\"",
         "package separately captured device-family roots",
@@ -7580,7 +7585,6 @@ TEXT_REQUIREMENTS = {
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
         "if recursive_spend_available",
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
-        "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
         "hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
     ),
@@ -7785,21 +7789,21 @@ SDK_SELECTOR_REQUIREMENTS = {
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;",
         "if (recursiveSpendAvailable)",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;",
-        "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
+        "return null;",
     ),
     "javascript/iroha_js/dist/crypto.js": (
         "if (recursiveCompactAvailable)",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1;",
         "if (recursiveSpendAvailable)",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;",
-        "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;",
+        "return null;",
     ),
     "python/iroha_python/src/iroha_python/kagemusha.py": (
         "if recursive_compact_available:",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
         "if recursive_spend_available:",
         "return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
-        "return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+        "return None",
     ),
     "crates/iroha_data_model/src/offline/mod.rs": (
         "recursive_compact_available: bool",
@@ -7807,12 +7811,12 @@ SDK_SELECTOR_REQUIREMENTS = {
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
         "if recursive_spend_available",
         "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
-        "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+        "None",
     ),
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
         "if recursiveCompactAvailable {",
         "return .recursiveCompactV1",
-        "return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1",
+        "return recursiveSpendAvailable ? .recursiveSpendV1 : nil",
     ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
         "recursiveCompactAvailable: Boolean",
@@ -7820,29 +7824,39 @@ SDK_SELECTOR_REQUIREMENTS = {
         "return Mode.RECURSIVE_COMPACT_V1",
         "if (recursiveSpendAvailable)",
         "Mode.RECURSIVE_SPEND_V1",
-        "Mode.CHECKED_PREFOLD_V1",
+        "null",
     ),
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java": (
         "if (recursiveCompactAvailable)",
         "return Mode.RECURSIVE_COMPACT_V1;",
-        "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
+        "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;",
     ),
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
         "if (recursiveCompactAvailable)",
         "return KagemushaOfflineSpendMode.RecursiveCompactV1;",
         "return recursiveSpendAvailable",
         "KagemushaOfflineSpendMode.RecursiveSpendV1",
-        "KagemushaOfflineSpendMode.CheckedPrefoldV1",
     ),
 }
 
 FORBIDDEN_SNIPPETS = {
+    "crates/iroha_data_model/src/offline/mod.rs": (
+        "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    ),
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
+        "KagemushaOfflineSpendMode.CheckedPrefoldV1",
+    ),
     "crates/iroha_kagami/src/localnet.rs": (
         'writeln!(stop_file, "    kill -9 \\"$pid\\"',
         'writeln!(stop_file, "    kill -KILL \\"$pid\\"',
     ),
     "scripts/kagemusha_production_readiness.py": (
+        "abi6_manifest_fallback_mode",
         '            if not artifact_path.is_file():\n                blockers.append(\n                    blocker(\n                        "lineage_proof_evidence_artifact_missing",\n',
+    ),
+    "scripts/kagemusha_release_bundle.py": (
+        "Return CLI Android root values, preserving the leg"
+        "acy default",
     ),
     "scripts/kagemusha_run_lineage_proof_staged.py": (
         "stdout=subprocess.PIPE",
@@ -7933,6 +7947,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-ancestor-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default",
     "ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default-cross-sdk",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-readiness-script-configured-default-wording",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-readiness-script-abi6-recursive-unavailable-mode",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-open",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-one-hop-runtime-keygen-fallback",
@@ -8741,6 +8757,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-root-default-wording",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-binding",
@@ -9202,8 +9219,8 @@ def require_manifest(errors: list[str]) -> None:
         )
         if modes.get("preferred_when_recursive_available") != "recursive_spend_v1":
             errors.append("ABI-6 fixture manifest must prefer recursive_spend_v1")
-        if modes.get("fallback_when_recursive_unavailable") != "checked_prefold_v1":
-            errors.append("ABI-6 fixture manifest must fall back to checked_prefold_v1")
+        if modes.get("preferred_when_recursive_unavailable") is not None:
+            errors.append("ABI-6 fixture manifest must expose no preferred mode when recursive support is unavailable")
         if not json_exactly_matches(modes, EXPECTED_ABI6_MODES):
             errors.append("ABI-6 fixture manifest modes drifted")
     hop_policy = manifest.get("hop_policy", {})
@@ -10145,7 +10162,7 @@ if mode == "--negative-control-sdk-default-cross-sdk":
             (
                 "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
                 "        if (recursiveCompactAvailable)\n        {\n            return KagemushaOfflineSpendMode.RecursiveCompactV1;\n        }\n\n",
-                "",
+                "        _ = recursiveCompactAvailable;\n",
             ),
         )
         for target, old, new in mutations:
@@ -10154,6 +10171,29 @@ if mode == "--negative-control-sdk-default-cross-sdk":
     run_negative_control(
         "cross-SDK production default selector",
         mutate_cross_sdk_default_selectors,
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-readiness-script-configured-default-wording":
+    run_negative_control(
+        "Kagemusha readiness script first-release default wording",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "Return CLI device-lab root values, preserving the configured default",
+            "Return CLI device-lab root values, preserving the leg"
+            "acy default",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-readiness-script-abi6-recursive-unavailable-mode":
+    run_negative_control(
+        "Kagemusha readiness script ABI-6 recursive-unavailable blocker code",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "abi6_manifest_recursive_unavailable_mode",
+            "abi6_manifest_fallback_mode",
+        ),
     )
     raise SystemExit(0)
 
@@ -17099,6 +17139,18 @@ if mode == "--negative-control-localnet-lifecycle-helper-cli-scalar-preflight":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-android-root-default-wording":
+    run_negative_control(
+        "Kagemusha release bundle Android root configured-default wording",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "Return CLI Android root values, preserving the configured default",
+            "Return CLI Android root values, preserving the leg"
+            "acy default",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-summary-drift":
     run_negative_control(
         "Kagemusha release bundle summary drift gate",
@@ -21202,5 +21254,5 @@ if errors:
         print(f"error: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring and compact-first SDK selection, with C# Windows host certification tracked separately")
+print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring and cross-SDK compact-first selection, with C# Windows host certification tracked separately")
 PY

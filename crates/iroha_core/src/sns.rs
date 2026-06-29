@@ -1214,7 +1214,20 @@ pub fn get_name_record(
     now_ms: u64,
 ) -> Result<NameRecordV1, SnsError> {
     let selector = selector_for_namespace_literal(namespace, literal, catalog)?;
-    let mut record = record_or_not_found(world, &selector)?;
+    get_name_record_by_selector(world, &selector, now_ms)
+}
+
+/// Fetch a SNS record by pre-canonicalized selector and apply the current lifecycle view.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the record is missing from authoritative state.
+pub fn get_name_record_by_selector(
+    world: &impl WorldReadOnly,
+    selector: &NameSelectorV1,
+    now_ms: u64,
+) -> Result<NameRecordV1, SnsError> {
+    let mut record = record_or_not_found(world, selector)?;
     refresh_lifecycle(&mut record, now_ms);
     Ok(record)
 }

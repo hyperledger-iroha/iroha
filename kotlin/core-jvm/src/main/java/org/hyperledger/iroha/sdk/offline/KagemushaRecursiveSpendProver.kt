@@ -8,7 +8,6 @@ import java.security.MessageDigest
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
-        CHECKED_PREFOLD_V1("checked_prefold_v1"),
         RECURSIVE_COMPACT_V1("recursive_compact_v1"),
         RECURSIVE_SPEND_V1("recursive_spend_v1"),
     }
@@ -92,31 +91,24 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun isNativeAvailable(): Boolean = nativeAvailable
 
         @JvmStatic
-        fun preferredMode(): Mode =
+        fun preferredMode(): Mode? =
             preferredMode(
                 recursiveCompactAvailable = KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(),
                 recursiveSpendAvailable = nativeAvailable,
             )
 
         @JvmStatic
-        fun preferredMode(recursiveSpendAvailable: Boolean): Mode =
-            preferredMode(
-                recursiveCompactAvailable = false,
-                recursiveSpendAvailable = recursiveSpendAvailable,
-            )
-
-        @JvmStatic
         fun preferredMode(
             recursiveCompactAvailable: Boolean,
             recursiveSpendAvailable: Boolean,
-        ): Mode {
+        ): Mode? {
             if (recursiveCompactAvailable) {
                 return Mode.RECURSIVE_COMPACT_V1
             }
             return if (recursiveSpendAvailable) {
                 Mode.RECURSIVE_SPEND_V1
             } else {
-                Mode.CHECKED_PREFOLD_V1
+                null
             }
         }
 
@@ -143,8 +135,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun isLineageAppendOutputCircuitId(outputCircuitId: String?): Boolean =
-            outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
-                outputCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            outputCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
 
         @JvmStatic
         fun isSupportedLineageKeyArtifactOpeningLen(verifierOpeningLen: Int): Boolean =
@@ -595,9 +586,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun normalizeAppendOutputCircuitId(outputCircuitId: String?): String =
             if (outputCircuitId.isNullOrEmpty()) {
-                RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-            } else if (outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
-                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+                ""
             } else {
                 outputCircuitId
             }

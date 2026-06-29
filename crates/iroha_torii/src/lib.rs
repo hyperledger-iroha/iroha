@@ -1760,9 +1760,9 @@ impl PipelineStatusKind {
             Self::Queued => 0,
             Self::Approved => 1,
             Self::Expired => 2,
-            Self::Committed => 3,
-            Self::Applied => 4,
-            Self::Rejected => 5,
+            Self::Rejected => 3,
+            Self::Committed => 4,
+            Self::Applied => 5,
         }
     }
 
@@ -6221,7 +6221,8 @@ async fn handler_offline_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6242,16 +6243,8 @@ async fn handler_offline_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -6262,7 +6255,8 @@ async fn handler_offline_v2_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6283,16 +6277,8 @@ async fn handler_offline_v2_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -15027,6 +15013,14 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
         ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
+        (
+            QueryOutputBatchBox::FeeSponsorPolicy(mut left),
+            QueryOutputBatchBox::FeeSponsorPolicy(right),
+        ) => merge_variant!(left, right, FeeSponsorPolicy),
+        (
+            QueryOutputBatchBox::FeeSponsorPolicyId(mut left),
+            QueryOutputBatchBox::FeeSponsorPolicyId(right),
+        ) => merge_variant!(left, right, FeeSponsorPolicyId),
         (left, right) => Err(torii_proxy_error_response(
             StatusCode::CONFLICT,
             "query_conflict",
@@ -15148,6 +15142,12 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
             canonicalize_variant!(items, AnonymousAssetEscrowRecord)
+        }
+        QueryOutputBatchBox::FeeSponsorPolicy(items) => {
+            canonicalize_variant!(items, FeeSponsorPolicy)
+        }
+        QueryOutputBatchBox::FeeSponsorPolicyId(items) => {
+            canonicalize_variant!(items, FeeSponsorPolicyId)
         }
     }
 }
@@ -16415,9 +16415,9 @@ fn pipeline_status_payload_rank(
         "Queued" => Ok(0),
         "Approved" => Ok(1),
         "Expired" => Ok(2),
-        "Committed" => Ok(3),
-        "Applied" => Ok(4),
-        "Rejected" => Ok(5),
+        "Rejected" => Ok(3),
+        "Committed" => Ok(4),
+        "Applied" => Ok(5),
         other => Err(torii_internal_json_error(format!(
             "unknown pipeline status kind `{other}` in routed response"
         ))),
@@ -19137,7 +19137,42 @@ mod torii_routed_read_tests {
         assert_eq!(payload.resolved_from, "state");
     }
 
-    fn pipeline_status_hint_response(kind: &str) -> Response {
+    #[tokio::test]
+    async fn merged_pipeline_status_response_prefers_applied_over_cached_rejection() {
+        let response = merged_pipeline_status_response(
+            vec![
+                norito::json!({
+                    "hash": "abc",
+                    "status": {
+                        "kind": "Rejected",
+                        "block_height": null,
+                        "rejection_reason": null
+                    },
+                    "scope": "global",
+                    "resolved_from": "cache"
+                }),
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Applied", "block_height": 7},
+                    "scope": "global",
+                    "resolved_from": "state"
+                }),
+            ],
+            "proxy",
+        )
+        .expect("pipeline status fanout should prefer committed success over stale rejection");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&body).expect("status payload");
+        assert_eq!(payload.status.kind, "Applied");
+        assert_eq!(payload.resolved_from, "state");
+    }
+
+    fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
         crate::utils::respond_with_format(
             PipelineTransactionStatusResponse::new(
                 "abc".to_owned(),
@@ -19147,7 +19182,7 @@ mod torii_routed_read_tests {
                     rejection_reason: None,
                 },
                 "global".to_owned(),
-                "cache".to_owned(),
+                resolved_from.to_owned(),
             ),
             ResponseFormat::Json,
         )
@@ -19156,7 +19191,7 @@ mod torii_routed_read_tests {
     #[tokio::test]
     async fn pipeline_status_hint_ignores_non_terminal_successes() {
         for kind in ["Queued", "Approved", "Committed"] {
-            let response = pipeline_status_hint_response(kind);
+            let response = pipeline_status_hint_response(kind, "cache");
 
             let hinted = pipeline_status_hinted_global_response(response)
                 .await
@@ -19170,14 +19205,30 @@ mod torii_routed_read_tests {
     }
 
     #[tokio::test]
-    async fn pipeline_status_hint_allows_terminal_successes() {
-        for kind in ["Applied", "Rejected", "Expired"] {
-            let response = pipeline_status_hint_response(kind);
+    async fn pipeline_status_hint_ignores_cached_negative_terminal_statuses() {
+        for kind in ["Rejected", "Expired"] {
+            let response = pipeline_status_hint_response(kind, "cache");
+
+            let hinted = pipeline_status_hinted_global_response(response)
+                .await
+                .expect("hint classifier should not fail");
+
+            assert!(
+                hinted.is_none(),
+                "global status must fan out instead of trusting hinted cached {kind}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hint_allows_authoritative_terminal_statuses() {
+        for (kind, resolved_from) in [("Applied", "cache"), ("Rejected", "state")] {
+            let response = pipeline_status_hint_response(kind, resolved_from);
 
             let hinted = pipeline_status_hinted_global_response(response)
                 .await
                 .expect("hint classifier should not fail")
-                .expect("terminal hinted status may short-circuit");
+                .expect("authoritative hinted status may short-circuit");
             let body = axum::body::to_bytes(hinted.into_body(), usize::MAX)
                 .await
                 .expect("hinted body should be readable");
@@ -19185,6 +19236,7 @@ mod torii_routed_read_tests {
                 norito::json::from_slice(&body).expect("status payload");
 
             assert_eq!(payload.status.kind, kind);
+            assert_eq!(payload.resolved_from, resolved_from);
         }
     }
 
@@ -34132,16 +34184,16 @@ fn pipeline_status_terminal_or_state_entry(
 ) -> Option<(PipelineStatusEntry, &'static str)> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
-    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
-        if entry.kind.is_terminal() {
-            return Some((entry, "cache"));
-        }
-    }
-
     if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Some((entry, "state"));
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind.is_terminal() {
+            return Some((entry, "cache"));
+        }
     }
 
     None
@@ -34241,11 +34293,14 @@ fn execute_pipeline_status_local_read(
 }
 
 #[cfg(feature = "app_api")]
-fn pipeline_status_payload_is_terminal(payload: &PipelineTransactionStatusResponse) -> bool {
-    matches!(
-        payload.status.kind.as_str(),
-        "Applied" | "Rejected" | "Expired"
-    )
+fn pipeline_status_payload_is_authoritative_hint(
+    payload: &PipelineTransactionStatusResponse,
+) -> bool {
+    match payload.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" | "Expired" => payload.resolved_from == "state",
+        _ => false,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -34270,7 +34325,7 @@ async fn pipeline_status_hinted_global_response(
             )
         })?;
     let is_terminal = norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes)
-        .map(|payload| pipeline_status_payload_is_terminal(&payload))
+        .map(|payload| pipeline_status_payload_is_authoritative_hint(&payload))
         .unwrap_or(false);
     let response = Response::from_parts(parts, Body::from(bytes));
 
@@ -50625,28 +50680,30 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
-    fn pipeline_status_merge_prefers_higher_rank() {
+    fn pipeline_status_merge_prefers_committed_success_over_cached_rejection() {
         let now = Instant::now();
-        let mut entry = PipelineStatusEntry::at_time(PipelineStatusKind::Applied, None, None, now);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        let mut entry =
+            PipelineStatusEntry::at_time(PipelineStatusKind::Rejected, None, Some(rejection), now);
         entry.merge_from_event(PipelineStatusEntry::at_time(
-            PipelineStatusKind::Expired,
-            None,
+            PipelineStatusKind::Committed,
+            NonZeroU64::new(7),
             None,
             now + Duration::from_secs(1),
         ));
-        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+        assert_eq!(entry.kind, PipelineStatusKind::Committed);
+        assert_eq!(entry.block_height, NonZeroU64::new(7));
+        assert!(entry.rejection.is_none());
 
-        let height = NonZeroU64::new(7).expect("height");
-        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
         entry.merge_from_event(PipelineStatusEntry::at_time(
-            PipelineStatusKind::Rejected,
-            Some(height),
-            Some(rejection.clone()),
+            PipelineStatusKind::Applied,
+            NonZeroU64::new(7),
+            None,
             now + Duration::from_secs(2),
         ));
-        assert_eq!(entry.kind, PipelineStatusKind::Rejected);
-        assert_eq!(entry.block_height, Some(height));
-        assert_eq!(entry.rejection, Some(rejection));
+        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+        assert_eq!(entry.block_height, NonZeroU64::new(7));
+        assert!(entry.rejection.is_none());
     }
 
     #[test]
@@ -51834,6 +51891,61 @@ pub(crate) mod tests_runtime_handlers {
         app.pipeline_status_cache.record_entry(
             tx_hash,
             PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+        );
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload
+                .get("status")
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Applied")
+        );
+        assert_eq!(
+            payload
+                .get("resolved_from")
+                .and_then(norito::json::Value::as_str),
+            Some("state")
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        store_block(&app, block);
+
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(rejection)),
         );
 
         let height = header.height();

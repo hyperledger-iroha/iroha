@@ -3289,6 +3289,7 @@ impl JsonDeserialize for Uptime {
 #[cfg(test)]
 mod serde_tests {
     use super::*;
+    use norito::{from_bytes, to_bytes};
 
     #[test]
     fn uptime_json_roundtrip() {
@@ -3350,6 +3351,38 @@ mod serde_tests {
         let decoded: Status = norito::json::from_json(&json).expect("deserialize status");
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.uptime.0, status.uptime.0);
+    }
+
+    #[test]
+    fn sumeragi_consensus_status_norito_preserves_tx_queue_pressure_causes() {
+        let status = SumeragiConsensusStatus {
+            tx_queue_depth: 31,
+            tx_queue_capacity: 64,
+            tx_queue_retained_bytes: 98_304,
+            tx_queue_max_retained_bytes: 131_072,
+            tx_queue_saturated: true,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: true,
+            tx_queue_saturated_by_age: true,
+            tx_queue_oldest_queued_age_ms: 7_500,
+            ..SumeragiConsensusStatus::default()
+        };
+
+        let bytes = to_bytes(&status).expect("encode sumeragi consensus status");
+        let archived = from_bytes::<SumeragiConsensusStatus>(&bytes)
+            .expect("archive sumeragi consensus status");
+        let decoded: SumeragiConsensusStatus =
+            norito::core::NoritoDeserialize::deserialize(archived);
+
+        assert_eq!(decoded.tx_queue_depth, 31);
+        assert_eq!(decoded.tx_queue_capacity, 64);
+        assert_eq!(decoded.tx_queue_retained_bytes, 98_304);
+        assert_eq!(decoded.tx_queue_max_retained_bytes, 131_072);
+        assert!(decoded.tx_queue_saturated);
+        assert!(!decoded.tx_queue_saturated_by_count);
+        assert!(decoded.tx_queue_saturated_by_bytes);
+        assert!(decoded.tx_queue_saturated_by_age);
+        assert_eq!(decoded.tx_queue_oldest_queued_age_ms, 7_500);
     }
 
     #[test]
@@ -4395,6 +4428,18 @@ pub struct SumeragiConsensusStatus {
     pub tx_queue_max_retained_bytes: u64,
     /// Whether the local transaction queue is saturated.
     pub tx_queue_saturated: bool,
+    /// Whether the local transaction queue is saturated by transaction count.
+    #[norito(default)]
+    pub tx_queue_saturated_by_count: bool,
+    /// Whether the local transaction queue is saturated by retained bytes.
+    #[norito(default)]
+    pub tx_queue_saturated_by_bytes: bool,
+    /// Whether the local transaction queue is saturated by oldest queued age.
+    #[norito(default)]
+    pub tx_queue_saturated_by_age: bool,
+    /// Oldest queued transaction age in milliseconds.
+    #[norito(default)]
+    pub tx_queue_oldest_queued_age_ms: u64,
     /// Epoch length in blocks (NPoS mode; zero when not applicable).
     #[norito(default)]
     pub epoch_length_blocks: u64,
@@ -4543,6 +4588,10 @@ struct SumeragiConsensusStatusPayload {
     commit_qc_validator_set_len: u64,
     tx_queue_retained_bytes: u64,
     tx_queue_max_retained_bytes: u64,
+    tx_queue_saturated_by_count: bool,
+    tx_queue_saturated_by_bytes: bool,
+    tx_queue_saturated_by_age: bool,
+    tx_queue_oldest_queued_age_ms: u64,
 }
 
 fn decode_field<'a, T: DecodeFromSlice<'a>>(
@@ -4928,6 +4977,26 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
         } else {
             0
         };
+        let tx_queue_saturated_by_count = if used < bytes.len() {
+            decode_field::<bool>(bytes, &mut used)?
+        } else {
+            false
+        };
+        let tx_queue_saturated_by_bytes = if used < bytes.len() {
+            decode_field::<bool>(bytes, &mut used)?
+        } else {
+            false
+        };
+        let tx_queue_saturated_by_age = if used < bytes.len() {
+            decode_field::<bool>(bytes, &mut used)?
+        } else {
+            false
+        };
+        let tx_queue_oldest_queued_age_ms = if used < bytes.len() {
+            decode_field::<u64>(bytes, &mut used)?
+        } else {
+            0
+        };
 
         Ok((
             Self {
@@ -4979,6 +5048,10 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
                 commit_qc_validator_set_len,
                 tx_queue_retained_bytes,
                 tx_queue_max_retained_bytes,
+                tx_queue_saturated_by_count,
+                tx_queue_saturated_by_bytes,
+                tx_queue_saturated_by_age,
+                tx_queue_oldest_queued_age_ms,
             },
             used,
         ))
@@ -5004,6 +5077,10 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
             tx_queue_retained_bytes: status.tx_queue_retained_bytes,
             tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
             tx_queue_saturated: status.tx_queue_saturated,
+            tx_queue_saturated_by_count: status.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: status.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: status.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: status.tx_queue_oldest_queued_age_ms,
             epoch_length_blocks: status.epoch_length_blocks,
             epoch_commit_deadline_offset: status.epoch_commit_deadline_offset,
             epoch_reveal_deadline_offset: status.epoch_reveal_deadline_offset,
@@ -5059,6 +5136,10 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
             tx_queue_retained_bytes: payload.tx_queue_retained_bytes,
             tx_queue_max_retained_bytes: payload.tx_queue_max_retained_bytes,
             tx_queue_saturated: payload.tx_queue_saturated,
+            tx_queue_saturated_by_count: payload.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: payload.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: payload.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: payload.tx_queue_oldest_queued_age_ms,
             epoch_length_blocks: payload.epoch_length_blocks,
             epoch_commit_deadline_offset: payload.epoch_commit_deadline_offset,
             epoch_reveal_deadline_offset: payload.epoch_reveal_deadline_offset,
@@ -6153,6 +6234,10 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         tx_queue_retained_bytes: metrics.sumeragi_tx_queue_retained_bytes.get(),
         tx_queue_max_retained_bytes: metrics.sumeragi_tx_queue_max_retained_bytes.get(),
         tx_queue_saturated: metrics.sumeragi_tx_queue_saturated.get() != 0,
+        tx_queue_saturated_by_count: metrics.sumeragi_tx_queue_saturated_by_count.get() != 0,
+        tx_queue_saturated_by_bytes: metrics.sumeragi_tx_queue_saturated_by_bytes.get() != 0,
+        tx_queue_saturated_by_age: metrics.sumeragi_tx_queue_saturated_by_age.get() != 0,
+        tx_queue_oldest_queued_age_ms: metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(),
         epoch_length_blocks: metrics.sumeragi_epoch_length_blocks.get(),
         epoch_commit_deadline_offset: metrics.sumeragi_epoch_commit_deadline_offset.get(),
         epoch_reveal_deadline_offset: metrics.sumeragi_epoch_reveal_deadline_offset.get(),
@@ -6692,8 +6777,6 @@ pub struct Metrics {
     pub offline_note_pruned_total: IntCounter,
     /// Offline attestation tokens processed grouped by integrity policy.
     pub offline_attestation_policy_total: IntCounterVec,
-    /// iOS App Attest assertions accepted through the compatibility signature path.
-    pub offline_app_attest_signature_compat_total: IntCounter,
     /// Viral incentive lifecycle events grouped by event kind.
     pub social_events_total: IntCounterVec,
     /// Latest viral reward budget spend for the active day.
@@ -6722,8 +6805,16 @@ pub struct Metrics {
     pub sumeragi_tx_queue_retained_bytes: GenericGauge<AtomicU64>,
     /// Retained transaction queue byte budget observed by consensus.
     pub sumeragi_tx_queue_max_retained_bytes: GenericGauge<AtomicU64>,
-    /// Queue capacity saturation flag observed by consensus (0 = healthy, 1 = saturated).
+    /// Queue saturation flag observed by consensus (0 = healthy, 1 = saturated).
     pub sumeragi_tx_queue_saturated: GenericGauge<AtomicU64>,
+    /// Transaction count saturation flag observed by consensus (0 = inactive, 1 = active).
+    pub sumeragi_tx_queue_saturated_by_count: GenericGauge<AtomicU64>,
+    /// Retained-byte saturation flag observed by consensus (0 = inactive, 1 = active).
+    pub sumeragi_tx_queue_saturated_by_bytes: GenericGauge<AtomicU64>,
+    /// Oldest-queued-age saturation flag observed by consensus (0 = inactive, 1 = active).
+    pub sumeragi_tx_queue_saturated_by_age: GenericGauge<AtomicU64>,
+    /// Oldest queued transaction age in milliseconds observed by consensus.
+    pub sumeragi_tx_queue_oldest_queued_age_ms: GenericGauge<AtomicU64>,
     /// Total pending blocks tracked by consensus.
     pub sumeragi_pending_blocks_total: GenericGauge<AtomicU64>,
     /// Pending blocks that currently gate proposals/view changes.
@@ -8894,11 +8985,6 @@ impl Default for Metrics {
             &["policy"],
         )
         .expect("Infallible");
-        let offline_app_attest_signature_compat_total = IntCounter::new(
-            "iroha_offline_app_attest_signature_compat_total",
-            "iOS App Attest assertions accepted via SHA256(clientDataHash) compatibility path",
-        )
-        .expect("Infallible");
         let social_events_total = IntCounterVec::new(
             Opts::new(
                 "iroha_social_events_total",
@@ -9199,7 +9285,27 @@ impl Default for Metrics {
         .expect("Infallible");
         let sumeragi_tx_queue_saturated = GenericGauge::new(
             "sumeragi_tx_queue_saturated",
-            "Transaction queue capacity saturation flag observed by consensus (0 = healthy, 1 = saturated)",
+            "Transaction queue saturation flag observed by consensus (0 = healthy, 1 = saturated)",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_saturated_by_count = GenericGauge::new(
+            "sumeragi_tx_queue_saturated_by_count",
+            "Transaction count saturation flag observed by consensus (0 = inactive, 1 = active)",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_saturated_by_bytes = GenericGauge::new(
+            "sumeragi_tx_queue_saturated_by_bytes",
+            "Retained-byte saturation flag observed by consensus (0 = inactive, 1 = active)",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_saturated_by_age = GenericGauge::new(
+            "sumeragi_tx_queue_saturated_by_age",
+            "Oldest-queued-age saturation flag observed by consensus (0 = inactive, 1 = active)",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_oldest_queued_age_ms = GenericGauge::new(
+            "sumeragi_tx_queue_oldest_queued_age_ms",
+            "Oldest queued transaction age in milliseconds observed by consensus",
         )
         .expect("Infallible");
         let sumeragi_pending_blocks_total = GenericGauge::new(
@@ -14123,7 +14229,6 @@ impl Default for Metrics {
             offline_note_rejections_total,
             offline_note_pruned_total,
             offline_attestation_policy_total,
-            offline_app_attest_signature_compat_total,
             social_events_total,
             social_budget_spent,
             social_campaign_spent,
@@ -14716,6 +14821,10 @@ impl Default for Metrics {
             sumeragi_tx_queue_retained_bytes,
             sumeragi_tx_queue_max_retained_bytes,
             sumeragi_tx_queue_saturated,
+            sumeragi_tx_queue_saturated_by_count,
+            sumeragi_tx_queue_saturated_by_bytes,
+            sumeragi_tx_queue_saturated_by_age,
+            sumeragi_tx_queue_oldest_queued_age_ms,
             sumeragi_pending_blocks_total,
             sumeragi_pending_blocks_blocking,
             sumeragi_commit_inflight_queue_depth,
@@ -15279,7 +15388,6 @@ impl Default for Metrics {
             offline_note_rejections_total,
             offline_note_pruned_total,
             offline_attestation_policy_total,
-            offline_app_attest_signature_compat_total,
             social_events_total,
             social_budget_spent,
             social_campaign_spent,
@@ -15295,6 +15403,10 @@ impl Default for Metrics {
             sumeragi_tx_queue_retained_bytes,
             sumeragi_tx_queue_max_retained_bytes,
             sumeragi_tx_queue_saturated,
+            sumeragi_tx_queue_saturated_by_count,
+            sumeragi_tx_queue_saturated_by_bytes,
+            sumeragi_tx_queue_saturated_by_age,
+            sumeragi_tx_queue_oldest_queued_age_ms,
             sumeragi_pending_blocks_total,
             sumeragi_pending_blocks_blocking,
             sumeragi_commit_inflight_queue_depth,
@@ -16960,11 +17072,6 @@ impl Metrics {
         self.offline_attestation_policy_total
             .with_label_values(&[policy])
             .inc();
-    }
-
-    /// Record an iOS App Attest signature accepted by the compatibility fallback.
-    pub fn inc_offline_app_attest_signature_compat(&self) {
-        self.offline_app_attest_signature_compat_total.inc();
     }
 
     /// Update queue/backlog telemetry for the SoraNet privacy aggregator.
@@ -20334,6 +20441,10 @@ mod test {
                 tx_queue_retained_bytes: 1_024,
                 tx_queue_max_retained_bytes: 65_536,
                 tx_queue_saturated: false,
+                tx_queue_saturated_by_count: false,
+                tx_queue_saturated_by_bytes: false,
+                tx_queue_saturated_by_age: false,
+                tx_queue_oldest_queued_age_ms: 250,
                 epoch_length_blocks: 0,
                 epoch_commit_deadline_offset: 0,
                 epoch_reveal_deadline_offset: 0,
@@ -20435,6 +20546,32 @@ mod test {
     }
 
     #[test]
+    fn build_sumeragi_status_includes_tx_queue_pressure_causes() {
+        let metrics = Metrics::default();
+        metrics.sumeragi_tx_queue_depth.set(31);
+        metrics.sumeragi_tx_queue_capacity.set(64);
+        metrics.sumeragi_tx_queue_retained_bytes.set(98_304);
+        metrics.sumeragi_tx_queue_max_retained_bytes.set(131_072);
+        metrics.sumeragi_tx_queue_saturated.set(1);
+        metrics.sumeragi_tx_queue_saturated_by_count.set(0);
+        metrics.sumeragi_tx_queue_saturated_by_bytes.set(1);
+        metrics.sumeragi_tx_queue_saturated_by_age.set(1);
+        metrics.sumeragi_tx_queue_oldest_queued_age_ms.set(7_500);
+
+        let status = build_sumeragi_status(&metrics);
+
+        assert_eq!(status.tx_queue_depth, 31);
+        assert_eq!(status.tx_queue_capacity, 64);
+        assert_eq!(status.tx_queue_retained_bytes, 98_304);
+        assert_eq!(status.tx_queue_max_retained_bytes, 131_072);
+        assert!(status.tx_queue_saturated);
+        assert!(!status.tx_queue_saturated_by_count);
+        assert!(status.tx_queue_saturated_by_bytes);
+        assert!(status.tx_queue_saturated_by_age);
+        assert_eq!(status.tx_queue_oldest_queued_age_ms, 7_500);
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn serialize_status_json() {
         let value = sample_status();
@@ -20522,6 +20659,10 @@ mod test {
                 "tx_queue_retained_bytes": 1_024,
                 "tx_queue_max_retained_bytes": 65_536,
                 "tx_queue_saturated": false,
+                "tx_queue_saturated_by_count": false,
+                "tx_queue_saturated_by_bytes": false,
+                "tx_queue_saturated_by_age": false,
+                "tx_queue_oldest_queued_age_ms": 250,
                 "epoch_length_blocks": 0,
                 "epoch_commit_deadline_offset": 0,
                 "epoch_reveal_deadline_offset": 0,
@@ -20694,6 +20835,10 @@ mod test {
                 "tx_queue_retained_bytes": 1024,
                 "tx_queue_max_retained_bytes": 65536,
                 "tx_queue_saturated": false,
+                "tx_queue_saturated_by_count": false,
+                "tx_queue_saturated_by_bytes": false,
+                "tx_queue_saturated_by_age": false,
+                "tx_queue_oldest_queued_age_ms": 250,
                 "epoch_length_blocks": 0,
                 "epoch_commit_deadline_offset": 0,
                 "epoch_reveal_deadline_offset": 0,

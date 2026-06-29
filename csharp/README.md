@@ -735,9 +735,10 @@ reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
 Use `PreferredMode(...)` to select `recursive_compact_v1` when the complete
-ABI-7 compact-token native surface is available, fall back to
-`recursive_spend_v1` when only the ABI-6 recursive-spend surface is available,
-and otherwise use `checked_prefold_v1`.
+ABI-7 compact-token native surface is available, `recursive_spend_v1` when only
+the complete ABI-6-or-later native surface is available, and otherwise `null`.
+Zero-argument selection probes the native bridge; explicit capability selection
+must pass both `recursiveCompactAvailable` and `recursiveSpendAvailable`.
 The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
 probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle
@@ -763,6 +764,17 @@ current-hop and, when required, previous-proof Pallas opening archives. These
 helpers still validate typed or raw lineage key material and previous-lineage
 record selection before invoking the Pallas builders, so builder availability
 or malformed record bundles cannot mask lineage-admission errors.
+The raw recursive init/append wrappers and record-backed bridge helpers decode
+`KagemushaVerifiedFoldRecordBundle` enough to reject over-limit `steps` count
+prefixes before loading the native bridge. Raw init/append request wrappers
+and the direct record-backed recursive aggregation/compact prover helpers also
+reject Pallas open-envelope archives whose top-level native vector schema or
+envelope count does not match the folded record-bundle hop count. The same C#
+managed preflight decodes each supplied Pallas `OpenVerifyEnvelope` far enough
+to reject malformed IPA params/public/proof counts, missing or malformed
+`vk_commitment` / `public_inputs_schema_hash` / `domain_tag` metadata options,
+empty or over-limit transcript labels, and trailing envelope bytes before
+native dispatch.
 Use `ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(...)`
 with record-bundle, Pallas open-envelope, and recursive compact key-artifact
 archives, and `VerifyRecursiveCompactPaymentToken(...)` with compact-token and
@@ -780,7 +792,7 @@ includes packaged compact proving-key archives and matching verifier-slice
 material. Production defaults still stay on ABI 6 Reserved-lineage recursive
 spend until that artifact set is shipped and signed for release. Empty,
 malformed, missing, or oversized local archives fail as `ArgumentException`;
-bridge error code `-312` remains classified as legacy reserved ABI-7 state. The
+bridge error code `-312` remains classified as reserved ABI-7 state. The
 ABI-7 launch boundary remains explicit: the one-hop LEN=4 compact-token proof
 path uses a packaged compact one-hop proving-key, while release evidence
 continues to track the proof-composition reservation, generic compact-token
@@ -828,7 +840,12 @@ Verify request archives must pass the same public-binding preflight before the
 native bridge returns a recursive spend verify result: Reserved-lineage bundles
 require a matching active `lineage_verifier_record`, semantic bundles must omit
 it, and unsupported proof attachments are rejected as malformed requests rather
-than soft invalid proof results.
+than soft invalid proof results. Redeem request archives keep the same
+single-record path and also carry the trailing defaulted
+`lineage_verifier_records` vector for additional Reserved-lineage verifier
+records; C# metadata-bound `Redeem(...)` overloads accept either source through
+the plural record-count preflight while the single-record boolean overloads
+remain available.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -874,6 +891,11 @@ until real proving, verification, chain admission, witness privacy checks,
 deterministic testing, negative/adversarial testing, replay/nullifier rejection
 testing, parser/verifier fuzzing, performance gates, and external audit signoff
 are complete.
+
+`PrivacyProofRequestV1(...)` performs managed preflight before loading the
+native bridge: `publicInputs` must be non-empty, `witness` and `proof` are
+capped at 33,554,432 bytes, and diagnostics name the offending component (for
+example, `proof must not exceed 33554432 bytes`).
 
 C# also exposes the deterministic privacy FFI status/error-code contract for
 diagnostics and cross-language parity: `StatusError`, `ErrorNullPointer`,

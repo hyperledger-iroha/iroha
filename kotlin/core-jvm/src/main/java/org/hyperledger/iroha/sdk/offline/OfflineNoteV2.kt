@@ -42,9 +42,6 @@ object OfflineNoteV2 {
     const val IOS_APP_ATTEST_PLATFORM: String = "ios-appattest"
     const val IOS_APP_ATTEST_ASSERTION_SCHEME: String = "apple-appattest-counter-v1"
     const val IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM: String = "app-attest-p256"
-    const val IOS_APP_ATTEST_LEGACY_PLATFORM: String = "ios-app-attest"
-    const val IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME: String = "apple-app-attest-v1"
-    const val IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM: String = "ecdsa-p256-sha256"
     const val ANDROID_KEYMINT_PLATFORM: String = "android-keymint"
     const val ANDROID_KEYMINT_ASSERTION_SCHEME: String =
         "android-keymint-ecdsa-p256-usage-limit-v1"
@@ -98,12 +95,6 @@ object OfflineNoteV2 {
         "iroha_data_model::isi::offline::AuditOfflineNote"
     const val REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA: String =
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
-    private const val ISSUE_INSTRUCTION_ALIAS_SCHEMA =
-        "iroha_data_model::isi::offline::IssueOfflineNoteV2"
-    private const val REDEEM_INSTRUCTION_ALIAS_SCHEMA =
-        "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
-    private const val AUDIT_INSTRUCTION_ALIAS_SCHEMA =
-        "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 
     @JvmStatic
     fun encodeCertificatePayload(value: KeyCertificatePayloadV2): ByteArray =
@@ -247,7 +238,6 @@ object OfflineNoteV2 {
         decodeInstructionModel(
             bytes,
             ISSUE_INSTRUCTION_SCHEMA,
-            ISSUE_INSTRUCTION_ALIAS_SCHEMA,
             ISSUE_SCHEMA,
             IssueAdapter,
         )
@@ -257,7 +247,6 @@ object OfflineNoteV2 {
         decodeInstructionModel(
             bytes,
             REDEEM_INSTRUCTION_SCHEMA,
-            REDEEM_INSTRUCTION_ALIAS_SCHEMA,
             REDEEM_SCHEMA,
             RedeemAdapter,
         )
@@ -267,7 +256,6 @@ object OfflineNoteV2 {
         decodeInstructionModel(
             bytes,
             AUDIT_INSTRUCTION_SCHEMA,
-            AUDIT_INSTRUCTION_ALIAS_SCHEMA,
             AUDIT_SCHEMA,
             AuditAdapter,
         )
@@ -329,58 +317,26 @@ object OfflineNoteV2 {
             bytes,
             listOf(REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA),
         )
-        try {
-            return NoritoCodec.decode(
-                wirePayload,
-                RegisterDeviceAttestationInstructionAdapter,
-                REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            )
-        } catch (canonicalError: RuntimeException) {
-            try {
-                val modelPayload = NoritoCodec.decode(
-                    wirePayload,
-                    InstructionWrapperPayloadAdapter,
-                    REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-                )
-                return decodeModelPayload(
-                    modelPayload.bytes,
-                    DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
-                    DeviceAttestationRegistrationAdapter,
-                    modelPayload.flags,
-                )
-            } catch (legacyError: RuntimeException) {
-                legacyError.addSuppressed(canonicalError)
-                throw IllegalArgumentException(
-                    "Offline Note V2 register device attestation instruction envelope is invalid",
-                    legacyError,
-                )
-            }
-        }
+        return NoritoCodec.decode(
+            wirePayload,
+            RegisterDeviceAttestationInstructionAdapter,
+            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+        )
     }
 
     private fun <T> decodeInstructionModel(
         bytes: ByteArray,
         instructionSchema: String,
-        instructionAliasSchema: String,
         modelSchema: String,
         modelAdapter: TypeAdapter<T>,
     ): T {
-        val instructionSchemas = listOf(instructionSchema, instructionAliasSchema)
-        val wirePayload = extractInstructionWirePayload(bytes, instructionSchemas)
-        var lastError: RuntimeException? = null
-        for (candidateSchema in instructionSchemas) {
-            try {
-                val modelPayload = NoritoCodec.decode(
-                    wirePayload,
-                    InstructionWrapperPayloadAdapter,
-                    candidateSchema,
-                )
-                return decodeModelPayload(modelPayload.bytes, modelSchema, modelAdapter, modelPayload.flags)
-            } catch (ex: RuntimeException) {
-                lastError = ex
-            }
-        }
-        throw IllegalArgumentException("Offline Note V2 instruction envelope is invalid", lastError)
+        val wirePayload = extractInstructionWirePayload(bytes, listOf(instructionSchema))
+        val modelPayload = NoritoCodec.decode(
+            wirePayload,
+            InstructionWrapperPayloadAdapter,
+            instructionSchema,
+        )
+        return decodeModelPayload(modelPayload.bytes, modelSchema, modelAdapter, modelPayload.flags)
     }
 
     private fun extractInstructionWirePayload(bytes: ByteArray, expectedWireNames: List<String>): ByteArray {
@@ -2173,17 +2129,6 @@ object OfflineNoteV2 {
                 assertionKeyAlgorithm,
                 assertionUsageCountLimit,
             )
-            IOS_APP_ATTEST_LEGACY_PLATFORM -> {
-                require(assertionScheme == IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME) {
-                    "legacy iOS App Attest assertion scheme must be $IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME"
-                }
-                require(assertionKeyAlgorithm == IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM) {
-                    "legacy iOS App Attest assertion key algorithm must be $IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM"
-                }
-                require(assertionUsageCountLimit == null) {
-                    "legacy iOS App Attest assertion usage count limit must be absent"
-                }
-            }
             ANDROID_KEYMINT_PLATFORM -> requireAndroidKeyMintProfile(
                 keyId,
                 assertionScheme,

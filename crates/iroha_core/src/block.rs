@@ -20293,6 +20293,7 @@ mod tests {
     use iroha_data_model::{
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
+        nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect},
         prelude::*,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
@@ -20328,6 +20329,18 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
+        FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                sponsor.clone(),
+                "default".parse().expect("default fee sponsor policy"),
+            ),
+            enabled: true,
+            max_fee: None,
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        }
     }
 
     #[test]
@@ -23911,138 +23924,6 @@ mod tests {
     }
 
     #[test]
-    fn fee_enabled_invalid_sink_before_burn_rejects_without_partial_transfer_or_fee() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-invalid-sink-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
-            [domain],
-            [payer, recipient],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
-            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
-            nexus.fees.burn_from_unix_timestamp_ms = 20;
-        }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Transfer::asset_numeric(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "invalid pre-burn fee sink must reject the transaction"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after invalid sink rejection")
-                .0,
-            Numeric::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after invalid sink rejection")
-                .0,
-            Numeric::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_fee_asset)
-                .expect("payer xor after invalid sink rejection")
-                .0,
-            Numeric::from(10_u32),
-            "fee routing config failures must not debit the payer"
-        );
-    }
-
-    #[test]
     fn fee_enabled_unauthorized_sponsor_rejects_without_transfer_or_sponsor_debit() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -24377,12 +24258,15 @@ mod tests {
         let fee_permission: Permission =
             iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                 sponsor: sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             }
             .into();
         world.account_permissions.insert(
             payer_id.clone(),
             std::collections::BTreeSet::from([fee_permission]),
         );
+        let policy = default_fee_sponsor_policy(&sponsor_id);
+        world.fee_sponsor_policies.insert(policy.id.clone(), policy);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
         let mut state =
@@ -25032,13 +24916,14 @@ mod tests {
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 5;
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         {
             let fee_permission: Permission =
                 iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                     sponsor: sponsor_id.clone(),
+                    policy: "default".parse().expect("default fee sponsor policy"),
                 }
                 .into();
             let mut world = state.world.block();
@@ -25046,6 +24931,8 @@ mod tests {
                 authority_id.clone(),
                 std::collections::BTreeSet::from([fee_permission]),
             );
+            let policy = default_fee_sponsor_policy(&sponsor_id);
+            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
             world.commit();
         }
 
@@ -25158,7 +25045,7 @@ mod tests {
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 5;
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.lane_catalog = LaneCatalog::new(
                 nonzero!(4_u32),
                 vec![
@@ -25190,6 +25077,7 @@ mod tests {
             let fee_permission: Permission =
                 iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                     sponsor: sponsor_id.clone(),
+                    policy: "default".parse().expect("default fee sponsor policy"),
                 }
                 .into();
             let mut world = state.world.block();
@@ -25197,6 +25085,8 @@ mod tests {
                 authority_id.clone(),
                 std::collections::BTreeSet::from([fee_permission]),
             );
+            let policy = default_fee_sponsor_policy(&sponsor_id);
+            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
             world.commit();
         }
 

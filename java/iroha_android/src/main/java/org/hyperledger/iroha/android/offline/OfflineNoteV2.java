@@ -50,10 +50,6 @@ public final class OfflineNoteV2 {
   public static final String IOS_APP_ATTEST_PLATFORM = "ios-appattest";
   public static final String IOS_APP_ATTEST_ASSERTION_SCHEME = "apple-appattest-counter-v1";
   public static final String IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM = "app-attest-p256";
-  public static final String IOS_APP_ATTEST_LEGACY_PLATFORM = "ios-app-attest";
-  public static final String IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME = "apple-app-attest-v1";
-  public static final String IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM =
-      "ecdsa-p256-sha256";
   public static final String ANDROID_KEYMINT_PLATFORM = "android-keymint";
   public static final String ANDROID_KEYMINT_ASSERTION_SCHEME =
       "android-keymint-ecdsa-p256-usage-limit-v1";
@@ -109,12 +105,6 @@ public final class OfflineNoteV2 {
       "iroha_data_model::isi::offline::AuditOfflineNote";
   public static final String REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA =
       "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation";
-  private static final String ISSUE_INSTRUCTION_ALIAS_SCHEMA =
-      "iroha_data_model::isi::offline::IssueOfflineNoteV2";
-  private static final String REDEEM_INSTRUCTION_ALIAS_SCHEMA =
-      "iroha_data_model::isi::offline::RedeemOfflineNoteV2";
-  private static final String AUDIT_INSTRUCTION_ALIAS_SCHEMA =
-      "iroha_data_model::isi::offline::AuditOfflineNoteV2";
 
   private OfflineNoteV2() {}
 
@@ -242,17 +232,17 @@ public final class OfflineNoteV2 {
 
   public static IssueV2 decodeIssueInstruction(final byte[] bytes) {
     return decodeInstructionModel(
-        bytes, ISSUE_INSTRUCTION_SCHEMA, ISSUE_INSTRUCTION_ALIAS_SCHEMA, ISSUE_SCHEMA, ISSUE_ADAPTER);
+        bytes, ISSUE_INSTRUCTION_SCHEMA, ISSUE_SCHEMA, ISSUE_ADAPTER);
   }
 
   public static RedeemV2 decodeRedeemInstruction(final byte[] bytes) {
     return decodeInstructionModel(
-        bytes, REDEEM_INSTRUCTION_SCHEMA, REDEEM_INSTRUCTION_ALIAS_SCHEMA, REDEEM_SCHEMA, REDEEM_ADAPTER);
+        bytes, REDEEM_INSTRUCTION_SCHEMA, REDEEM_SCHEMA, REDEEM_ADAPTER);
   }
 
   public static AuditBundleV2 decodeAuditInstruction(final byte[] bytes) {
     return decodeInstructionModel(
-        bytes, AUDIT_INSTRUCTION_SCHEMA, AUDIT_INSTRUCTION_ALIAS_SCHEMA, AUDIT_SCHEMA, AUDIT_ADAPTER);
+        bytes, AUDIT_INSTRUCTION_SCHEMA, AUDIT_SCHEMA, AUDIT_ADAPTER);
   }
 
   public static DeviceAttestationRegistrationV2 decodeRegisterDeviceAttestationInstruction(
@@ -309,52 +299,24 @@ public final class OfflineNoteV2 {
   private static DeviceAttestationRegistrationV2 decodeRegisterDeviceAttestationInstructionModel(
       final byte[] bytes) {
     final byte[] wirePayload =
-        extractInstructionWirePayload(bytes, List.of(REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA));
-    try {
-      return NoritoCodec.decode(
-          wirePayload,
-          REGISTER_DEVICE_ATTESTATION_INSTRUCTION_ADAPTER,
-          REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA);
-    } catch (final RuntimeException canonicalError) {
-      try {
-        final InstructionModelPayload modelPayload =
-            NoritoCodec.decode(
-                wirePayload,
-                INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER,
-                REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA);
-        return decodeModelPayload(
-            modelPayload.bytes(),
-            DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
-            DEVICE_ATTESTATION_REGISTRATION_ADAPTER,
-            modelPayload.flags());
-      } catch (final RuntimeException legacyError) {
-        legacyError.addSuppressed(canonicalError);
-        throw new IllegalArgumentException(
-            "Offline Note V2 register device attestation instruction envelope is invalid",
-            legacyError);
-      }
-    }
+        extractInstructionWirePayload(
+            bytes, Collections.singletonList(REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA));
+    return NoritoCodec.decode(
+        wirePayload,
+        REGISTER_DEVICE_ATTESTATION_INSTRUCTION_ADAPTER,
+        REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA);
   }
 
   private static <T> T decodeInstructionModel(
       final byte[] bytes,
       final String instructionSchema,
-      final String instructionAliasSchema,
       final String modelSchema,
       final TypeAdapter<T> modelAdapter) {
-    final List<String> instructionSchemas = List.of(instructionSchema, instructionAliasSchema);
-    final byte[] wirePayload = extractInstructionWirePayload(bytes, instructionSchemas);
-    RuntimeException lastError = null;
-    for (final String candidateSchema : instructionSchemas) {
-      try {
-        final InstructionModelPayload modelPayload =
-            NoritoCodec.decode(wirePayload, INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER, candidateSchema);
-        return decodeModelPayload(modelPayload.bytes(), modelSchema, modelAdapter, modelPayload.flags());
-      } catch (final RuntimeException ex) {
-        lastError = ex;
-      }
-    }
-    throw new IllegalArgumentException("Offline Note V2 instruction envelope is invalid", lastError);
+    final byte[] wirePayload =
+        extractInstructionWirePayload(bytes, Collections.singletonList(instructionSchema));
+    final InstructionModelPayload modelPayload =
+        NoritoCodec.decode(wirePayload, INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER, instructionSchema);
+    return decodeModelPayload(modelPayload.bytes(), modelSchema, modelAdapter, modelPayload.flags());
   }
 
   private static byte[] extractInstructionWirePayload(
@@ -3248,23 +3210,6 @@ public final class OfflineNoteV2 {
     requireP256AssertionPublicKey(assertionPublicKey);
     if (IOS_APP_ATTEST_PLATFORM.equals(platform)) {
       requireIosAppAttestProfile(assertionScheme, assertionKeyAlgorithm, assertionUsageCountLimit);
-      return;
-    }
-    if (IOS_APP_ATTEST_LEGACY_PLATFORM.equals(platform)) {
-      if (!IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME.equals(assertionScheme)) {
-        throw new IllegalArgumentException(
-            "legacy iOS App Attest assertion scheme must be "
-                + IOS_APP_ATTEST_LEGACY_ASSERTION_SCHEME);
-      }
-      if (!IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)) {
-        throw new IllegalArgumentException(
-            "legacy iOS App Attest assertion key algorithm must be "
-                + IOS_APP_ATTEST_LEGACY_ASSERTION_KEY_ALGORITHM);
-      }
-      if (assertionUsageCountLimit != null) {
-        throw new IllegalArgumentException(
-            "legacy iOS App Attest assertion usage count limit must be absent");
-      }
       return;
     }
     if (ANDROID_KEYMINT_PLATFORM.equals(platform)) {

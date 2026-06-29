@@ -17,7 +17,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 import org.hyperledger.iroha.android.client.ClientResponse;
 
-/** One-call Offline Note wallet facade for load, receive, pay, accept, redeem, and sync. */
+/**
+ * Archived classic Offline Note wallet/model helpers kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
+ */
 public final class OfflineNoteWallet {
   private static final AtomicInteger LOAD_THREAD_COUNTER = new AtomicInteger();
   private static final ExecutorService LOAD_EXECUTOR =

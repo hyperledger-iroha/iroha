@@ -99,6 +99,7 @@ public final class OfflineNoteTest {
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
     toriiIssuerClientBodySignsRefillAndRetiresNoteIssue();
+    toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases();
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletRejectsAuditWhenRecursiveVerifierFails();
@@ -963,17 +964,17 @@ public final class OfflineNoteTest {
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
         "recursive compact should be preferred when compact ABI is present");
     assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(true)
+        KagemushaRecursiveSpendProver.preferredMode(false, true)
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
         "recursive Kagemusha spend should be preferred when available");
     assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(false)
-            == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
-        "checked prefold should remain the compatibility fallback");
-    assertEquals(
-        "checked_prefold_v1",
-        KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName(),
-        "checked prefold Kagemusha wire mode");
+        KagemushaRecursiveSpendProver.preferredMode(false, false) == null,
+        "no recursive Kagemusha bridge should expose no preferred production mode");
+    for (final KagemushaRecursiveSpendProver.Mode mode : KagemushaRecursiveSpendProver.Mode.values()) {
+      assertTrue(
+          !"checked_prefold_v1".equals(mode.wireName()),
+          "checked-prefold is not a first-release spend mode");
+    }
     assertEquals(
         "recursive_compact_v1",
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName(),
@@ -3065,22 +3066,15 @@ public final class OfflineNoteTest {
 
     final String encoded =
         new String(OfflineNoteWalletNoteJsonCodec.encode(note), StandardCharsets.UTF_8);
-    final OfflineNoteWalletNote migratedSpent =
-        OfflineNoteWalletNoteJsonCodec.decode(
-            encoded.replace("\"state\":\"SPENDABLE\"", "\"state\":\"SPEND_PENDING\"")
-                .getBytes(StandardCharsets.UTF_8));
-    assertEquals(
-        OfflineNoteWalletNoteState.SPENT.name(),
-        migratedSpent.state().name(),
-        "migrated spend pending state");
-    final OfflineNoteWalletNote migratedChange =
-        OfflineNoteWalletNoteJsonCodec.decode(
-            encoded.replace("\"state\":\"SPENDABLE\"", "\"state\":\"CHANGE_PENDING\"")
-                .getBytes(StandardCharsets.UTF_8));
-    assertEquals(
-        OfflineNoteWalletNoteState.SPENDABLE.name(),
-        migratedChange.state().name(),
-        "migrated change pending state");
+    for (final String retiredState :
+        Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")) {
+      assertThrows(
+          () ->
+              OfflineNoteWalletNoteJsonCodec.decode(
+                  encoded.replace("\"state\":\"SPENDABLE\"", "\"state\":\"" + retiredState + "\"")
+                      .getBytes(StandardCharsets.UTF_8)),
+          "retired " + retiredState + " wallet-note state should reject");
+    }
   }
 
   private static void walletNoteScopeIdsRejectSurroundingWhitespace() throws Exception {
@@ -3182,7 +3176,7 @@ public final class OfflineNoteTest {
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> certificateJson =
-        obj(obj(fixture, "payment_token"), "sender_key_certificate");
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
     final String accountId = string(certificateJson, "account_id");
     final String assetDefinitionId =
         assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
@@ -3198,6 +3192,13 @@ public final class OfflineNoteTest {
         new OfflineIssuerExecutor(certificateJson, " lineage-state-hash ");
     final List<byte[]> signedMessages = new ArrayList<>();
     final long[] nowMs = new long[] {1_700_000_000_000L};
+    final Map<String, String> defaultHeaders = new LinkedHashMap<>();
+    defaultHeaders.put("X-Iroha-Account", "retired-account");
+    defaultHeaders.put("x-iroha-signature", "retired-signature");
+    defaultHeaders.put("X-IROHA-TIMESTAMP-MS", "123");
+    defaultHeaders.put("X-Iroha-Nonce", "retired-nonce");
+    defaultHeaders.put("X-Iroha-Witness", "retired-witness");
+    defaultHeaders.put("X-Client-Trace", "trace-1");
     final ToriiOfflineNoteIssuerClient client =
         new ToriiOfflineNoteIssuerClient(
             new ToriiCanonicalRequestAuth(
@@ -3219,7 +3220,7 @@ public final class OfflineNoteTest {
             executor,
             URI.create("https://torii.example"),
             java.time.Duration.ofSeconds(15),
-            Map.of(),
+            defaultHeaders,
             List.of(),
             () -> nowMs[0],
             new SequenceIdGenerator(
@@ -3266,6 +3267,9 @@ public final class OfflineNoteTest {
               .noneMatch(name -> name.regionMatches(true, 0, "X-Iroha-", 0, "X-Iroha-".length())),
           "offline issuer body auth must not use X-Iroha headers");
     }
+    assertTrue(
+        List.of("trace-1").equals(executor.requests.get(0).headers().get("X-Client-Trace")),
+        "non-auth default header should survive");
 
     final Map<String, Object> refillBody = executor.requestBody(0);
     assertEquals(accountId, string(refillBody, "account_id"), "refill account id");
@@ -3303,6 +3307,21 @@ public final class OfflineNoteTest {
     assertEquals("", string(secondRefillBody, "local_state_hash"), "second refill local state hash");
   }
 
+  private static void toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
+    final String offlinePublicKey = "a5".repeat(32);
+    for (final String retiredKey :
+        Arrays.asList("device_public_key", "app_attest_public_key_base64")) {
+      final Map<String, Object> bindingJson = new LinkedHashMap<>();
+      bindingJson.put("device_id", "device-1");
+      bindingJson.put("attestation_key_id", "attestation-key-1");
+      bindingJson.put("offline_public_key", offlinePublicKey);
+      bindingJson.put(retiredKey, base64(filledBytes(65, 2)));
+      assertThrows(
+          () -> new OfflineNoteIssuerDeviceBinding("device-1", offlinePublicKey, bindingJson),
+          "device_binding." + retiredKey + " is retired; use assertion_public_key");
+    }
+  }
+
   private static byte[] fakeIssuerSignature(final byte[] message) {
     final byte[] signature = new byte[64];
     for (int index = 0; index < signature.length; index++) {
@@ -3314,7 +3333,7 @@ public final class OfflineNoteTest {
   private static void toriiIssuerClientRejectsMalformedCertificateUsageLimits() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> baseCertificateJson =
-        obj(obj(fixture, "payment_token"), "sender_key_certificate");
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
     final String accountId = string(baseCertificateJson, "account_id");
     final String assetDefinitionId =
         assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
@@ -3338,6 +3357,51 @@ public final class OfflineNoteTest {
       assertToriiIssuerClientRejectsCertificateJson(
           certificateJson, accountId, assetDefinitionId, binding);
     }
+    for (final String invalidScheme :
+        List.of("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("assertion_scheme", invalidScheme);
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+    for (final String invalidAlgorithm : List.of("ecdsa-p256-sha256", "ed25519")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("assertion_key_algorithm", invalidAlgorithm);
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+    for (final String invalidPlatform :
+        List.of("android", "android-keymint ", "Android-keymint", "ios-appattest-android")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("platform", invalidPlatform);
+      certificateJson.put("assertion_scheme", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME);
+      certificateJson.put(
+          "assertion_key_algorithm", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
+      certificateJson.put("assertion_usage_count_limit", Integer.valueOf(1));
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+
+    Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put("public_key", hex(filledBytes(33, 1)));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
+
+    certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put(
+        "assertion_public_key", base64(filledBytes(65, 0xff)).replace('/', '_'));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
+
+    certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put("issuer_signature_base64", " " + base64(filledBytes(64, 3)));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
+
+    certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put("issuer_signature_base64", base64(filledBytes(64, 3)).replace("=", ""));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
   }
 
   private static void assertToriiIssuerClientRejectsCertificateJson(
@@ -4699,6 +4763,24 @@ public final class OfflineNoteTest {
         nullableInt(json, "assertion_usage_count_limit"),
         bool(json, "one_use"),
         base64Bytes(string(json, "issuer_signature_base64")));
+  }
+
+  private static Map<String, Object> currentIssuerCertificateJson(
+      final Map<String, Object> json) {
+    final Map<String, Object> copy = new LinkedHashMap<>(json);
+    final String platform = string(copy, "platform");
+    if (OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      copy.put("assertion_scheme", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME);
+      copy.put(
+          "assertion_key_algorithm", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
+    } else if (OfflineNoteV2.IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      copy.put("assertion_scheme", OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME);
+      copy.put("assertion_key_algorithm", OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM);
+    } else {
+      copy.put("assertion_scheme", "unsupported-platform");
+      copy.put("assertion_key_algorithm", "unsupported-platform");
+    }
+    return copy;
   }
 
   private static OfflineNoteCertificateVerifier certificateVerifier(

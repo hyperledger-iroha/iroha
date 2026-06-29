@@ -13,7 +13,7 @@ import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
-/** Compatibility submitter that rejects retired classic Offline Note payment transactions. */
+/** Fail-closed submitter that rejects retired classic Offline Note payment transactions. */
 public final class IrohaOfflineNoteTransactionSubmitter implements OfflineNoteTransactionSubmitter {
   public static final String GAS_ASSET_ID_METADATA_KEY = "gas_asset_id";
   public static final String FEE_SPONSOR_METADATA_KEY = "fee_sponsor";

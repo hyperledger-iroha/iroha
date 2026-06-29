@@ -19,7 +19,7 @@ public final class FileKeyExportStore implements KeyExportStore {
 
   @Override
   public Optional<String> load(final String alias) throws KeyExportException {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       return Optional.empty();
     }
     synchronized (lock) {
@@ -30,10 +30,10 @@ public final class FileKeyExportStore implements KeyExportStore {
 
   @Override
   public void store(final String alias, final String bundleBase64) throws KeyExportException {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       throw new KeyExportException("alias must be provided");
     }
-    if (bundleBase64 == null || bundleBase64.isBlank()) {
+    if (bundleBase64 == null || bundleBase64.trim().isEmpty()) {
       throw new KeyExportException("bundleBase64 must be provided");
     }
     synchronized (lock) {
@@ -45,7 +45,7 @@ public final class FileKeyExportStore implements KeyExportStore {
 
   @Override
   public void delete(final String alias) throws KeyExportException {
-    if (alias == null || alias.isBlank()) {
+    if (alias == null || alias.trim().isEmpty()) {
       return;
     }
     synchronized (lock) {

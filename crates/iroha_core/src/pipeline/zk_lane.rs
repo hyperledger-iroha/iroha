@@ -509,6 +509,9 @@ struct WorkerPool {
     next_worker: usize,
 }
 
+const AUTO_WORKER_MIN: usize = 2;
+const AUTO_WORKER_MAX: usize = 8;
+
 impl WorkerPool {
     fn spawn(worker_threads: usize, work_queue_cap: usize) -> Self {
         let mut work_txs = Vec::with_capacity(worker_threads);
@@ -582,10 +585,10 @@ impl WorkerPool {
 
 fn resolve_worker_threads(configured: usize) -> usize {
     if configured == 0 {
-        std::thread::available_parallelism()
+        let detected = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1)
-            .max(1)
+            .unwrap_or(1);
+        detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
         configured.max(1)
     }
@@ -976,6 +979,22 @@ mod tests {
         assert_eq!(resolve_queue_cap(0, 32), 128);
         assert_eq!(resolve_queue_cap(0, 64), 256);
         assert_eq!(resolve_queue_cap(17, 4), 17);
+    }
+
+    #[test]
+    fn worker_threads_auto_is_bounded() {
+        let expected = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            .clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX);
+
+        assert_eq!(resolve_worker_threads(0), expected);
+        assert!(resolve_worker_threads(0) <= AUTO_WORKER_MAX);
+    }
+
+    #[test]
+    fn worker_threads_preserves_explicit_count() {
+        assert_eq!(resolve_worker_threads(32), 32);
     }
 
     #[test]

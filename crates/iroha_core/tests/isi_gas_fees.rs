@@ -44,6 +44,22 @@ fn new_account_in_domain(account_id: &AccountId, _domain: &str) -> Account {
     Account::new(account_id.clone()).build(account_id)
 }
 
+fn default_fee_sponsor_policy(sponsor: &AccountId) -> iroha_data_model::nexus::FeeSponsorPolicy {
+    let mut policy = iroha_data_model::nexus::FeeSponsorPolicy::new(
+        iroha_data_model::nexus::FeeSponsorPolicyId::new(
+            sponsor.clone(),
+            "default".parse().expect("default fee sponsor policy"),
+        ),
+    );
+    policy.enabled = true;
+    policy
+        .rules
+        .push(iroha_data_model::nexus::FeeSponsorRule::new(
+            iroha_data_model::nexus::FeeSponsorRuleEffect::Allow,
+        ));
+    policy
+}
+
 #[test]
 fn non_vm_instructions_charge_fees() {
     // 1) Minimal world: domains, accounts, asset definition, payer balance, tech account
@@ -302,6 +318,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     state.set_pipeline(pipeline);
     {
         let nexus = state.nexus.get_mut();
+        nexus.enabled = true;
         nexus.fees.sponsorship_enabled = true;
     }
 
@@ -345,12 +362,19 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let mut state_tx = block.transaction();
 
     // Grant the authority permission to charge fees to the sponsor.
+    iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy {
+        policy: default_fee_sponsor_policy(&sponsor_id),
+    }
+    .execute(&sponsor_id, &mut state_tx)
+    .expect("upsert fee sponsor policy");
     let permission = CanUseFeeSponsor {
         sponsor: sponsor_id.clone(),
+        policy: "default".parse().expect("default fee sponsor policy"),
     };
     Grant::account_permission(permission, alice_id.clone())
         .execute(&sponsor_id, &mut state_tx)
         .expect("grant fee sponsor permission");
+    state_tx.nexus.enabled = false;
 
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor
@@ -397,10 +421,11 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
 #[test]
 fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     use iroha_core::block::{BlockBuilder, ValidBlock};
+    use iroha_core::smartcontracts::Execute;
     use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
 
     let (alice_id, alice_kp) = gen_account_in("wonderland");
-    let (sponsor_id, sponsor_kp) = gen_account_in("wonderland");
+    let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
     let (gas_id, _gas_kp) = gen_account_in("ivm");
     let dom_w: Domain =
         Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice_id);
@@ -429,18 +454,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let mut state = new_state(world, kura, query_handle);
+    state.nexus.get_mut().enabled = true;
 
-    let permission = CanUseFeeSponsor {
-        sponsor: sponsor_id.clone(),
-    };
-    let setup_instruction: InstructionBox =
-        Grant::account_permission(permission, alice_id.clone()).into();
-    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-    let setup_tx = TransactionBuilder::new(chain.clone(), sponsor_id.clone())
-        .with_executable(Executable::from(core::iter::once(setup_instruction)))
-        .sign(sponsor_kp.private_key());
-    let setup_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(setup_tx));
-    let setup_block = BlockBuilder::new(vec![setup_accepted])
+    let setup_block = BlockBuilder::new(Vec::new())
         .chain(0, None)
         .sign(alice_kp.private_key())
         .unpack(|_| {});
@@ -450,6 +466,25 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         ValidBlock::validate_unchecked(setup_block.into(), &mut setup_state_block).unpack(|_| {});
     let setup_committed = setup_valid.commit_unchecked().unpack(|_| {});
     let _ = setup_state_block.apply_without_execution(&setup_committed, Vec::new());
+    {
+        let mut setup_state_tx = setup_state_block.transaction();
+        setup_state_tx.nexus.enabled = true;
+        iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy {
+            policy: default_fee_sponsor_policy(&sponsor_id),
+        }
+        .execute(&sponsor_id, &mut setup_state_tx)
+        .expect("upsert fee sponsor policy");
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
+            },
+            alice_id.clone(),
+        )
+        .execute(&sponsor_id, &mut setup_state_tx)
+        .expect("grant fee sponsor permission");
+        setup_state_tx.apply();
+    }
     setup_state_block
         .commit()
         .expect("commit setup permission block");
@@ -460,6 +495,17 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         assert!(
             check_tx.can_use_fee_sponsor(&alice_id, &sponsor_id),
             "setup block must grant CanUseFeeSponsor permission"
+        );
+        assert!(
+            check_tx
+                .world
+                .fee_sponsor_policies()
+                .get(&iroha_data_model::nexus::FeeSponsorPolicyId::new(
+                    sponsor_id.clone(),
+                    "default".parse().expect("default fee sponsor policy"),
+                ))
+                .is_some(),
+            "setup block must create the default fee sponsor policy"
         );
     }
 
@@ -476,6 +522,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     state.set_pipeline(pipeline);
     {
         let nexus = state.nexus.get_mut();
+        nexus.enabled = false;
         nexus.fees.sponsorship_enabled = true;
     }
 
@@ -495,6 +542,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         "fee_sponsor".parse().unwrap(),
         iroha_primitives::json::Json::new(sponsor_id.to_string()),
     );
+    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
         .with_executable(Executable::from(core::iter::once(instruction)))
         .with_metadata(md)
@@ -507,8 +555,12 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .sign(alice_kp.private_key())
         .unpack(|_| {});
     let mut state_block = state.block(block.header());
-    let valid = ValidBlock::validate_unchecked(block.into(), &mut state_block).unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let mut validation_events = Vec::new();
+    let valid = ValidBlock::validate_unchecked(block.into(), &mut state_block)
+        .unpack(|event| validation_events.push(format!("{event:?}")));
+    let committed = valid
+        .commit_unchecked()
+        .unpack(|event| validation_events.push(format!("{event:?}")));
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit block");
 
@@ -541,7 +593,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
             .metadata()
             .get(&"k".parse::<Name>().expect("metadata key"))
             .is_some(),
-        "overlay transaction must apply instruction effects"
+        "overlay transaction must apply instruction effects; validation_events={validation_events:?}"
     );
     assert_eq!(payer_balance_after, 0);
     assert!(

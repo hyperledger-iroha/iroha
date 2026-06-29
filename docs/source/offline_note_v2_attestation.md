@@ -43,21 +43,23 @@ rule when present, and must match the exact JSON `device_id`.
 The signed receipt version is `1` and contains these fields:
 
 - `version`: `1`.
-- `platform`: platform label. First-release receipts accept the legacy
-  middleware iOS profile `ios-app-attest`, the canonical on-chain iOS profile
-  `ios-appattest`, and the canonical Android profile `android-keymint`.
+- `platform`: platform label. First-release receipts accept only the canonical
+  iOS profile `ios-appattest` and the canonical Android profile
+  `android-keymint`; the retired middleware iOS spelling `ios-app-attest` is
+  rejected.
 - `account_id`: exact account string from the request.
 - `device_id`: exact device id from the request.
 - `offline_public_key_base64`: canonical standard base64 for the 32-byte Offline
   note public key. It must match request `offline_public_key`.
 - `assertion_public_key_base64`: canonical standard base64 for the hardware
-  assertion public key. It must match any request `assertion_public_key`,
-  `app_attest_public_key_base64`, or `device_public_key` field when present,
-  and it must encode a valid uncompressed SEC1 P-256 point.
+  assertion public key. It must match request `assertion_public_key` when
+  present, and it must encode a valid uncompressed SEC1 P-256 point. Retired
+  request-side aliases `app_attest_public_key_base64` and `device_public_key`
+  are rejected inside `device_binding`.
 - `assertion_scheme`: hardware assertion scheme.
 - `assertion_key_algorithm`: assertion key algorithm.
-- `assertion_usage_count_limit`: absent for both iOS App Attest profiles; for
-  Android KeyMint it must be present as unsigned integer `1`.
+- `assertion_usage_count_limit`: absent for iOS App Attest; for Android KeyMint
+  it must be present as unsigned integer `1`.
 - `attestation_key_id`: verifier-scoped platform attestation key id.
 - `hardware_one_use`: must be `true`.
 - `attestation_report_hash_hex`: lowercase or uppercase hex accepted by hash
@@ -77,25 +79,23 @@ normalizing them before comparison or key-certificate issuance.
 If `device_binding.attestation_report_base64` is present, Torii requires it to
 be an exact, non-empty base64 string, decodes it, and requires
 `sha256(report_bytes)` to equal `attestation_report_hash_hex`. If the request
-supplies `assertion_public_key`, `app_attest_public_key_base64`,
-`device_public_key`, `platform`, `assertion_scheme`, or
+supplies `assertion_public_key`, `platform`, `assertion_scheme`, or
 `assertion_key_algorithm` inside `device_binding`, those string values must be
 exact and must match the signed receipt. The Android KeyMint profile requires
 both the signed receipt and `device_binding` to carry
-`assertion_usage_count_limit = 1`; both iOS App Attest profiles must omit it.
+`assertion_usage_count_limit = 1`; iOS App Attest must omit it.
 
 The signed receipt must also use one of these profile triples:
 
 ```text
 platform        assertion_scheme                              assertion_key_algorithm
-ios-app-attest  apple-app-attest-v1                           ecdsa-p256-sha256
 ios-appattest   apple-appattest-counter-v1                    app-attest-p256
 android-keymint android-keymint-ecdsa-p256-usage-limit-v1     ecdsa-p256-sha256
 ```
 
-For both iOS App Attest profiles, `assertion_usage_count_limit` must be absent
-from the signed receipt and `device_binding`. For the Android KeyMint profile,
-it must be present in both places and equal to `1`.
+For iOS App Attest, `assertion_usage_count_limit` must be absent from the
+signed receipt and `device_binding`. For the Android KeyMint profile, it must
+be present in both places and equal to `1`.
 
 The Swift, Kotlin/JVM, and Java Android SDK registration constructors enforce
 the canonical on-chain profiles before encoding
@@ -106,28 +106,26 @@ registrations additionally require `key_id` to be canonical standard base64
 credential bytes. Their key-certificate and key-certificate-payload models also
 enforce non-empty attestation identities and the supported certificate profile
 table above, including valid uncompressed SEC1 P-256 `assertion_public_key`
-bytes. They can still read legacy middleware-issued iOS certificates through
-the explicit `ios-app-attest` profile, but reject arbitrary hardware profile
-names, profile splices, off-curve assertion keys, and unsupported usage-limit
-values.
+bytes. They reject the retired middleware-issued iOS tuple
+`ios-app-attest` / `apple-app-attest-v1` / `ecdsa-p256-sha256`, arbitrary
+hardware profile names, profile splices, off-curve assertion keys, and
+unsupported usage-limit values.
 
 Torii also applies the same signed profile table when parsing a redemption
-sender key certificate. This preserves legacy middleware iOS certificates while
-rejecting profile-spliced certificates, iOS certificates with usage limits, and
-Android certificates that omit usage limit `1`. Structured JSON redemption
+sender key certificate. This rejects retired middleware iOS certificates,
+profile-spliced certificates, iOS certificates with usage limits, and Android
+certificates that omit usage limit `1`. Structured JSON redemption
 payloads are field-strict: the `norito_base64` wrapper, the structured
 redemption object, nested sender key certificates, and nested recursive proof
-objects all reject unknown keys before interpretation. Compatibility aliases
-remain accepted: `key_certificate` for `sender_key_certificate`,
+objects all reject unknown keys before interpretation. Retired compatibility
+aliases are rejected: `key_certificate` for `sender_key_certificate`,
 `verifier_key_name` for `verifier_key_id`, `public_inputs_hash` for
-`public_inputs_hash_hex`, and the SDK-emitted redemption identity fields
-`recipient_account_id` and `asset_definition_id`. When present, those nested
-identity fields must match the authenticated top-level request. Recursive proof
-backend aliases `verifier_key_backend` and `proof_backend` are accepted
-alongside `backend` only when all present backend fields carry the same exact
-value. Verifier-key and public-input alias pairs remain mutually exclusive in a
-single JSON object. The sender key certificate field set includes the Torii
-issue-response envelope metadata (`issued_at_ms`, `expires_at_ms`,
+`public_inputs_hash_hex`, and recursive proof backend aliases
+`verifier_key_backend` and `proof_backend`. The SDK-emitted redemption identity
+fields `recipient_account_id` and `asset_definition_id` remain accepted; when
+present, they must match the authenticated top-level request. The sender key
+certificate field set includes the Torii issue-response envelope metadata
+(`issued_at_ms`, `expires_at_ms`,
 `app_attest_public_key_base64`, iOS app metadata, and
 `issuer_signature_payload_base64`) so wallets may reuse the returned
 `key_certificate` object directly as a redemption `sender_key_certificate`.

@@ -210,6 +210,23 @@ public sealed class TransactionBuilder
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
         string? publicAmount,
         string? currentNoteAmount,
         bool hasChangeOutput)
@@ -231,6 +248,29 @@ public sealed class TransactionBuilder
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount,
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
         string? publicAmount,
         string? currentNoteAmount,
         ReadOnlySpan<byte> changeOutput)
@@ -241,6 +281,29 @@ public sealed class TransactionBuilder
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
+            publicAmount,
+            currentNoteAmount,
+            changeOutput));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
+        string? publicAmount,
+        string? currentNoteAmount,
+        ReadOnlySpan<byte> changeOutput)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount,
             publicAmount,
             currentNoteAmount,
             changeOutput));

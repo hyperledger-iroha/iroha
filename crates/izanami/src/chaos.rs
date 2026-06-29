@@ -5256,7 +5256,13 @@ struct SumeragiStatusDigest {
     missing_block_fetch_last_dwell_ms: u64,
     tx_queue_depth: u64,
     tx_queue_capacity: u64,
+    tx_queue_retained_bytes: u64,
+    tx_queue_max_retained_bytes: u64,
     tx_queue_saturated: bool,
+    tx_queue_saturated_by_count: bool,
+    tx_queue_saturated_by_bytes: bool,
+    tx_queue_saturated_by_age: bool,
+    tx_queue_oldest_queued_age_ms: u64,
     pacemaker_backpressure_deferrals_total: u64,
     commit_inflight_active: bool,
     commit_inflight_height: u64,
@@ -5352,7 +5358,13 @@ impl SumeragiStatusDigest {
             missing_block_fetch_last_dwell_ms: wire.missing_block_fetch.last_dwell_ms,
             tx_queue_depth: wire.tx_queue_depth,
             tx_queue_capacity: wire.tx_queue_capacity,
+            tx_queue_retained_bytes: wire.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: wire.tx_queue_max_retained_bytes,
             tx_queue_saturated: wire.tx_queue_saturated,
+            tx_queue_saturated_by_count: wire.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: wire.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: wire.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: wire.tx_queue_oldest_queued_age_ms,
             pacemaker_backpressure_deferrals_total: wire.pacemaker_backpressure_deferrals_total,
             commit_inflight_active: wire.commit_inflight.active,
             commit_inflight_height: wire.commit_inflight.height,
@@ -5537,7 +5549,13 @@ impl SumeragiStatusDigest {
             missing_block_fetch_last_dwell_ms: self.missing_block_fetch_last_dwell_ms,
             tx_queue_depth: self.tx_queue_depth,
             tx_queue_capacity: self.tx_queue_capacity,
+            tx_queue_retained_bytes: self.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: self.tx_queue_max_retained_bytes,
             tx_queue_saturated: self.tx_queue_saturated,
+            tx_queue_saturated_by_count: self.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: self.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: self.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: self.tx_queue_oldest_queued_age_ms,
             pacemaker_backpressure_deferrals_total: self
                 .pacemaker_backpressure_deferrals_total
                 .saturating_sub(start.pacemaker_backpressure_deferrals_total),
@@ -13438,7 +13456,13 @@ mod tests {
         end.missing_block_fetch.last_dwell_ms = 1_200;
         end.tx_queue_depth = 73;
         end.tx_queue_capacity = 128;
+        end.tx_queue_retained_bytes = 98_304;
+        end.tx_queue_max_retained_bytes = 131_072;
         end.tx_queue_saturated = true;
+        end.tx_queue_saturated_by_count = false;
+        end.tx_queue_saturated_by_bytes = true;
+        end.tx_queue_saturated_by_age = true;
+        end.tx_queue_oldest_queued_age_ms = 8_500;
         end.pacemaker_backpressure_deferrals_total = 24;
         end.commit_inflight.active = true;
         end.commit_inflight.height = 42;
@@ -13522,7 +13546,13 @@ mod tests {
         assert_eq!(delta.missing_block_fetch_last_dwell_ms, 1_200);
         assert_eq!(delta.tx_queue_depth, 73);
         assert_eq!(delta.tx_queue_capacity, 128);
+        assert_eq!(delta.tx_queue_retained_bytes, 98_304);
+        assert_eq!(delta.tx_queue_max_retained_bytes, 131_072);
         assert!(delta.tx_queue_saturated);
+        assert!(!delta.tx_queue_saturated_by_count);
+        assert!(delta.tx_queue_saturated_by_bytes);
+        assert!(delta.tx_queue_saturated_by_age);
+        assert_eq!(delta.tx_queue_oldest_queued_age_ms, 8_500);
         assert_eq!(delta.pacemaker_backpressure_deferrals_total, 20);
         assert!(delta.commit_inflight_active);
         assert_eq!(delta.commit_inflight_height, 42);

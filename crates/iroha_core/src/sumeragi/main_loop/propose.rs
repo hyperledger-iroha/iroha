@@ -1392,7 +1392,7 @@ impl Actor {
         )
     }
 
-    fn drop_stale_pending_block_for_fresh_proposal(
+    pub(super) fn drop_stale_pending_block_for_fresh_proposal(
         &mut self,
         pending_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1402,7 +1402,7 @@ impl Actor {
             pending_hash,
             height,
             view,
-            false,
+            true,
             None,
         )
     }
@@ -1742,8 +1742,13 @@ impl Actor {
                     && pending.commit_qc_observed()
             });
         let new_view_qc_supersedes_owner = self.latest_committed_qc().is_some_and(|highest_qc| {
-            self.new_view_qc_supersedes_same_height_vote_conflict(
-                height, view, highest_qc, owner_hash, owner_view,
+            self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
+                height,
+                view,
+                highest_qc,
+                owner_hash,
+                owner_view,
+                crate::sumeragi::consensus::Phase::Prepare,
             )
         });
         let Some(owner_pending) = self
@@ -1899,12 +1904,13 @@ impl Actor {
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
         let local_vote_new_view_qc_supersedes = local_vote.as_ref().is_some_and(|vote| {
             self.latest_committed_qc().is_some_and(|highest_qc| {
-                self.new_view_qc_supersedes_same_height_vote_conflict(
+                self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                     height,
                     view,
                     highest_qc,
                     vote.block_hash,
                     vote.view,
+                    vote.phase,
                 )
             })
         });
@@ -4424,7 +4430,7 @@ impl Actor {
             return None;
         }
 
-        let (pending_block, block_hash, pending_payload_bytes, pending_payload_hash) = {
+        let (pending_block, block_hash, pending_payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
                 !pending.aborted
                     && pending.height == height
@@ -4446,7 +4452,6 @@ impl Actor {
             (
                 pending.block.clone(),
                 pending.block.hash(),
-                pending.payload_bytes_cow().into_owned(),
                 pending.payload_hash,
             )
         };
@@ -4554,18 +4559,69 @@ impl Actor {
             && height == self.committed_height_snapshot().saturating_add(1)
             && view > 0
             && pending_queue_len > 0;
+        let prior_body_rebroadcast = self
+            .proposal_rebroadcast_log
+            .last_sent_at(&block_hash)
+            .is_some();
         let payload_cooldown = self.payload_rebroadcast_cooldown();
-        let cooldown = if frontier_recovery_cached {
-            payload_cooldown.min(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        let mut cooldown = if frontier_recovery_cached {
+            self.targeted_payload_rescue_cooldown()
         } else {
             payload_cooldown
         };
-        if !frontier_recovery_cached && self.relay_backpressure_active(now, cooldown) {
+        if self.relay_backpressure_active(now, payload_cooldown)
+            && (!frontier_recovery_cached || prior_body_rebroadcast)
+        {
             trace!(
                 height,
-                view, "skipping cached proposal rebroadcast due to relay backpressure"
+                view,
+                block = %block_hash,
+                frontier_recovery_cached,
+                prior_body_rebroadcast,
+                "skipping cached proposal rebroadcast due to relay backpressure"
             );
             return None;
+        }
+        let queue_drop_backpressure = self.queue_drop_backpressure_active(now, payload_cooldown);
+        let queue_block_backpressure = self.queue_block_backpressure_active(now, payload_cooldown);
+        if (queue_drop_backpressure || queue_block_backpressure) && prior_body_rebroadcast {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                frontier_recovery_cached,
+                queue_drop_backpressure,
+                queue_block_backpressure,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                "skipping cached proposal rebroadcast due to consensus queue backpressure"
+            );
+            return None;
+        }
+        let tx_queue_pressure = self.queue.pressure_snapshot();
+        let tx_queue_capacity_backpressure =
+            tx_queue_pressure.saturated_by_count || tx_queue_pressure.saturated_by_bytes;
+        if tx_queue_capacity_backpressure && prior_body_rebroadcast {
+            let slow_cooldown = self.rbc_deliver_commit_qc_recovery_cooldown().max(cooldown);
+            if slow_cooldown > cooldown {
+                trace!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    frontier_recovery_cached,
+                    queued = tx_queue_pressure.queued_tx_count,
+                    tracked = tx_queue_pressure.tracked_tx_count,
+                    capacity = tx_queue_pressure.capacity.get(),
+                    retained_bytes = tx_queue_pressure.retained_bytes,
+                    max_retained_bytes = tx_queue_pressure.max_retained_bytes.get(),
+                    saturated_by_count = tx_queue_pressure.saturated_by_count,
+                    saturated_by_bytes = tx_queue_pressure.saturated_by_bytes,
+                    cooldown_ms = slow_cooldown.as_millis(),
+                    "slowing cached proposal rebroadcast due to transaction queue backpressure"
+                );
+                cooldown = slow_cooldown;
+            }
         }
         if !self
             .proposal_rebroadcast_log
@@ -4584,12 +4640,32 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let block_created = self
-            .frontier_block_created_for_local_proposal_wire_with_payload(
-                &pending_block,
+        let block_created = {
+            let Some(pending) = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .filter(|pending| {
+                    !pending.aborted
+                        && pending.height == height
+                        && pending.view == view
+                        && pending.payload_hash == pending_payload_hash
+                })
+            else {
+                trace!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "skipping cached proposal rebroadcast: pending block changed before wire build"
+                );
+                return None;
+            };
+            let pending_payload_bytes = pending.payload_bytes();
+            self.frontier_block_created_for_local_proposal_wire_with_payload(
+                &pending.block,
                 &proposal,
                 &proposal_roster,
-                &pending_payload_bytes,
+                pending_payload_bytes,
                 pending_payload_hash,
             )
             .unwrap_or_else(|| {
@@ -4599,8 +4675,9 @@ impl Actor {
                     block = %block_hash,
                     "rebroadcasting cached proposal with plain block-created fallback"
                 );
-                super::message::BlockCreated::from(&pending_block)
-            });
+                super::message::BlockCreated::from(&pending.block)
+            })
+        };
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         let proposal_hint = super::message::ProposalHint {
@@ -4751,6 +4828,69 @@ impl Actor {
             self.nudge_frontier_recovery_proposal_retry(now);
         }
         progressed
+    }
+
+    fn stale_proposals_seen_only_slot_allows_recovery_rotation(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        now: Instant,
+        precommit_votes_at_view: usize,
+    ) -> Option<(Duration, Duration)> {
+        if !self.config.resilience.enabled
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || view == 0
+            || precommit_votes_at_view > 0
+            || !self.slot_tracker.proposals_seen.contains(&(height, view))
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(height, view)
+                .is_some()
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_hint(height, view)
+                .is_some()
+            || self.authoritative_slot_owner_hash(height, view).is_some()
+            || self
+                .frontier_slot_live_local_owner_for_round(height, view)
+                .is_some()
+            || self.slot_has_actionable_vote_backed_proposal_evidence(height, view, epoch)
+            || self.same_height_has_recoverable_qc(height)
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && !pending.is_retired_same_height()
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == height
+                    && pending.view == view
+            })
+        {
+            return None;
+        }
+
+        if let Some(existing_vote) = self.local_same_height_vote(height, epoch)
+            && existing_vote.view >= view
+            && self.local_same_height_vote_blocks_fresh_proposal(
+                height,
+                view,
+                &existing_vote,
+                now,
+                true,
+            )
+        {
+            return None;
+        }
+
+        let stale_window = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(Duration::from_millis(1));
+        let view_age = self.phase_tracker.view_age(height, now)?;
+        (view_age >= stale_window).then_some((view_age, stale_window))
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(
@@ -5775,12 +5915,25 @@ impl Actor {
                     .proposal_cache
                     .get_hint(height, view_idx)
                     .cloned();
-                let repair_window = self
+                let base_repair_window = self
                     .frontier_slot_lag_window()
                     .max(self.recovery_deferred_qc_ttl())
                     .max(quorum_timeout)
                     .max(self.rebroadcast_cooldown())
                     .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
+                let repair_window =
+                    self.cap_active_block_production_gap(base_repair_window, pending_queue_len > 0);
+                if repair_window < base_repair_window {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        precommit_votes_at_view,
+                        repair_window_ms = base_repair_window.as_millis(),
+                        capped_repair_window_ms = repair_window.as_millis(),
+                        "capping cached proposal body repair window under active transaction backlog"
+                    );
+                }
                 let cache_age = self
                     .subsystems
                     .propose
@@ -6334,6 +6487,48 @@ impl Actor {
         }
 
         if self.slot_has_proposal_evidence(height, view_idx) {
+            if let Some((view_age, stale_window)) = self
+                .stale_proposals_seen_only_slot_allows_recovery_rotation(
+                    height,
+                    view_idx,
+                    epoch,
+                    now,
+                    precommit_votes_at_view,
+                )
+            {
+                self.slot_tracker.proposals_seen.remove(&(height, view_idx));
+                if self
+                    .subsystems
+                    .propose
+                    .proposal_liveness
+                    .is_some_and(|slot| slot.height == height && slot.view == view_idx)
+                {
+                    self.subsystems.propose.proposal_liveness = None;
+                }
+                warn!(
+                    height,
+                    view = view_idx,
+                    queue_len = pending_queue_len,
+                    view_age_ms = view_age.as_millis(),
+                    stale_window_ms = stale_window.as_millis(),
+                    "proposal-seen marker has no materialized slot owner; rotating recovery view"
+                );
+                self.apply_view_change_after_exhausted_frontier_recovery(
+                    height,
+                    view_idx,
+                    ViewChangeCause::QuorumTimeout,
+                );
+                self.maybe_rebroadcast_new_view_votes(height, now);
+                self.warn_resilience_frontier_proposal_deferred(
+                    height,
+                    view_idx,
+                    "proposal_seen_without_materialized_owner",
+                    highest_qc,
+                    pending_queue_len,
+                    now,
+                );
+                return false;
+            }
             let progressed = self.maybe_progress_existing_slot_proposal(
                 height,
                 view_idx,

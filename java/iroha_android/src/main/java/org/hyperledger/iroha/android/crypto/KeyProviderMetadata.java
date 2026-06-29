@@ -115,7 +115,7 @@ public final class KeyProviderMetadata {
     private HardwareSecurityLevel securityLevel = HardwareSecurityLevel.NONE;
 
     public Builder setName(final String name) {
-      if (name != null && !name.isBlank()) {
+      if (name != null && !name.trim().isEmpty()) {
         this.name = name;
       }
       return this;

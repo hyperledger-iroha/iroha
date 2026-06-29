@@ -8,7 +8,7 @@ object OfflineSettlementProofs {
     private const val RECURSION_DEPTH: Int = 1
 
     /**
-     * Build the redeem-request proof for the legacy cash redeem payload shape.
+     * Build the canonical redeem-request proof for the cash redeem payload shape.
      * Output is pinned against the committed Rust-generated fixtures.
      */
     @JvmStatic

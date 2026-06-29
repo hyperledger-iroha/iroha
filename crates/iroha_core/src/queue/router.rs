@@ -13053,6 +13053,7 @@ mod tests {
             vec![InstructionBox::from(Grant::account_permission(
                 CanUseFeeSponsor {
                     sponsor: sponsor_id,
+                    policy: "default".parse().expect("default fee sponsor policy"),
                 },
                 holder_id.clone(),
             ))],
@@ -13122,6 +13123,7 @@ mod tests {
             vec![InstructionBox::from(Grant::account_permission(
                 CanUseFeeSponsor {
                     sponsor: sponsor_id,
+                    policy: "default".parse().expect("default fee sponsor policy"),
                 },
                 holder_id.clone(),
             ))],

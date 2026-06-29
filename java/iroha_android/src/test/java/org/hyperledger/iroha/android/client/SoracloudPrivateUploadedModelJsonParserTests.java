@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
+import java.util.Collections;
 
 public final class SoracloudPrivateUploadedModelJsonParserTests {
 
@@ -59,11 +59,11 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
   private static void rejectsMissingOrMalformedReceiptInstruction() {
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.privateUploadedModelReceiptInstruction(
-            List.of(new SoracloudTxInstruction("other", "0a"))),
+            Collections.singletonList(new SoracloudTxInstruction("other", "0a"))),
         "expected missing receipt instruction rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.privateUploadedModelReceiptInstruction(
-            List.of(new SoracloudTxInstruction(
+            Collections.singletonList(new SoracloudTxInstruction(
                 SoracloudPrivateUploadedModelJsonParser.PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID,
                 "zz"))),
         "expected malformed receipt instruction rejection");

@@ -261,6 +261,11 @@ pub enum SingularQueryJson {
         /// Fully qualified `domain.dataspace` identifier.
         domain_id: String,
     },
+    /// Looks up a fee sponsor policy by identifier.
+    FindFeeSponsorPolicyById {
+        /// Fee sponsor policy identifier in `sponsor/name` form.
+        id: String,
+    },
 }
 
 impl SingularQueryJson {
@@ -314,6 +319,12 @@ impl SingularQueryJson {
     fn parse_contract_manifest(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindContractManifestByCodeHash {
             code_hash: payload_required_string(payload, "code_hash")?.to_owned(),
+        })
+    }
+
+    fn parse_fee_sponsor_policy_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindFeeSponsorPolicyById {
+            id: payload_required_string(payload, "id")?.to_owned(),
         })
     }
 
@@ -507,6 +518,11 @@ impl SingularQueryJson {
                 payload.insert("domain_id".to_owned(), Value::String(domain_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
+            Self::FindFeeSponsorPolicyById { id } => {
+                let mut payload = Map::new();
+                payload.insert("id".to_owned(), Value::String(id.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
             _ => {}
         }
         Value::Object(map)
@@ -545,6 +561,9 @@ impl SingularQueryJson {
             "FindTriggerById" => Self::parse_trigger_by_id(singular_payload(map)?),
             "FindTwitterBindingByHash" => Self::parse_twitter_binding(singular_payload(map)?),
             "FindDomainById" => Self::parse_domain_by_id(singular_payload(map)?),
+            "FindFeeSponsorPolicyById" => {
+                Self::parse_fee_sponsor_policy_by_id(singular_payload(map)?)
+            }
             other => Err(QueryJsonError::UnknownSingularType(other.to_owned())),
         }
     }
@@ -575,6 +594,7 @@ impl SingularQueryJson {
             }
             SingularQueryJson::FindTwitterBindingByHash { .. } => "FindTwitterBindingByHash",
             SingularQueryJson::FindDomainById { .. } => "FindDomainById",
+            SingularQueryJson::FindFeeSponsorPolicyById { .. } => "FindFeeSponsorPolicyById",
         }
     }
 
@@ -682,6 +702,14 @@ impl SingularQueryJson {
                 let id = Self::decode_domain_id(&domain_id)?;
                 Ok(SingularQueryBox::FindDomainById(
                     crate::query::domain::prelude::FindDomainById::new(id),
+                ))
+            }
+            SingularQueryJson::FindFeeSponsorPolicyById { id } => {
+                let id = id
+                    .parse::<crate::nexus::FeeSponsorPolicyId>()
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "id"))?;
+                Ok(SingularQueryBox::FindFeeSponsorPolicyById(
+                    crate::query::nexus::prelude::FindFeeSponsorPolicyById::new(id),
                 ))
             }
         }
@@ -891,6 +919,18 @@ impl IterableQueryJson {
                     Box::new(crate::query::role::prelude::FindRoleIds)
                 })
             }
+            IterableQueryKind::FindFeeSponsorPolicies => {
+                type Item = crate::nexus::FeeSponsorPolicy;
+                self.build_for_kind::<Item, _>(params.clone(), || {
+                    Box::new(crate::query::nexus::prelude::FindFeeSponsorPolicies)
+                })
+            }
+            IterableQueryKind::FindFeeSponsorPolicyIds => {
+                type Item = crate::nexus::FeeSponsorPolicyId;
+                self.build_for_kind::<Item, _>(params, || {
+                    Box::new(crate::query::nexus::prelude::FindFeeSponsorPolicyIds)
+                })
+            }
         }
     }
 }
@@ -922,6 +962,10 @@ pub enum IterableQueryKind {
     FindRoleIds,
     /// Enumerate repo agreements.
     FindRepoAgreements,
+    /// Enumerate fee sponsor policies.
+    FindFeeSponsorPolicies,
+    /// Enumerate fee sponsor policy identifiers.
+    FindFeeSponsorPolicyIds,
 }
 
 impl IterableQueryKind {
@@ -939,6 +983,8 @@ impl IterableQueryKind {
             IterableQueryKind::FindRoles => "FindRoles",
             IterableQueryKind::FindRoleIds => "FindRoleIds",
             IterableQueryKind::FindRepoAgreements => "FindRepoAgreements",
+            IterableQueryKind::FindFeeSponsorPolicies => "FindFeeSponsorPolicies",
+            IterableQueryKind::FindFeeSponsorPolicyIds => "FindFeeSponsorPolicyIds",
         }
     }
 }
@@ -960,6 +1006,8 @@ impl FromStr for IterableQueryKind {
             "FindRoles" => Ok(IterableQueryKind::FindRoles),
             "FindRoleIds" => Ok(IterableQueryKind::FindRoleIds),
             "FindRepoAgreements" => Ok(IterableQueryKind::FindRepoAgreements),
+            "FindFeeSponsorPolicies" => Ok(IterableQueryKind::FindFeeSponsorPolicies),
+            "FindFeeSponsorPolicyIds" => Ok(IterableQueryKind::FindFeeSponsorPolicyIds),
             _ => Err(()),
         }
     }
@@ -1495,6 +1543,78 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn fee_sponsor_policy_queries_roundtrip() {
+        let keypair = KeyPair::try_from_seed(vec![0xEF; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
+        let sponsor = crate::account::AccountId::new(keypair.public_key().clone());
+        let policy_id = crate::nexus::FeeSponsorPolicyId::new(
+            sponsor.clone(),
+            "retail_transfers"
+                .parse::<crate::Name>()
+                .expect("valid policy name"),
+        );
+
+        let singular = SingularQueryJson::FindFeeSponsorPolicyById {
+            id: policy_id.to_string(),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindFeeSponsorPolicyById(q) => {
+                assert_eq!(q.id(), &policy_id);
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
+        for kind in [
+            IterableQueryKind::FindFeeSponsorPolicies,
+            IterableQueryKind::FindFeeSponsorPolicyIds,
+        ] {
+            let iterable = IterableQueryJson {
+                kind,
+                params: IterableQueryParamsJson {
+                    limit: Some(5),
+                    ..IterableQueryParamsJson::default()
+                },
+                predicate: None,
+            };
+            let envelope = QueryEnvelopeJson::Iterable(Box::new(iterable.clone()));
+            let json = norito::json::to_json(&envelope).expect("serialize iterable");
+            let parsed: QueryEnvelopeJson =
+                norito::json::from_str(&json).expect("deserialize iterable");
+            assert_eq!(parsed, envelope);
+            let QueryEnvelopeJson::Iterable(parsed_iterable) = parsed else {
+                unreachable!();
+            };
+            assert!(parsed_iterable.into_query_with_params().is_ok());
+        }
+
+        assert_eq!(
+            IterableQueryKind::from_str("FindFeeSponsorPolicies"),
+            Ok(IterableQueryKind::FindFeeSponsorPolicies)
+        );
+        assert_eq!(
+            IterableQueryKind::from_str("FindFeeSponsorPolicyIds"),
+            Ok(IterableQueryKind::FindFeeSponsorPolicyIds)
+        );
+
+        let invalid = SingularQueryJson::FindFeeSponsorPolicyById {
+            id: "missing-policy-separator".to_owned(),
+        };
+        let err = invalid
+            .into_box()
+            .expect_err("invalid policy id must be rejected");
+        assert_eq!(err, QueryJsonError::InvalidField("payload", "id"));
     }
 
     #[test]

@@ -543,20 +543,25 @@ fn signed_certificate(
     let public_key = public_key.to_vec();
     let assertion_signing_key = p256_assertion_signing_key(platform, key_id, device_id);
     let assertion_public_key = p256_assertion_public_key(&assertion_signing_key);
-    let (assertion_scheme, assertion_key_algorithm, assertion_usage_count_limit) =
-        if platform == "android-keymint" || platform == "android" {
-            (
-                "android-keymint-ecdsa-p256-usage-limit-v1".to_owned(),
-                "ecdsa-p256-sha256".to_owned(),
-                Some(1),
+    let (assertion_scheme, assertion_key_algorithm, assertion_usage_count_limit) = match platform {
+        "android-keymint" => (
+            "android-keymint-ecdsa-p256-usage-limit-v1".to_owned(),
+            "ecdsa-p256-sha256".to_owned(),
+            Some(1),
+        ),
+        "ios-appattest" => (
+            "apple-appattest-counter-v1".to_owned(),
+            "app-attest-p256".to_owned(),
+            None,
+        ),
+        unsupported => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsupported Offline V2 fixture certificate platform: {unsupported}"),
             )
-        } else {
-            (
-                "apple-appattest-counter-v1".to_owned(),
-                "app-attest-p256".to_owned(),
-                None,
-            )
-        };
+            .into());
+        }
+    };
     let unsigned_certificate = OfflineNoteKeyCertificate {
         version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: platform.to_owned(),
@@ -1316,6 +1321,34 @@ mod tests {
         verifying_key
             .verify(challenge, &signature)
             .expect("Android assertion verifies against certificate key");
+    }
+
+    #[test]
+    fn signed_certificate_rejects_noncanonical_platform_aliases() {
+        let issuer_key_pair =
+            fixed_ed25519_keypair("issuer", 0x11).expect("fixed issuer key derives");
+        let note_key_pair = fixed_ed25519_keypair("note", 0x51).expect("fixed note key derives");
+        let account_id = AccountId::new(note_key_pair.public_key().clone());
+
+        for platform in ["android", "ios-app-attest", "browser-webauthn"] {
+            let error = match signed_certificate(
+                &issuer_key_pair,
+                &note_key_pair,
+                &account_id,
+                platform,
+                "fixture-key",
+                "fixture-device",
+            ) {
+                Ok(_) => panic!("noncanonical fixture platform {platform} must reject"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported Offline V2 fixture certificate platform"),
+                "unexpected error for {platform}: {error}"
+            );
+        }
     }
 
     #[test]

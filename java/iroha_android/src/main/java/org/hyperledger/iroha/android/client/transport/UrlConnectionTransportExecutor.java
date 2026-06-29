@@ -134,10 +134,11 @@ public final class UrlConnectionTransportExecutor
     if (stream == null) {
       return new byte[0];
     }
-    try (stream; final ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
+    try (InputStream responseBody = stream;
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
       final byte[] chunk = new byte[4096];
       int read;
-      while ((read = stream.read(chunk)) != -1) {
+      while ((read = responseBody.read(chunk)) != -1) {
         buffer.write(chunk, 0, read);
       }
       return buffer.toByteArray();
@@ -162,7 +163,7 @@ public final class UrlConnectionTransportExecutor
 
   private static Map<String, List<String>> normalizeHeaders(final Map<String, List<String>> raw) {
     if (raw == null) {
-      return Map.of();
+      return Collections.emptyMap();
     }
     final Map<String, List<String>> out = new java.util.LinkedHashMap<>();
     for (final Map.Entry<String, List<String>> entry : raw.entrySet()) {
@@ -171,7 +172,7 @@ public final class UrlConnectionTransportExecutor
       }
       final List<String> values =
           entry.getValue() == null
-              ? List.of()
+              ? Collections.emptyList()
               : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
       out.put(entry.getKey(), values);
     }

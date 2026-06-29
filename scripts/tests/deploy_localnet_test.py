@@ -44,6 +44,14 @@ class DeployLocalnetShellSafetyTest(unittest.TestCase):
             text,
         )
 
+    def test_10k_perf_profile_caps_kura_hot_cache(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--kura-blocks-in-memory <N>", text)
+        self.assertIn("IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY", text)
+        self.assertIn("10k-*)", text)
+        self.assertIn("KURA_BLOCKS_IN_MEMORY=32", text)
+        self.assertIn("blocks_in_memory = \" blocks", text)
+
 
 if __name__ == "__main__":
     unittest.main()

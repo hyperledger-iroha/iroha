@@ -6,12 +6,14 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,6 +46,8 @@ public final class ToriiEventStreamClient {
 
   private static final String EVENT_STREAM_CONTENT_TYPE = "text/event-stream";
   private static final String DEFAULT_EVENT_NAME = "message";
+  private static final List<String> PRODUCTION_EVENT_KINDS =
+      Collections.unmodifiableList(Arrays.asList("VerifyingKey", "Proof"));
 
   private final URI baseUri;
   private final TransportExecutor transport;
@@ -54,7 +58,7 @@ public final class ToriiEventStreamClient {
     this.baseUri = builder.baseUri;
     this.transport = builder.transport;
     this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
-    this.observers = List.copyOf(builder.observers);
+    this.observers = Collections.unmodifiableList(new ArrayList<>(builder.observers));
   }
 
   public static Builder builder() {
@@ -116,7 +120,7 @@ public final class ToriiEventStreamClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return baseUri;
     }
     if (path.startsWith("http://") || path.startsWith("https://")) {
@@ -191,9 +195,9 @@ public final class ToriiEventStreamClient {
       final String normalized = normalizeEventFilterPayload(value, "eventFilter");
       if (!normalized.equals(value)) {
         segments[i] =
-            URLEncoder.encode(name, StandardCharsets.UTF_8)
+            urlEncode(name)
                 + "="
-                + URLEncoder.encode(normalized, StandardCharsets.UTF_8);
+                + urlEncode(normalized);
         changed = true;
       }
     }
@@ -201,7 +205,11 @@ public final class ToriiEventStreamClient {
   }
 
   private static String decodeQueryComponent(final String value) {
-    return URLDecoder.decode(value.replace("+", " "), StandardCharsets.UTF_8);
+    try {
+      return URLDecoder.decode(value.replace("+", " "), StandardCharsets.UTF_8.name());
+    } catch (final UnsupportedEncodingException ex) {
+      throw new IllegalStateException("UTF-8 not supported", ex);
+    }
   }
 
   @SuppressWarnings("unchecked")
@@ -229,7 +237,7 @@ public final class ToriiEventStreamClient {
   private static boolean normalizeProductionEventFilterObject(
       final Map<String, Object> filter, final String context) {
     boolean changed = false;
-    for (final String eventKind : List.of("VerifyingKey", "Proof")) {
+    for (final String eventKind : PRODUCTION_EVENT_KINDS) {
       final Object bodyValue = filter.get(eventKind);
       if (!(bodyValue instanceof Map<?, ?>)) {
         continue;
@@ -344,12 +352,20 @@ public final class ToriiEventStreamClient {
         builder.append('&');
       }
       builder
-          .append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8))
+          .append(urlEncode(entry.getKey()))
           .append('=')
-          .append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+          .append(urlEncode(entry.getValue()));
       first = false;
     }
     return builder.toString();
+  }
+
+  private static String urlEncode(final String value) {
+    try {
+      return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
+    } catch (final UnsupportedEncodingException ex) {
+      throw new IllegalStateException("UTF-8 not supported", ex);
+    }
   }
 
   private void parseEventStream(
