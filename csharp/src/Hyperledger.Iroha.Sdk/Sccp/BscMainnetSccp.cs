@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -707,7 +708,7 @@ public static partial class BscMainnetSccp
             }
         }
 
-        if (expectedKey is not null && !string.Equals(expectedKey.Trim(), key, StringComparison.Ordinal))
+        if (expectedKey is not null && !string.Equals(expectedKey, key, StringComparison.Ordinal))
         {
             throw new ArgumentException(
                 "expectedKey must match the BSC mainnet destination binding.",
@@ -784,7 +785,14 @@ public static partial class BscMainnetSccp
                     nameof(value));
             }
 
-            return Convert.ToUInt64(hex, 16);
+            if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsedHex))
+            {
+                throw new ArgumentException(
+                    "eth_chainId must fit in an unsigned 64-bit integer.",
+                    nameof(value));
+            }
+
+            return parsedHex;
         }
 
         if (value.Length == 0
@@ -795,13 +803,27 @@ public static partial class BscMainnetSccp
                 nameof(value));
         }
 
-        return ulong.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        if (!ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                "eth_chainId must fit in an unsigned 64-bit integer.",
+                nameof(value));
+        }
+
+        return parsed;
     }
 
     private static ulong NormalizeRpcChainId(object? value)
     {
         var quantity = NormalizeRpcQuantity(value, "eth_chainId");
-        return Convert.ToUInt64(quantity[2..], 16);
+        if (!ulong.TryParse(quantity[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                "eth_chainId must fit in an unsigned 64-bit integer.",
+                nameof(value));
+        }
+
+        return parsed;
     }
 
     private static IReadOnlyDictionary<string, object?> RequireDictionary(object? value, string label)
@@ -1255,7 +1277,14 @@ public static partial class BscMainnetSccp
                 parameterName);
         }
 
-        return "0x" + Convert.ToUInt64(hex, 16).ToString("x", System.Globalization.CultureInfo.InvariantCulture);
+        if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must fit in an unsigned 64-bit integer.",
+                parameterName);
+        }
+
+        return "0x" + parsed.ToString("x", CultureInfo.InvariantCulture);
     }
 
     private static string NormalizePositiveRpcQuantity(object? value, string parameterName)
@@ -1962,7 +1991,53 @@ public sealed record BscMainnetLocalAdmissionSubmissionInput(
     string VerifierBackend = BscMainnetSccp.EvmGroth16Bn254ProofBackend,
     string EnvelopeEncoding = BscMainnetSccp.LocalAdmissionEnvelopeEncoding,
     string SubmissionKind = BscMainnetSccp.LocalAdmissionSubmissionKind,
-    string VerifierEntrypoint = BscMainnetSccp.LocalAdmissionEntrypoint);
+    string VerifierEntrypoint = BscMainnetSccp.LocalAdmissionEntrypoint)
+{
+    private byte[] proofBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] envelopeBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+}
 
 public sealed record BscMainnetLocalAdmissionPayload(
     byte[] ProofBytes,
@@ -1972,10 +2047,44 @@ public sealed record BscMainnetLocalAdmissionPayload(
     string SourceVerifierMaterialHash,
     string SourceAdapterEngineDeploymentHash)
 {
+    private byte[] proofBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
     public int Version { get; } = 1;
-    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
-    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
-    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+    public string ProofBytesHex => "0x" + Convert.ToHexString(proofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex => "0x" + Convert.ToHexString(publicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex => "0x" + Convert.ToHexString(bundleBytes).ToLowerInvariant();
 }
 
 public sealed record BscMainnetLocalAdmissionSubmission(
@@ -1992,6 +2101,51 @@ public sealed record BscMainnetLocalAdmissionSubmission(
     byte[] BundleBytes,
     byte[] EnvelopeBytes)
 {
+    private byte[] proofBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] envelopeBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = BscMainnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+
     public int Version { get; } = 1;
     public string PlatformPayload { get; } = BscMainnetSccp.LocalAdmissionSubmissionKind;
     public string EnvelopeEncoding { get; } = BscMainnetSccp.LocalAdmissionEnvelopeEncoding;
@@ -1999,10 +2153,19 @@ public sealed record BscMainnetLocalAdmissionSubmission(
     public string VerifierEntrypoint { get; } = BscMainnetSccp.LocalAdmissionEntrypoint;
     public IReadOnlyList<BscMainnetSccpSubmissionArgument> Arguments { get; } =
         Array.Empty<BscMainnetSccpSubmissionArgument>();
-    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
-    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
-    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
-    public string EnvelopeHex { get; } = "0x" + Convert.ToHexString(EnvelopeBytes).ToLowerInvariant();
+    public string ProofBytesHex => "0x" + Convert.ToHexString(proofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex => "0x" + Convert.ToHexString(publicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex => "0x" + Convert.ToHexString(bundleBytes).ToLowerInvariant();
+    public string EnvelopeHex => "0x" + Convert.ToHexString(envelopeBytes).ToLowerInvariant();
+}
+
+file static class BscMainnetSccpByteGuards
+{
+    internal static byte[] CopyRequiredBytes(byte[] value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        return value.ToArray();
+    }
 }
 
 public interface IBscMainnetExecutionProvider
@@ -2056,6 +2219,9 @@ public sealed record BscMainnetParliaFinalityEvidence(
 
 public sealed record BscMainnetReceiptProof
 {
+    private IReadOnlyList<byte[]> receiptTrieProofNodes = Array.Empty<byte[]>();
+    private IReadOnlyList<byte[]> inclusionBranch = Array.Empty<byte[]>();
+
     public int SourceDomain { get; init; } = BscMainnetSccp.DomainBsc;
 
     public string SourceEventDigest { get; init; } = string.Empty;
@@ -2074,24 +2240,61 @@ public sealed record BscMainnetReceiptProof
 
     public ulong ReceiptRootIndex { get; init; }
 
-    public IReadOnlyList<byte[]> ReceiptTrieProofNodes { get; init; } = Array.Empty<byte[]>();
+    public IReadOnlyList<byte[]> ReceiptTrieProofNodes
+    {
+        get => CopyByteArrays(receiptTrieProofNodes);
+        init => receiptTrieProofNodes = CopyByteArrays(value);
+    }
 
-    public IReadOnlyList<byte[]> InclusionBranch { get; init; } = Array.Empty<byte[]>();
+    public IReadOnlyList<byte[]> InclusionBranch
+    {
+        get => CopyByteArrays(inclusionBranch);
+        init => inclusionBranch = CopyByteArrays(value);
+    }
+
+    private static IReadOnlyList<byte[]> CopyByteArrays(IReadOnlyList<byte[]> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var output = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            var item = values[index] ?? throw new ArgumentException("List item must not be null.", nameof(values));
+            output[index] = item.ToArray();
+        }
+
+        return Array.AsReadOnly(output);
+    }
 }
 
 public sealed record BscMainnetInboundEvidence
 {
+    private IReadOnlyDictionary<string, object?>? receipt;
+    private IReadOnlyDictionary<string, object?>? block;
+    private IReadOnlyDictionary<string, object?>? parliaFinality;
+
     public int SourceDomain { get; init; } = BscMainnetSccp.DomainBsc;
 
     public int TargetDomain { get; init; } = BscMainnetSccp.DomainSora;
 
     public string? TransactionHash { get; init; }
 
-    public IReadOnlyDictionary<string, object?>? Receipt { get; init; }
+    public IReadOnlyDictionary<string, object?>? Receipt
+    {
+        get => SccpObjectSnapshots.CopyDictionaryOrNull(receipt);
+        init => receipt = SccpObjectSnapshots.CopyDictionaryOrNull(value);
+    }
 
-    public IReadOnlyDictionary<string, object?>? Block { get; init; }
+    public IReadOnlyDictionary<string, object?>? Block
+    {
+        get => SccpObjectSnapshots.CopyDictionaryOrNull(block);
+        init => block = SccpObjectSnapshots.CopyDictionaryOrNull(value);
+    }
 
-    public IReadOnlyDictionary<string, object?>? ParliaFinality { get; init; }
+    public IReadOnlyDictionary<string, object?>? ParliaFinality
+    {
+        get => SccpObjectSnapshots.CopyDictionaryOrNull(parliaFinality);
+        init => parliaFinality = SccpObjectSnapshots.CopyDictionaryOrNull(value);
+    }
 
     public string? ReceiptProofHash { get; init; }
 

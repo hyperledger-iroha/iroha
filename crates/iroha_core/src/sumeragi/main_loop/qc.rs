@@ -770,12 +770,13 @@ impl Actor {
             let new_view_qc_supersedes = highest_qc
                 .or_else(|| self.proposal_or_new_view_highest_qc_for_slot(height, view))
                 .is_some_and(|highest_qc| {
-                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                    self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                         height,
                         view,
                         highest_qc,
                         vote.block_hash,
                         vote.view,
+                        vote.phase,
                     )
                 });
             if new_view_qc_supersedes {
@@ -5187,6 +5188,14 @@ impl Actor {
             super::status::RoundEventCauseTrace::QcReceived,
             None,
         );
+        let _ = self.broadcast_certified_commit_proof_for_pending_block(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc,
+            topology.as_ref(),
+            "locally_aggregated",
+        );
         self.relay_validated_qc(qc, topology, "locally_aggregated");
         true
     }
@@ -8055,6 +8064,16 @@ impl Actor {
             "cached validated QC"
         );
         if !was_qc_cached {
+            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                let _ = self.broadcast_certified_commit_proof_for_pending_block(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    &qc,
+                    topology.as_ref(),
+                    "first_validated",
+                );
+            }
             self.relay_validated_qc(&qc, &topology, "first_validated");
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)

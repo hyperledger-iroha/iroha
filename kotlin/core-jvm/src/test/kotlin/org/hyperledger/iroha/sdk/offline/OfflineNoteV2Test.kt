@@ -20,11 +20,11 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
-private const val ISSUE_INSTRUCTION_ALIAS_SCHEMA =
+private const val RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA =
     "iroha_data_model::isi::offline::IssueOfflineNoteV2"
-private const val REDEEM_INSTRUCTION_ALIAS_SCHEMA =
+private const val RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA =
     "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
-private const val AUDIT_INSTRUCTION_ALIAS_SCHEMA =
+private const val RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA =
     "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 
 class OfflineNoteV2Test {
@@ -333,46 +333,54 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes() {
+    fun offlineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes() {
         val fixture = loadFixture()
         val issue = issue(fixture)
         val audit = audit(fixture)
         val redeem = redeem(fixture)
         val issueAliasWirePayload = encodeInstructionWrapper(
-            ISSUE_INSTRUCTION_ALIAS_SCHEMA,
+            RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA,
             OfflineNoteV2.encodeIssue(issue),
         )
         val auditAliasWirePayload = encodeInstructionWrapper(
-            AUDIT_INSTRUCTION_ALIAS_SCHEMA,
+            RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA,
             OfflineNoteV2.encodeAudit(audit),
         )
         val redeemAliasWirePayload = encodeInstructionWrapper(
-            REDEEM_INSTRUCTION_ALIAS_SCHEMA,
+            RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA,
             OfflineNoteV2.encodeRedeem(redeem),
         )
 
-        assertEquals(
-            base64(issue.noritoEncoded()),
-            base64(OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload).noritoEncoded()),
-        )
-        assertEquals(
-            base64(issue.noritoEncoded()),
-            base64(OfflineNoteV2.decodeIssueInstruction(
-                rawInstructionPair(ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload),
-            ).noritoEncoded()),
-        )
-        assertEquals(
-            base64(audit.noritoEncoded()),
-            base64(OfflineNoteV2.decodeAuditInstruction(
-                rawInstructionPair(AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload),
-            ).noritoEncoded()),
-        )
-        assertEquals(
-            base64(redeem.noritoEncoded()),
-            base64(OfflineNoteV2.decodeRedeemInstruction(
-                rawInstructionPair(REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload),
-            ).noritoEncoded()),
-        )
+        assertFailsWith<IllegalArgumentException>(
+            "retired issue instruction alias should throw",
+        ) { OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload) }
+        assertFailsWith<IllegalArgumentException>(
+            "retired audit instruction alias should throw",
+        ) { OfflineNoteV2.decodeAuditInstruction(auditAliasWirePayload) }
+        assertFailsWith<IllegalArgumentException>(
+            "retired redeem instruction alias should throw",
+        ) { OfflineNoteV2.decodeRedeemInstruction(redeemAliasWirePayload) }
+        assertFailsWith<IllegalArgumentException>(
+            "retired issue instruction alias envelope should throw",
+        ) {
+            OfflineNoteV2.decodeIssueInstruction(
+                rawInstructionPair(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload),
+            )
+        }
+        assertFailsWith<IllegalArgumentException>(
+            "retired audit instruction alias envelope should throw",
+        ) {
+            OfflineNoteV2.decodeAuditInstruction(
+                rawInstructionPair(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload),
+            )
+        }
+        assertFailsWith<IllegalArgumentException>(
+            "retired redeem instruction alias envelope should throw",
+        ) {
+            OfflineNoteV2.decodeRedeemInstruction(
+                rawInstructionPair(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload),
+            )
+        }
     }
 
     @Test
@@ -380,8 +388,13 @@ class OfflineNoteV2Test {
         val fixture = loadFixture()
         val issue = issue(fixture)
         val redeem = redeem(fixture)
+        val registration = attestationRegistration(fixture)
         val issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue))
         val redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))
+        val retiredRegisterWrapperPayload = encodeInstructionWrapper(
+            OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            OfflineNoteV2.encodeDeviceAttestationRegistration(registration),
+        )
         val issuePair = rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload)
 
         assertFailsWith<IllegalArgumentException> {
@@ -407,6 +420,21 @@ class OfflineNoteV2Test {
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.decodeAuditInstruction(
                 rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload),
+            )
+        }
+        assertFailsWith<IllegalArgumentException>(
+            "retired register device attestation generic wrapper should throw",
+        ) {
+            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(retiredRegisterWrapperPayload)
+        }
+        assertFailsWith<IllegalArgumentException>(
+            "retired register device attestation generic wrapper envelope should throw",
+        ) {
+            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(
+                rawInstructionPair(
+                    OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                    retiredRegisterWrapperPayload,
+                ),
             )
         }
     }
@@ -636,6 +664,36 @@ class OfflineNoteV2Test {
                 assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
                 assertionPublicKey = assertionPublicKey,
                 assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificatePayloadV2(
+                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                platform = "ios-app-attest",
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = "apple-app-attest-v1",
+                assertionKeyAlgorithm = "ecdsa-p256-sha256",
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = null,
+                oneUse = true,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = "ios-app-attest",
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = "apple-app-attest-v1",
+                assertionKeyAlgorithm = "ecdsa-p256-sha256",
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = null,
                 oneUse = true,
                 issuerSignature = issuerSignature,
             )

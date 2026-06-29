@@ -81,6 +81,9 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
             "routeId": "taira_bsc_xor",
             "assetKey": "xor"
         }))),
+        source_verifier_material: None,
+        source_adapter_engine_deployment: None,
+        source_adapter_engine: None,
         destination_browser_prover: Some(browser_prover_ref(
             0x60,
             &destination_binding_hash,

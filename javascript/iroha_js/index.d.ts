@@ -1059,6 +1059,10 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   commitment_root?: string;
   sourceEventDigest?: string;
   source_event_digest?: string;
+  sourceBridgeEmitterAddress?: string | BinaryLike | number[];
+  source_bridge_emitter_address?: string | BinaryLike | number[];
+  sourceBridgeEmitterCodeHash?: string | BinaryLike | number[];
+  source_bridge_emitter_code_hash?: string | BinaryLike | number[];
   receipt?: Record<string, unknown>;
   block?: Record<string, unknown>;
   blockReceipts?: readonly Record<string, unknown>[];
@@ -19314,7 +19318,6 @@ export function deriveConfidentialNullifierV2(input: {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
@@ -19357,8 +19360,7 @@ export class KagemushaRecursiveSpendRequestCodecError extends Error {
 }
 export type KagemushaOfflineSpendMode =
   | "recursive_compact_v1"
-  | "recursive_spend_v1"
-  | "checked_prefold_v1";
+  | "recursive_spend_v1";
 export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
   | 2
   | 4
@@ -19382,14 +19384,15 @@ export interface KagemushaRecursiveSpendLineageKeyArtifacts {
   readonly isInitArtifact: boolean;
   readonly isAppendArtifact: boolean;
 }
+export function preferredKagemushaOfflineSpendMode(): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable?: boolean,
-  recursiveCompactAvailable?: boolean,
-): KagemushaOfflineSpendMode;
+  recursiveCompactAvailable: boolean,
+  recursiveSpendAvailable: boolean,
+): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable: boolean,
   recursiveSpendAvailable: boolean,
-): KagemushaOfflineSpendMode;
+): KagemushaOfflineSpendMode | null;
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
   hopCount: number,
@@ -19618,8 +19621,6 @@ export interface KagemushaRecursiveSpendVerifyResult {
   readonly chain_admission_reason: string;
   readonly witnesslessRedeemSupported: boolean;
   readonly witnessless_redeem_supported: boolean;
-  readonly lineageWitnessRequired: boolean;
-  readonly lineage_witness_required: boolean;
   readonly lineageWitnessRequiredForRedeem: boolean;
   readonly lineage_witness_required_for_redeem: boolean;
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -46,7 +47,7 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeAccountController(string accountId)
     {
-        var parsed = AccountAddress.Parse(CanonicalizeAccountId(accountId), DefaultNetworkPrefix);
+        var parsed = AccountAddress.Parse(CanonicalizeDefaultAccountId(accountId), DefaultNetworkPrefix);
         if (parsed.CurveIdentifier is null || parsed.PublicKey.Length == 0)
         {
             throw new ArgumentException("Multisig account controllers are not yet supported by the managed transaction encoder.", nameof(accountId));
@@ -170,20 +171,31 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeNumeric(string value)
     {
         var trimmed = RequireExactNonBlank(value, nameof(value));
+        var literal = trimmed;
 
         var sign = 1;
-        if (trimmed[0] == '-')
+        if (literal[0] == '-')
         {
             sign = -1;
-            trimmed = trimmed[1..];
+            literal = literal[1..];
         }
-        else if (trimmed[0] == '+')
+        else if (literal[0] == '+')
         {
-            trimmed = trimmed[1..];
+            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
         }
 
-        var parts = trimmed.Split('.', 2);
-        if (parts.Length == 0 || parts.Any(static part => part.Length == 0 && part != string.Empty))
+        if (literal.Length == 0)
+        {
+            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
+        }
+
+        var parts = literal.Split('.', 2);
+        if (parts[0].Length == 0 || (parts.Length == 2 && parts[1].Length == 0))
+        {
+            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
+        }
+
+        if (parts[0].Length > 1 && parts[0][0] == '0')
         {
             throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
         }
@@ -194,7 +206,7 @@ internal sealed class TransactionEncodingContext
         }
 
         var digits = string.Concat(parts);
-        if (digits.Length == 0)
+        if (sign < 0 && digits.All(static digit => digit == '0'))
         {
             throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
         }
@@ -205,7 +217,7 @@ internal sealed class TransactionEncodingContext
             throw new ArgumentOutOfRangeException(nameof(value), "Iroha numerics support at most 28 fractional digits.");
         }
 
-        var bigInteger = BigInteger.Parse(digits, System.Globalization.CultureInfo.InvariantCulture);
+        var bigInteger = BigInteger.Parse(digits, NumberStyles.None, CultureInfo.InvariantCulture);
         if (sign < 0)
         {
             bigInteger = BigInteger.Negate(bigInteger);
@@ -377,7 +389,9 @@ internal sealed class TransactionEncodingContext
                     }
 
                     first = false;
-                    builder.Append(JsonValue.Create(pair.Key)!.ToJsonString());
+                    var keyNode = JsonValue.Create(pair.Key)
+                        ?? throw new InvalidOperationException("JSON object key must not be null.");
+                    builder.Append(keyNode.ToJsonString());
                     builder.Append(':');
                     if (pair.Value is JsonNode child)
                     {
@@ -443,11 +457,31 @@ internal sealed class TransactionEncodingContext
         return writer.ToArray();
     }
 
-    private static string CanonicalizeAccountId(string accountId)
+    internal static string CanonicalizeAccountId(string accountId, string paramName = "accountId")
     {
-        return AccountAddress.Parse(
-            RequireExactNonBlank(accountId, nameof(accountId)),
-            DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
+        var exact = RequireExactNonBlank(accountId, paramName);
+        try
+        {
+            return AccountAddress.Parse(exact, DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
+        }
+        catch (AccountAddressException exception)
+        {
+            throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
+        }
+    }
+
+    private static string CanonicalizeDefaultAccountId(string accountId)
+    {
+        try
+        {
+            return AccountAddress.Parse(
+                RequireExactNonBlank(accountId, nameof(accountId)),
+                DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
+        }
+        catch (AccountAddressException exception)
+        {
+            throw new ArgumentException("Account id must be a canonical I105 account id.", nameof(accountId), exception);
+        }
     }
 
     private static string FormatPublicKeyMultihash(ulong functionCode, ReadOnlySpan<byte> payload)
@@ -554,6 +588,10 @@ internal sealed class TransactionEncodingContext
         if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
         {
             throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
         }
         if (value.Any(char.IsControl))
         {

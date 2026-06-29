@@ -66,6 +66,8 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::oracle::DefiOracleAttestation>,
         dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AnonymousAssetEscrowRecord>,
+        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorPolicy>,
+        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorPolicyId>,
     ]);
 }
 
@@ -315,6 +317,34 @@ impl SortableQueryOutput for PeerId {
     }
 }
 
+impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicy {
+    type TiebreakKey = iroha_data_model::nexus::FeeSponsorPolicyId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id.clone()
+    }
+}
+
+impl SortableQueryOutput for iroha_data_model::nexus::FeeSponsorPolicyId {
+    type TiebreakKey = Self;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp(other)
+    }
+}
+
 impl SortableQueryOutput for Permission {
     type TiebreakKey = Vec<u8>;
 
@@ -493,6 +523,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindLaneRelayEnvelopeByRef(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindFeeSponsorPolicyById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsProviderOwner(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -644,6 +677,10 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
             dm::escrow::AnonymousAssetEscrowRecord =>
                 dm::query::escrow::prelude::FindAnonymousAssetEscrows,
+            dm::nexus::FeeSponsorPolicy =>
+                dm::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor,
+            dm::nexus::FeeSponsorPolicy => dm::query::nexus::prelude::FindFeeSponsorPolicies,
+            dm::nexus::FeeSponsorPolicyId => dm::query::nexus::prelude::FindFeeSponsorPolicyIds,
         }
 
         Err(Error::Conversion(
@@ -2497,6 +2534,19 @@ impl ValidQueryRequest {
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
+                            QueryItemKind::FeeSponsorPolicy => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorPolicy, iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor)
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::nexus::FeeSponsorPolicy,
+                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                                )
+                            }
+                            QueryItemKind::FeeSponsorPolicyId => run_payload_or_default!(
+                                iroha_data_model::nexus::FeeSponsorPolicyId,
+                                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                            ),
                         }
                     }
                     #[cfg(any())]
@@ -2642,6 +2692,14 @@ impl ValidQueryRequest {
                                 "missing or malformed query payload".into(),
                             ));
                         }
+                        QueryItemKind::FeeSponsorPolicy => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorPolicy,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                        ),
+                        QueryItemKind::FeeSponsorPolicyId => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorPolicyId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                        ),
                     }
                 }
                 if iter_query.query_box().is_none() {
@@ -2768,6 +2826,14 @@ impl ValidQueryRequest {
                                 "missing or malformed query payload".into(),
                             ));
                         }
+                        QueryItemKind::FeeSponsorPolicy => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorPolicy,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                        ),
+                        QueryItemKind::FeeSponsorPolicyId => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorPolicyId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                        ),
                     }
                 }
                 let Some(qbox) = iter_query.query_box() else {
@@ -2904,6 +2970,14 @@ impl ValidQueryRequest {
                                 "missing or malformed query payload".into(),
                             ));
                         }
+                        QueryItemKind::FeeSponsorPolicy => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorPolicy,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                        ),
+                        QueryItemKind::FeeSponsorPolicyId => run_unit!(
+                            iroha_data_model::nexus::FeeSponsorPolicyId,
+                            iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                        ),
                     }
                 };
 
@@ -3957,6 +4031,19 @@ impl ValidQueryRequest {
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
+                            QueryItemKind::FeeSponsorPolicy => {
+                                if !iter_query.query_payload.is_empty() {
+                                    run_payload_or_default!(require_payload iroha_data_model::nexus::FeeSponsorPolicy, iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor)
+                                }
+                                run_payload_or_default!(
+                                    iroha_data_model::nexus::FeeSponsorPolicy,
+                                    iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies
+                                )
+                            }
+                            QueryItemKind::FeeSponsorPolicyId => run_payload_or_default!(
+                                iroha_data_model::nexus::FeeSponsorPolicyId,
+                                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds
+                            ),
                         }
                     }
                     #[cfg(not(feature = "fast_dsl"))]

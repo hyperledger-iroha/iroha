@@ -129,6 +129,20 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("\t")]
+    public void CatalogAliasesMapNullAndBlankLabelsToUnsupported(string? label)
+    {
+        var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
+
+        Assert.Equal(VerifyingKeyBackendTag.Unsupported, parsed);
+        Assert.False(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
+        Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
+    }
+
+    [Theory]
     [InlineData("halo2\uFF0Fipa")]
     [InlineData("halo2/\u200Bipa")]
     [InlineData("h\u0430lo2/ipa")]
@@ -298,6 +312,9 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("mock/dev")]
     [InlineData("kzg/powersoftau")]
     [InlineData("../halo2/ipa")]
+    [InlineData("halo2/ ipa")]
+    [InlineData("halo2/\u00A0ipa")]
+    [InlineData("stark/fri/sha256\tgoldilocks")]
     [InlineData(" halo2/ipa")]
     [InlineData("halo2/ipa ")]
     [InlineData("\thalo2/ipa")]
@@ -316,7 +333,9 @@ public sealed class VerifyingKeyBackendTagTests
         var expected = backend.Trim().Length == 0
             ? "must not be blank"
             : backend.Trim() == backend
-                ? "unsupported production verifier backend"
+                ? backend.Any(char.IsWhiteSpace)
+                    ? "must not contain whitespace"
+                    : "unsupported production verifier backend"
                 : "surrounding whitespace";
         Assert.Contains(expected, error.Message);
     }

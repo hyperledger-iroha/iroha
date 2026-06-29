@@ -20,8 +20,10 @@ public final class TransactionStatusHttpException extends RuntimeException {
     super(buildMessage(hashHex, statusCode, rejectCode, responseBody));
     this.hashHex = Objects.requireNonNull(hashHex, "hashHex");
     this.statusCode = statusCode;
-    this.rejectCode = rejectCode == null || rejectCode.isBlank() ? null : rejectCode.trim();
-    this.responseBody = responseBody == null || responseBody.isBlank() ? null : responseBody;
+    this.rejectCode =
+        rejectCode == null || rejectCode.trim().isEmpty() ? null : rejectCode.trim();
+    this.responseBody =
+        responseBody == null || responseBody.trim().isEmpty() ? null : responseBody;
   }
 
   public String hashHex() {
@@ -47,10 +49,10 @@ public final class TransactionStatusHttpException extends RuntimeException {
             .append(statusCode)
             .append(" for transaction ")
             .append(hashHex);
-    if (rejectCode != null && !rejectCode.isBlank()) {
+    if (rejectCode != null && !rejectCode.trim().isEmpty()) {
       message.append(" (reject_code=").append(rejectCode.trim()).append(")");
     }
-    if (responseBody != null && !responseBody.isBlank()) {
+    if (responseBody != null && !responseBody.trim().isEmpty()) {
       message.append(". body=").append(responseBody);
     }
     return message.toString();

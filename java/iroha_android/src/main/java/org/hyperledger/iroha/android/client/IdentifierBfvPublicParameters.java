@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -83,8 +85,8 @@ public final class IdentifierBfvPublicParameters {
     private final List<Long> a;
 
     public PublicKey(final List<Long> b, final List<Long> a) {
-      this.b = List.copyOf(Objects.requireNonNull(b, "b"));
-      this.a = List.copyOf(Objects.requireNonNull(a, "a"));
+      this.b = Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(b, "b")));
+      this.a = Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(a, "a")));
     }
 
     public List<Long> b() {

@@ -812,11 +812,11 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
-Offline V2 key-refill compatibility requests carry auth in the JSON body instead
+Offline V2 key-refill body-auth requests carry auth in the JSON body instead
 of `X-Iroha-*` headers. Use `CanonicalRequestSigner.withBodySignature(...)` to
 add `account_id`, `timestamp_ms`, `nonce`, and `signature_base64` to a request
 body. Multisig callers should build the canonical request witness separately and
-pass it as `witness_base64` with `withBodyWitness(...)`. Classic Offline Note
+pass it as `witness_base64` with `withBodyWitness(...)`. Retired Offline Note
 issue, redeem, audit, and defund submission paths are retired; production
 offline payments use Kagemusha flows.
 `ToriiOfflineNoteIssuerClient` requires `ToriiCanonicalRequestAuth` for
@@ -1179,12 +1179,15 @@ Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 ## Offline readiness and auditing
 
 The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline
-readiness surface. Torii keeps body-signed key refill for compatibility, but
-classic note issue, redemption, audit, and defund submission paths are retired.
+readiness surface. Torii accepts body-signed key refill on the maintained
+Offline V2 API, but
+retired note issue, redemption, audit, and defund submission paths are retired.
 `OfflineNoteWallet` and `OfflineBearerCashWallet` remain available for
-historical model and fixture compatibility, but their default issuer and
-transaction submitter surfaces fail closed for classic note issue, audit,
-redeem, and defund paths. Production offline payments use Kagemusha flows.
+historical fixture records, but their default issuer and
+transaction submitter surfaces fail closed for retired note issue, audit,
+redeem, and defund paths. `NativeOfflineNoteProver` and chain-VK proof
+providers also fail closed for retired proof generation. Production offline
+payments use Kagemusha flows.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
@@ -1280,7 +1283,9 @@ wallets reject unknown previous recursive proof circuits and include
 previousHopCount)` identifies whether the selected append output circuit
 requires the request to carry the previous recursive proof opening archive.
 `outputCircuitId` is the Norito append request's `output_proof_circuit_id`;
-missing or empty request values preserve semantic compatibility append.
+wallets must pass either the semantic aggregation circuit id or the
+append-specific Reserved-lineage circuit id explicitly; missing, empty, and
+family-id selectors are rejected before native dispatch.
 `KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)`
 and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)` ask the
 native bridge to generate the opaque Pallas opening archives for the current-hop
@@ -1310,8 +1315,8 @@ native bridge returns a `KagemushaRecursiveSpendVerifyResultV1`:
 Reserved-lineage bundles require a matching active `lineage_verifier_record`,
 semantic bundles must omit it, and unsupported proof attachments are rejected
 as malformed requests rather than soft invalid proof results.
-Decoded verify results expose both `lineageWitnessRequiredForRedeem` and the
-earlier `lineageWitnessRequired` alias for the same redeem decision.
+Decoded verify results expose only `lineageWitnessRequiredForRedeem` for the
+redeem decision.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -1319,13 +1324,13 @@ rejected before runtime key generation.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
-Android Java typed redeem builders accept the legacy single
+Android Java typed redeem builders accept the single-record
 `lineageVerifierRecord` path plus `lineageVerifierRecords` / raw
 `lineage_verifier_records` for additional Reserved-lineage verifier records.
 Use the plural field for multi-profile record-backed lineage witnesses, or
 place every Reserved-lineage verifier record there for vector-only callers.
 `normalizeAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId` expose
-that defaulting rule for wallet-side preflight.
+that explicit-selector rule for wallet-side preflight.
 `RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1` and
 `RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` expose the
 exactly-one-envelope cardinality rule and native 8 MiB pre-decode cap for that
@@ -1393,14 +1398,17 @@ pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
 `AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
 on every committed wallet-state revision and rejects app-data rollback or
-cloned preference snapshots after the old revision key has been deleted. Legacy
-`SPEND_PENDING` records decode as `SPENT`, and legacy `CHANGE_PENDING` records
-decode as `SPENDABLE`.
-the core module includes an in-memory store and `ToriiOfflineNoteIssuerClient`
-for body-signed key-refill in tests and JVM tooling. Legacy note issue and
-`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions remain
-for source compatibility, but fail closed; production offline payments use
-Kagemusha flows.
+cloned preference snapshots after the old revision key has been deleted.
+Wallet `load` records newly issued local notes as `ISSUE_PENDING` until sync
+observes the matching `IssueOfflineNote` commit; rejected issue outcomes cancel
+the pending note. The Java Android wallet-note JSON codec rejects retired
+`spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING` state
+wallet-note state names are rejected; first-release records must use current
+state names. The core module
+includes an in-memory store and `ToriiOfflineNoteIssuerClient` for body-signed
+key-refill in tests and JVM tooling. Retired note issue and
+`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
+fail-closed historical APIs; production offline payments use Kagemusha flows.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
 created from any `HttpClientTransport`:
@@ -1412,7 +1420,7 @@ transport
     .thenAccept(readiness -> System.out.println(readiness.offlineNote()));
 ```
 
-Legacy offline HTTP routes were removed from the public offline client surface
+Retired offline HTTP routes were removed from the public offline client surface
 so callers cannot accidentally target Torii routes that now return 404.
 
 Use `OfflineToriiClient#getOfflineReadiness()` to check whether Torii exposes the offline note

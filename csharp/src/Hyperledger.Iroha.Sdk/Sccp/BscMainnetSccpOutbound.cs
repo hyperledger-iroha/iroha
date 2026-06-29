@@ -1033,11 +1033,26 @@ public sealed record BscMainnetSccpProofContext(
 
 public sealed record BscMainnetOutboundProofRequestInput
 {
+    private byte[] bundleBytes = [];
+    private byte[]? sourceProofBytes;
+
     public BscMainnetTransparentPublicInputs? PublicInputs { get; init; }
 
-    public byte[] BundleBytes { get; init; } = [];
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            bundleBytes = value.ToArray();
+        }
+    }
 
-    public byte[]? SourceProofBytes { get; init; }
+    public byte[]? SourceProofBytes
+    {
+        get => sourceProofBytes?.ToArray();
+        init => sourceProofBytes = value?.ToArray();
+    }
 
     public string StatementHash { get; init; } = string.Empty;
 
@@ -1062,7 +1077,53 @@ public sealed record BscMainnetOutboundProofRequest(
     string StatementHash,
     string DestinationBindingHash,
     string RequestHash,
-    BscMainnetSccpDestinationBinding DestinationBinding);
+    BscMainnetSccpDestinationBinding DestinationBinding)
+{
+    private byte[] publicInputsBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private string[] publicSignalWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicSignalWords,
+        nameof(PublicSignalWords));
+    private byte[] bundleBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] sourceProofBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        SourceProofBytes,
+        nameof(SourceProofBytes));
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public string[] PublicSignalWords
+    {
+        get => publicSignalWords.ToArray();
+        init => publicSignalWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicSignalWords));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] SourceProofBytes
+    {
+        get => sourceProofBytes.ToArray();
+        init => sourceProofBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(SourceProofBytes));
+    }
+}
 
 public sealed record BscMainnetOutboundProofResult(
     int Version,
@@ -1077,7 +1138,31 @@ public sealed record BscMainnetOutboundProofResult(
     BscMainnetSccpProofContext ProofContext,
     string RequestHash,
     string EnvelopeHash,
-    BscMainnetSccpDestinationBinding DestinationBinding);
+    BscMainnetSccpDestinationBinding DestinationBinding)
+{
+    private byte[] proofBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private string[] publicSignalWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicSignalWords,
+        nameof(PublicSignalWords));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public string[] PublicSignalWords
+    {
+        get => publicSignalWords.ToArray();
+        init => publicSignalWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicSignalWords));
+    }
+}
 
 public sealed record BscMainnetSccpSubmissionInput(
     BscMainnetOutboundProofResult ProofResult);
@@ -1110,7 +1195,165 @@ public sealed record BscMainnetSccpSubmission(
     byte[] EnvelopeBytes,
     string EnvelopeHex,
     byte[] ProofBytes,
-    byte[] PublicInputWordsBytes);
+    byte[] PublicInputWordsBytes)
+{
+    private string[] publicInputWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicInputWords,
+        nameof(PublicInputWords));
+    private string[] publicSignalWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicSignalWords,
+        nameof(PublicSignalWords));
+    private BscMainnetSccpSubmissionArgument[] arguments =
+        BscMainnetSccpArrayGuards.CopyRequiredArguments(Arguments, nameof(Arguments));
+    private byte[] callData = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        CallData,
+        nameof(CallData));
+    private byte[] envelopeBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+    private byte[] proofBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputWordsBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputWordsBytes,
+        nameof(PublicInputWordsBytes));
+    private readonly string constructorCallDataHex = RequireHexMatches(CallDataHex, CallData, nameof(CallDataHex));
+    private readonly string constructorEnvelopeHex = RequireHexMatches(EnvelopeHex, EnvelopeBytes, nameof(EnvelopeHex));
+
+    public string CallDataHex
+    {
+        get
+        {
+            _ = constructorCallDataHex;
+            return Hex(callData);
+        }
+        init => _ = RequireHexMatches(value, callData, nameof(CallDataHex));
+    }
+
+    public string EnvelopeHex
+    {
+        get
+        {
+            _ = constructorEnvelopeHex;
+            return Hex(envelopeBytes);
+        }
+        init => _ = RequireHexMatches(value, envelopeBytes, nameof(EnvelopeHex));
+    }
+
+    public string[] PublicInputWords
+    {
+        get => publicInputWords.ToArray();
+        init => publicInputWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicInputWords));
+    }
+
+    public string[] PublicSignalWords
+    {
+        get => publicSignalWords.ToArray();
+        init => publicSignalWords = BscMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicSignalWords));
+    }
+
+    public BscMainnetSccpSubmissionArgument[] Arguments
+    {
+        get => arguments.ToArray();
+        init => arguments = BscMainnetSccpArrayGuards.CopyRequiredArguments(
+            value,
+            nameof(Arguments));
+    }
+
+    public byte[] CallData
+    {
+        get => callData.ToArray();
+        init => callData = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(CallData));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputWordsBytes
+    {
+        get => publicInputWordsBytes.ToArray();
+        init => publicInputWordsBytes = BscMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputWordsBytes));
+    }
+
+    private static string Hex(ReadOnlySpan<byte> value)
+    {
+        return "0x" + Convert.ToHexString(value).ToLowerInvariant();
+    }
+
+    private static string RequireHexMatches(string value, ReadOnlySpan<byte> bytes, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var expected = Hex(bytes);
+        if (!string.Equals(value, expected, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Hex view must match the supplied bytes.", parameterName);
+        }
+
+        return value;
+    }
+}
+
+file static class BscMainnetSccpArrayGuards
+{
+    internal static string[] CopyRequiredStrings(string[] value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        var copy = value.ToArray();
+        for (var index = 0; index < copy.Length; index++)
+        {
+            if (copy[index] is null)
+            {
+                throw new ArgumentException($"{parameterName}[{index}] must not be null.", parameterName);
+            }
+        }
+
+        return copy;
+    }
+
+    internal static BscMainnetSccpSubmissionArgument[] CopyRequiredArguments(
+        BscMainnetSccpSubmissionArgument[] value,
+        string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        var copy = value.ToArray();
+        for (var index = 0; index < copy.Length; index++)
+        {
+            if (copy[index] is null)
+            {
+                throw new ArgumentException($"{parameterName}[{index}] must not be null.", parameterName);
+            }
+        }
+
+        return copy;
+    }
+
+    internal static byte[] CopyRequiredBytes(byte[] value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        return value.ToArray();
+    }
+}
 
 public interface IBscMainnetOutboundProver
 {

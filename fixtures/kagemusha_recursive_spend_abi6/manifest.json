@@ -32,7 +32,7 @@
   },
   "modes": {
     "preferred_when_recursive_available": "recursive_spend_v1",
-    "fallback_when_recursive_unavailable": "checked_prefold_v1"
+    "preferred_when_recursive_unavailable": null
   },
   "operations": [
     {

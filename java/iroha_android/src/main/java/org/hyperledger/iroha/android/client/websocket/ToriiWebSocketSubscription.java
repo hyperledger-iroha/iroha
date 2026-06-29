@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client.websocket;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +47,7 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
     this.initialBackoffMs = builder.initialBackoffMs;
     this.maxBackoffMs = builder.maxBackoffMs;
     this.nextBackoffMs = new AtomicLong(initialBackoffMs);
-    this.observers = List.copyOf(builder.observers);
+    this.observers = Collections.unmodifiableList(new ArrayList<>(builder.observers));
   }
 
   /** Returns a builder that opens sessions via the provided client/path/options triple. */
@@ -265,23 +266,23 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
 
     @Override
     public CompletableFuture<Void> sendText(final CharSequence data, final boolean last) {
-      return CompletableFuture.failedFuture(new IllegalStateException("session not open"));
+      return failedSessionFuture();
     }
 
     @Override
     public CompletableFuture<Void> sendBinary(
         final java.nio.ByteBuffer data, final boolean last) {
-      return CompletableFuture.failedFuture(new IllegalStateException("session not open"));
+      return failedSessionFuture();
     }
 
     @Override
     public CompletableFuture<Void> sendPing(final java.nio.ByteBuffer message) {
-      return CompletableFuture.failedFuture(new IllegalStateException("session not open"));
+      return failedSessionFuture();
     }
 
     @Override
     public CompletableFuture<Void> sendPong(final java.nio.ByteBuffer message) {
-      return CompletableFuture.failedFuture(new IllegalStateException("session not open"));
+      return failedSessionFuture();
     }
 
     @Override
@@ -297,6 +298,12 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
     @Override
     public String subprotocol() {
       return "";
+    }
+
+    private static CompletableFuture<Void> failedSessionFuture() {
+      final CompletableFuture<Void> future = new CompletableFuture<>();
+      future.completeExceptionally(new IllegalStateException("session not open"));
+      return future;
     }
   }
 

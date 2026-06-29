@@ -251,6 +251,8 @@ const FRONTIER_RECOVERY_NEW_VIEW_REBROADCAST_MULTIPLIER: u32 = 4;
 /// Targeted payload/body rescue sends full payload material to stragglers, so keep it
 /// materially slower than READY/vote repair even on fast 1s localnets.
 const TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
+/// Targeted READY repair is small per message but high-fanout under stalled sessions.
+const TARGETED_RBC_READY_REPAIR_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
 /// Delivered RBC sessions can be retained near the tip for repair, but full DELIVER
 /// broadcasts are heavy enough to self-amplify during frontier recovery.
 const RBC_DELIVER_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_secs(1);
@@ -494,6 +496,15 @@ fn targeted_payload_rescue_cooldown_from_block_time(block_time: Duration) -> Dur
         .max(TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR)
 }
 
+/// Align repeated targeted READY repair with heavier repair traffic instead of vote cadence.
+fn targeted_rbc_ready_repair_cooldown_from_block_time(block_time: Duration) -> Duration {
+    saturating_mul_duration(
+        control_plane_rebroadcast_cooldown_from_block_time(block_time),
+        RBC_DELIVER_REBROADCAST_COOLDOWN_MULTIPLIER,
+    )
+    .max(TARGETED_RBC_READY_REPAIR_COOLDOWN_FLOOR)
+}
+
 /// Derive post-timeout quorum reschedule retry cadence from the observed quorum timeout.
 ///
 /// Keep retries faster than the timeout itself for responsiveness on fast localnets while still
@@ -693,6 +704,8 @@ where
     let mut requeued = 0usize;
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
+    let mut full_failures = 0usize;
+    let mut latency_saturated_failures = 0usize;
     let mut gossip_hashes: Vec<_> = Vec::new();
     for tx in txs {
         let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx));
@@ -779,6 +792,14 @@ where
                             "transaction already committed during requeue; skipping"
                         );
                     }
+                    crate::queue::Error::Full => {
+                        failures = failures.saturating_add(1);
+                        full_failures = full_failures.saturating_add(1);
+                    }
+                    crate::queue::Error::LatencySaturated => {
+                        failures = failures.saturating_add(1);
+                        latency_saturated_failures = latency_saturated_failures.saturating_add(1);
+                    }
                     err => {
                         failures = failures.saturating_add(1);
                         warn!(?err, "failed to requeue transaction after commit failure");
@@ -786,6 +807,18 @@ where
                 }
             }
         }
+    }
+    if full_failures > 0 {
+        warn!(
+            failures = full_failures,
+            "failed to requeue transactions after commit failure because the queue is full"
+        );
+    }
+    if latency_saturated_failures > 0 {
+        warn!(
+            failures = latency_saturated_failures,
+            "failed to requeue transactions after commit failure because the queue latency budget is saturated"
+        );
     }
     if !gossip_hashes.is_empty() {
         queue.requeue_gossip_hashes(gossip_hashes.iter().copied());
@@ -6440,6 +6473,96 @@ impl Actor {
         )
     }
 
+    fn new_view_qc_supersedes_noncommit_same_height_vote_conflict(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        conflicting_block_hash: HashOf<BlockHeader>,
+        conflicting_view: u64,
+        conflicting_phase: crate::sumeragi::consensus::Phase,
+    ) -> bool {
+        if matches!(conflicting_phase, crate::sumeragi::consensus::Phase::Commit) {
+            return false;
+        }
+        self.new_view_qc_supersedes_same_height_vote_conflict(
+            proposal_height,
+            proposal_view,
+            highest_qc,
+            conflicting_block_hash,
+            conflicting_view,
+        )
+    }
+
+    fn new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        conflicting_vote: &crate::sumeragi::consensus::Vote,
+        now: Instant,
+    ) -> bool {
+        if !self.config.resilience.enabled
+            || !matches!(
+                conflicting_vote.phase,
+                crate::sumeragi::consensus::Phase::Commit
+            )
+            || conflicting_vote.height != proposal_height
+            || proposal_height != self.committed_height_snapshot().saturating_add(1)
+            || proposal_view <= conflicting_vote.view
+        {
+            return false;
+        }
+        if self.same_height_block_has_recoverable_qc(
+            conflicting_vote.block_hash,
+            proposal_height,
+            conflicting_vote.view,
+        ) || self.same_height_has_recoverable_qc(proposal_height)
+        {
+            return false;
+        }
+
+        let hard_stale_age = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1))
+            .saturating_mul(3);
+        let recovery_exhausted = self
+            .stale_same_height_recovery_age(proposal_height, conflicting_vote.view, now)
+            .is_some_and(|age| age >= hard_stale_age)
+            || self.same_height_vote_recovery_view_gap_exhausted(
+                conflicting_vote.view,
+                proposal_view,
+                self.effective_commit_topology().len(),
+            );
+        recovery_exhausted
+            && self.new_view_qc_supersedes_same_height_vote_conflict(
+                proposal_height,
+                proposal_view,
+                highest_qc,
+                conflicting_vote.block_hash,
+                conflicting_vote.view,
+            )
+    }
+
+    fn new_view_qc_supersedes_noncommit_same_height_vote_lock(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        lock: &SameHeightVoteLock,
+    ) -> bool {
+        if lock.commit_vote_observed {
+            return false;
+        }
+        self.new_view_qc_supersedes_same_height_vote_lock(
+            proposal_height,
+            proposal_view,
+            highest_qc,
+            lock,
+        )
+    }
+
     fn pending_block_has_delivered_rbc(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -6980,12 +7103,19 @@ impl Actor {
         };
         let raw_vote_superseded = |vote: &crate::sumeragi::consensus::Vote| {
             highest_qc_for_slot.is_some_and(|highest_qc| {
-                self.new_view_qc_supersedes_same_height_vote_conflict(
+                self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                     height,
                     view,
                     highest_qc,
                     vote.block_hash,
                     vote.view,
+                    vote.phase,
+                ) || self.new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
+                    height,
+                    view,
+                    highest_qc,
+                    vote,
+                    Instant::now(),
                 )
             })
         };
@@ -7047,6 +7177,32 @@ impl Actor {
         if height != self.committed_height_snapshot().saturating_add(1) || view == 0 {
             return false;
         }
+        let now = Instant::now();
+        if let Some(existing_vote) = self
+            .local_same_height_vote(height, epoch)
+            .filter(|vote| vote.block_hash != block_hash && vote.view <= view)
+            && self
+                .proposal_or_new_view_highest_qc_for_slot(height, view)
+                .is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        existing_vote.block_hash,
+                        existing_vote.view,
+                        existing_vote.phase,
+                    ) || self
+                        .new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
+                            height,
+                            view,
+                            highest_qc,
+                            &existing_vote,
+                            now,
+                        )
+                })
+        {
+            return false;
+        }
         if let Some(existing_vote) = self
             .local_same_height_vote(height, epoch)
             .filter(|vote| vote.block_hash != block_hash && vote.view <= view)
@@ -7054,7 +7210,7 @@ impl Actor {
                 height,
                 view,
                 &existing_vote,
-                Instant::now(),
+                now,
                 true,
             )
         {
@@ -10169,6 +10325,7 @@ impl Actor {
     ) -> bool {
         if let Some(pending) = self.pending.pending_blocks.get(&key.0) {
             if !pending.aborted
+                && !pending.is_retired_same_height()
                 && pending.height == key.1
                 && pending.view == key.2
                 && pending_extends_tip(
@@ -10184,6 +10341,7 @@ impl Actor {
         if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
             if inflight.block_hash == key.0
                 && !inflight.pending.aborted
+                && !inflight.pending.is_retired_same_height()
                 && inflight.pending.height == key.1
                 && inflight.pending.view == key.2
                 && pending_extends_tip(
@@ -10195,6 +10353,9 @@ impl Actor {
             {
                 return true;
             }
+        }
+        if self.rbc_key_matches_retired_same_height_pending(key) {
+            return false;
         }
         if self
             .pending
@@ -10243,6 +10404,18 @@ impl Actor {
         false
     }
 
+    fn rbc_key_matches_retired_same_height_pending(
+        &self,
+        key: super::rbc_store::SessionKey,
+    ) -> bool {
+        self.pending
+            .pending_blocks
+            .get(&key.0)
+            .is_some_and(|pending| {
+                pending.height == key.1 && pending.view == key.2 && pending.is_retired_same_height()
+            })
+    }
+
     fn rbc_rebroadcast_active_with_tip(
         &self,
         key: super::rbc_store::SessionKey,
@@ -10264,7 +10437,10 @@ impl Actor {
             .pending_blocks
             .get(&key.0)
             .is_some_and(|pending| {
-                !pending.is_retry_aborted() && pending.height == key.1 && pending.view == key.2
+                !pending.is_retry_aborted()
+                    && !pending.is_retired_same_height()
+                    && pending.height == key.1
+                    && pending.view == key.2
             })
         {
             return true;
@@ -10277,6 +10453,7 @@ impl Actor {
             .is_some_and(|inflight| {
                 inflight.block_hash == key.0
                     && !inflight.pending.aborted
+                    && !inflight.pending.is_retired_same_height()
                     && inflight.pending.height == key.1
                     && inflight.pending.view == key.2
             })
@@ -10300,8 +10477,9 @@ impl Actor {
         {
             return true;
         }
+        let passive_retained_pending = self.rbc_key_matches_retired_same_height_pending(key);
         if self.has_local_pending_candidate_for_rbc_key(key)
-            || self.block_payload_available_locally(key.0)
+            || (!passive_retained_pending && self.block_payload_available_locally(key.0))
         {
             return false;
         }
@@ -28183,7 +28361,19 @@ impl Actor {
 
         let mut sent = false;
 
-        let payload_cooldown = self.targeted_payload_rescue_cooldown();
+        let tx_queue_capacity_backpressure = self.tx_queue_capacity_backpressure_active();
+        let base_payload_cooldown = self.targeted_payload_rescue_cooldown();
+        let prior_payload_rescue = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .targeted_payload_rescue_last_sent
+            .contains_key(&key);
+        let payload_cooldown = self.targeted_repair_cooldown_under_tx_backpressure(
+            base_payload_cooldown,
+            tx_queue_capacity_backpressure,
+            prior_payload_rescue,
+        );
         let payload_due = self.rbc_targeted_payload_rescue_due(&key, now, payload_cooldown);
         let mut payload_session = session.clone();
         let body_repair_block = self
@@ -28252,8 +28442,13 @@ impl Actor {
                         payload_cooldown_ms = payload_cooldown.as_millis(),
                         "sending targeted RBC INIT and BlockBodyResponse companion to peers missing READY"
                     );
+                    let response = self.block_body_response_for_wire(block.as_ref());
                     for peer in &targets {
-                        self.send_block_body_response(peer.clone(), block.as_ref());
+                        self.dispatch_block_body_response_with_plain_fallback(
+                            peer.clone(),
+                            block.as_ref(),
+                            response.clone(),
+                        );
                     }
                     sent = true;
                 } else if let Some((init, chunks)) =
@@ -28325,7 +28520,7 @@ impl Actor {
             }
         }
 
-        let base_ready_cooldown = self.rebroadcast_cooldown();
+        let base_ready_cooldown = self.targeted_rbc_ready_repair_cooldown();
         let ready_cooldown = if session.delivered
             && ready_quorum_required != 0
             && ready_count < ready_quorum_required
@@ -28335,6 +28530,17 @@ impl Actor {
         } else {
             base_ready_cooldown
         };
+        let prior_ready_rescue = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&key);
+        let ready_cooldown = self.targeted_repair_cooldown_under_tx_backpressure(
+            ready_cooldown,
+            tx_queue_capacity_backpressure,
+            prior_ready_rescue,
+        );
         let ready_due = self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown);
         if ready_due
             && self.send_targeted_rbc_ready_set_to_peers(
@@ -28418,7 +28624,7 @@ impl Actor {
             return false;
         }
         let payload_cooldown = self.targeted_payload_rescue_cooldown();
-        let base_ready_cooldown = self.rebroadcast_cooldown();
+        let base_ready_cooldown = self.targeted_rbc_ready_repair_cooldown();
         let ready_cooldown = if required != 0
             && ready_count < required
             && self.missing_commit_qc_request_pending_for_round(key.0, key.1, key.2)
@@ -28427,6 +28633,17 @@ impl Actor {
         } else {
             base_ready_cooldown
         };
+        let prior_ready_rescue = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&key);
+        let ready_cooldown = self.targeted_repair_cooldown_under_tx_backpressure(
+            ready_cooldown,
+            self.tx_queue_capacity_backpressure_active(),
+            prior_ready_rescue,
+        );
         self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
             && self.send_targeted_rbc_ready_set_to_peers(key, session, missing_ready_peers, now)
     }
@@ -29126,6 +29343,7 @@ impl Actor {
                     .get(&key.0)
                     .is_some_and(|pending| {
                         !pending.aborted
+                            && !pending.is_retired_same_height()
                             && pending.height == key.1
                             && pending.view == key.2
                             && !pending.commit_qc_observed()
@@ -29214,6 +29432,7 @@ impl Actor {
                     progress = true;
                 }
                 if hot_repair_allowed
+                    && !payload_backpressure
                     && delivered_ready_quorum_met
                     && self.rbc_deliver_rebroadcast_due(&key, now, deliver_rebroadcast_cooldown)
                     && let Some(deliver) = self.build_rbc_deliver(key, &session)
@@ -29556,9 +29775,13 @@ impl Actor {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
-        if rbc_session_has_complete_delivery(&session) || session.is_invalid() {
+        let complete_delivery = rbc_session_has_complete_delivery(&session);
+        if complete_delivery || session.is_invalid() {
             self.clear_rbc_deferrals(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            if complete_delivery && key.1 <= self.committed_height_snapshot() {
+                let _ = self.clean_rbc_sessions_for_committed_block_if_settled(key.0, key.1);
+            }
             return Ok(());
         }
         let mut roster_source = self
@@ -30016,6 +30239,8 @@ impl Actor {
         }
 
         if delivered_committed {
+            let cleaned_committed_rbc =
+                self.clean_rbc_sessions_for_committed_block_if_settled(key.0, key.1);
             debug!(
                 height = key.1,
                 view = key.2,
@@ -30024,6 +30249,7 @@ impl Actor {
                 ready = ready_count,
                 deliver_sender,
                 senders = ?ready_senders,
+                cleaned_committed_rbc,
                 "suppressing RBC DELIVER rebroadcast after block is already committed"
             );
             return Ok(());
@@ -30089,6 +30315,10 @@ impl Actor {
         self.effective_timing.get().targeted_payload_rescue_cooldown
     }
 
+    fn targeted_rbc_ready_repair_cooldown(&self) -> Duration {
+        targeted_rbc_ready_repair_cooldown_from_block_time(self.effective_timing.get().block_time)
+    }
+
     fn rbc_deliver_rebroadcast_cooldown(&self) -> Duration {
         self.effective_timing.get().rbc_deliver_rebroadcast_cooldown
     }
@@ -30099,6 +30329,24 @@ impl Actor {
             base,
             RBC_DELIVER_COMMIT_QC_RECOVERY_COOLDOWN_MULTIPLIER,
         ))
+    }
+
+    fn tx_queue_capacity_backpressure_active(&self) -> bool {
+        let pressure = self.queue.pressure_snapshot();
+        pressure.saturated_by_count || pressure.saturated_by_bytes
+    }
+
+    fn targeted_repair_cooldown_under_tx_backpressure(
+        &self,
+        base: Duration,
+        tx_queue_capacity_backpressure: bool,
+        repeated_repair: bool,
+    ) -> Duration {
+        if tx_queue_capacity_backpressure && repeated_repair {
+            self.rbc_deliver_commit_qc_recovery_cooldown().max(base)
+        } else {
+            base
+        }
     }
 
     fn deterministic_recovery_profile(&self) -> DeterministicRecoveryProfile {
@@ -46224,6 +46472,10 @@ struct PayloadRebroadcastThrottle {
 }
 
 impl PayloadRebroadcastThrottle {
+    fn last_sent_at(&self, block_hash: &HashOf<BlockHeader>) -> Option<Instant> {
+        self.last_sent.get(block_hash).copied()
+    }
+
     fn allow(&mut self, block_hash: HashOf<BlockHeader>, now: Instant, cooldown: Duration) -> bool {
         if let Some(previous) = self.last_sent.get(&block_hash) {
             if cooldown > Duration::ZERO && now.saturating_duration_since(*previous) < cooldown {

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
@@ -13,7 +14,9 @@ public sealed class TransactionBuilder
     public TransactionBuilder(string chainId, string authorityAccountId)
     {
         ChainId = RequireExactNonBlank(chainId, nameof(chainId));
-        AuthorityAccountId = RequireExactNonBlank(authorityAccountId, nameof(authorityAccountId));
+        AuthorityAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            authorityAccountId,
+            nameof(authorityAccountId));
     }
 
     public string ChainId { get; }
@@ -26,9 +29,9 @@ public sealed class TransactionBuilder
 
     public uint? Nonce { get; private set; }
 
-    public IReadOnlyList<TransactionInstruction> Instructions => instructions;
+    public IReadOnlyList<TransactionInstruction> Instructions => instructions.ToArray();
 
-    public IReadOnlyDictionary<string, JsonNode?> Metadata => metadata;
+    public IReadOnlyDictionary<string, JsonNode?> Metadata => SnapshotMetadata(metadata);
 
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {
@@ -207,6 +210,23 @@ public sealed class TransactionBuilder
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
         string? publicAmount,
         string? currentNoteAmount,
         bool hasChangeOutput)
@@ -217,6 +237,29 @@ public sealed class TransactionBuilder
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount,
             publicAmount,
             currentNoteAmount,
             hasChangeOutput));
@@ -243,15 +286,53 @@ public sealed class TransactionBuilder
             changeOutput));
     }
 
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
+        string? publicAmount,
+        string? currentNoteAmount,
+        ReadOnlySpan<byte> changeOutput)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount,
+            publicAmount,
+            currentNoteAmount,
+            changeOutput));
+    }
+
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)
     {
+        if (creationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(creationTimeMilliseconds),
+                "Transaction creation time must be positive.");
+        }
+
         CreationTimeMilliseconds = creationTimeMilliseconds;
         return this;
     }
 
     public TransactionBuilder SetCreationTime(DateTimeOffset creationTime)
     {
-        return SetCreationTimeMilliseconds((ulong)creationTime.ToUnixTimeMilliseconds());
+        var creationTimeMilliseconds = creationTime.ToUnixTimeMilliseconds();
+        if (creationTimeMilliseconds <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(creationTime),
+                "Transaction creation time must be after the Unix epoch.");
+        }
+
+        return SetCreationTimeMilliseconds((ulong)creationTimeMilliseconds);
     }
 
     public TransactionBuilder SetTimeToLiveMilliseconds(ulong? timeToLiveMilliseconds)
@@ -298,6 +379,18 @@ public sealed class TransactionBuilder
         }
 
         return this;
+    }
+
+    private static IReadOnlyDictionary<string, JsonNode?> SnapshotMetadata(
+        IReadOnlyDictionary<string, JsonNode?> values)
+    {
+        var snapshot = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+        foreach (var (key, value) in values)
+        {
+            snapshot[key] = value?.DeepClone();
+        }
+
+        return new ReadOnlyDictionary<string, JsonNode?>(snapshot);
     }
 
     public SignedTransactionEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
@@ -348,13 +441,17 @@ public sealed class TransactionBuilder
         {
             throw new ArgumentException("Value cannot be null or empty.", paramName);
         }
-        if (value != value.Trim() || value.Any(char.IsControl))
-        {
-            throw new ArgumentException("Value must not contain surrounding whitespace or control characters.", paramName);
-        }
         if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
         {
             throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
         }
 
         return value;

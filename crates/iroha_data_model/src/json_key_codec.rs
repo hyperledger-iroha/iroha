@@ -265,6 +265,18 @@ impl JsonKeyCodec for crate::nexus::UniversalAccountId {
     }
 }
 
+impl JsonKeyCodec for crate::nexus::FeeSponsorPolicyId {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse::<crate::nexus::FeeSponsorPolicyId>()
+            .map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
+
 impl JsonKeyCodec for crate::account::OpaqueAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);

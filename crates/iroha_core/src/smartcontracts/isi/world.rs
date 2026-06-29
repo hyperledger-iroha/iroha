@@ -8592,20 +8592,6 @@ pub mod isi {
         }
     }
 
-    fn validate_configured_sccp_single_lane_launch_scope(domain: u32) -> Result<(), Error> {
-        let Some((launch_domain, launch_policy_label, launch_source_label)) =
-            configured_sccp_single_lane_launch_policy_v1()
-        else {
-            return Ok(());
-        };
-        if domain != launch_domain {
-            return Err(invalid_bridge_proof(format!(
-                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
-            )));
-        }
-        Ok(())
-    }
-
     fn validate_configured_sccp_lane_launch_ready(
         zk_config: &iroha_config::parameters::actual::Zk,
         domain: u32,
@@ -8618,7 +8604,13 @@ pub mod isi {
         else {
             return validate_configured_sccp_all_lanes_launch_ready(zk_config);
         };
-        validate_configured_sccp_single_lane_launch_scope(domain)?;
+        let launch_policy_label =
+            match configured_sccp_single_lane_launch_policy_v1().map(|(domain, _, _)| domain) {
+                Some(launch_domain) if domain != launch_domain => {
+                    "on-chain SCCP lane activation policy"
+                }
+                _ => launch_policy_label,
+            };
 
         let readiness =
             iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
@@ -8718,7 +8710,6 @@ pub mod isi {
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
-            validate_configured_sccp_single_lane_launch_scope(source_domain)?;
             let destination_rollout = configured_sccp_destination_rollout_for_domain(
                 &state_transaction.zk,
                 source_domain,
@@ -9469,6 +9460,9 @@ pub mod isi {
             proving_key_hash: manifest.proving_key_hash,
             native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash,
             native_evm_prover_bundle: manifest.native_evm_prover_bundle,
+            source_verifier_material: manifest.source_verifier_material,
+            source_adapter_engine_deployment: manifest.source_adapter_engine_deployment,
+            source_adapter_engine: manifest.source_adapter_engine,
             destination_browser_prover: manifest
                 .destination_browser_prover
                 .map(sccp_route_browser_prover_ref_to_user),
@@ -15075,6 +15069,191 @@ pub mod isi {
         }
     }
 
+    fn permission_manages_fee_sponsor_policy(
+        state_transaction: &StateTransaction<'_, '_>,
+        permission: &Permission,
+        sponsor: &AccountId,
+    ) -> bool {
+        permission.name() == "CanManageFeeSponsorPolicy"
+            && crate::state::parse_permission_account_field(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                permission.payload(),
+                "sponsor",
+            )
+            .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
+    }
+
+    fn can_manage_fee_sponsor_policy(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        sponsor: &AccountId,
+    ) -> bool {
+        if authority.subject_id() == sponsor.subject_id() {
+            return true;
+        }
+
+        if state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| {
+                permissions.iter().any(|permission| {
+                    permission_manages_fee_sponsor_policy(state_transaction, permission, sponsor)
+                })
+            })
+        {
+            return true;
+        }
+
+        state_transaction
+            .world
+            .account_roles_iter(authority)
+            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .any(|role| {
+                role.permissions.iter().any(|permission| {
+                    permission_manages_fee_sponsor_policy(state_transaction, permission, sponsor)
+                })
+            })
+    }
+
+    fn validate_fee_sponsor_policy(
+        policy: &iroha_data_model::nexus::FeeSponsorPolicy,
+    ) -> Result<(), Error> {
+        if let Some(max_fee) = &policy.max_fee
+            && max_fee < &Numeric::zero()
+        {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "fee sponsor policy max_fee must be non-negative".into(),
+                ),
+            )
+            .into());
+        }
+
+        if policy.enabled
+            && !policy
+                .rules
+                .iter()
+                .any(|rule| rule.effect == iroha_data_model::nexus::FeeSponsorRuleEffect::Allow)
+        {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "enabled fee sponsor policy must contain at least one allow rule".into(),
+                ),
+            )
+            .into());
+        }
+
+        for (rule_index, rule) in policy.rules.iter().enumerate() {
+            for wire_id in &rule.instruction_wire_ids {
+                if wire_id.trim().is_empty() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "fee sponsor policy rule {rule_index} contains an empty instruction wire id"
+                        )),
+                    )
+                    .into());
+                }
+            }
+            for (selector_index, selector) in rule.contract_selectors.iter().enumerate() {
+                if selector
+                    .entrypoints
+                    .iter()
+                    .any(|entrypoint| entrypoint.trim().is_empty())
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "fee sponsor policy rule {rule_index} contract selector {selector_index} contains an empty entrypoint"
+                        )),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    impl Execute for nexus::UpsertFeeSponsorPolicy {
+        #[metrics(+"upsert_fee_sponsor_policy")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.nexus.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "fee sponsor policy management requires nexus.enabled=true".into(),
+                ));
+            }
+
+            let policy = self.policy().clone();
+            let sponsor = policy.id.sponsor.clone();
+            if state_transaction.world.accounts.get(&sponsor).is_none() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown fee sponsor policy sponsor `{sponsor}`"
+                    )),
+                )
+                .into());
+            }
+            if !can_manage_fee_sponsor_policy(state_transaction, authority, &sponsor) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "authority `{authority}` cannot manage fee sponsor policies for `{sponsor}`"
+                    )
+                    .into(),
+                ));
+            }
+            validate_fee_sponsor_policy(&policy)?;
+
+            state_transaction
+                .world
+                .fee_sponsor_policies
+                .insert(policy.id.clone(), policy);
+            Ok(())
+        }
+    }
+
+    impl Execute for nexus::RemoveFeeSponsorPolicy {
+        #[metrics(+"remove_fee_sponsor_policy")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.nexus.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "fee sponsor policy management requires nexus.enabled=true".into(),
+                ));
+            }
+
+            let id = self.id().clone();
+            if state_transaction.world.accounts.get(&id.sponsor).is_none() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown fee sponsor policy sponsor `{}`",
+                        id.sponsor
+                    )),
+                )
+                .into());
+            }
+            if !can_manage_fee_sponsor_policy(state_transaction, authority, &id.sponsor) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "authority `{authority}` cannot manage fee sponsor policies for `{}`",
+                        id.sponsor
+                    )
+                    .into(),
+                ));
+            }
+
+            state_transaction.world.fee_sponsor_policies.remove(id);
+            Ok(())
+        }
+    }
+
     fn parse_config_asset_definition_id(
         world: &impl crate::state::WorldReadOnly,
         raw: &str,
@@ -16141,7 +16320,10 @@ pub mod isi {
             },
             events::data::{DataEvent, prelude::BridgeEvent},
             isi::{
-                Grant, Revoke, consensus_keys, nexus::SetLaneRelayEmergencyValidators,
+                Grant, Revoke, consensus_keys,
+                nexus::{
+                    RemoveFeeSponsorPolicy, SetLaneRelayEmergencyValidators, UpsertFeeSponsorPolicy,
+                },
                 verifying_keys,
             },
             metadata::Metadata,
@@ -16149,7 +16331,9 @@ pub mod isi {
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
                 DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-                LaneCatalog, LaneConfig, LaneId,
+                FeeSponsorContractSelector, FeeSponsorExecutableKind, FeeSponsorPolicy,
+                FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, LaneCatalog, LaneConfig,
+                LaneId,
             },
             permission::Permission,
             proof::{
@@ -19033,6 +19217,28 @@ pub mod isi {
             .expect("dataspace catalog");
             stx.nexus.dataspace_catalog = dataspace_catalog.clone();
             stx.world.dataspace_catalog = dataspace_catalog;
+        }
+
+        fn register_wonderland_account(stx: &mut StateTransaction<'_, '_>, account_id: &AccountId) {
+            Register::account(new_account_in_domain(account_id))
+                .execute(&ALICE_ID, stx)
+                .expect("register wonderland account");
+        }
+
+        fn fee_sponsor_policy_id(sponsor: &AccountId, name: &str) -> FeeSponsorPolicyId {
+            FeeSponsorPolicyId::new(
+                sponsor.clone(),
+                Name::from_str(name).expect("static fee sponsor policy name"),
+            )
+        }
+
+        fn allow_all_fee_sponsor_policy(sponsor: &AccountId, name: &str) -> FeeSponsorPolicy {
+            let mut policy = FeeSponsorPolicy::new(fee_sponsor_policy_id(sponsor, name));
+            policy.enabled = true;
+            policy
+                .rules
+                .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Allow));
+            policy
         }
 
         fn restricted_shield_fixture(
@@ -23072,6 +23278,283 @@ pub mod isi {
                 .account_roles_iter(&ALICE_ID)
                 .any(|rid| rid == &role_id);
             assert!(has_role, "owner must be auto‑granted the new role");
+        }
+
+        #[test]
+        fn fee_sponsor_policy_management_and_queries_are_sponsor_scoped() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+
+            let (sponsor_id, _) = gen_account_in("wonderland");
+            let (other_sponsor_id, _) = gen_account_in("wonderland");
+            let (delegate_id, _) = gen_account_in("wonderland");
+            let (role_delegate_id, _) = gen_account_in("wonderland");
+            let (outsider_id, _) = gen_account_in("wonderland");
+            for account_id in [
+                &sponsor_id,
+                &other_sponsor_id,
+                &delegate_id,
+                &role_delegate_id,
+                &outsider_id,
+            ] {
+                register_wonderland_account(&mut stx, account_id);
+            }
+
+            let default_policy = allow_all_fee_sponsor_policy(&sponsor_id, "default");
+            let default_policy_id = default_policy.id.clone();
+            let err = UpsertFeeSponsorPolicy {
+                policy: default_policy.clone(),
+            }
+            .execute(&outsider_id, &mut stx)
+            .expect_err("unprivileged account must not manage sponsor policies");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("cannot manage fee sponsor policies"),
+                "unexpected outsider error: {msg}"
+            );
+
+            UpsertFeeSponsorPolicy {
+                policy: default_policy.clone(),
+            }
+            .execute(&sponsor_id, &mut stx)
+            .expect("sponsor may manage its own policy");
+
+            let manage_permission: Permission =
+                iroha_executor_data_model::permission::nexus::CanManageFeeSponsorPolicy {
+                    sponsor: sponsor_id.clone(),
+                }
+                .into();
+            Grant::account_permission(manage_permission.clone(), delegate_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant direct fee sponsor policy management permission");
+
+            let mut transfer_policy = allow_all_fee_sponsor_policy(&sponsor_id, "native_transfers");
+            transfer_policy.rules[0]
+                .executable_kinds
+                .insert(FeeSponsorExecutableKind::Instructions);
+            transfer_policy.rules[0]
+                .instruction_wire_ids
+                .insert("Transfer".to_owned());
+            UpsertFeeSponsorPolicy {
+                policy: transfer_policy.clone(),
+            }
+            .execute(&delegate_id, &mut stx)
+            .expect("directly delegated account may manage sponsor policy");
+
+            let role_id: RoleId = "FEE_POLICY_OPS".parse().expect("role id");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register fee policy ops role");
+            Grant::role_permission(manage_permission, role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role fee sponsor policy management permission");
+            Grant::account_role(role_id, role_delegate_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role to delegated manager");
+
+            let role_policy = allow_all_fee_sponsor_policy(&sponsor_id, "role_managed");
+            UpsertFeeSponsorPolicy {
+                policy: role_policy.clone(),
+            }
+            .execute(&role_delegate_id, &mut stx)
+            .expect("role-delegated account may manage sponsor policy");
+
+            let other_policy = allow_all_fee_sponsor_policy(&other_sponsor_id, "default");
+            UpsertFeeSponsorPolicy {
+                policy: other_policy.clone(),
+            }
+            .execute(&other_sponsor_id, &mut stx)
+            .expect("other sponsor may manage its own policy");
+
+            let by_id_query = iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyById {
+                id: default_policy_id.clone(),
+            };
+            let found = crate::smartcontracts::ValidSingularQuery::execute(&by_id_query, &stx)
+                .expect("find fee sponsor policy by id");
+            assert_eq!(found, default_policy);
+
+            let policy_ids = crate::smartcontracts::ValidQuery::execute(
+                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds,
+                iroha_data_model::query::dsl::CompoundPredicate::<FeeSponsorPolicyId>::PASS,
+                &stx,
+            )
+            .expect("find fee sponsor policy ids")
+            .collect::<BTreeSet<_>>();
+            assert_eq!(
+                policy_ids,
+                BTreeSet::from([
+                    default_policy_id.clone(),
+                    fee_sponsor_policy_id(&sponsor_id, "native_transfers"),
+                    fee_sponsor_policy_id(&sponsor_id, "role_managed"),
+                    other_policy.id.clone(),
+                ])
+            );
+
+            let sponsor_policy_ids = crate::smartcontracts::ValidQuery::execute(
+                iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor {
+                    sponsor: sponsor_id.clone(),
+                },
+                iroha_data_model::query::dsl::CompoundPredicate::<FeeSponsorPolicy>::PASS,
+                &stx,
+            )
+            .expect("find fee sponsor policies by sponsor")
+            .map(|policy| policy.id)
+            .collect::<BTreeSet<_>>();
+            assert_eq!(
+                sponsor_policy_ids,
+                BTreeSet::from([default_policy_id, transfer_policy.id, role_policy.id,])
+            );
+
+            let all_policy_count = crate::smartcontracts::ValidQuery::execute(
+                iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies,
+                iroha_data_model::query::dsl::CompoundPredicate::<FeeSponsorPolicy>::PASS,
+                &stx,
+            )
+            .expect("find fee sponsor policies")
+            .count();
+            assert_eq!(all_policy_count, 4);
+        }
+
+        #[test]
+        fn fee_sponsor_policy_upsert_rejects_invalid_policy_shapes() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+
+            let (sponsor_id, _) = gen_account_in("wonderland");
+            register_wonderland_account(&mut stx, &sponsor_id);
+
+            let disabled_err = UpsertFeeSponsorPolicy {
+                policy: allow_all_fee_sponsor_policy(&sponsor_id, "disabled_config"),
+            }
+            .execute(&sponsor_id, &mut stx)
+            .expect_err("nexus-disabled policy management must fail");
+            let disabled_msg = smart_contract_instruction_error_message(disabled_err);
+            assert!(
+                disabled_msg.contains("requires nexus.enabled=true"),
+                "unexpected nexus-disabled error: {disabled_msg}"
+            );
+            stx.nexus.enabled = true;
+
+            let mut no_allow =
+                FeeSponsorPolicy::new(fee_sponsor_policy_id(&sponsor_id, "no_allow"));
+            no_allow.enabled = true;
+            no_allow
+                .rules
+                .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Deny));
+
+            let mut negative_max_fee =
+                allow_all_fee_sponsor_policy(&sponsor_id, "negative_max_fee");
+            negative_max_fee.max_fee = Some(Numeric::new(-1_i32, 0));
+
+            let mut empty_wire_id = allow_all_fee_sponsor_policy(&sponsor_id, "empty_wire_id");
+            empty_wire_id.rules[0]
+                .instruction_wire_ids
+                .insert(" ".to_owned());
+
+            let mut empty_entrypoint =
+                allow_all_fee_sponsor_policy(&sponsor_id, "empty_entrypoint");
+            let mut selector = FeeSponsorContractSelector::default();
+            selector.entrypoints.insert(String::new());
+            empty_entrypoint.rules[0].contract_selectors.push(selector);
+
+            let (unknown_sponsor_id, _) = gen_account_in("wonderland");
+            let unknown_sponsor_policy =
+                allow_all_fee_sponsor_policy(&unknown_sponsor_id, "unknown_sponsor");
+
+            for (policy, expected) in [
+                (no_allow, "must contain at least one allow rule"),
+                (negative_max_fee, "max_fee must be non-negative"),
+                (empty_wire_id, "empty instruction wire id"),
+                (empty_entrypoint, "empty entrypoint"),
+                (unknown_sponsor_policy, "unknown fee sponsor policy sponsor"),
+            ] {
+                let err = UpsertFeeSponsorPolicy { policy }
+                    .execute(&sponsor_id, &mut stx)
+                    .expect_err("invalid fee sponsor policy must fail");
+                let msg = smart_contract_instruction_error_message(err);
+                assert!(
+                    msg.contains(expected),
+                    "expected `{expected}` in invalid policy error, got: {msg}"
+                );
+            }
+
+            assert!(
+                stx.world.fee_sponsor_policies.is_empty(),
+                "rejected policies must not be persisted"
+            );
+        }
+
+        #[test]
+        fn fee_sponsor_policy_remove_requires_management_authority() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+
+            let (sponsor_id, _) = gen_account_in("wonderland");
+            let (delegate_id, _) = gen_account_in("wonderland");
+            let (outsider_id, _) = gen_account_in("wonderland");
+            for account_id in [&sponsor_id, &delegate_id, &outsider_id] {
+                register_wonderland_account(&mut stx, account_id);
+            }
+
+            let policy = allow_all_fee_sponsor_policy(&sponsor_id, "removable");
+            let policy_id = policy.id.clone();
+            UpsertFeeSponsorPolicy { policy }
+                .execute(&sponsor_id, &mut stx)
+                .expect("sponsor may upsert removable policy");
+
+            let err = RemoveFeeSponsorPolicy {
+                id: policy_id.clone(),
+            }
+            .execute(&outsider_id, &mut stx)
+            .expect_err("outsider must not remove sponsor policy");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("cannot manage fee sponsor policies"),
+                "unexpected remove authorization error: {msg}"
+            );
+            assert!(
+                stx.world.fee_sponsor_policies.get(&policy_id).is_some(),
+                "unauthorized removal must leave policy intact"
+            );
+
+            let manage_permission: Permission =
+                iroha_executor_data_model::permission::nexus::CanManageFeeSponsorPolicy {
+                    sponsor: sponsor_id.clone(),
+                }
+                .into();
+            Grant::account_permission(manage_permission, delegate_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant direct fee sponsor policy management permission");
+
+            RemoveFeeSponsorPolicy {
+                id: policy_id.clone(),
+            }
+            .execute(&delegate_id, &mut stx)
+            .expect("delegated account may remove sponsor policy");
+            assert!(
+                stx.world.fee_sponsor_policies.get(&policy_id).is_none(),
+                "authorized removal must delete policy"
+            );
         }
 
         #[test]
@@ -30349,6 +30832,74 @@ pub mod isi {
                 state_ro: &impl StateReadOnly,
             ) -> Result<VerifiedLaneRelayRecord, Error> {
                 load_verified_lane_relay_record(state_ro, &self.relay_ref)
+            }
+        }
+
+        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicies {
+            #[metrics(+"find_fee_sponsor_policies")]
+            fn execute(
+                self,
+                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorPolicy>,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<impl Iterator<Item = Self::Item>, Error> {
+                Ok(state_ro
+                    .world()
+                    .fee_sponsor_policies()
+                    .iter()
+                    .map(|(_, policy)| policy)
+                    .filter(move |policy| filter.applies(policy))
+                    .cloned())
+            }
+        }
+
+        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyIds {
+            #[metrics(+"find_fee_sponsor_policy_ids")]
+            fn execute(
+                self,
+                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorPolicyId>,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<impl Iterator<Item = Self::Item>, Error> {
+                Ok(state_ro
+                    .world()
+                    .fee_sponsor_policies()
+                    .iter()
+                    .map(|(id, _)| id)
+                    .filter(move |id| filter.applies(id))
+                    .cloned())
+            }
+        }
+
+        impl ValidQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPoliciesBySponsor {
+            #[metrics(+"find_fee_sponsor_policies_by_sponsor")]
+            fn execute(
+                self,
+                filter: CompoundPredicate<iroha_data_model::nexus::FeeSponsorPolicy>,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<impl Iterator<Item = Self::Item>, Error> {
+                let sponsor = self.sponsor;
+                Ok(state_ro
+                    .world()
+                    .fee_sponsor_policies()
+                    .iter()
+                    .filter(move |(id, _)| id.sponsor == sponsor)
+                    .map(|(_, policy)| policy)
+                    .filter(move |policy| filter.applies(policy))
+                    .cloned())
+            }
+        }
+
+        impl ValidSingularQuery for iroha_data_model::query::nexus::prelude::FindFeeSponsorPolicyById {
+            #[metrics(+"find_fee_sponsor_policy_by_id")]
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<iroha_data_model::nexus::FeeSponsorPolicy, Error> {
+                state_ro
+                    .world()
+                    .fee_sponsor_policies()
+                    .get(&self.id)
+                    .cloned()
+                    .ok_or_else(|| Error::Conversion("FeeSponsorPolicy not found".to_string()))
             }
         }
 

@@ -11,8 +11,22 @@ public final class OfflineNoteOutcomeIndex {
   public static final String KIND_REDEEM = "RedeemOfflineNote";
   public static final String KIND_AUDIT = "AuditOfflineNote";
 
+  private final Map<String, String> committedIssues = new LinkedHashMap<>();
+  private final Map<String, String> rejectedIssues = new LinkedHashMap<>();
   private final Map<String, String> committedRedeems = new LinkedHashMap<>();
   private final Map<String, String> rejectedRedeems = new LinkedHashMap<>();
+
+  public OfflineNoteOutcomeIndex recordCommittedIssue(
+      final OfflineNote.Issue issue, final String transactionHashHex) {
+    putFirst(committedIssues, issue.noteCommitment(), transactionHashHex);
+    return this;
+  }
+
+  public OfflineNoteOutcomeIndex recordRejectedIssue(
+      final OfflineNote.Issue issue, final String transactionHashHex) {
+    putFirst(rejectedIssues, issue.noteCommitment(), transactionHashHex);
+    return this;
+  }
 
   public OfflineNoteOutcomeIndex recordCommittedAudit(
       final OfflineNote.AuditBundle audit, final String transactionHashHex) {
@@ -38,9 +52,23 @@ public final class OfflineNoteOutcomeIndex {
 
   public OfflineNoteSyncResolution resolve(final OfflineNoteWalletNote note) {
     return switch (note.state()) {
+      case ISSUE_PENDING -> resolveIssuePending(note);
       case REDEEM_PENDING -> resolveRedeemPending(note);
       default -> null;
     };
+  }
+
+  private OfflineNoteSyncResolution resolveIssuePending(final OfflineNoteWalletNote note) {
+    final String commitmentKey = note.noteCommitmentHex();
+    if (committedIssues.containsKey(commitmentKey)) {
+      return new OfflineNoteSyncResolution(
+          OfflineNoteWalletNoteState.SPENDABLE, committedIssues.get(commitmentKey));
+    }
+    if (rejectedIssues.containsKey(commitmentKey)) {
+      return new OfflineNoteSyncResolution(
+          OfflineNoteWalletNoteState.CANCELLED, rejectedIssues.get(commitmentKey));
+    }
+    return null;
   }
 
   private OfflineNoteSyncResolution resolveRedeemPending(final OfflineNoteWalletNote note) {
@@ -74,7 +102,15 @@ public final class OfflineNoteOutcomeIndex {
       if (!committed && !rejected) {
         continue;
       }
-      if (KIND_AUDIT.equalsIgnoreCase(outcome.kind())) {
+      if (KIND_ISSUE.equalsIgnoreCase(outcome.kind())) {
+        final OfflineNote.Issue issue =
+            OfflineNote.decodeIssueInstruction(outcome.encodedInstruction());
+        if (committed) {
+          index.recordCommittedIssue(issue, outcome.transactionHashHex());
+        } else {
+          index.recordRejectedIssue(issue, outcome.transactionHashHex());
+        }
+      } else if (KIND_AUDIT.equalsIgnoreCase(outcome.kind())) {
         final OfflineNote.AuditBundle audit =
             OfflineNote.decodeAuditInstruction(outcome.encodedInstruction());
         if (committed) {

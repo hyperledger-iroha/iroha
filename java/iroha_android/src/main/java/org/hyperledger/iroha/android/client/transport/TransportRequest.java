@@ -84,7 +84,9 @@ public final class TransportRequest {
       if (headers != null) {
         for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
           final List<String> values =
-              entry.getValue() == null ? List.of() : new ArrayList<>(entry.getValue());
+              entry.getValue() == null
+                  ? Collections.emptyList()
+                  : new ArrayList<>(entry.getValue());
           this.headers.put(entry.getKey(), values);
         }
       }
@@ -116,7 +118,9 @@ public final class TransportRequest {
       final Map<String, List<String>> copy = new java.util.LinkedHashMap<>();
       for (final Map.Entry<String, List<String>> entry : source.entrySet()) {
         final List<String> values =
-            entry.getValue() == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
+            entry.getValue() == null
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
         copy.put(entry.getKey(), values);
       }
       return copy;

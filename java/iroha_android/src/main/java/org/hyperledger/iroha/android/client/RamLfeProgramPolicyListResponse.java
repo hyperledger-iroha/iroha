@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -11,7 +13,8 @@ public final class RamLfeProgramPolicyListResponse {
   public RamLfeProgramPolicyListResponse(
       final long total, final List<RamLfeProgramPolicySummary> items) {
     this.total = total;
-    this.items = List.copyOf(Objects.requireNonNull(items, "items"));
+    this.items =
+        Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(items, "items")));
   }
 
   public long total() {

@@ -16,6 +16,38 @@ namespace Hyperledger.Iroha.Torii;
 
 public sealed class ToriiClient : IDisposable
 {
+    private const int QueryProjectionArchiveVersion = 1;
+    private const int QueryProjectionSchemaVersion = 1;
+    private const int QueryProjectionBlobClassCustomId = 1001;
+    private const string QueryProjectionCodec = "application/x-iroha-query-shard+norito+zstd";
+    private const string QueryProjectionRowsetCodec = "application/x-iroha-query-shard-rowset+norito";
+    private const string QueryProjectionCompression = "zstd";
+    private const int QueryProjectionDefaultPartitionCount = 4096;
+    private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
+    private static readonly string[] QueryRowEnrichmentFields =
+    [
+        "primary_alias",
+        "primary_alias_name",
+        "primary_alias_dataspace",
+        "primary_alias_domain",
+        "has_primary_alias",
+    ];
+
+    private static readonly string[] QueryProjectionMetadataKeys =
+    [
+        "query_projection.locator",
+        "query_projection.resource",
+        "query_projection.partition_id",
+        "query_projection.asset_definition_id",
+        "query_projection.indexed_height",
+        "query_projection.indexed_block_hash_hex",
+        "query_projection.row_count",
+        "query_projection.rowset_codec",
+        "query_projection.rowset_hash_hex",
+        "query_projection.emitted_at_unix",
+    ];
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
     private readonly bool ownsHttpClient;
     private readonly JsonSerializerOptions serializerOptions;
 
@@ -23,10 +55,10 @@ public sealed class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(baseUri);
 
-        BaseUri = EnsureTrailingSlash(baseUri);
+        BaseUri = NormalizeBaseUri(baseUri);
         HttpClient = httpClient ?? new HttpClient();
         ownsHttpClient = httpClient is null;
-        Options = options ?? new ToriiClientOptions();
+        Options = options?.Snapshot() ?? new ToriiClientOptions();
         serializerOptions = CreateSerializerOptions(Options.JsonSerializerOptions);
     }
 
@@ -48,7 +80,10 @@ public sealed class ToriiClient : IDisposable
     {
         using var response = await SendAsync(HttpMethod.Get, path, query, content: null, cancellationToken: cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            $"Torii JSON response for `{response.RequestMessage?.RequestUri}`",
+            cancellationToken);
     }
 
     public async Task<TResponse> GetAsync<TResponse>(string path, string? query = null, CancellationToken cancellationToken = default)
@@ -71,261 +106,319 @@ public sealed class ToriiClient : IDisposable
     public async Task<string> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, "/v1/health", cancellationToken: cancellationToken);
-        return await response.Content.ReadAsStringAsync(cancellationToken);
+        return await ReadStrictUtf8TextContentAsync(response.Content, "Torii health response body", cancellationToken);
     }
 
-    public Task<ToriiAccountsPage> GetAccountsAsync(
+    public async Task<ToriiAccountsPage> GetAccountsAsync(
         int? limit = null,
         long offset = 0,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiAccountsPage>(
+        var response = await GetAsync<ToriiAccountsPage>(
             "/v1/accounts",
             BuildPaginationQuery(limit, offset),
             cancellationToken);
+        ValidateAccountsPage(response, "accounts response");
+        return response;
     }
 
-    public Task<ToriiExplorerAccountQrSnapshot> GetExplorerAccountQrAsync(
+    public async Task<ToriiExplorerAccountQrSnapshot> GetExplorerAccountQrAsync(
         string accountId,
         CancellationToken cancellationToken = default)
     {
-        var encodedAccountId = EncodePathSegment(accountId);
-        return GetAsync<ToriiExplorerAccountQrSnapshot>(
+        var encodedAccountId = EncodeIdentifierPathSegment(accountId, nameof(accountId));
+        var response = await GetAsync<ToriiExplorerAccountQrSnapshot>(
             $"/v1/explorer/accounts/{encodedAccountId}/qr",
             cancellationToken: cancellationToken);
+        ValidateExplorerAccountQrSnapshot(response, "explorer account QR response");
+        return response;
     }
 
-    public Task<ToriiExplorerAccountsPage> GetExplorerAccountsAsync(
+    public async Task<ToriiExplorerAccountsPage> GetExplorerAccountsAsync(
         ToriiExplorerAccountsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAccountsPage>(
+        var response = await GetAsync<ToriiExplorerAccountsPage>(
             "/v1/explorer/accounts",
             BuildExplorerAccountsQuery(query),
             cancellationToken);
+        ValidateExplorerAccountsPage(response, "explorer accounts response");
+        return response;
     }
 
-    public Task<ToriiExplorerAccount> GetExplorerAccountAsync(
+    public async Task<ToriiExplorerAccount> GetExplorerAccountAsync(
         string accountId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAccount>(
-            $"/v1/explorer/accounts/{EncodePathSegment(accountId)}",
+        var response = await GetAsync<ToriiExplorerAccount>(
+            $"/v1/explorer/accounts/{EncodeIdentifierPathSegment(accountId, nameof(accountId))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerAccount(response, "explorer account response");
+        return response;
     }
 
-    public Task<ToriiExplorerDomainsPage> GetExplorerDomainsAsync(
+    public async Task<ToriiExplorerDomainsPage> GetExplorerDomainsAsync(
         ToriiExplorerDomainsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerDomainsPage>(
+        var response = await GetAsync<ToriiExplorerDomainsPage>(
             "/v1/explorer/domains",
             BuildExplorerDomainsQuery(query),
             cancellationToken);
+        ValidateExplorerDomainsPage(response, "explorer domains response");
+        return response;
     }
 
-    public Task<ToriiExplorerDomain> GetExplorerDomainAsync(
+    public async Task<ToriiExplorerDomain> GetExplorerDomainAsync(
         string domainId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerDomain>(
-            $"/v1/explorer/domains/{EncodePathSegment(domainId)}",
+        var response = await GetAsync<ToriiExplorerDomain>(
+            $"/v1/explorer/domains/{EncodeIdentifierPathSegment(domainId, nameof(domainId))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerDomain(response, "explorer domain response");
+        return response;
     }
 
-    public Task<ToriiExplorerAssetDefinitionsPage> GetExplorerAssetDefinitionsAsync(
+    public async Task<ToriiExplorerAssetDefinitionsPage> GetExplorerAssetDefinitionsAsync(
         ToriiExplorerAssetDefinitionsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAssetDefinitionsPage>(
+        var response = await GetAsync<ToriiExplorerAssetDefinitionsPage>(
             "/v1/explorer/asset-definitions",
             BuildExplorerAssetDefinitionsQuery(query),
             cancellationToken);
+        ValidateExplorerAssetDefinitionsPage(response, "explorer asset definitions response");
+        return response;
     }
 
-    public Task<ToriiExplorerAssetDefinition> GetExplorerAssetDefinitionAsync(
+    public async Task<ToriiExplorerAssetDefinition> GetExplorerAssetDefinitionAsync(
         string definitionId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAssetDefinition>(
-            $"/v1/explorer/asset-definitions/{EncodePathSegment(definitionId)}",
+        var response = await GetAsync<ToriiExplorerAssetDefinition>(
+            $"/v1/explorer/asset-definitions/{EncodeIdentifierPathSegment(definitionId, nameof(definitionId))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerAssetDefinition(response, "explorer asset definition response");
+        return response;
     }
 
-    public Task<ToriiExplorerAssetDefinitionEconometrics> GetExplorerAssetDefinitionEconometricsAsync(
+    public async Task<ToriiExplorerAssetDefinitionEconometrics> GetExplorerAssetDefinitionEconometricsAsync(
         string definitionId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAssetDefinitionEconometrics>(
-            $"/v1/explorer/asset-definitions/{EncodePathSegment(definitionId)}/econometrics",
+        var response = await GetAsync<ToriiExplorerAssetDefinitionEconometrics>(
+            $"/v1/explorer/asset-definitions/{EncodeIdentifierPathSegment(definitionId, nameof(definitionId))}/econometrics",
             cancellationToken: cancellationToken);
+        ValidateExplorerAssetDefinitionEconometrics(response, "explorer asset definition econometrics response");
+        return response;
     }
 
-    public Task<ToriiExplorerAssetDefinitionSnapshot> GetExplorerAssetDefinitionSnapshotAsync(
+    public async Task<ToriiExplorerAssetDefinitionSnapshot> GetExplorerAssetDefinitionSnapshotAsync(
         string definitionId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAssetDefinitionSnapshot>(
-            $"/v1/explorer/asset-definitions/{EncodePathSegment(definitionId)}/snapshot",
+        var response = await GetAsync<ToriiExplorerAssetDefinitionSnapshot>(
+            $"/v1/explorer/asset-definitions/{EncodeIdentifierPathSegment(definitionId, nameof(definitionId))}/snapshot",
             cancellationToken: cancellationToken);
+        ValidateExplorerAssetDefinitionSnapshot(response, "explorer asset definition snapshot response");
+        return response;
     }
 
-    public Task<ToriiExplorerAssetsPage> GetExplorerAssetsAsync(
+    public async Task<ToriiExplorerAssetsPage> GetExplorerAssetsAsync(
         ToriiExplorerAssetsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAssetsPage>(
+        var response = await GetAsync<ToriiExplorerAssetsPage>(
             "/v1/explorer/assets",
             BuildExplorerAssetsQuery(query),
             cancellationToken);
+        ValidateExplorerAssetsPage(response, "explorer assets response");
+        return response;
     }
 
-    public Task<ToriiExplorerAsset> GetExplorerAssetAsync(
+    public async Task<ToriiExplorerAsset> GetExplorerAssetAsync(
         string assetId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerAsset>(
-            $"/v1/explorer/assets/{EncodePathSegment(assetId)}",
+        var response = await GetAsync<ToriiExplorerAsset>(
+            $"/v1/explorer/assets/{EncodeIdentifierPathSegment(assetId, nameof(assetId))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerAsset(response, "explorer asset response");
+        return response;
     }
 
-    public Task<ToriiExplorerNftsPage> GetExplorerNftsAsync(
+    public async Task<ToriiExplorerNftsPage> GetExplorerNftsAsync(
         ToriiExplorerNftsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerNftsPage>(
+        var response = await GetAsync<ToriiExplorerNftsPage>(
             "/v1/explorer/nfts",
             BuildExplorerNftsQuery(query),
             cancellationToken);
+        ValidateExplorerNftsPage(response, "explorer nfts response");
+        return response;
     }
 
-    public Task<ToriiExplorerNft> GetExplorerNftAsync(
+    public async Task<ToriiExplorerNft> GetExplorerNftAsync(
         string nftId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerNft>(
-            $"/v1/explorer/nfts/{EncodePathSegment(nftId)}",
+        var response = await GetAsync<ToriiExplorerNft>(
+            $"/v1/explorer/nfts/{EncodeIdentifierPathSegment(nftId, nameof(nftId))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerNft(response, "explorer nft response");
+        return response;
     }
 
-    public Task<ToriiExplorerRwasPage> GetExplorerRwasAsync(
+    public async Task<ToriiExplorerRwasPage> GetExplorerRwasAsync(
         ToriiExplorerRwasQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerRwasPage>(
+        var response = await GetAsync<ToriiExplorerRwasPage>(
             "/v1/explorer/rwas",
             BuildExplorerRwasQuery(query),
             cancellationToken);
+        ValidateExplorerRwasPage(response, "explorer rwas response");
+        return response;
     }
 
-    public Task<ToriiExplorerRwa> GetExplorerRwaAsync(
+    public async Task<ToriiExplorerRwa> GetExplorerRwaAsync(
         string rwaId,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerRwa>(
-            $"/v1/explorer/rwas/{EncodePathSegment(rwaId)}",
+        var response = await GetAsync<ToriiExplorerRwa>(
+            $"/v1/explorer/rwas/{EncodeIdentifierPathSegment(rwaId, nameof(rwaId))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerRwa(response, "explorer rwa response");
+        return response;
     }
 
-    public Task<ToriiExplorerBlocksPage> GetExplorerBlocksAsync(
+    public async Task<ToriiExplorerBlocksPage> GetExplorerBlocksAsync(
         ToriiExplorerPaginationQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerBlocksPage>(
+        var response = await GetAsync<ToriiExplorerBlocksPage>(
             "/v1/explorer/blocks",
             BuildExplorerPaginationQuery(query),
             cancellationToken);
+        ValidateExplorerBlocksPage(response, "explorer blocks response");
+        return response;
     }
 
-    public Task<ToriiExplorerBlock> GetExplorerBlockAsync(
+    public async Task<ToriiExplorerBlock> GetExplorerBlockAsync(
         string identifier,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerBlock>(
-            $"/v1/explorer/blocks/{EncodePathSegment(identifier)}",
+        var response = await GetAsync<ToriiExplorerBlock>(
+            $"/v1/explorer/blocks/{EncodeIdentifierPathSegment(identifier, nameof(identifier))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerBlock(response, "explorer block response");
+        return response;
     }
 
-    public Task<ToriiExplorerTransactionsPage> GetExplorerTransactionsAsync(
+    public async Task<ToriiExplorerTransactionsPage> GetExplorerTransactionsAsync(
         ToriiExplorerTransactionsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerTransactionsPage>(
+        var response = await GetAsync<ToriiExplorerTransactionsPage>(
             "/v1/explorer/transactions",
             BuildExplorerTransactionsQuery(query),
             cancellationToken);
+        ValidateExplorerTransactionsPage(response, "explorer transactions response");
+        return response;
     }
 
-    public Task<ToriiExplorerLatestTransactionsResponse> GetExplorerLatestTransactionsAsync(
+    public async Task<ToriiExplorerLatestTransactionsResponse> GetExplorerLatestTransactionsAsync(
         ToriiExplorerTransactionsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerLatestTransactionsResponse>(
+        var response = await GetAsync<ToriiExplorerLatestTransactionsResponse>(
             "/v1/explorer/transactions/latest",
             BuildExplorerTransactionsQuery(query),
             cancellationToken);
+        ValidateExplorerLatestTransactionsResponse(response, "explorer latest transactions response");
+        return response;
     }
 
-    public Task<ToriiExplorerTransactionDetail> GetExplorerTransactionAsync(
+    public async Task<ToriiExplorerTransactionDetail> GetExplorerTransactionAsync(
         string transactionHash,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerTransactionDetail>(
-            $"/v1/explorer/transactions/{EncodePathSegment(transactionHash)}",
+        var response = await GetAsync<ToriiExplorerTransactionDetail>(
+            $"/v1/explorer/transactions/{EncodeIdentifierPathSegment(transactionHash, nameof(transactionHash))}",
             cancellationToken: cancellationToken);
+        ValidateExplorerTransactionDetail(response, "explorer transaction response");
+        return response;
     }
 
-    public Task<ToriiExplorerInstructionsPage> GetExplorerInstructionsAsync(
+    public async Task<ToriiExplorerInstructionsPage> GetExplorerInstructionsAsync(
         ToriiExplorerInstructionsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerInstructionsPage>(
+        var response = await GetAsync<ToriiExplorerInstructionsPage>(
             "/v1/explorer/instructions",
             BuildExplorerInstructionsQuery(query),
             cancellationToken);
+        ValidateExplorerInstructionsPage(response, "explorer instructions response");
+        return response;
     }
 
-    public Task<ToriiExplorerLatestInstructionsResponse> GetExplorerLatestInstructionsAsync(
+    public async Task<ToriiExplorerLatestInstructionsResponse> GetExplorerLatestInstructionsAsync(
         ToriiExplorerInstructionsQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerLatestInstructionsResponse>(
+        var response = await GetAsync<ToriiExplorerLatestInstructionsResponse>(
             "/v1/explorer/instructions/latest",
             BuildExplorerInstructionsQuery(query),
             cancellationToken);
+        ValidateExplorerLatestInstructionsResponse(response, "explorer latest instructions response");
+        return response;
     }
 
-    public Task<ToriiExplorerInstruction> GetExplorerInstructionAsync(
+    public async Task<ToriiExplorerInstruction> GetExplorerInstructionAsync(
         string transactionHash,
         ulong index,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerInstruction>(
-            $"/v1/explorer/instructions/{EncodePathSegment(transactionHash)}/{index.ToString(CultureInfo.InvariantCulture)}",
+        var response = await GetAsync<ToriiExplorerInstruction>(
+            $"/v1/explorer/instructions/{EncodeIdentifierPathSegment(transactionHash, nameof(transactionHash))}/{index.ToString(CultureInfo.InvariantCulture)}",
             cancellationToken: cancellationToken);
+        ValidateExplorerInstruction(response, "explorer instruction response");
+        return response;
     }
 
-    public Task<ToriiContractCodeView> GetExplorerInstructionContractViewAsync(
+    public async Task<ToriiContractCodeView> GetExplorerInstructionContractViewAsync(
         string transactionHash,
         ulong index,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiContractCodeView>(
-            $"/v1/explorer/instructions/{EncodePathSegment(transactionHash)}/{index.ToString(CultureInfo.InvariantCulture)}/contract-view",
+        var response = await GetAsync<ToriiContractCodeView>(
+            $"/v1/explorer/instructions/{EncodeIdentifierPathSegment(transactionHash, nameof(transactionHash))}/{index.ToString(CultureInfo.InvariantCulture)}/contract-view",
             cancellationToken: cancellationToken);
+        ValidateContractCodeView(response, "explorer instruction contract-view response");
+        return response;
     }
 
-    public Task<ToriiExplorerHealthSnapshot> GetExplorerHealthAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiExplorerHealthSnapshot> GetExplorerHealthAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerHealthSnapshot>("/v1/explorer/health", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiExplorerHealthSnapshot>(
+            "/v1/explorer/health",
+            cancellationToken: cancellationToken);
+        ValidateExplorerHealthSnapshot(response, "explorer health response");
+        return response;
     }
 
-    public Task<ToriiExplorerMetricsSnapshot> GetExplorerMetricsAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiExplorerMetricsSnapshot> GetExplorerMetricsAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiExplorerMetricsSnapshot>("/v1/explorer/metrics", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiExplorerMetricsSnapshot>(
+            "/v1/explorer/metrics",
+            cancellationToken: cancellationToken);
+        ValidateExplorerMetricsSnapshot(response, "explorer metrics response");
+        return response;
     }
 
-    public Task<ToriiAssetBalancesPage> GetAccountAssetsAsync(
+    public async Task<ToriiAssetBalancesPage> GetAccountAssetsAsync(
         string accountId,
         int? limit = null,
         long offset = 0,
@@ -333,62 +426,74 @@ public sealed class ToriiClient : IDisposable
         string? scope = null,
         CancellationToken cancellationToken = default)
     {
-        var encodedAccountId = EncodePathSegment(accountId);
-        return GetAsync<ToriiAssetBalancesPage>(
+        var encodedAccountId = EncodeAccountIdPathSegment(accountId, nameof(accountId));
+        var response = await GetAsync<ToriiAssetBalancesPage>(
             $"/v1/accounts/{encodedAccountId}/assets",
             BuildPaginationQuery(
                 limit,
                 offset,
-                new KeyValuePair<string, string?>("asset", NormalizeOptionalValue(asset)),
-                new KeyValuePair<string, string?>("scope", NormalizeOptionalValue(scope))),
+                new KeyValuePair<string, string?>("asset", NormalizeOptionalExactValue(asset, nameof(asset))),
+                new KeyValuePair<string, string?>("scope", NormalizeOptionalExactValue(scope, nameof(scope)))),
             cancellationToken);
+        ValidateAccountAssetBalancesPage(response, "account assets response");
+        return response;
     }
 
-    public Task<ToriiTransactionsPage> GetAccountTransactionsAsync(
+    public async Task<ToriiTransactionsPage> GetAccountTransactionsAsync(
         string accountId,
         int? limit = null,
         long offset = 0,
         string? assetId = null,
         CancellationToken cancellationToken = default)
     {
-        var encodedAccountId = EncodePathSegment(accountId);
-        return GetAsync<ToriiTransactionsPage>(
+        var encodedAccountId = EncodeAccountIdPathSegment(accountId, nameof(accountId));
+        var response = await GetAsync<ToriiTransactionsPage>(
             $"/v1/accounts/{encodedAccountId}/transactions",
             BuildPaginationQuery(
                 limit,
                 offset,
-                new KeyValuePair<string, string?>("asset_id", NormalizeOptionalValue(assetId))),
+                new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(assetId, nameof(assetId)))),
             cancellationToken);
+        ValidateAccountTransactionsPage(response, "account transactions response");
+        return response;
     }
 
-    public Task<ToriiAccountPermissionsPage> GetAccountPermissionsAsync(
+    public async Task<ToriiAccountPermissionsPage> GetAccountPermissionsAsync(
         string accountId,
         int? limit = null,
         long offset = 0,
         CancellationToken cancellationToken = default)
     {
-        var encodedAccountId = EncodePathSegment(accountId);
-        return GetAsync<ToriiAccountPermissionsPage>(
+        var encodedAccountId = EncodeAccountIdPathSegment(accountId, nameof(accountId));
+        var response = await GetAsync<ToriiAccountPermissionsPage>(
             $"/v1/accounts/{encodedAccountId}/permissions",
             BuildPaginationQuery(limit, offset),
             cancellationToken);
+        ValidateAccountPermissionsPage(response, "account permissions response");
+        return response;
     }
 
-    public Task<ToriiAccountAliasLookupResponse?> LookupAliasesByAccountAsync(
+    public async Task<ToriiAccountAliasLookupResponse?> LookupAliasesByAccountAsync(
         string accountId,
         string? dataspace = null,
         string? domain = null,
         CancellationToken cancellationToken = default)
     {
-        return PostOptionalAsync<ToriiAccountAliasLookupRequest, ToriiAccountAliasLookupResponse>(
+        var response = await PostOptionalAsync<ToriiAccountAliasLookupRequest, ToriiAccountAliasLookupResponse>(
             "/v1/aliases/by_account",
             new ToriiAccountAliasLookupRequest
             {
-                AccountId = NormalizeRequiredValue(accountId, nameof(accountId)),
-                Dataspace = NormalizeOptionalValue(dataspace),
-                Domain = NormalizeOptionalValue(domain),
+                AccountId = ToriiAccountFaucetPow.RequireExactAccountId(accountId, nameof(accountId)),
+                Dataspace = NormalizeOptionalExactValue(dataspace, nameof(dataspace)),
+                Domain = NormalizeOptionalExactValue(domain, nameof(domain)),
             },
             cancellationToken);
+        if (response is not null)
+        {
+            ValidateAccountAliasLookupResponse(response, "account alias lookup response");
+        }
+
+        return response;
     }
 
     public async Task<ToriiIdentifierPoliciesResponse> GetIdentifierPoliciesAsync(CancellationToken cancellationToken = default)
@@ -440,70 +545,94 @@ public sealed class ToriiClient : IDisposable
         return response;
     }
 
-    public Task<ToriiAccountAliasIndexResolution?> ResolveAccountAliasIndexAsync(
+    public async Task<ToriiAccountAliasIndexResolution?> ResolveAccountAliasIndexAsync(
         ulong index,
         CancellationToken cancellationToken = default)
     {
-        return PostOptionalAsync<ToriiAliasResolveIndexRequest, ToriiAccountAliasIndexResolution>(
+        var response = await PostOptionalAsync<ToriiAliasResolveIndexRequest, ToriiAccountAliasIndexResolution>(
             "/v1/aliases/resolve_index",
             new ToriiAliasResolveIndexRequest
             {
                 Index = index,
             },
             cancellationToken);
+        if (response is not null)
+        {
+            ValidateAccountAliasIndexResolution(response, "account alias index response");
+        }
+
+        return response;
     }
 
-    public Task<ToriiUaidPortfolioResponse> GetUaidPortfolioAsync(
+    public async Task<ToriiUaidPortfolioResponse> GetUaidPortfolioAsync(
         string uaid,
         ToriiUaidPortfolioQuery? query = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedUaid = NormalizeUaidLiteral(uaid);
-        return GetAsync<ToriiUaidPortfolioResponse>(
+        var response = await GetAsync<ToriiUaidPortfolioResponse>(
             $"/v1/accounts/{EncodePathSegment(normalizedUaid)}/portfolio",
             BuildQueryString([
-                new KeyValuePair<string, string?>("asset_id", NormalizeOptionalValue(query?.AssetId)),
+                new KeyValuePair<string, string?>(
+                    "asset_id",
+                    NormalizeOptionalExactValue(
+                        query?.AssetId,
+                        nameof(ToriiUaidPortfolioQuery.AssetId))),
             ]),
             cancellationToken);
+        ValidateUaidPortfolioResponse(response, "UAID portfolio response");
+        return response;
     }
 
-    public Task<ToriiUaidBindingsResponse> GetUaidBindingsAsync(
+    public async Task<ToriiUaidBindingsResponse> GetUaidBindingsAsync(
         string uaid,
         CancellationToken cancellationToken = default)
     {
         var normalizedUaid = NormalizeUaidLiteral(uaid);
-        return GetAsync<ToriiUaidBindingsResponse>(
+        var response = await GetAsync<ToriiUaidBindingsResponse>(
             $"/v1/space-directory/uaids/{EncodePathSegment(normalizedUaid)}",
             cancellationToken: cancellationToken);
+        ValidateUaidBindingsResponse(response, "UAID bindings response");
+        return response;
     }
 
-    public Task<ToriiUaidManifestsResponse> GetUaidManifestsAsync(
+    public async Task<ToriiUaidManifestsResponse> GetUaidManifestsAsync(
         string uaid,
         ToriiUaidManifestQuery? query = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedUaid = NormalizeUaidLiteral(uaid);
-        return GetAsync<ToriiUaidManifestsResponse>(
+        var response = await GetAsync<ToriiUaidManifestsResponse>(
             $"/v1/space-directory/uaids/{EncodePathSegment(normalizedUaid)}/manifests",
             BuildUaidManifestQuery(query),
             cancellationToken);
+        ValidateUaidManifestsResponse(response, "UAID manifests response");
+        return response;
     }
 
-    public Task<ToriiAccountOnboardingResponse> RegisterAccountAsync(
+    public async Task<ToriiAccountOnboardingResponse> RegisterAccountAsync(
         ToriiAccountOnboardingRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeAccountOnboardingRequest(request);
 
-        return PostAsync<ToriiAccountOnboardingRequest, ToriiAccountOnboardingResponse>(
+        var response = await PostAsync<ToriiAccountOnboardingRequest, ToriiAccountOnboardingResponse>(
             "/v1/accounts/onboard",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+
+        ValidateAccountOnboardingResponse(response, "account onboarding response");
+        return response;
     }
 
-    public Task<ToriiAccountFaucetPuzzle> GetAccountFaucetPuzzleAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiAccountFaucetPuzzle> GetAccountFaucetPuzzleAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiAccountFaucetPuzzle>("/v1/accounts/faucet/puzzle", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiAccountFaucetPuzzle>(
+            "/v1/accounts/faucet/puzzle",
+            cancellationToken: cancellationToken);
+        ValidateAccountFaucetPuzzle(response, "account faucet puzzle response");
+        return response;
     }
 
     public async Task<ToriiAccountFaucetSolution> SolveAccountFaucetAsync(
@@ -515,16 +644,20 @@ public sealed class ToriiClient : IDisposable
         return ToriiAccountFaucetPow.Solve(accountId, puzzle, solveOptions, cancellationToken);
     }
 
-    public Task<ToriiAccountFaucetResponse> ClaimAccountFaucetAsync(
+    public async Task<ToriiAccountFaucetResponse> ClaimAccountFaucetAsync(
         ToriiAccountFaucetRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeAccountFaucetRequest(request);
 
-        return PostAsync<ToriiAccountFaucetRequest, ToriiAccountFaucetResponse>(
+        var response = await PostAsync<ToriiAccountFaucetRequest, ToriiAccountFaucetResponse>(
             "/v1/accounts/faucet",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+
+        ValidateAccountFaucetResponse(response, "account faucet response");
+        return response;
     }
 
     public async Task<ToriiAccountFaucetResponse> ClaimAccountFaucetAsync(
@@ -536,43 +669,51 @@ public sealed class ToriiClient : IDisposable
         return await ClaimAccountFaucetAsync(prepared.ToRequest(), cancellationToken);
     }
 
-    public Task<ToriiVpnProfile> GetVpnProfileAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiVpnProfile> GetVpnProfileAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiVpnProfile>("/v1/vpn/profile", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiVpnProfile>("/v1/vpn/profile", cancellationToken: cancellationToken);
+        ValidateVpnProfile(response, "vpn profile response");
+        return response;
     }
 
-    public Task<ToriiVpnQuote> CreateVpnQuoteAsync(
+    public async Task<ToriiVpnQuote> CreateVpnQuoteAsync(
         ToriiVpnQuoteCreateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeVpnQuoteCreateRequest(request);
 
-        return PostAsync<ToriiVpnQuoteCreateRequest, ToriiVpnQuote>(
+        var response = await PostAsync<ToriiVpnQuoteCreateRequest, ToriiVpnQuote>(
             "/v1/vpn/quotes",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateVpnQuote(response, "vpn quote response");
+        return response;
     }
 
-    public Task<ToriiVpnSession> CreateVpnSessionAsync(
+    public async Task<ToriiVpnSession> CreateVpnSessionAsync(
         ToriiVpnSessionCreateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeVpnSessionCreateRequest(request);
 
-        return PostAsync<ToriiVpnSessionCreateRequest, ToriiVpnSession>(
+        var response = await PostAsync<ToriiVpnSessionCreateRequest, ToriiVpnSession>(
             "/v1/vpn/sessions",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateVpnSession(response, "vpn session response");
+        return response;
     }
 
     public async Task<ToriiVpnSession?> GetVpnSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedSessionId = NormalizeRequiredValue(sessionId, nameof(sessionId));
+        var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
         using var response = await SendAllowingStatusAsync(
             HttpMethod.Get,
-            $"/v1/vpn/sessions/{EncodePathSegment(normalizedSessionId)}",
+            $"/v1/vpn/sessions/{encodedSessionId}",
             query: null,
             content: null,
             HttpStatusCode.NotFound,
@@ -583,17 +724,19 @@ public sealed class ToriiClient : IDisposable
             return null;
         }
 
-        return await DeserializeAsync<ToriiVpnSession>(response, cancellationToken);
+        var session = await DeserializeAsync<ToriiVpnSession>(response, cancellationToken);
+        ValidateVpnSession(session, "vpn session response");
+        return session;
     }
 
     public async Task<ToriiVpnReceipt?> DeleteVpnSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedSessionId = NormalizeRequiredValue(sessionId, nameof(sessionId));
+        var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
         using var response = await SendAllowingStatusAsync(
             HttpMethod.Delete,
-            $"/v1/vpn/sessions/{EncodePathSegment(normalizedSessionId)}",
+            $"/v1/vpn/sessions/{encodedSessionId}",
             query: null,
             content: null,
             HttpStatusCode.NotFound,
@@ -604,101 +747,145 @@ public sealed class ToriiClient : IDisposable
             return null;
         }
 
-        return await DeserializeAsync<ToriiVpnReceipt>(response, cancellationToken);
+        var receipt = await DeserializeAsync<ToriiVpnReceipt>(response, cancellationToken);
+        ValidateVpnReceipt(receipt, "vpn receipt response");
+        return receipt;
     }
 
-    public Task<ToriiVpnReceipt> SubmitVpnReceiptAsync(
+    public async Task<ToriiVpnReceipt> SubmitVpnReceiptAsync(
         ToriiVpnReceiptSubmitRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeVpnReceiptSubmitRequest(request);
 
-        return PostAsync<ToriiVpnReceiptSubmitRequest, ToriiVpnReceipt>(
+        var response = await PostAsync<ToriiVpnReceiptSubmitRequest, ToriiVpnReceipt>(
             "/v1/vpn/receipts",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateVpnReceipt(response, "vpn receipt response");
+        return response;
     }
 
-    public Task<ToriiVpnReceiptListResponse> ListVpnReceiptsAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiVpnReceiptListResponse> ListVpnReceiptsAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiVpnReceiptListResponse>("/v1/vpn/receipts", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiVpnReceiptListResponse>(
+            "/v1/vpn/receipts",
+            cancellationToken: cancellationToken);
+        ValidateVpnReceiptListResponse(response, "vpn receipt list response");
+        return response;
     }
 
-    public Task<ToriiMultisigAccountOnboardingResponse> RegisterMultisigAccountAsync(
+    public async Task<ToriiMultisigAccountOnboardingResponse> RegisterMultisigAccountAsync(
         ToriiMultisigAccountOnboardingRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigAccountOnboardingRequest(request);
 
-        return PostAsync<ToriiMultisigAccountOnboardingRequest, ToriiMultisigAccountOnboardingResponse>(
+        var response = await PostAsync<ToriiMultisigAccountOnboardingRequest, ToriiMultisigAccountOnboardingResponse>(
             "/v1/accounts/onboard/multisig",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+
+        ValidateMultisigAccountOnboardingResponse(response, "multisig account onboarding response");
+        return response;
     }
 
-    public Task<ToriiAssetAliasResolution?> ResolveAssetAliasAsync(string alias, CancellationToken cancellationToken = default)
+    public async Task<ToriiAssetAliasResolution?> ResolveAssetAliasAsync(string alias, CancellationToken cancellationToken = default)
     {
-        return PostOptionalAsync<ToriiAliasResolutionRequest, ToriiAssetAliasResolution>(
+        var response = await PostOptionalAsync<ToriiAliasResolutionRequest, ToriiAssetAliasResolution>(
             "/v1/assets/aliases/resolve",
             new ToriiAliasResolutionRequest
             {
-                Alias = NormalizeRequiredValue(alias, nameof(alias)),
+                Alias = NormalizeExactValue(alias, nameof(alias)),
             },
             cancellationToken);
+        if (response is not null)
+        {
+            ValidateAssetAliasResolution(response, "asset alias resolution response");
+        }
+
+        return response;
     }
 
-    public Task<ToriiAccountAliasResolution?> ResolveAccountAliasAsync(string alias, CancellationToken cancellationToken = default)
+    public async Task<ToriiAccountAliasResolution?> ResolveAccountAliasAsync(string alias, CancellationToken cancellationToken = default)
     {
-        return PostOptionalAsync<ToriiAliasResolutionRequest, ToriiAccountAliasResolution>(
+        var response = await PostOptionalAsync<ToriiAliasResolutionRequest, ToriiAccountAliasResolution>(
             "/v1/aliases/resolve",
             new ToriiAliasResolutionRequest
             {
-                Alias = NormalizeRequiredValue(alias, nameof(alias)),
+                Alias = NormalizeExactValue(alias, nameof(alias)),
             },
             cancellationToken);
+        if (response is not null)
+        {
+            ValidateAccountAliasResolution(response, "account alias resolution response");
+        }
+
+        return response;
     }
 
-    public Task<ToriiContractAliasResolution?> ResolveContractAliasAsync(
+    public async Task<ToriiContractAliasResolution?> ResolveContractAliasAsync(
         string contractAlias,
         CancellationToken cancellationToken = default)
     {
-        return PostOptionalAsync<ToriiContractAliasResolutionRequest, ToriiContractAliasResolution>(
+        var response = await PostOptionalAsync<ToriiContractAliasResolutionRequest, ToriiContractAliasResolution>(
             "/v1/contracts/aliases/resolve",
             new ToriiContractAliasResolutionRequest
             {
-                ContractAlias = NormalizeRequiredValue(contractAlias, nameof(contractAlias)),
+                ContractAlias = NormalizeExactValue(contractAlias, nameof(contractAlias)),
             },
             cancellationToken);
+        if (response is not null)
+        {
+            ValidateContractAliasResolution(response, "contract alias resolution response");
+        }
+
+        return response;
     }
 
-    public Task<ToriiDeployContractResponse> DeployContractAsync(
+    public async Task<ToriiDeployContractResponse> DeployContractAsync(
         ToriiDeployContractRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeDeployContractRequest(request);
 
-        return PostAsync<ToriiDeployContractRequest, ToriiDeployContractResponse>(
+        var response = await PostAsync<ToriiDeployContractRequest, ToriiDeployContractResponse>(
             "/v1/contracts/deploy",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+
+        ValidateDeployContractResponse(response, "contract deploy response");
+        return response;
     }
 
-    public Task<ToriiContractCodeRecord> GetContractCodeAsync(
+    public async Task<ToriiContractCodeRecord> GetContractCodeAsync(
         string codeHash,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiContractCodeRecord>(
-            $"/v1/contracts/code/{EncodePathSegment(codeHash)}",
+        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+
+        var response = await GetAsync<ToriiContractCodeRecord>(
+            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}",
             cancellationToken: cancellationToken);
+        ValidateContractCodeRecord(response, "contract code response");
+        return response;
     }
 
-    public Task<ToriiContractCodeBytesResponse> GetContractCodeBytesResponseAsync(
+    public async Task<ToriiContractCodeBytesResponse> GetContractCodeBytesResponseAsync(
         string codeHash,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiContractCodeBytesResponse>(
-            $"/v1/contracts/code-bytes/{EncodePathSegment(codeHash)}",
+        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+
+        var response = await GetAsync<ToriiContractCodeBytesResponse>(
+            $"/v1/contracts/code-bytes/{EncodePathSegment(normalizedCodeHash)}",
             cancellationToken: cancellationToken);
+
+        _ = response.DecodeBytes();
+        return response;
     }
 
     public async Task<byte[]> GetContractCodeBytesAsync(
@@ -709,72 +896,94 @@ public sealed class ToriiClient : IDisposable
         return response.DecodeBytes();
     }
 
-    public Task<ToriiContractInstancesResponse> GetContractInstancesAsync(
+    public async Task<ToriiContractInstancesResponse> GetContractInstancesAsync(
         string namespaceId,
         ToriiContractInstancesQuery? query = null,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiContractInstancesResponse>(
-            $"/v1/contracts/instances/{EncodePathSegment(namespaceId)}",
+        var normalizedNamespaceId = NormalizeExactValue(namespaceId, nameof(namespaceId));
+
+        var response = await GetAsync<ToriiContractInstancesResponse>(
+            $"/v1/contracts/instances/{EncodePathSegment(normalizedNamespaceId)}",
             BuildContractInstancesQuery(query),
             cancellationToken);
+        ValidateContractInstancesResponse(response, "contract instances response");
+        return response;
     }
 
-    public Task<ToriiDeployAndActivateContractInstanceResponse> DeployAndActivateContractInstanceAsync(
+    public async Task<ToriiDeployAndActivateContractInstanceResponse> DeployAndActivateContractInstanceAsync(
         ToriiDeployAndActivateContractInstanceRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeDeployAndActivateContractInstanceRequest(request);
 
-        return PostAsync<ToriiDeployAndActivateContractInstanceRequest, ToriiDeployAndActivateContractInstanceResponse>(
+        var response = await PostAsync<ToriiDeployAndActivateContractInstanceRequest, ToriiDeployAndActivateContractInstanceResponse>(
             "/v1/contracts/instance",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+
+        ValidateDeployAndActivateContractInstanceResponse(response, "contract instance deploy response");
+        return response;
     }
 
-    public Task<ToriiActivateContractInstanceResponse> ActivateContractInstanceAsync(
+    public async Task<ToriiActivateContractInstanceResponse> ActivateContractInstanceAsync(
         ToriiActivateContractInstanceRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeActivateContractInstanceRequest(request);
 
-        return PostAsync<ToriiActivateContractInstanceRequest, ToriiActivateContractInstanceResponse>(
+        var response = await PostAsync<ToriiActivateContractInstanceRequest, ToriiActivateContractInstanceResponse>(
             "/v1/contracts/instance/activate",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+
+        ValidateActivateContractInstanceResponse(response, "contract instance activation response");
+        return response;
     }
 
-    public Task<ToriiContractStateResponse> GetContractStateAsync(
+    public async Task<ToriiContractStateResponse> GetContractStateAsync(
         ToriiContractStateQuery query,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        return GetAsync<ToriiContractStateResponse>(
+        var response = await GetAsync<ToriiContractStateResponse>(
             "/v1/contracts/state",
             BuildContractStateQuery(query),
             cancellationToken);
+
+        ValidateContractStateResponse(response, "contract state response");
+        return response;
     }
 
-    public Task<ToriiContractCallResponse> CallContractAsync(
+    public async Task<ToriiContractCallResponse> CallContractAsync(
         ToriiContractCallRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeContractCallRequest(request);
 
-        return PostAsync<ToriiContractCallRequest, ToriiContractCallResponse>(
+        var response = await PostAsync<ToriiContractCallRequest, ToriiContractCallResponse>(
             "/v1/contracts/call",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateContractCallResponse(response, "contract call response");
+        return response;
     }
 
-    public Task<ToriiContractCodeView> GetContractCodeViewAsync(
+    public async Task<ToriiContractCodeView> GetContractCodeViewAsync(
         string codeHash,
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiContractCodeView>(
-            $"/v1/contracts/code/{EncodePathSegment(codeHash)}/contract-view",
+        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+
+        var response = await GetAsync<ToriiContractCodeView>(
+            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}/contract-view",
             cancellationToken: cancellationToken);
+        ValidateContractCodeView(response, "contract code-view response");
+        return response;
     }
 
     public async Task<ToriiContractViewExecutionResult> ExecuteContractViewAsync(
@@ -782,8 +991,9 @@ public sealed class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeContractViewRequest(request);
 
-        using var content = CreateJsonContent(request);
+        using var content = CreateJsonContent(normalizedRequest);
         using var response = await SendAllowingStatusAsync(
             HttpMethod.Post,
             "/v1/contracts/view",
@@ -794,28 +1004,35 @@ public sealed class ToriiClient : IDisposable
 
         if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
         {
+            var error = await DeserializeAsync<ToriiContractViewErrorResponse>(response, cancellationToken);
+            ValidateContractViewErrorResponse(error, "contract view error response");
             return new ToriiContractViewExecutionResult
             {
-                Error = await DeserializeAsync<ToriiContractViewErrorResponse>(response, cancellationToken),
+                Error = error,
             };
         }
 
+        var success = await DeserializeAsync<ToriiContractViewResponse>(response, cancellationToken);
+        ValidateContractViewResponse(success, "contract view response");
         return new ToriiContractViewExecutionResult
         {
-            Success = await DeserializeAsync<ToriiContractViewResponse>(response, cancellationToken),
+            Success = success,
         };
     }
 
-    public Task<ToriiMultisigContractCallResponse> ProposeMultisigContractCallAsync(
+    public async Task<ToriiMultisigContractCallResponse> ProposeMultisigContractCallAsync(
         ToriiMultisigContractCallProposeRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigContractCallProposeRequest(request);
 
-        return PostAsync<ToriiMultisigContractCallProposeRequest, ToriiMultisigContractCallResponse>(
+        var response = await PostAsync<ToriiMultisigContractCallProposeRequest, ToriiMultisigContractCallResponse>(
             "/v1/contracts/call/multisig/propose",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateMultisigContractCallResponse(response, "multisig contract-call response");
+        return response;
     }
 
     public async Task<ToriiMultisigResponse> ProposeMultisigAsync(
@@ -823,38 +1040,46 @@ public sealed class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigProposeRequest(request);
 
         var response = await PostAsync<ToriiMultisigProposeRequest, ToriiMultisigResponse>(
             "/v1/multisig/propose",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
         ValidateMultisigResponse(response, "multisig response");
         return response;
     }
 
-    public Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
+    public async Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
         ToriiMultisigContractCallApproveRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigContractCallApproveRequest(request);
 
-        return PostAsync<ToriiMultisigContractCallApproveRequest, ToriiMultisigContractCallResponse>(
+        var response = await PostAsync<ToriiMultisigContractCallApproveRequest, ToriiMultisigContractCallResponse>(
             "/v1/contracts/call/multisig/approve",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateMultisigContractCallResponse(response, "multisig contract-call response");
+        return response;
     }
 
-    public Task<ToriiContractVerifiedSourceJob> SubmitContractVerifiedSourceJobAsync(
+    public async Task<ToriiContractVerifiedSourceJob> SubmitContractVerifiedSourceJobAsync(
         string codeHash,
         ToriiContractVerifiedSourceSubmission request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        var normalizedRequest = NormalizeContractVerifiedSourceSubmission(request);
 
-        return PostAsync<ToriiContractVerifiedSourceSubmission, ToriiContractVerifiedSourceJob>(
-            $"/v1/contracts/code/{EncodePathSegment(codeHash)}/verified-source/jobs",
-            request,
+        var response = await PostAsync<ToriiContractVerifiedSourceSubmission, ToriiContractVerifiedSourceJob>(
+            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}/verified-source/jobs",
+            normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateContractVerifiedSourceJob(response, "contract verified-source job response");
+        return response;
     }
 
     public async Task<ToriiContractVerifiedSourceJob?> GetContractVerifiedSourceJobAsync(
@@ -862,9 +1087,12 @@ public sealed class ToriiClient : IDisposable
         string jobId,
         CancellationToken cancellationToken = default)
     {
+        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        var normalizedJobId = NormalizeExactValue(jobId, nameof(jobId));
+
         using var response = await SendAllowingStatusAsync(
             HttpMethod.Get,
-            $"/v1/contracts/code/{EncodePathSegment(codeHash)}/verified-source-jobs/{EncodePathSegment(jobId)}",
+            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}/verified-source-jobs/{EncodePathSegment(normalizedJobId)}",
             query: null,
             content: null,
             HttpStatusCode.NotFound,
@@ -875,36 +1103,48 @@ public sealed class ToriiClient : IDisposable
             return null;
         }
 
-        return await DeserializeAsync<ToriiContractVerifiedSourceJob>(response, cancellationToken);
+        var job = await DeserializeAsync<ToriiContractVerifiedSourceJob>(response, cancellationToken);
+        ValidateContractVerifiedSourceJob(job, "contract verified-source job response");
+        return job;
     }
 
     public async Task<string> GetMetricsAsync(CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, "/v1/metrics", cancellationToken: cancellationToken);
-        return await response.Content.ReadAsStringAsync(cancellationToken);
+        return await ReadStrictUtf8TextContentAsync(response.Content, "Torii metrics response body", cancellationToken);
     }
 
-    public Task<ToriiNodeCapabilities> GetNodeCapabilitiesAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiNodeCapabilities> GetNodeCapabilitiesAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiNodeCapabilities>("/v1/node/capabilities", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiNodeCapabilities>("/v1/node/capabilities", cancellationToken: cancellationToken);
+        ValidateNodeCapabilities(response, "node capabilities response");
+        return response;
     }
 
-    public Task<ToriiRuntimeAbiActive> GetRuntimeAbiActiveAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiRuntimeAbiActive> GetRuntimeAbiActiveAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiRuntimeAbiActive>("/v1/runtime/abi/active", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiRuntimeAbiActive>("/v1/runtime/abi/active", cancellationToken: cancellationToken);
+        ValidateRuntimeAbiActive(response, "runtime ABI active response");
+        return response;
     }
 
-    public Task<ToriiRuntimeAbiHash> GetRuntimeAbiHashAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiRuntimeAbiHash> GetRuntimeAbiHashAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiRuntimeAbiHash>("/v1/runtime/abi/hash", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiRuntimeAbiHash>(
+            "/v1/runtime/abi/hash",
+            cancellationToken: cancellationToken);
+        ValidateRuntimeAbiHash(response, "runtime ABI hash response");
+        return response;
     }
 
-    public Task<ToriiRuntimeMetrics> GetRuntimeMetricsAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiRuntimeMetrics> GetRuntimeMetricsAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiRuntimeMetrics>("/v1/runtime/metrics", cancellationToken: cancellationToken);
+        var response = await GetAsync<ToriiRuntimeMetrics>("/v1/runtime/metrics", cancellationToken: cancellationToken);
+        ValidateRuntimeMetrics(response, "runtime metrics response");
+        return response;
     }
 
-    public Task<JsonDocument> GetVerifyingKeyAsync(
+    public async Task<JsonDocument> GetVerifyingKeyAsync(
         string backend,
         string name,
         CancellationToken cancellationToken = default)
@@ -913,45 +1153,53 @@ public sealed class ToriiClient : IDisposable
             backend,
             nameof(backend));
         var normalizedName = NormalizeVerifyingKeyName(name, nameof(name));
-        return GetJsonDocumentAsync(
+        var response = await GetJsonDocumentAsync(
             $"/v1/zk/vk/{EncodePathSegment(normalizedBackend)}/{EncodePathSegment(normalizedName)}",
             cancellationToken: cancellationToken);
+        ValidateVerifyingKeyDetailDocument(response, "verifying key detail response");
+        return response;
     }
 
-    public Task<JsonDocument> RegisterVerifyingKeyAsync(
+    public async Task<JsonDocument> RegisterVerifyingKeyAsync(
         ToriiVerifyingKeyRegisterRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedRequest = NormalizeVerifyingKeyRegisterRequest(request);
-        return PostJsonDocumentAsync(
+        var response = await PostJsonDocumentAsync(
             "/v1/zk/vk/register",
             normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateVerifyingKeyWriteDocument(response, "verifying key register response");
+        return response;
     }
 
-    public Task<JsonDocument> UpdateVerifyingKeyAsync(
+    public async Task<JsonDocument> UpdateVerifyingKeyAsync(
         ToriiVerifyingKeyUpdateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedRequest = NormalizeVerifyingKeyUpdateRequest(request);
-        return PostJsonDocumentAsync(
+        var response = await PostJsonDocumentAsync(
             "/v1/zk/vk/update",
             normalizedRequest,
             cancellationToken: cancellationToken);
+        ValidateVerifyingKeyWriteDocument(response, "verifying key update response");
+        return response;
     }
 
-    public Task<ToriiSoraFsCidLookupResponse> GetSoraFsCidLookupAsync(
+    public async Task<ToriiSoraFsCidLookupResponse> GetSoraFsCidLookupAsync(
         string cid,
         CancellationToken cancellationToken = default)
     {
-        var normalizedCid = NormalizeRequiredValue(cid, nameof(cid));
-        return GetAsync<ToriiSoraFsCidLookupResponse>(
-            $"/v1/sorafs/cid/{EncodePathSegment(normalizedCid)}",
+        var encodedCid = EncodeSoraFsCidPathSegment(cid, nameof(cid));
+        var response = await GetAsync<ToriiSoraFsCidLookupResponse>(
+            $"/v1/sorafs/cid/{encodedCid}",
             cancellationToken: cancellationToken);
+        ValidateSoraFsCidLookupResponse(response, "SoraFS CID lookup response");
+        return response;
     }
 
     public async Task<ToriiSoraFsPinRegisterResponse> RegisterSoraFsPinManifestAsync(
@@ -968,22 +1216,26 @@ public sealed class ToriiClient : IDisposable
         return NormalizeSoraFsPinRegisterResponse(response);
     }
 
-    public Task<ToriiSoraFsDenylistCatalogResponse> GetSoraFsDenylistCatalogAsync(
+    public async Task<ToriiSoraFsDenylistCatalogResponse> GetSoraFsDenylistCatalogAsync(
         CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiSoraFsDenylistCatalogResponse>(
+        var response = await GetAsync<ToriiSoraFsDenylistCatalogResponse>(
             "/v1/sorafs/denylist/catalog",
             cancellationToken: cancellationToken);
+        ValidateSoraFsDenylistCatalogResponse(response, "SoraFS denylist catalog response");
+        return response;
     }
 
-    public Task<ToriiSoraFsDenylistPackResponse> GetSoraFsDenylistPackAsync(
+    public async Task<ToriiSoraFsDenylistPackResponse> GetSoraFsDenylistPackAsync(
         string packId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedPackId = NormalizeRequiredValue(packId, nameof(packId));
-        return GetAsync<ToriiSoraFsDenylistPackResponse>(
-            $"/v1/sorafs/denylist/packs/{EncodePathSegment(normalizedPackId)}",
+        var encodedPackId = EncodePathSegment(packId, nameof(packId));
+        var response = await GetAsync<ToriiSoraFsDenylistPackResponse>(
+            $"/v1/sorafs/denylist/packs/{encodedPackId}",
             cancellationToken: cancellationToken);
+        ValidateSoraFsDenylistPackResponse(response, "SoraFS denylist pack response");
+        return response;
     }
 
     public Task<HttpResponseMessage> OpenSoraFsCidContentAsync(
@@ -991,8 +1243,7 @@ public sealed class ToriiClient : IDisposable
         string? relativePath = null,
         CancellationToken cancellationToken = default)
     {
-        var normalizedCid = NormalizeRequiredValue(cid, nameof(cid));
-        var gatewayPath = BuildSoraFsCidGatewayPath(normalizedCid, relativePath);
+        var gatewayPath = BuildSoraFsCidGatewayPath(cid, relativePath);
         return SendAsync(HttpMethod.Get, gatewayPath, cancellationToken: cancellationToken);
     }
 
@@ -1003,14 +1254,13 @@ public sealed class ToriiClient : IDisposable
     {
         using var response = await OpenSoraFsCidContentAsync(cid, relativePath, cancellationToken);
         var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var contentCid = ReadSoraFsContentCidHeader(response);
         return new ToriiSoraFsContentResponse
         {
             Bytes = bytes,
             ContentType = response.Content.Headers.ContentType?.ToString(),
             ContentLength = response.Content.Headers.ContentLength,
-            ContentCid = response.Headers.TryGetValues("sora-content-cid", out var values)
-                ? values.FirstOrDefault()
-                : null,
+            ContentCid = contentCid,
         };
     }
 
@@ -1019,10 +1269,14 @@ public sealed class ToriiClient : IDisposable
         string? query = null,
         CancellationToken cancellationToken = default)
     {
-        using var content = CreateBinaryContent(noritoVersionedBytes, "application/x-norito");
+        var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoVersionedBytes, nameof(noritoVersionedBytes));
+        using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
         using var response = await SendAsync(HttpMethod.Post, "/query", query, content, cancellationToken: cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            $"signed query response for `{response.RequestMessage?.RequestUri}`",
+            cancellationToken);
     }
 
     public Task<JsonDocument> SubmitSignedQueryAsync(
@@ -1067,22 +1321,30 @@ public sealed class ToriiClient : IDisposable
     {
         await foreach (var sseEvent in StreamEventsAsync(query, lastEventId, cancellationToken))
         {
-            if (sseEvent.IsComment || sseEvent.JsonData is null)
+            if (sseEvent.IsComment || sseEvent.RawData is null)
+            {
+                continue;
+            }
+
+            var payload = RequireSseJsonData(sseEvent, "pipeline SSE payload");
+            if (!TryReadSseStringProperty(payload, "category", "pipeline SSE payload", out var category)
+                || !string.Equals(category, "Pipeline", StringComparison.Ordinal))
             {
                 continue;
             }
 
             var pipelineEvent = JsonSerializer.Deserialize(
-                sseEvent.JsonData,
+                payload,
                 ToriiJsonSerializerContext.Default.ToriiPipelineEvent);
-            if (pipelineEvent is null || !string.Equals(pipelineEvent.Category, "Pipeline", StringComparison.Ordinal))
+            if (pipelineEvent is null)
             {
-                continue;
+                throw new JsonException("pipeline SSE payload must not deserialize to null.");
             }
 
             pipelineEvent.LastEventId = sseEvent.Id;
             pipelineEvent.SseEventName = sseEvent.Event;
             pipelineEvent.RetryMilliseconds = sseEvent.RetryMilliseconds;
+            ValidatePipelineEvent(pipelineEvent, "pipeline SSE payload");
             yield return pipelineEvent;
         }
     }
@@ -1094,24 +1356,43 @@ public sealed class ToriiClient : IDisposable
     {
         await foreach (var sseEvent in StreamEventsAsync(query, lastEventId, cancellationToken))
         {
-            if (sseEvent.IsComment || sseEvent.JsonData is null)
+            if (sseEvent.IsComment || sseEvent.RawData is null)
+            {
+                continue;
+            }
+
+            var payload = RequireSseJsonData(sseEvent, "proof SSE payload");
+            if (!TryReadSseStringProperty(payload, "category", "proof SSE payload", out var category)
+                || !string.Equals(category, "Data", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!TryReadSseStringProperty(payload, "event", "proof SSE payload", out var proofEventName))
+            {
+                ToriiPipelineEventJsonConverter.RequireRequiredString(proofEventName, "proof SSE payload.event");
+            }
+
+            ToriiSseEventJson.RequireExactTokenText(proofEventName, "proof SSE payload.event");
+            var exactProofEventName = proofEventName
+                ?? throw new JsonException("proof SSE payload.event must not be null.");
+            if (!exactProofEventName.StartsWith("Proof", StringComparison.Ordinal))
             {
                 continue;
             }
 
             var proofEvent = JsonSerializer.Deserialize(
-                sseEvent.JsonData,
+                payload,
                 ToriiJsonSerializerContext.Default.ToriiProofEvent);
-            if (proofEvent is null
-                || !string.Equals(proofEvent.Category, "Data", StringComparison.Ordinal)
-                || !proofEvent.Event.StartsWith("Proof", StringComparison.Ordinal))
+            if (proofEvent is null)
             {
-                continue;
+                throw new JsonException("proof SSE payload must not deserialize to null.");
             }
 
             proofEvent.LastEventId = sseEvent.Id;
             proofEvent.SseEventName = sseEvent.Event;
             proofEvent.RetryMilliseconds = sseEvent.RetryMilliseconds;
+            ValidateProofEvent(proofEvent, "proof SSE payload");
             yield return proofEvent;
         }
     }
@@ -1156,6 +1437,7 @@ public sealed class ToriiClient : IDisposable
         return StreamSsePayloadsAsync(
             "/v1/explorer/blocks/stream",
             ToriiJsonSerializerContext.Default.ToriiExplorerBlock,
+            payload => ValidateExplorerBlock(payload, "explorer block SSE payload"),
             query: null,
             lastEventId: lastEventId,
             cancellationToken: cancellationToken);
@@ -1168,6 +1450,7 @@ public sealed class ToriiClient : IDisposable
         return StreamSsePayloadsAsync(
             "/v1/explorer/transactions/stream",
             ToriiJsonSerializerContext.Default.ToriiExplorerTransaction,
+            payload => ValidateExplorerTransaction(payload, "explorer transaction SSE payload"),
             query: null,
             lastEventId: lastEventId,
             cancellationToken: cancellationToken);
@@ -1180,6 +1463,7 @@ public sealed class ToriiClient : IDisposable
         return StreamSsePayloadsAsync(
             "/v1/explorer/instructions/stream",
             ToriiJsonSerializerContext.Default.ToriiExplorerInstruction,
+            payload => ValidateExplorerInstruction(payload, "explorer instruction SSE payload"),
             query: null,
             lastEventId: lastEventId,
             cancellationToken: cancellationToken);
@@ -1197,7 +1481,8 @@ public sealed class ToriiClient : IDisposable
         ReadOnlyMemory<byte> noritoBytes,
         CancellationToken cancellationToken = default)
     {
-        using var content = CreateBinaryContent(noritoBytes, "application/x-norito");
+        var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoBytes, nameof(noritoBytes));
+        using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
         using var response = await SendAsync(HttpMethod.Post, "/transaction", content: content, cancellationToken: cancellationToken);
     }
 
@@ -1228,7 +1513,10 @@ public sealed class ToriiClient : IDisposable
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            $"pipeline transaction status response for `{response.RequestMessage?.RequestUri}`",
+            cancellationToken);
         return ParsePipelineTransactionStatus(document.RootElement, normalizedHash);
     }
 
@@ -1241,7 +1529,10 @@ public sealed class ToriiClient : IDisposable
         using var content = CreateJsonContent(request);
         using var response = await SendAsync(HttpMethod.Post, path, query, content, cancellationToken: cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            $"Torii JSON response for `{response.RequestMessage?.RequestUri}`",
+            cancellationToken);
     }
 
     public async Task<HttpResponseMessage> SendAsync(
@@ -1336,50 +1627,427 @@ public sealed class ToriiClient : IDisposable
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(method);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var exactMethod = RequireExactRequestMethod(method.Method, nameof(method));
+        var exactPath = RequireExactRequestPath(path, nameof(path));
+        var exactQuery = NormalizeOptionalExactQuery(query, nameof(query));
+        var exactAccept = NormalizeOptionalAcceptHeaderValue(accept, nameof(accept));
 
-        var requestUri = BuildRequestUri(path, query);
+        var requestUri = BuildRequestUri(exactPath, exactQuery);
         var request = new HttpRequestMessage(method, requestUri)
         {
             Content = content,
         };
 
-        if (!string.IsNullOrWhiteSpace(Options.BearerToken))
+        var bearerToken = NormalizeOptionalBearerToken(Options.BearerToken, nameof(ToriiClientOptions.BearerToken));
+        if (bearerToken is not null)
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Options.BearerToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         }
 
-        if (!string.IsNullOrWhiteSpace(accept))
+        if (!string.IsNullOrEmpty(exactAccept))
         {
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(accept));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(exactAccept));
         }
 
+        byte[]? signedBodyBytes = null;
+        IReadOnlyDictionary<string, string>? signedHeaders = null;
         if (Options.CanonicalRequestCredentials is not null)
         {
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
                 Options.CanonicalRequestCredentials.AccountId,
                 Options.CanonicalRequestCredentials.PrivateKeySeed,
-                method.Method,
+                exactMethod,
                 requestUri.AbsolutePath,
                 requestUri.Query,
                 bodyBytes);
 
-            foreach (var header in headers.ToDictionary())
+            signedBodyBytes = bodyBytes;
+            signedHeaders = headers.ToDictionary();
+            foreach (var header in signedHeaders)
             {
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
         }
 
+        var protectedAuthorization = request.Headers.Authorization?.ToString();
+        var protectedAccept = FormatAcceptHeaders(request);
         configureRequest?.Invoke(request);
+        await EnsureConfigureRequestDidNotMutateProtectedStateAsync(
+            request,
+            exactMethod,
+            requestUri,
+            content,
+            protectedAuthorization,
+            protectedAccept,
+            signedBodyBytes,
+            signedHeaders,
+            cancellationToken);
         return request;
     }
+
+    private static async Task EnsureConfigureRequestDidNotMutateProtectedStateAsync(
+        HttpRequestMessage request,
+        string expectedMethod,
+        Uri expectedUri,
+        HttpContent? expectedContent,
+        string? expectedAuthorization,
+        string expectedAccept,
+        byte[]? signedBodyBytes,
+        IReadOnlyDictionary<string, string>? signedHeaders,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.Method.Method, expectedMethod, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("configureRequest must not mutate the HTTP method.", "configureRequest");
+        }
+
+        if (request.RequestUri is null
+            || !string.Equals(request.RequestUri.AbsoluteUri, expectedUri.AbsoluteUri, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("configureRequest must not mutate the request URI.", "configureRequest");
+        }
+
+        if (!ReferenceEquals(request.Content, expectedContent))
+        {
+            throw new ArgumentException("configureRequest must not replace request content.", "configureRequest");
+        }
+
+        if (!string.Equals(request.Headers.Authorization?.ToString(), expectedAuthorization, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("configureRequest must not mutate the Authorization header.", "configureRequest");
+        }
+
+        if (!string.Equals(FormatAcceptHeaders(request), expectedAccept, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("configureRequest must not mutate the Accept header.", "configureRequest");
+        }
+
+        if (signedBodyBytes is not null)
+        {
+            var currentBodyBytes = request.Content is null
+                ? Array.Empty<byte>()
+                : await request.Content.ReadAsByteArrayAsync(cancellationToken);
+            if (!currentBodyBytes.SequenceEqual(signedBodyBytes))
+            {
+                throw new ArgumentException("configureRequest must not mutate signed request content.", "configureRequest");
+            }
+        }
+
+        if (signedHeaders is not null)
+        {
+            foreach (var header in signedHeaders)
+            {
+                if (!request.Headers.TryGetValues(header.Key, out var values)
+                    || !values.SequenceEqual([header.Value]))
+                {
+                    throw new ArgumentException("configureRequest must not mutate canonical signing headers.", "configureRequest");
+                }
+            }
+        }
+    }
+
+    private static string FormatAcceptHeaders(HttpRequestMessage request)
+        => string.Join(",", request.Headers.Accept.Select(static header => header.ToString()));
+
+    private static string RequireExactRequestPart(string? value, string paramName)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new ArgumentException($"{paramName} must not be empty.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException($"{paramName} must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain control characters.", paramName);
+        }
+
+        return value;
+    }
+
+    private static string RequireExactRequestMethod(string? value, string paramName)
+    {
+        var exact = RequireExactRequestPart(value, paramName);
+        if (!exact.All(IsHttpTokenCharacter))
+        {
+            throw new ArgumentException($"{paramName} must be an HTTP token.", paramName);
+        }
+
+        return exact;
+    }
+
+    private static bool IsHttpTokenCharacter(char value)
+        => value is >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or >= '0' and <= '9'
+            or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+'
+            or '-' or '.' or '^' or '_' or '`' or '|' or '~';
+
+    private static string RequireExactRequestPath(string? value, string paramName)
+    {
+        var exact = RequireExactRequestPart(value, paramName);
+        if (exact[0] != '/')
+        {
+            throw new ArgumentException($"{paramName} must be a root-relative path.", paramName);
+        }
+
+        if (exact.Length > 1 && exact[1] == '/')
+        {
+            throw new ArgumentException($"{paramName} must not be a scheme-relative URI.", paramName);
+        }
+
+        if (exact.Contains(':', StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain raw ':' characters.", paramName);
+        }
+
+        ValidateUriStableRequestPath(exact, paramName);
+        return exact;
+    }
+
+    private static void ValidateUriStableRequestPath(string value, string paramName)
+    {
+        if (value.Contains('\\', StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain raw backslash characters.", paramName);
+        }
+
+        ValidatePathPercentEscapes(value, paramName);
+        foreach (var segment in value.Split('/', StringSplitOptions.None))
+        {
+            if (segment.Length == 0)
+            {
+                continue;
+            }
+
+            var decodedSegment = DecodePercentEncodedPathSegment(segment, paramName);
+            if (decodedSegment.Any(char.IsControl))
+            {
+                throw new ArgumentException($"{paramName} path segments must not contain percent-decoded control characters.", paramName);
+            }
+
+            if (decodedSegment is "." or "..")
+            {
+                throw new ArgumentException($"{paramName} must not contain dot path segments.", paramName);
+            }
+        }
+    }
+
+    private static string? NormalizeOptionalExactQuery(string? value, string paramName)
+    {
+        if (value is null || value.Length == 0)
+        {
+            return value;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{paramName} must not be whitespace.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException($"{paramName} must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain control characters.", paramName);
+        }
+
+        var decoded = DecodeQueryText(
+            value,
+            paramName,
+            $"{paramName} must contain valid percent escapes.",
+            $"{paramName} percent-encoded bytes must be valid UTF-8.");
+        if (decoded.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain percent-decoded control characters.", paramName);
+        }
+
+        ValidateExactQuerySegments(value, paramName);
+        return value;
+    }
+
+    private static void ValidateExactQuerySegments(string value, string paramName)
+    {
+        var query = value[0] == '?' ? value[1..] : value;
+        if (query.Length == 0)
+        {
+            throw new ArgumentException($"{paramName} must contain at least one query parameter.", paramName);
+        }
+
+        foreach (var segment in query.Split('&', StringSplitOptions.None))
+        {
+            if (segment.Length == 0)
+            {
+                throw new ArgumentException($"{paramName} must not contain empty query segments.", paramName);
+            }
+
+            var equalsIndex = segment.IndexOf('=');
+            var rawName = equalsIndex >= 0 ? segment[..equalsIndex] : segment;
+            var decodedName = DecodeQueryText(
+                rawName,
+                paramName,
+                $"{paramName} must contain valid percent escapes.",
+                $"{paramName} percent-encoded bytes must be valid UTF-8.");
+            if (string.IsNullOrEmpty(decodedName) || decodedName.Any(char.IsWhiteSpace))
+            {
+                throw new ArgumentException($"{paramName} parameter names must not be empty or whitespace.", paramName);
+            }
+
+            if (decodedName.Any(char.IsControl))
+            {
+                throw new ArgumentException($"{paramName} parameter names must not contain control characters.", paramName);
+            }
+        }
+    }
+
+    private static string? NormalizeOptionalExactHeaderValue(string? value, string paramName)
+    {
+        if (value is null || value.Length == 0)
+        {
+            return value;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{paramName} must not be whitespace.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain control characters.", paramName);
+        }
+
+        return value;
+    }
+
+    private static string? NormalizeOptionalAcceptHeaderValue(string? value, string paramName)
+    {
+        var exact = NormalizeOptionalExactHeaderValue(value, paramName);
+        if (string.IsNullOrEmpty(exact))
+        {
+            return exact;
+        }
+
+        var slashIndex = exact.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex != exact.LastIndexOf('/') || slashIndex == exact.Length - 1)
+        {
+            throw new ArgumentException($"{paramName} must be a single HTTP media range.", paramName);
+        }
+
+        var type = exact[..slashIndex];
+        var subtype = exact[(slashIndex + 1)..];
+        if (!IsMediaRangePart(type) || !IsMediaRangePart(subtype))
+        {
+            throw new ArgumentException($"{paramName} must be a single HTTP media range.", paramName);
+        }
+
+        if (type == "*" && subtype != "*")
+        {
+            throw new ArgumentException($"{paramName} wildcard media ranges must use */*.", paramName);
+        }
+
+        return exact;
+    }
+
+    private static bool IsMediaRangePart(string value)
+        => value == "*" || value.All(IsHttpTokenCharacter);
+
+    private static string? NormalizeOptionalBearerToken(string? value, string paramName)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value.Length == 0 || string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{paramName} must not be empty or whitespace.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException($"{paramName} must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain control characters.", paramName);
+        }
+
+        ValidateBearerToken(value, paramName);
+        return value;
+    }
+
+    private static void ValidateBearerToken(string value, string paramName)
+    {
+        var firstPaddingIndex = value.IndexOf('=');
+        var tokenLength = firstPaddingIndex < 0 ? value.Length : firstPaddingIndex;
+        if (tokenLength == 0)
+        {
+            throw new ArgumentException($"{paramName} must be an HTTP bearer token.", paramName);
+        }
+
+        for (var index = 0; index < tokenLength; index++)
+        {
+            if (!IsBearerTokenCharacter(value[index]))
+            {
+                throw new ArgumentException($"{paramName} must be an HTTP bearer token.", paramName);
+            }
+        }
+
+        if (firstPaddingIndex < 0)
+        {
+            return;
+        }
+
+        for (var index = firstPaddingIndex; index < value.Length; index++)
+        {
+            if (value[index] != '=')
+            {
+                throw new ArgumentException($"{paramName} must use trailing-only bearer token padding.", paramName);
+            }
+        }
+    }
+
+    private static bool IsBearerTokenCharacter(char value)
+        => value is >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or >= '0' and <= '9'
+            or '-' or '.' or '_' or '~' or '+' or '/';
 
     private static async IAsyncEnumerable<ToriiServerSentEvent> ReadServerSentEventsAsync(
         Stream stream,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: false);
+        using var reader = new StreamReader(stream, StrictUtf8, detectEncodingFromByteOrderMarks: false, leaveOpen: false);
         var dataBuilder = new StringBuilder();
         var commentBuilder = new StringBuilder();
         var hasData = false;
@@ -1387,13 +2055,32 @@ public sealed class ToriiClient : IDisposable
         string? eventName = null;
         string? eventId = null;
         int? retryMilliseconds = null;
+        var firstLine = true;
 
         while (true)
         {
-            var line = await reader.ReadLineAsync(cancellationToken);
+            string? line;
+            try
+            {
+                line = await reader.ReadLineAsync(cancellationToken);
+            }
+            catch (DecoderFallbackException exception)
+            {
+                throw new JsonException("SSE stream must be valid UTF-8.", exception);
+            }
+
             if (line is null)
             {
                 break;
+            }
+
+            if (firstLine)
+            {
+                firstLine = false;
+                if (line.Length > 0 && line[0] == '\ufeff')
+                {
+                    line = line[1..];
+                }
             }
 
             if (line.Length == 0)
@@ -1451,8 +2138,8 @@ public sealed class ToriiClient : IDisposable
                 case "id":
                     eventId = value;
                     break;
-                case "retry" when int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedRetry) && parsedRetry >= 0:
-                    retryMilliseconds = parsedRetry;
+                case "retry":
+                    retryMilliseconds = ParseSseRetryMilliseconds(value);
                     break;
             }
         }
@@ -1462,6 +2149,27 @@ public sealed class ToriiClient : IDisposable
         {
             yield return finalEvent;
         }
+    }
+
+    private static int ParseSseRetryMilliseconds(string value)
+    {
+        if (!IsCanonicalNonNegativeInt32Text(value)
+            || !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new JsonException("SSE retry must be canonical non-negative Int32 milliseconds.");
+        }
+
+        return parsed;
+    }
+
+    private static bool IsCanonicalNonNegativeInt32Text(string value)
+    {
+        if (value.Length == 0 || (value.Length > 1 && value[0] == '0'))
+        {
+            return false;
+        }
+
+        return value.All(static character => character is >= '0' and <= '9');
     }
 
     private static ToriiServerSentEvent? BuildServerSentEvent(
@@ -1482,25 +2190,89 @@ public sealed class ToriiClient : IDisposable
         JsonNode? jsonData = null;
         if (!string.IsNullOrWhiteSpace(rawData))
         {
-            try
-            {
-                jsonData = JsonNode.Parse(rawData);
-            }
-            catch (JsonException)
-            {
-                jsonData = null;
-            }
+            jsonData = TryParseSseJsonData(rawData);
         }
 
-        return new ToriiServerSentEvent
+        try
         {
-            Event = hasData ? eventName ?? "message" : eventName,
-            Id = eventId,
-            RetryMilliseconds = retryMilliseconds,
-            RawData = rawData,
-            JsonData = jsonData,
-            Comment = hasComment ? commentBuilder.ToString() : null,
-        };
+            return new ToriiServerSentEvent
+            {
+                Event = hasData ? eventName ?? "message" : eventName,
+                Id = eventId,
+                RetryMilliseconds = retryMilliseconds,
+                RawData = rawData,
+                JsonData = jsonData,
+                Comment = hasComment ? commentBuilder.ToString() : null,
+            };
+        }
+        catch (ArgumentException error) when (error.ParamName is "Event" or "Id" or "RetryMilliseconds")
+        {
+            var field = error.ParamName switch
+            {
+                "Event" => "sse_event_name",
+                "Id" => "last_event_id",
+                "RetryMilliseconds" => "retry",
+                _ => error.ParamName,
+            };
+            throw new JsonException($"SSE event.{field}: {error.Message}", error);
+        }
+    }
+
+    private static JsonNode? TryParseSseJsonData(string rawData)
+    {
+        try
+        {
+            return ToriiIdentifierJson.ParseNodeRejectingDuplicateProperties(rawData, "SSE data");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static JsonNode RequireSseJsonData(ToriiServerSentEvent sseEvent, string context)
+    {
+        if (string.IsNullOrWhiteSpace(sseEvent.RawData))
+        {
+            throw new JsonException($"{context}.data must be valid non-null JSON.");
+        }
+
+        try
+        {
+            return ToriiIdentifierJson.ParseNodeRejectingDuplicateProperties(
+                    sseEvent.RawData,
+                    $"{context}.data")
+                ?? throw new JsonException($"{context}.data must be valid non-null JSON.");
+        }
+        catch (JsonException exception) when (!ToriiIdentifierJson.IsDuplicatePropertyError(exception))
+        {
+            throw new JsonException($"{context}.data must be valid non-null JSON.", exception);
+        }
+    }
+
+    private static bool TryReadSseStringProperty(
+        JsonNode payload,
+        string propertyName,
+        string context,
+        out string? value)
+    {
+        if (payload is not JsonObject payloadObject)
+        {
+            throw new JsonException($"{context}.data must be a JSON object.");
+        }
+
+        if (!payloadObject.TryGetPropertyValue(propertyName, out var propertyValue) || propertyValue is null)
+        {
+            value = null;
+            return false;
+        }
+
+        if (propertyValue is JsonValue jsonValue && jsonValue.TryGetValue<string>(out value))
+        {
+            return true;
+        }
+
+        throw new JsonException($"{context}.{propertyName} must be a string.");
     }
 
     private async Task<TResponse> DeserializeAsync<TResponse>(
@@ -1508,8 +2280,40 @@ public sealed class ToriiClient : IDisposable
         CancellationToken cancellationToken)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        var value = await JsonSerializer.DeserializeAsync<TResponse>(stream, serializerOptions, cancellationToken);
+        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            DuplicatePropertyContext<TResponse>(response),
+            cancellationToken);
+        var value = document.RootElement.Deserialize<TResponse>(serializerOptions);
         return value ?? throw new JsonException($"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
+    }
+
+    private static string DuplicatePropertyContext<TResponse>(HttpResponseMessage response)
+    {
+        if (typeof(TResponse) == typeof(ToriiIdentifierResolveResponse))
+        {
+            return "identifier resolve response";
+        }
+
+        return $"Torii response for `{response.RequestMessage?.RequestUri}`";
+    }
+
+    private static async Task<JsonDocument> ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+        Stream stream,
+        string context,
+        CancellationToken cancellationToken)
+    {
+        var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        try
+        {
+            ToriiIdentifierJson.RejectDuplicateProperties(document.RootElement, context);
+            return document;
+        }
+        catch
+        {
+            document.Dispose();
+            throw;
+        }
     }
 
     private static JsonException RewriteIdentifierPoliciesJsonException(JsonException exception)
@@ -1558,12 +2362,1283 @@ public sealed class ToriiClient : IDisposable
 
     private static void ValidateMultisigResponse(ToriiMultisigResponse response, string context)
     {
-        if (!response.Ok)
+        ToriiMultisigJson.ValidateMultisigResponse(response, context);
+    }
+
+    private static void ValidateMultisigContractCallResponse(
+        ToriiMultisigContractCallResponse response,
+        string context)
+    {
+        ToriiMultisigJson.ValidateMultisigContractCallResponse(response, context);
+    }
+
+    private static void ValidateAccountOnboardingResponse(ToriiAccountOnboardingResponse response, string context)
+    {
+        ToriiOnboardingJson.ValidateAccountOnboardingResponse(response, context);
+    }
+
+    private static void ValidateAccountFaucetResponse(ToriiAccountFaucetResponse response, string context)
+    {
+        ToriiOnboardingJson.ValidateAccountFaucetResponse(response, context);
+    }
+
+    private static void ValidateAccountFaucetPuzzle(ToriiAccountFaucetPuzzle response, string context)
+    {
+        ToriiAccountFaucetJson.ValidateAccountFaucetPuzzle(response, context);
+    }
+
+    private static void ValidateMultisigAccountOnboardingResponse(
+        ToriiMultisigAccountOnboardingResponse response,
+        string context)
+    {
+        ToriiOnboardingJson.ValidateMultisigAccountOnboardingResponse(response, context);
+    }
+
+    private static void ValidateVpnProfile(ToriiVpnProfile response, string context)
+    {
+        ToriiVpnJson.ValidateVpnProfile(response, context);
+    }
+
+    private static void ValidateVpnQuote(ToriiVpnQuote response, string context)
+    {
+        ToriiVpnJson.ValidateVpnQuote(response, context);
+    }
+
+    private static void ValidateVpnSession(ToriiVpnSession response, string context)
+    {
+        ToriiVpnJson.ValidateVpnSession(response, context);
+    }
+
+    private static void ValidateVpnReceiptListResponse(ToriiVpnReceiptListResponse response, string context)
+    {
+        ToriiVpnJson.ValidateVpnReceiptListResponse(response, context);
+    }
+
+    private static void ValidateVpnReceipt(ToriiVpnReceipt response, string context)
+    {
+        ToriiVpnJson.ValidateVpnReceipt(response, context);
+    }
+
+    private static void ValidateVpnTxInstructions(IReadOnlyList<ToriiVpnTxInstruction>? instructions, string context)
+    {
+        if (instructions is null)
         {
-            throw new JsonException($"{context}.ok must be true.");
+            return;
         }
 
-        ValidateOptionalBase64(response.SigningMessageBase64, $"{context}.signing_message_b64");
+        for (var index = 0; index < instructions.Count; index++)
+        {
+            var instruction = instructions[index];
+            if (instruction is null)
+            {
+                throw new JsonException($"{context}[{index}] must be an object.");
+            }
+
+            ValidateVpnTxInstruction(instruction, $"{context}[{index}]");
+        }
+    }
+
+    private static void ValidateOptionalVpnTxInstruction(ToriiVpnTxInstruction? instruction, string context)
+    {
+        if (instruction is null)
+        {
+            return;
+        }
+
+        ValidateVpnTxInstruction(instruction, context);
+    }
+
+    private static void ValidateVpnTxInstruction(ToriiVpnTxInstruction instruction, string context)
+    {
+        ToriiVpnJson.ValidateVpnTxInstruction(instruction, context);
+    }
+
+    private static void ValidateDeployContractResponse(ToriiDeployContractResponse response, string context)
+    {
+        ToriiContractDeploymentJson.ValidateDeployContractResponse(response, context);
+    }
+
+    private static void ValidateDeployAndActivateContractInstanceResponse(
+        ToriiDeployAndActivateContractInstanceResponse response,
+        string context)
+    {
+        ToriiContractDeploymentJson.ValidateDeployAndActivateContractInstanceResponse(response, context);
+    }
+
+    private static void ValidateActivateContractInstanceResponse(
+        ToriiActivateContractInstanceResponse response,
+        string context)
+    {
+        ToriiContractDeploymentJson.ValidateActivateContractInstanceResponse(response, context);
+    }
+
+    private static void ValidateContractCodeRecord(ToriiContractCodeRecord response, string context)
+    {
+        ToriiContractMetadataJson.ValidateContractCodeRecord(response, context);
+    }
+
+    private static void ValidateContractInstancesResponse(
+        ToriiContractInstancesResponse response,
+        string context)
+    {
+        ToriiContractInstancesJson.ValidateContractInstancesResponse(response, context);
+    }
+
+    private static void ValidateContractCodeView(ToriiContractCodeView response, string context)
+    {
+        ToriiContractMetadataJson.ValidateContractCodeView(response, context);
+    }
+
+    private static void ValidateContractCodeViewAccessHints(
+        ToriiContractViewAccessHints response,
+        string context)
+    {
+        ValidateContractCodeViewTokenList(response.ReadKeys, $"{context}.read_keys");
+        ValidateContractCodeViewTokenList(response.WriteKeys, $"{context}.write_keys");
+    }
+
+    private static void ValidateContractCodeViewEntrypoints(
+        IReadOnlyList<ToriiContractViewEntrypoint>? entrypoints,
+        string context)
+    {
+        if (entrypoints is null)
+        {
+            throw new JsonException($"{context} is required.");
+        }
+
+        for (var index = 0; index < entrypoints.Count; index++)
+        {
+            var entrypoint = entrypoints[index];
+            if (entrypoint is null)
+            {
+                throw new JsonException($"{context}[{index}] must not be null.");
+            }
+
+            ValidateContractCodeViewEntrypoint(entrypoint, $"{context}[{index}]");
+        }
+    }
+
+    private static void ValidateContractCodeViewEntrypoint(
+        ToriiContractViewEntrypoint response,
+        string context)
+    {
+        ValidateExactTokenText(response.Name, $"{context}.name");
+        ValidateExactTokenText(response.Kind, $"{context}.kind");
+        ValidateContractCodeViewEntrypointParams(response.Parameters, $"{context}.params");
+        ValidateOptionalExactNonEmptyText(response.ReturnType, $"{context}.return_type");
+        ValidateOptionalExactTokenText(response.Permission, $"{context}.permission");
+        ValidateContractCodeViewTokenList(response.ReadKeys, $"{context}.read_keys");
+        ValidateContractCodeViewTokenList(response.WriteKeys, $"{context}.write_keys");
+        ValidateContractCodeViewTokenList(response.AccessHintsSkipped, $"{context}.access_hints_skipped");
+        ValidateContractCodeViewTokenList(response.Triggers, $"{context}.triggers");
+    }
+
+    private static void ValidateContractCodeViewEntrypointParams(
+        IReadOnlyList<ToriiContractViewEntrypointParam>? parameters,
+        string context)
+    {
+        if (parameters is null)
+        {
+            throw new JsonException($"{context} is required.");
+        }
+
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var parameter = parameters[index];
+            if (parameter is null)
+            {
+                throw new JsonException($"{context}[{index}] must not be null.");
+            }
+
+            ValidateExactTokenText(parameter.Name, $"{context}[{index}].name");
+            ValidateExactNonEmptyText(
+                parameter.TypeName,
+                $"{context}[{index}].type_name",
+                message => new JsonException(message));
+        }
+    }
+
+    private static void ValidateContractCodeViewAnalysis(
+        ToriiContractViewAnalysis response,
+        string context)
+    {
+        if (response.Memory is null)
+        {
+            throw new JsonException($"{context}.memory is required.");
+        }
+
+        if (response.Syscalls is null)
+        {
+            throw new JsonException($"{context}.syscalls is required.");
+        }
+
+        for (var index = 0; index < response.Syscalls.Count; index++)
+        {
+            var syscall = response.Syscalls[index];
+            if (syscall is null)
+            {
+                throw new JsonException($"{context}.syscalls[{index}] must not be null.");
+            }
+
+            ValidateOptionalExactTokenText(syscall.Name, $"{context}.syscalls[{index}].name");
+        }
+    }
+
+    private static void ValidateContractCodeViewTokenList(IReadOnlyList<string>? values, string context)
+    {
+        if (values is null)
+        {
+            throw new JsonException($"{context} is required.");
+        }
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            ValidateExactTokenText(values[index], $"{context}[{index}]");
+        }
+    }
+
+    private static void ValidateContractCodeViewWarnings(IReadOnlyList<string>? values, string context)
+    {
+        if (values is null)
+        {
+            throw new JsonException($"{context} is required.");
+        }
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            ValidateExactNonEmptyText(values[index], $"{context}[{index}]", message => new JsonException(message));
+        }
+    }
+
+    private static void ValidateRenderedSourceText(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{field} must be non-empty rendered source text.");
+        }
+
+        if (value.IndexOf('\0') >= 0)
+        {
+            throw new JsonException($"{field} must not contain NUL characters.");
+        }
+    }
+
+    private static void ValidateContractStateResponse(ToriiContractStateResponse response, string context)
+    {
+        ToriiContractStateJson.ValidateContractStateResponse(response, context);
+    }
+
+    private static void ValidateContractCallResponse(ToriiContractCallResponse response, string context)
+    {
+        ToriiContractCallJson.ValidateContractCallResponse(response, context);
+    }
+
+    private static void ValidateContractViewResponse(ToriiContractViewResponse response, string context)
+    {
+        ToriiContractCallJson.ValidateContractViewResponse(response, context);
+    }
+
+    private static void ValidateContractViewErrorResponse(ToriiContractViewErrorResponse response, string context)
+    {
+        ToriiContractCallJson.ValidateContractViewErrorResponse(response, context);
+    }
+
+    private static void ValidateOptionalContractViewVmDiagnostic(
+        ToriiContractViewVmDiagnostic? response,
+        string context)
+    {
+        ToriiContractCallJson.ValidateOptionalContractViewVmDiagnostic(response, context);
+    }
+
+    private static void ValidateContractVerifiedSourceJob(ToriiContractVerifiedSourceJob response, string context)
+    {
+        ToriiContractMetadataJson.ValidateVerifiedSourceJob(response, context);
+    }
+
+    private static void ValidateOptionalContractVerifiedSourceReference(
+        ToriiContractVerifiedSourceReference? response,
+        string context)
+    {
+        if (response is null)
+        {
+            return;
+        }
+
+        ValidateExactNonEmptyText(response.Language, $"{context}.language", message => new JsonException(message));
+        if (response.SourceName is not null)
+        {
+            ValidateExactNonEmptyText(
+                response.SourceName,
+                $"{context}.source_name",
+                message => new JsonException(message));
+        }
+        ValidateExactNonEmptyText(response.SubmittedAt, $"{context}.submitted_at", message => new JsonException(message));
+        ValidateOptionalExactSizedHex(response.ManifestIdHex, $"{context}.manifest_id_hex", 32);
+        ValidateOptionalExactSizedHex(response.PayloadDigestHex, $"{context}.payload_digest_hex", 32);
+    }
+
+    private static void ValidateRuntimeAbiHash(ToriiRuntimeAbiHash response, string context)
+    {
+        ToriiRuntimeJson.ValidateRuntimeAbiHash(response, context);
+    }
+
+    private static void ValidateNodeCapabilities(ToriiNodeCapabilities response, string context)
+    {
+        ToriiNodeCapabilitiesJson.ValidateNodeCapabilities(response, context);
+    }
+
+    private static void ValidateNodeCryptoCapabilities(ToriiNodeCryptoCapabilities response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (response.Sm is null)
+        {
+            throw new JsonException($"{context}.sm must not be null.");
+        }
+        ValidateNodeSmCapabilities(response.Sm, $"{context}.sm");
+
+        if (response.Curves is null)
+        {
+            throw new JsonException($"{context}.curves must not be null.");
+        }
+        ValidateNodeCurveCapabilities(response.Curves, $"{context}.curves");
+    }
+
+    private static void ValidateNodeSmCapabilities(ToriiNodeSmCapabilities response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        ValidateExactTokenText(response.DefaultHash, $"{context}.default_hash");
+        ValidateExactNonEmptyText(
+            response.Sm2DistidDefault,
+            $"{context}.sm2_distid_default",
+            message => new JsonException(message));
+
+        if (response.AllowedSigning is null)
+        {
+            throw new JsonException($"{context}.allowed_signing must not be null.");
+        }
+
+        var hasSm2Signing = ValidateAllowedSigningLabels(response.AllowedSigning, $"{context}.allowed_signing");
+        ValidateSmDefaultHashConsistency(response.DefaultHash, hasSm2Signing, context);
+
+        if (response.Acceleration is null)
+        {
+            throw new JsonException($"{context}.acceleration must not be null.");
+        }
+        ValidateNodeSmAcceleration(response.Acceleration, $"{context}.acceleration");
+    }
+
+    private static void ValidateNodeSmAcceleration(ToriiNodeSmAcceleration response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (!response.Scalar)
+        {
+            throw new JsonException($"{context}.scalar must be true.");
+        }
+
+        ValidateExactTokenText(response.Policy, $"{context}.policy");
+        if (response.Policy is not ("auto" or "force-enable" or "force-disable" or "scalar-only"))
+        {
+            throw new JsonException($"{context}.policy must be one of auto, force-enable, force-disable, or scalar-only.");
+        }
+
+        if (response.NeonSm3 != response.NeonSm4)
+        {
+            throw new JsonException($"{context}.neon_sm3 and {context}.neon_sm4 must match.");
+        }
+
+        if ((response.Policy is "scalar-only" or "force-disable") && response.NeonSm3)
+        {
+            throw new JsonException($"{context}.policy must not advertise NEON acceleration when {context}.policy is {response.Policy}.");
+        }
+    }
+
+    private static bool ValidateAllowedSigningLabels(IReadOnlyList<string> allowedSigning, string context)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var hasEd25519 = false;
+        var hasSm2 = false;
+        for (var index = 0; index < allowedSigning.Count; index++)
+        {
+            var label = allowedSigning[index];
+            ValidateExactTokenText(label, $"{context}[{index}]");
+            if (!seen.Add(label))
+            {
+                throw new JsonException($"{context}[{index}] must not contain duplicate signing labels.");
+            }
+
+            if (string.Equals(label, "ed25519", StringComparison.Ordinal))
+            {
+                hasEd25519 = true;
+            }
+
+            if (string.Equals(label, "sm2", StringComparison.Ordinal))
+            {
+                hasSm2 = true;
+            }
+        }
+
+        if (!hasEd25519)
+        {
+            throw new JsonException($"{context} must include ed25519 for control-plane operations.");
+        }
+
+        return hasSm2;
+    }
+
+    private static void ValidateSmDefaultHashConsistency(string defaultHash, bool hasSm2Signing, string context)
+    {
+        var usesSm3Hash = string.Equals(defaultHash, "sm3-256", StringComparison.Ordinal);
+        if (hasSm2Signing && !usesSm3Hash)
+        {
+            throw new JsonException($"{context}.default_hash must be sm3-256 when allowed_signing includes sm2.");
+        }
+
+        if (!hasSm2Signing && usesSm3Hash)
+        {
+            throw new JsonException($"{context}.allowed_signing must include sm2 when default_hash is sm3-256.");
+        }
+    }
+
+    private static void ValidateNodeCurveCapabilities(ToriiNodeCurveCapabilities response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        ValidateNonNegativeInt32(response.RegistryVersion, $"{context}.registry_version");
+
+        if (response.AllowedCurveIds is null)
+        {
+            throw new JsonException($"{context}.allowed_curve_ids must not be null.");
+        }
+
+        for (var index = 0; index < response.AllowedCurveIds.Count; index++)
+        {
+            ValidateNonNegativeInt32(response.AllowedCurveIds[index], $"{context}.allowed_curve_ids[{index}]");
+        }
+
+        if (response.AllowedCurveBitmap is null)
+        {
+            throw new JsonException($"{context}.allowed_curve_bitmap must not be null.");
+        }
+
+        ValidateAllowedCurveBitmap(response.AllowedCurveIds, response.AllowedCurveBitmap, context);
+    }
+
+    private static void ValidateAllowedCurveBitmap(
+        IReadOnlyList<int> allowedCurveIds,
+        IReadOnlyList<ulong> allowedCurveBitmap,
+        string context)
+    {
+        var seen = new HashSet<int>();
+        for (var index = 0; index < allowedCurveIds.Count; index++)
+        {
+            var curveId = allowedCurveIds[index];
+            if (!seen.Add(curveId))
+            {
+                throw new JsonException($"{context}.allowed_curve_ids[{index}] must not contain duplicate curve ids.");
+            }
+
+            var wordIndex = curveId / 64;
+            var bitMask = 1UL << (curveId & 63);
+            if (wordIndex >= allowedCurveBitmap.Count || (allowedCurveBitmap[wordIndex] & bitMask) == 0)
+            {
+                throw new JsonException(
+                    $"{context}.allowed_curve_ids[{index}] must have a matching allowed_curve_bitmap bit.");
+            }
+        }
+
+        for (var wordIndex = 0; wordIndex < allowedCurveBitmap.Count; wordIndex++)
+        {
+            var word = allowedCurveBitmap[wordIndex];
+            if (word == 0)
+            {
+                continue;
+            }
+
+            for (var bit = 0; bit < 64; bit++)
+            {
+                var bitMask = 1UL << bit;
+                if ((word & bitMask) == 0)
+                {
+                    continue;
+                }
+
+                var curveId = ((long)wordIndex * 64L) + bit;
+                if (curveId > int.MaxValue || !seen.Contains((int)curveId))
+                {
+                    throw new JsonException(
+                        $"{context}.allowed_curve_bitmap[{wordIndex}] must not advertise curve ids missing from allowed_curve_ids.");
+                }
+            }
+        }
+    }
+
+    private static void ValidateNodeQueryCapabilities(ToriiNodeQueryCapabilities response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (response.Aggregate is null)
+        {
+            throw new JsonException($"{context}.aggregate must not be null.");
+        }
+        ValidateNodeAggregateQueryCapabilities(response.Aggregate, $"{context}.aggregate");
+
+        if (!response.IndexedSnapshotMarker)
+        {
+            throw new JsonException($"{context}.indexed_snapshot_marker must be true.");
+        }
+
+        ValidateExactTokenSequence(response.RowEnrichmentFields, QueryRowEnrichmentFields, $"{context}.row_enrichment_fields");
+
+        if (response.Projection is null)
+        {
+            throw new JsonException($"{context}.projection must not be null.");
+        }
+        ValidateNodeProjectionCapabilities(response.Projection, $"{context}.projection");
+    }
+
+    private static void ValidateNodeAggregateQueryCapabilities(
+        ToriiNodeAggregateQueryCapabilities response,
+        string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (!response.V1)
+        {
+            throw new JsonException($"{context}.v1 must be true.");
+        }
+
+        if (!response.ExactResults)
+        {
+            throw new JsonException($"{context}.exact_results must be true.");
+        }
+
+        ValidateExactUniqueTokenList(response.SupportedResources, $"{context}.supported_resources");
+    }
+
+    private static void ValidateNodeProjectionCapabilities(ToriiNodeProjectionCapabilities response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        if (!response.CheckpointContractV1)
+        {
+            throw new JsonException($"{context}.checkpoint_contract_v1 must be true.");
+        }
+
+        if (response.DaV1Enabled)
+        {
+            throw new JsonException($"{context}.da_v1_enabled must be false.");
+        }
+
+        ValidateProjectionFeatureFlags(response, context);
+        ValidateExactInt32(response.ArchiveVersion, QueryProjectionArchiveVersion, $"{context}.archive_version");
+        ValidateExactInt32(response.SchemaVersion, QueryProjectionSchemaVersion, $"{context}.schema_version");
+        ValidateExactInt32(response.BlobClassCustomId, QueryProjectionBlobClassCustomId, $"{context}.blob_class_custom_id");
+        ValidateExactTokenText(response.Codec, $"{context}.codec");
+        ValidateExactTokenValue(response.Codec, QueryProjectionCodec, $"{context}.codec");
+        ValidateExactTokenText(response.RowsetCodec, $"{context}.rowset_codec");
+        ValidateExactTokenValue(response.RowsetCodec, QueryProjectionRowsetCodec, $"{context}.rowset_codec");
+        ValidateExactTokenText(response.Compression, $"{context}.compression");
+        ValidateExactTokenValue(response.Compression, QueryProjectionCompression, $"{context}.compression");
+        ValidateExactInt32(
+            response.DefaultPartitionCount,
+            QueryProjectionDefaultPartitionCount,
+            $"{context}.default_partition_count");
+        ValidateExactTokenSequence(response.MetadataKeys, QueryProjectionMetadataKeys, $"{context}.metadata_keys");
+        ValidateExactUniqueTokenList(response.ExportSupportedResources, $"{context}.export_supported_resources");
+        if (!response.ArchiveExportV1 && response.ExportSupportedResources.Count != 0)
+        {
+            throw new JsonException($"{context}.export_supported_resources must be empty when archive_export_v1 is false.");
+        }
+
+        if (response.LatestCheckpointIndexedHeight is < 0)
+        {
+            throw new JsonException($"{context}.latest_checkpoint_indexed_height must be non-negative.");
+        }
+
+        ValidateOptionalExactSizedHex(response.LatestCheckpointBlockHashHex, $"{context}.latest_checkpoint_block_hash_hex", 32);
+        if (response.LatestCheckpointBlockHashHex is not null && response.LatestCheckpointIndexedHeight is null)
+        {
+            throw new JsonException(
+                $"{context}.latest_checkpoint_block_hash_hex requires latest_checkpoint_indexed_height.");
+        }
+    }
+
+    private static void ValidateProjectionFeatureFlags(ToriiNodeProjectionCapabilities response, string context)
+    {
+        var expected = response.CheckpointPlanV1;
+        if (response.CheckpointPublishV1 != expected ||
+            response.ShardCatalogV1 != expected ||
+            response.ArchiveExportV1 != expected)
+        {
+            throw new JsonException(
+                $"{context}.checkpoint_plan_v1, {context}.checkpoint_publish_v1, {context}.shard_catalog_v1, and {context}.archive_export_v1 must match.");
+        }
+    }
+
+    private static void ValidateRuntimeAbiActive(ToriiRuntimeAbiActive response, string context)
+    {
+        ToriiRuntimeJson.ValidateRuntimeAbiActive(response, context);
+    }
+
+    private static void ValidateRuntimeMetrics(ToriiRuntimeMetrics response, string context)
+    {
+        ToriiRuntimeJson.ValidateRuntimeMetrics(response, context);
+    }
+
+    private static void ValidatePipelineEvent(ToriiPipelineEvent response, string context)
+    {
+        ToriiSseEventJson.ValidatePipelineEvent(response, context);
+    }
+
+    private static void ValidateProofEvent(ToriiProofEvent response, string context)
+    {
+        ToriiSseEventJson.ValidateProofEvent(response, context);
+    }
+
+    private static void ValidateUaidManifestsResponse(ToriiUaidManifestsResponse response, string context)
+    {
+        ToriiUaidJson.ValidateUaidManifestsResponse(response, context);
+    }
+
+    private static void ValidateUaidManifestRecord(ToriiUaidManifestRecord response, string context)
+    {
+        ToriiUaidJson.ValidateUaidManifestRecord(response, context);
+    }
+
+    private static void ValidateUaidManifestLifecycle(ToriiUaidManifestLifecycle response, string context)
+    {
+        ToriiUaidJson.ValidateUaidManifestLifecycle(response, context);
+    }
+
+    private static void ValidateUaidPortfolioResponse(ToriiUaidPortfolioResponse response, string context)
+    {
+        ToriiUaidJson.ValidateUaidPortfolioResponse(response, context);
+    }
+
+    private static void ValidateUaidPortfolioDataspace(ToriiUaidPortfolioDataspace response, string context)
+    {
+        ToriiUaidJson.ValidateUaidPortfolioDataspace(response, context);
+    }
+
+    private static void ValidateUaidPortfolioAccount(ToriiUaidPortfolioAccount response, string context)
+    {
+        ToriiUaidJson.ValidateUaidPortfolioAccount(response, context);
+    }
+
+    private static void ValidateUaidBindingsResponse(ToriiUaidBindingsResponse response, string context)
+    {
+        ToriiUaidJson.ValidateUaidBindingsResponse(response, context);
+    }
+
+    private static void ValidateAccountsPage(ToriiAccountsPage response, string context)
+    {
+        ToriiAccountQueryJson.ValidateAccountsPage(response, context);
+    }
+
+    private static void ValidateAccountSummary(ToriiAccountSummary response, string context)
+    {
+        ToriiAccountQueryJson.ValidateAccountSummary(response, context);
+    }
+
+    private static void ValidateAccountAssetBalancesPage(ToriiAssetBalancesPage response, string context)
+    {
+        ToriiAccountQueryJson.ValidateAssetBalancesPage(response, context);
+    }
+
+    private static void ValidateAccountAssetBalance(ToriiAssetBalance response, string context)
+    {
+        ToriiAccountQueryJson.ValidateAssetBalance(response, context);
+    }
+
+    private static void ValidateAccountPermissionsPage(ToriiAccountPermissionsPage response, string context)
+    {
+        ToriiAccountQueryJson.ValidateAccountPermissionsPage(response, context);
+    }
+
+    private static void ValidateAccountAliasLookupResponse(ToriiAccountAliasLookupResponse response, string context)
+    {
+        ToriiAccountAliasLookupJson.ValidateAccountAliasLookupResponse(response, context);
+    }
+
+    private static void ValidateAccountAliasResolution(ToriiAccountAliasResolution response, string context)
+    {
+        ToriiAliasResolutionJson.ValidateAccountAliasResolution(response, context);
+    }
+
+    private static void ValidateAccountAliasIndexResolution(ToriiAccountAliasIndexResolution response, string context)
+    {
+        ToriiAliasResolutionJson.ValidateAccountAliasIndexResolution(response, context);
+    }
+
+    private static void ValidateAssetAliasResolution(ToriiAssetAliasResolution response, string context)
+    {
+        ToriiAliasResolutionJson.ValidateAssetAliasResolution(response, context);
+    }
+
+    private static void ValidateAssetAliasBinding(ToriiAssetAliasBinding response, string context)
+    {
+        ToriiAliasResolutionJson.ValidateAssetAliasBinding(response, context);
+    }
+
+    private static void ValidateContractAliasResolution(ToriiContractAliasResolution response, string context)
+    {
+        ToriiAliasResolutionJson.ValidateContractAliasResolution(response, context);
+    }
+
+    private static void ValidateContractAliasBinding(ToriiContractAliasBinding response, string context)
+    {
+        ToriiAliasResolutionJson.ValidateContractAliasBinding(response, context);
+    }
+
+    private static void ValidateAccountTransactionsPage(ToriiTransactionsPage response, string context)
+    {
+        ToriiAccountQueryJson.ValidateTransactionsPage(response, context);
+    }
+
+    private static void ValidateAccountTransactionSummary(ToriiTransactionSummary response, string context)
+    {
+        ToriiAccountQueryJson.ValidateTransactionSummary(response, context);
+    }
+
+    private static void ValidateExplorerBlocksPage(ToriiExplorerBlocksPage response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerBlock);
+    }
+
+    private static void ValidateExplorerAccountsPage(ToriiExplorerAccountsPage response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAccountsPage(response, context);
+    }
+
+    private static void ValidateExplorerAccount(ToriiExplorerAccount response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAccount(response, context);
+    }
+
+    private static void ValidateExplorerAccountQrSnapshot(ToriiExplorerAccountQrSnapshot response, string context)
+    {
+        ToriiExplorerSnapshotJson.ValidateExplorerAccountQrSnapshot(response, context);
+    }
+
+    private static void ValidateExplorerDomainsPage(ToriiExplorerDomainsPage response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerDomainsPage(response, context);
+    }
+
+    private static void ValidateExplorerDomain(ToriiExplorerDomain response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerDomain(response, context);
+    }
+
+    private static void ValidateExplorerAssetDefinitionsPage(
+        ToriiExplorerAssetDefinitionsPage response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAssetDefinitionsPage(response, context);
+    }
+
+    private static void ValidateExplorerAssetDefinition(ToriiExplorerAssetDefinition response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAssetDefinition(response, context);
+    }
+
+    private static void ValidateExplorerAssetDefinitionEconometrics(
+        ToriiExplorerAssetDefinitionEconometrics response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAssetDefinitionEconometrics(response, context);
+    }
+
+    private static void ValidateExplorerVelocityWindow(
+        ToriiExplorerEconometricsVelocityWindow response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerVelocityWindow(response, context);
+    }
+
+    private static void ValidateExplorerIssuanceWindow(
+        ToriiExplorerEconometricsIssuanceWindow response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerIssuanceWindow(response, context);
+    }
+
+    private static void ValidateExplorerIssuanceSeriesPoint(
+        ToriiExplorerEconometricsIssuanceSeriesPoint response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerIssuanceSeriesPoint(response, context);
+    }
+
+    private static void ValidateExplorerAssetDefinitionSnapshot(
+        ToriiExplorerAssetDefinitionSnapshot response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAssetDefinitionSnapshot(response, context);
+    }
+
+    private static void ValidateExplorerTopHolder(ToriiExplorerEconometricsTopHolder response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerTopHolder(response, context);
+    }
+
+    private static void ValidateExplorerDistributionSnapshot(
+        ToriiExplorerEconometricsDistributionSnapshot response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerDistributionSnapshot(response, context);
+    }
+
+    private static void ValidateExplorerLorenzPoint(ToriiExplorerEconometricsLorenzPoint response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerLorenzPoint(response, context);
+    }
+
+    private static void ValidateExplorerAssetsPage(ToriiExplorerAssetsPage response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAssetsPage(response, context);
+    }
+
+    private static void ValidateExplorerAsset(ToriiExplorerAsset response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerAsset(response, context);
+    }
+
+    private static void ValidateExplorerNftsPage(ToriiExplorerNftsPage response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerNftsPage(response, context);
+    }
+
+    private static void ValidateExplorerNft(ToriiExplorerNft response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerNft(response, context);
+    }
+
+    private static void ValidateExplorerRwasPage(ToriiExplorerRwasPage response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerRwasPage(response, context);
+    }
+
+    private static void ValidateExplorerRwa(ToriiExplorerRwa response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerRwa(response, context);
+    }
+
+    private static void ValidateExplorerRwaParent(ToriiExplorerRwaParent response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerRwaParent(response, context);
+    }
+
+    private static void ValidateExplorerHealthSnapshot(ToriiExplorerHealthSnapshot response, string context)
+    {
+        ToriiExplorerSnapshotJson.ValidateExplorerHealthSnapshot(response, context);
+    }
+
+    private static void ValidateExplorerMetricsSnapshot(ToriiExplorerMetricsSnapshot response, string context)
+    {
+        ToriiExplorerSnapshotJson.ValidateExplorerMetricsSnapshot(response, context);
+    }
+
+    private static void ValidateExplorerPagination(ToriiExplorerPaginationMeta? response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerPagination(response, context);
+    }
+
+    private static void ValidateExplorerBlock(ToriiExplorerBlock response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerBlock(response, context);
+    }
+
+    private static void ValidateExplorerTransactionsPage(ToriiExplorerTransactionsPage response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerTransaction);
+    }
+
+    private static void ValidateExplorerLatestTransactionsResponse(
+        ToriiExplorerLatestTransactionsResponse response,
+        string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerTransaction);
+    }
+
+    private static void ValidateExplorerTransaction(ToriiExplorerTransaction response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerTransaction(response, context);
+    }
+
+    private static void ValidateExplorerTransactionDetail(
+        ToriiExplorerTransactionDetail response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerTransactionDetail(response, context);
+    }
+
+    private static void ValidateExplorerTransactionRejection(
+        ToriiExplorerTransactionRejection response,
+        string context)
+    {
+        ToriiExplorerJson.ValidateExplorerTransactionRejection(response, context);
+    }
+
+    private static void ValidateExplorerInstructionsPage(ToriiExplorerInstructionsPage response, string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerInstruction);
+    }
+
+    private static void ValidateExplorerLatestInstructionsResponse(
+        ToriiExplorerLatestInstructionsResponse response,
+        string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerInstruction);
+    }
+
+    private static void ValidateExplorerInstruction(ToriiExplorerInstruction response, string context)
+    {
+        ToriiExplorerJson.ValidateExplorerInstruction(response, context);
+    }
+
+    private static void ValidateExplorerItems<TItem>(
+        IReadOnlyList<TItem>? items,
+        string context,
+        Action<TItem, string> validate)
+        where TItem : class
+    {
+        if (items is null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        for (var index = 0; index < items.Count; index++)
+        {
+            var item = items[index];
+            if (item is null)
+            {
+                throw new JsonException($"{context}[{index}] must not be null.");
+            }
+
+            validate(item, $"{context}[{index}]");
+        }
+    }
+
+    private static void ValidateSoraFsCidLookupResponse(ToriiSoraFsCidLookupResponse response, string context)
+    {
+        ToriiSoraFsJson.ValidateCidLookupResponse(response, context);
+    }
+
+    private static void ValidateSoraFsFileEntry(ToriiSoraFsFileEntry file, string context)
+    {
+        ToriiSoraFsJson.ValidateFileEntry(file, context);
+    }
+
+    private static void ValidateSoraFsDenylistCatalogResponse(
+        ToriiSoraFsDenylistCatalogResponse response,
+        string context)
+    {
+        ToriiSoraFsJson.ValidateDenylistCatalogResponse(response, context);
+    }
+
+    private static void ValidateSoraFsDenylistPackResponse(
+        ToriiSoraFsDenylistPackResponse response,
+        string context)
+    {
+        ToriiSoraFsJson.ValidateDenylistPackResponse(response, context);
+    }
+
+    private static void ValidateSoraFsDenylistPackSummary(
+        ToriiSoraFsDenylistPackSummary response,
+        string context)
+    {
+        ToriiSoraFsJson.ValidateDenylistPackSummary(response, context);
+    }
+
+    private static void ValidateSoraFsDenylistPackFields(
+        string? packId,
+        string? version,
+        string? policyTier,
+        string? manifestCid,
+        string? merkleRoot,
+        string? issuedByProposalId,
+        string? reviewReference,
+        string? jurisdiction,
+        string? issuedAt,
+        string? expiresAt,
+        long entryCount,
+        string context)
+    {
+        ValidateExactNonEmptyText(packId, $"{context}.pack_id", message => new JsonException(message));
+        ValidateOptionalExactNonEmptyText(version, $"{context}.version");
+        ValidateOptionalExactNonEmptyText(policyTier, $"{context}.policy_tier");
+        if (manifestCid is not null)
+        {
+            ValidateSoraFsContentCid(manifestCid, $"{context}.manifest_cid");
+        }
+        ValidateOptionalExactNonEmptyText(merkleRoot, $"{context}.merkle_root");
+        ValidateOptionalExactNonEmptyText(issuedByProposalId, $"{context}.issued_by_proposal_id");
+        ValidateOptionalExactNonEmptyText(reviewReference, $"{context}.review_reference");
+        ValidateOptionalExactNonEmptyText(jurisdiction, $"{context}.jurisdiction");
+        ValidateOptionalExactNonEmptyText(issuedAt, $"{context}.issued_at");
+        ValidateOptionalExactNonEmptyText(expiresAt, $"{context}.expires_at");
+        ValidateNonNegativeInt64(entryCount, $"{context}.entry_count");
+    }
+
+    private static void ValidateSoraFsDenylistTextList(IReadOnlyList<string>? values, string context)
+    {
+        if (values is null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            ValidateExactNonEmptyText(values[index], $"{context}[{index}]", message => new JsonException(message));
+        }
+    }
+
+    private static void ValidateSoraFsContentCid(string? value, string field)
+    {
+        ValidateExactNonEmptyText(value, field, message => new JsonException(message));
+        var text = value ?? throw new JsonException($"{field} must not be null.");
+
+        if (text.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (text[0] != 'b' || text.Length == 1)
+        {
+            throw new JsonException($"{field} must be lowercase multibase base32 CID text.");
+        }
+
+        for (var index = 1; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (character is not (>= 'a' and <= 'z') and not (>= '2' and <= '7'))
+            {
+                throw new JsonException($"{field} must be lowercase multibase base32 CID text.");
+            }
+        }
+    }
+
+    private static string? ReadSoraFsContentCidHeader(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("sora-content-cid", out var values))
+        {
+            return null;
+        }
+
+        var contentCids = values.ToArray();
+        if (contentCids.Length != 1)
+        {
+            throw new JsonException("SoraFS content response.sora-content-cid must appear exactly once.");
+        }
+
+        ValidateSoraFsContentCid(contentCids[0], "SoraFS content response.sora-content-cid");
+        return contentCids[0];
+    }
+
+    private static void ValidateSoraFsPathText(string? value, string field)
+    {
+        ValidateExactNonEmptyText(value, field, message => new JsonException(message));
+    }
+
+    private static void ValidateOptionalExactNonEmptyText(string? value, string field)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        ValidateExactNonEmptyText(value, field, message => new JsonException(message));
+    }
+
+    private static void ValidateExactTokenText(string? value, string field)
+    {
+        ValidateExactNonEmptyText(value, field, message => new JsonException(message));
+        var text = value ?? throw new JsonException($"{field} must not be null.");
+        if (text.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+    }
+
+    private static void ValidateExactUniqueTokenList(
+        IReadOnlyList<string>? values,
+        string field,
+        bool requireNonEmpty = false)
+    {
+        if (values is null)
+        {
+            throw new JsonException($"{field} must not be null.");
+        }
+
+        if (requireNonEmpty && values.Count == 0)
+        {
+            throw new JsonException($"{field} must not be empty.");
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < values.Count; index++)
+        {
+            var itemField = $"{field}[{index}]";
+            var value = values[index];
+            ValidateExactTokenText(value, itemField);
+            if (!seen.Add(value))
+            {
+                throw new JsonException($"{itemField} must not contain duplicate capability labels.");
+            }
+        }
+    }
+
+    private static void ValidateExactTokenSequence(
+        IReadOnlyList<string>? values,
+        IReadOnlyList<string> expected,
+        string field)
+    {
+        if (values is null)
+        {
+            throw new JsonException($"{field} must not be null.");
+        }
+
+        if (values.Count != expected.Count)
+        {
+            throw new JsonException($"{field} must match the expected projection metadata key list.");
+        }
+
+        for (var index = 0; index < values.Count; index++)
+        {
+            var itemField = $"{field}[{index}]";
+            ValidateExactTokenText(values[index], itemField);
+            if (!string.Equals(values[index], expected[index], StringComparison.Ordinal))
+            {
+                throw new JsonException($"{itemField} must match the expected projection metadata key.");
+            }
+        }
+    }
+
+    private static void ValidateExactTokenValue(string value, string expected, string field)
+    {
+        if (!string.Equals(value, expected, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must be {expected}.");
+        }
+    }
+
+    private static void ValidateOptionalExactTokenText(string? value, string field)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        ValidateExactTokenText(value, field);
+    }
+
+    private static void ValidateOptionalCanonicalNonNegativeNumericText(string? value, string field)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        ValidateCanonicalNonNegativeNumericText(value, field);
+    }
+
+    private static void ValidateCanonicalNonNegativeNumericText(string? value, string field)
+    {
+        ValidateExactNonEmptyText(value, field, message => new JsonException(message));
+
+        var text = value ?? throw new JsonException($"{field} must not be null.");
+        if (text[0] == '+' || text[0] == '-')
+        {
+            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
+        }
+
+        var separator = text.IndexOf('.', StringComparison.Ordinal);
+        var integerPart = separator < 0 ? text : text[..separator];
+        var fractionalPart = separator < 0 ? string.Empty : text[(separator + 1)..];
+        if (integerPart.Length == 0 || integerPart.Any(static character => character is < '0' or > '9'))
+        {
+            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
+        }
+        if (integerPart.Length > 1 && integerPart[0] == '0')
+        {
+            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
+        }
+        if (separator >= 0)
+        {
+            if (fractionalPart.Length == 0
+                || fractionalPart.Length > 28
+                || fractionalPart.Any(static character => character is < '0' or > '9')
+                || fractionalPart[^1] == '0')
+            {
+                throw new JsonException($"{field} must be a canonical non-negative numeric string.");
+            }
+        }
+    }
+
+    private static void ValidateNonNegativeInt32(int value, string field)
+    {
+        if (value < 0)
+        {
+            throw new JsonException($"{field} must be non-negative.");
+        }
+    }
+
+    private static void ValidateAbiVersionV1(int value, string field)
+    {
+        ValidateNonNegativeInt32(value, field);
+        if (value != 1)
+        {
+            throw new JsonException($"{field} must be 1.");
+        }
+    }
+
+    private static void ValidatePositiveInt32(int value, string field)
+    {
+        if (value <= 0)
+        {
+            throw new JsonException($"{field} must be positive.");
+        }
+    }
+
+    private static void ValidateExactInt32(int value, int expected, string field)
+    {
+        if (value != expected)
+        {
+            throw new JsonException($"{field} must be {expected}.");
+        }
+    }
+
+    private static void ValidateNonNegativeInt64(long value, string field)
+    {
+        if (value < 0)
+        {
+            throw new JsonException($"{field} must be non-negative.");
+        }
+    }
+
+    private static void ValidateFiniteNonNegativeDouble(double value, string field)
+    {
+        if (!double.IsFinite(value) || value < 0)
+        {
+            throw new JsonException($"{field} must be a finite non-negative number.");
+        }
+    }
+
+    private static void ValidateFiniteUnitIntervalDouble(double value, string field)
+    {
+        if (!double.IsFinite(value) || value < 0 || value > 1)
+        {
+            throw new JsonException($"{field} must be a finite number from 0 to 1.");
+        }
     }
 
     private static void ValidateIdentifierResolveRequest(ToriiIdentifierResolveRequest request)
@@ -1699,8 +3774,8 @@ public sealed class ToriiClient : IDisposable
                 execution,
                 "associated_data_hash",
                 $"{context}.execution.associated_data_hash");
-            ValidateOptionalUnsignedInteger(execution, "executed_at_ms", $"{context}.execution.executed_at_ms");
-            ValidateOptionalUnsignedInteger(execution, "expires_at_ms", $"{context}.execution.expires_at_ms");
+            ValidateOptionalPositiveUnsignedInteger(execution, "executed_at_ms", $"{context}.execution.executed_at_ms");
+            ValidateOptionalPositiveUnsignedInteger(execution, "expires_at_ms", $"{context}.execution.expires_at_ms");
         }
 
         if (TryGetOptionalJsonObject(payload, "opening", $"{context}.opening", out var opening)
@@ -1730,11 +3805,11 @@ public sealed class ToriiClient : IDisposable
                 openingPayload,
                 "opened_output_hash",
                 $"{context}.opening.payload.opened_output_hash");
-            ValidateOptionalUnsignedInteger(
+            ValidateOptionalPositiveUnsignedInteger(
                 openingPayload,
                 "opened_at_ms",
                 $"{context}.opening.payload.opened_at_ms");
-            ValidateOptionalUnsignedInteger(
+            ValidateOptionalPositiveUnsignedInteger(
                 openingPayload,
                 "expires_at_ms",
                 $"{context}.opening.payload.expires_at_ms");
@@ -1875,6 +3950,11 @@ public sealed class ToriiClient : IDisposable
             throw createException($"{field} must not contain surrounding whitespace.");
         }
 
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw createException($"{field} must not contain whitespace.");
+        }
+
         if (ContainsControlCharacter(value))
         {
             throw createException($"{field} must not contain control characters.");
@@ -1950,10 +4030,10 @@ public sealed class ToriiClient : IDisposable
             {
                 throw new JsonException($"{context} must be non-negative.");
             }
-            if (text.Length == 0
+            if (!ToriiIdentifierJson.IsCanonicalUnsignedDecimalText(text)
                 || !ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out _))
             {
-                throw new JsonException($"{context} must be an unsigned integer.");
+                throw new JsonException($"{context} must be canonical unsigned decimal text.");
             }
             return;
         }
@@ -1973,6 +4053,49 @@ public sealed class ToriiClient : IDisposable
         }
 
         throw new JsonException($"{context} must be an unsigned integer.");
+    }
+
+    private static void ValidateOptionalPositiveUnsignedInteger(
+        JsonObject payload,
+        string propertyName,
+        string context)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var value) || value is null)
+        {
+            return;
+        }
+
+        ValidateOptionalUnsignedInteger(payload, propertyName, context);
+
+        if (value is not JsonValue jsonValue)
+        {
+            return;
+        }
+
+        if (jsonValue.TryGetValue<string>(out var text))
+        {
+            if (text == "0")
+            {
+                throw new JsonException($"{context} must be positive.");
+            }
+
+            return;
+        }
+
+        if (jsonValue.TryGetValue<long>(out var signedInteger))
+        {
+            if (signedInteger == 0)
+            {
+                throw new JsonException($"{context} must be positive.");
+            }
+
+            return;
+        }
+
+        if (jsonValue.TryGetValue<ulong>(out var unsignedInteger) && unsignedInteger == 0)
+        {
+            throw new JsonException($"{context} must be positive.");
+        }
     }
 
     private static string RequireExactJsonStringProperty(JsonObject payload, string propertyName, string context)
@@ -1998,6 +4121,11 @@ public sealed class ToriiClient : IDisposable
             throw new JsonException($"{context} must not contain surrounding whitespace.");
         }
 
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{context} must not contain whitespace.");
+        }
+
         if (ContainsControlCharacter(value))
         {
             throw new JsonException($"{context} must not contain control characters.");
@@ -2016,17 +4144,60 @@ public sealed class ToriiClient : IDisposable
             }
         }
 
+        byte[] bytes;
         try
         {
-            if (Convert.FromBase64String(value).Length == 0)
-            {
-                throw new JsonException($"{field} must not decode to empty bytes.");
-            }
+            bytes = Convert.FromBase64String(value);
         }
         catch (FormatException ex)
         {
             throw new JsonException($"{field} must be valid base64.", ex);
         }
+
+        if (bytes.Length == 0)
+        {
+            throw new JsonException($"{field} must not decode to empty bytes.");
+        }
+
+        if (!string.Equals(Convert.ToBase64String(bytes), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must be canonical base64 text.");
+        }
+    }
+
+    private static byte[] DecodeExactBase64AllowEmpty(string value, string field)
+    {
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(value);
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException($"{field} must be valid base64.", error);
+        }
+
+        if (!string.Equals(Convert.ToBase64String(bytes), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must be canonical base64 text.");
+        }
+
+        return bytes;
     }
 
     private static string RequireJsonStringForJson(JsonNode? node, string context)
@@ -2051,13 +4222,137 @@ public sealed class ToriiClient : IDisposable
             throw new JsonException($"{field} must not contain surrounding whitespace.");
         }
 
-        var body = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
+        }
+
+        var body = value.StartsWith("0x", StringComparison.Ordinal)
             ? value[2..]
             : value;
         if (body.Length == 0 || body.Length % 2 != 0 || !IsHex(body))
         {
             throw new JsonException($"{field} must be an exact hex string.");
         }
+    }
+
+    private static void ValidateExactSizedHex(string? value, string field, int expectedBytes)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{field} must be a non-empty {expectedBytes}-byte hex string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
+        }
+
+        if (value.Length != expectedBytes * 2 || !IsLowercaseHex(value))
+        {
+            throw new JsonException($"{field} must be an exact lowercase {expectedBytes}-byte hex string.");
+        }
+    }
+
+    private static void ValidateExactLowercaseHexChars(string? value, string field, int expectedChars)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{field} must be a non-empty {expectedChars}-character lowercase hex string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
+        }
+
+        if (value.Length != expectedChars || !IsLowercaseHex(value))
+        {
+            throw new JsonException($"{field} must be a {expectedChars}-character lowercase hex string.");
+        }
+    }
+
+    private static void ValidateOptionalExactSizedHex(string? value, string field, int expectedBytes)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        ValidateExactSizedHex(value, field, expectedBytes);
+    }
+
+    private static void ValidateOptionalExactSizedHexOrEmpty(string? value, string field, int expectedBytes)
+    {
+        if (value is null || value.Length == 0)
+        {
+            return;
+        }
+
+        ValidateExactSizedHex(value, field, expectedBytes);
+    }
+
+    private static void ValidateExactEvenLengthHex(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{field} must be a non-empty even-length hex string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
+        }
+
+        if (value.Length % 2 != 0 || !IsLowercaseHex(value))
+        {
+            throw new JsonException($"{field} must be an exact lowercase even-length hex string.");
+        }
+    }
+
+    private static void ValidateOptionalTransactionHashHex(string? value, string field)
+    {
+        if (value is null || value.Length == 0)
+        {
+            return;
+        }
+
+        ValidateExactSizedHex(value, field, 32);
     }
 
     private static void ValidateOptionalBase64(string? value, string field)
@@ -2067,22 +4362,44 @@ public sealed class ToriiClient : IDisposable
             return;
         }
 
-        var trimmed = value.Trim();
-        if (trimmed.Length == 0)
+        if (string.IsNullOrWhiteSpace(value))
         {
             throw new JsonException($"{field} must be a non-empty base64 string.");
         }
 
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
+        }
+
+        byte[] bytes;
         try
         {
-            if (Convert.FromBase64String(trimmed).Length == 0)
-            {
-                throw new JsonException($"{field} must not decode to empty bytes.");
-            }
+            bytes = Convert.FromBase64String(value);
         }
         catch (FormatException ex)
         {
             throw new JsonException($"{field} must be valid base64.", ex);
+        }
+
+        if (bytes.Length == 0)
+        {
+            throw new JsonException($"{field} must not decode to empty bytes.");
+        }
+
+        if (!string.Equals(Convert.ToBase64String(bytes), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must be canonical base64 text.");
         }
     }
 
@@ -2090,15 +4407,43 @@ public sealed class ToriiClient : IDisposable
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        var responseBody = response.Content is null
-            ? null
-            : await response.Content.ReadAsStringAsync(cancellationToken);
+        string? responseBody = null;
+        if (response.Content is not null)
+        {
+            try
+            {
+                responseBody = await ReadStrictUtf8TextContentAsync(
+                    response.Content,
+                    "Torii error response body",
+                    cancellationToken);
+            }
+            catch (InvalidDataException)
+            {
+                responseBody = InvalidUtf8ResponseBody;
+            }
+        }
 
         return new ToriiApiException(
             response.StatusCode,
             response.RequestMessage?.RequestUri,
             responseBody,
             response.ReasonPhrase);
+    }
+
+    private static async Task<string> ReadStrictUtf8TextContentAsync(
+        HttpContent content,
+        string context,
+        CancellationToken cancellationToken)
+    {
+        var bytes = await content.ReadAsByteArrayAsync(cancellationToken);
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new InvalidDataException($"{context} must be valid UTF-8.", exception);
+        }
     }
 
     private Task<HttpResponseMessage> OpenSseAsync(
@@ -2115,9 +4460,10 @@ public sealed class ToriiClient : IDisposable
             accept: "text/event-stream",
             configureRequest: request =>
             {
-                if (!string.IsNullOrWhiteSpace(lastEventId))
+                var exactLastEventId = NormalizeOptionalExactHeaderValue(lastEventId, nameof(lastEventId));
+                if (!string.IsNullOrEmpty(exactLastEventId))
                 {
-                    request.Headers.TryAddWithoutValidation("Last-Event-ID", lastEventId.Trim());
+                    request.Headers.TryAddWithoutValidation("Last-Event-ID", exactLastEventId);
                 }
             },
             cancellationToken: cancellationToken);
@@ -2126,6 +4472,7 @@ public sealed class ToriiClient : IDisposable
     private async IAsyncEnumerable<TResponse> StreamSsePayloadsAsync<TResponse>(
         string path,
         JsonTypeInfo<TResponse> jsonTypeInfo,
+        Action<TResponse>? validate = null,
         string? query = null,
         string? lastEventId = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -2135,16 +4482,20 @@ public sealed class ToriiClient : IDisposable
 
         await foreach (var sseEvent in ReadServerSentEventsAsync(stream, cancellationToken))
         {
-            if (sseEvent.IsComment || sseEvent.JsonData is null)
+            if (sseEvent.IsComment || sseEvent.RawData is null)
             {
                 continue;
             }
 
-            var payload = JsonSerializer.Deserialize(sseEvent.JsonData, jsonTypeInfo);
-            if (payload is not null)
+            var payloadContext = $"{path} SSE payload";
+            var payload = JsonSerializer.Deserialize(RequireSseJsonData(sseEvent, payloadContext), jsonTypeInfo);
+            if (payload is null)
             {
-                yield return payload;
+                throw new JsonException($"{payloadContext} must not deserialize to null.");
             }
+
+            validate?.Invoke(payload);
+            yield return payload;
         }
     }
 
@@ -2205,8 +4556,146 @@ public sealed class ToriiClient : IDisposable
 
     private static string DecodeQueryComponent(string value)
     {
-        return Uri.UnescapeDataString(value.Replace("+", " ", StringComparison.Ordinal));
+        var decoded = DecodeQueryText(
+            value,
+            nameof(value),
+            "event SSE query components must contain valid percent escapes.",
+            "event SSE query components must contain valid UTF-8 percent-encoded bytes.");
+        if (decoded.Any(char.IsControl))
+        {
+            throw new ArgumentException("event SSE query components must not contain control characters.", nameof(value));
+        }
+
+        return decoded;
     }
+
+    private static string DecodeQueryText(
+        string value,
+        string paramName,
+        string invalidPercentMessage,
+        string invalidUtf8Message)
+    {
+        ValidateQueryPercentEscapes(value, paramName, invalidPercentMessage);
+        var builder = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length;)
+        {
+            if (value[index] == '+')
+            {
+                builder.Append(' ');
+                index++;
+                continue;
+            }
+
+            if (value[index] != '%')
+            {
+                builder.Append(value[index]);
+                index++;
+                continue;
+            }
+
+            var bytes = new List<byte>();
+            while (index < value.Length && value[index] == '%')
+            {
+                bytes.Add((byte)((HexValue(value[index + 1]) << 4) | HexValue(value[index + 2])));
+                index += 3;
+            }
+
+            try
+            {
+                builder.Append(StrictUtf8.GetString(bytes.ToArray()));
+            }
+            catch (DecoderFallbackException exception)
+            {
+                throw new ArgumentException(invalidUtf8Message, paramName, exception);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static string DecodePercentEncodedPathSegment(string value, string paramName)
+    {
+        var builder = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length;)
+        {
+            if (value[index] != '%')
+            {
+                builder.Append(value[index]);
+                index++;
+                continue;
+            }
+
+            var bytes = new List<byte>();
+            while (index < value.Length && value[index] == '%')
+            {
+                bytes.Add((byte)((HexValue(value[index + 1]) << 4) | HexValue(value[index + 2])));
+                index += 3;
+            }
+
+            try
+            {
+                builder.Append(StrictUtf8.GetString(bytes.ToArray()));
+            }
+            catch (DecoderFallbackException exception)
+            {
+                throw new ArgumentException(
+                    $"{paramName} path segments must contain valid UTF-8 percent-encoded bytes.",
+                    paramName,
+                    exception);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static void ValidateQueryPercentEscapes(string value, string paramName, string message)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] != '%')
+            {
+                continue;
+            }
+
+            if (index + 2 >= value.Length
+                || !Uri.IsHexDigit(value[index + 1])
+                || !Uri.IsHexDigit(value[index + 2]))
+            {
+                throw new ArgumentException(message, paramName);
+            }
+
+            index += 2;
+        }
+    }
+
+    private static void ValidatePathPercentEscapes(string value, string paramName)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] != '%')
+            {
+                continue;
+            }
+
+            if (index + 2 >= value.Length
+                || !Uri.IsHexDigit(value[index + 1])
+                || !Uri.IsHexDigit(value[index + 2]))
+            {
+                throw new ArgumentException($"{paramName} must contain valid percent escapes.", paramName);
+            }
+
+            index += 2;
+        }
+    }
+
+    private static int HexValue(char value)
+        => value switch
+        {
+            >= '0' and <= '9' => value - '0',
+            >= 'A' and <= 'F' => value - 'A' + 10,
+            >= 'a' and <= 'f' => value - 'a' + 10,
+            _ => throw new ArgumentException("query components must contain valid percent escapes."),
+        };
 
     private static string NormalizeEventFilterPayload(string filter, string context)
     {
@@ -2216,14 +4705,23 @@ public sealed class ToriiClient : IDisposable
             return filter;
         }
 
+        if (!string.Equals(trimmed, filter, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{context} must not contain surrounding whitespace.", context);
+        }
+
         JsonNode? node;
         try
         {
-            node = JsonNode.Parse(trimmed);
+            node = ToriiIdentifierJson.ParseNodeRejectingDuplicateProperties(filter, context);
         }
-        catch (JsonException)
+        catch (JsonException exception) when (ToriiIdentifierJson.IsDuplicatePropertyError(exception))
         {
-            return filter;
+            throw new ArgumentException(exception.Message, context, exception);
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException($"{context} must be valid JSON.", context, exception);
         }
 
         if (node is not JsonObject obj)
@@ -2231,13 +4729,12 @@ public sealed class ToriiClient : IDisposable
             return filter;
         }
 
-        var changed = NormalizeProductionEventFilterObject(obj, context);
-        return changed ? obj.ToJsonString() : filter;
+        ValidateProductionEventFilterObject(obj, context);
+        return filter;
     }
 
-    private static bool NormalizeProductionEventFilterObject(JsonObject filter, string context)
+    private static void ValidateProductionEventFilterObject(JsonObject filter, string context)
     {
-        var changed = false;
         foreach (var eventKind in new[] { "VerifyingKey", "Proof" })
         {
             if (filter[eventKind] is not JsonObject body
@@ -2253,76 +4750,74 @@ public sealed class ToriiClient : IDisposable
                 $"{context}.{eventKind}.id_matcher.backend");
             if (!string.Equals(normalizedBackend, backend, StringComparison.Ordinal))
             {
-                matcher["backend"] = normalizedBackend;
-                changed = true;
+                throw new ArgumentException(
+                    $"{context}.{eventKind}.id_matcher.backend must use exact production verifier backend text.",
+                    $"{context}.{eventKind}.id_matcher.backend");
             }
 
             if (string.Equals(eventKind, "Proof", StringComparison.Ordinal))
             {
-                changed |= NormalizeProofHashMatcher(
+                ValidateProofHashMatcher(
                     matcher,
                     "hash_hex",
                     $"{context}.{eventKind}.id_matcher.hash_hex");
-                changed |= NormalizeProofHashMatcher(
+                ValidateProofHashMatcher(
                     matcher,
                     "proof_hash_hex",
                     $"{context}.{eventKind}.id_matcher.proof_hash_hex");
             }
             else
             {
-                changed |= NormalizeVerifyingKeyNameMatcher(
+                ValidateVerifyingKeyNameMatcher(
                     matcher,
                     $"{context}.{eventKind}.id_matcher.name");
             }
         }
-
-        return changed;
     }
 
-    private static bool NormalizeVerifyingKeyNameMatcher(JsonObject matcher, string context)
+    private static void ValidateVerifyingKeyNameMatcher(JsonObject matcher, string context)
     {
         if (!matcher.TryGetPropertyValue("name", out var node))
         {
-            return false;
+            return;
         }
 
         var raw = RequireJsonString(node, context);
-        var normalized = raw.Trim();
-        if (normalized.Length == 0)
+        if (string.IsNullOrWhiteSpace(raw))
         {
             throw new ArgumentException($"{context} must be a non-empty string.", context);
         }
 
-        if (normalized.Contains(':', StringComparison.Ordinal))
+        if (!string.Equals(raw.Trim(), raw, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{context} must not contain surrounding whitespace.", context);
+        }
+
+        if (raw.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException($"{context} must not contain whitespace.", context);
+        }
+
+        if (ContainsControlCharacter(raw))
+        {
+            throw new ArgumentException($"{context} must not contain control characters.", context);
+        }
+
+        if (raw.Contains(':', StringComparison.Ordinal))
         {
             throw new ArgumentException($"{context} must not contain ':' characters.", context);
         }
-
-        if (string.Equals(raw, normalized, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        matcher["name"] = normalized;
-        return true;
     }
 
-    private static bool NormalizeProofHashMatcher(JsonObject matcher, string propertyName, string context)
+    private static void ValidateProofHashMatcher(JsonObject matcher, string propertyName, string context)
     {
         if (!matcher.TryGetPropertyValue(propertyName, out var node))
         {
-            return false;
+            return;
         }
 
         var raw = RequireJsonString(node, context);
-        var normalized = NormalizeHex32String(raw, context);
-        if (string.Equals(raw, normalized, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        matcher[propertyName] = normalized;
-        return true;
+        RequireExactHex32String(raw, context);
     }
 
     private static string RequireJsonString(JsonNode? node, string context)
@@ -2335,20 +4830,32 @@ public sealed class ToriiClient : IDisposable
         throw new ArgumentException($"{context} must be a string.", context);
     }
 
-    private static string NormalizeHex32String(string raw, string context)
+    private static void RequireExactHex32String(string raw, string context)
     {
-        var normalized = raw.Trim().ToLowerInvariant();
-        if (normalized.StartsWith("0x", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(raw))
         {
-            normalized = normalized[2..];
+            throw new ArgumentException($"{context} must be a non-empty 32-byte hex string.", context);
         }
 
-        if (normalized.Length != 64 || !IsLowerHex(normalized))
+        if (!string.Equals(raw.Trim(), raw, StringComparison.Ordinal))
         {
-            throw new ArgumentException($"{context} must be a 32-byte hex string.", context);
+            throw new ArgumentException($"{context} must not contain surrounding whitespace.", context);
         }
 
-        return normalized;
+        if (raw.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException($"{context} must not contain whitespace.", context);
+        }
+
+        if (ContainsControlCharacter(raw))
+        {
+            throw new ArgumentException($"{context} must not contain control characters.", context);
+        }
+
+        if (raw.Length != 64 || !IsLowerHex(raw))
+        {
+            throw new ArgumentException($"{context} must be a lowercase 32-byte hex string without 0x prefix.", context);
+        }
     }
 
     private static bool IsLowerHex(string value)
@@ -2449,11 +4956,13 @@ public sealed class ToriiClient : IDisposable
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("contains", NormalizeOptionalValue(query.Contains)),
-            new KeyValuePair<string, string?>("hash_prefix", NormalizeOptionalValue(query.HashPrefix)),
+            new KeyValuePair<string, string?>("contains", NormalizeOptionalExactValue(query.Contains, nameof(query.Contains))),
+            new KeyValuePair<string, string?>("hash_prefix", NormalizeOptionalExactHexPrefix(query.HashPrefix, nameof(query.HashPrefix))),
             new KeyValuePair<string, string?>("offset", query.Offset?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("order", NormalizeOptionalValue(query.Order)),
+            new KeyValuePair<string, string?>(
+                "limit",
+                NormalizeOptionalPositiveUInt64(query.Limit, nameof(query.Limit))?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("order", NormalizeOptionalExactValue(query.Order, nameof(query.Order))),
         ]);
     }
 
@@ -2461,30 +4970,40 @@ public sealed class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var hasPath = !string.IsNullOrWhiteSpace(query.Path);
-        var normalizedPaths = query.Paths?
-            .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Select(static value => value.Trim())
-            .ToArray();
+        var normalizedPath = query.Path is null
+            ? null
+            : NormalizeExactValue(query.Path, nameof(query.Path));
+        var normalizedPrefix = query.Prefix is null
+            ? null
+            : NormalizeExactValue(query.Prefix, nameof(query.Prefix));
+        var normalizedPaths = NormalizeOptionalExactPathList(query.Paths, nameof(query.Paths));
+
+        var hasPath = normalizedPath is not null;
         var hasPaths = normalizedPaths is { Length: > 0 };
-        var hasPrefix = !string.IsNullOrWhiteSpace(query.Prefix);
+        var hasPrefix = normalizedPrefix is not null;
         var modeCount = (hasPath ? 1 : 0) + (hasPaths ? 1 : 0) + (hasPrefix ? 1 : 0);
         if (modeCount != 1)
         {
             throw new ArgumentException("Exactly one of Path, Paths, or Prefix must be provided.", nameof(query));
         }
 
+        var encodedPaths = normalizedPaths is { Length: > 0 } paths
+            ? string.Join(',', paths)
+            : null;
+
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("path", hasPath ? NormalizeRequiredValue(query.Path, nameof(query.Path)) : null),
-            new KeyValuePair<string, string?>("paths", hasPaths ? string.Join(',', normalizedPaths!) : null),
-            new KeyValuePair<string, string?>("prefix", hasPrefix ? NormalizeRequiredValue(query.Prefix, nameof(query.Prefix)) : null),
+            new KeyValuePair<string, string?>("path", normalizedPath),
+            new KeyValuePair<string, string?>("paths", encodedPaths),
+            new KeyValuePair<string, string?>("prefix", normalizedPrefix),
             new KeyValuePair<string, string?>(
                 "include_value",
                 query.IncludeValue.HasValue ? query.IncludeValue.Value.ToString().ToLowerInvariant() : null),
             new KeyValuePair<string, string?>("offset", query.Offset?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("decode", NormalizeOptionalValue(query.Decode)),
+            new KeyValuePair<string, string?>(
+                "limit",
+                NormalizeOptionalPositiveUInt64(query.Limit, nameof(query.Limit))?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("decode", NormalizeOptionalExactValue(query.Decode, nameof(query.Decode))),
         ]);
     }
 
@@ -2517,8 +5036,8 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalValue(query.Domain)),
-            new KeyValuePair<string, string?>("with_asset", NormalizeOptionalValue(query.WithAsset)),
+            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
+            new KeyValuePair<string, string?>("with_asset", NormalizeOptionalExactValue(query.WithAsset, nameof(query.WithAsset))),
         ]);
     }
 
@@ -2535,7 +5054,7 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalValue(query.OwnedBy)),
+            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
         ]);
     }
 
@@ -2552,8 +5071,8 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalValue(query.Domain)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalValue(query.OwnedBy)),
+            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
+            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
         ]);
     }
 
@@ -2570,9 +5089,9 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalValue(query.OwnedBy)),
-            new KeyValuePair<string, string?>("definition", NormalizeOptionalValue(query.Definition)),
-            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalValue(query.AssetId)),
+            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
+            new KeyValuePair<string, string?>("definition", NormalizeOptionalExactValue(query.Definition, nameof(query.Definition))),
+            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
         ]);
     }
 
@@ -2589,8 +5108,8 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalValue(query.OwnedBy)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalValue(query.Domain)),
+            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
+            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
         ]);
     }
 
@@ -2607,8 +5126,8 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalValue(query.OwnedBy)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalValue(query.Domain)),
+            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
+            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
         ]);
     }
 
@@ -2625,12 +5144,12 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("authority", NormalizeOptionalValue(query.Authority)),
+            new KeyValuePair<string, string?>("authority", NormalizeOptionalAccountId(query.Authority, nameof(query.Authority))),
             new KeyValuePair<string, string?>("block", query.Block?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>(
                 "status",
                 query.Status is null ? null : FormatExplorerTransactionStatusFilter(query.Status.Value)),
-            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalValue(query.AssetId)),
+            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
         ]);
     }
 
@@ -2647,15 +5166,15 @@ public sealed class ToriiClient : IDisposable
         [
             new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("authority", NormalizeOptionalValue(query.Authority)),
-            new KeyValuePair<string, string?>("account", NormalizeOptionalValue(query.Account)),
-            new KeyValuePair<string, string?>("transaction_hash", NormalizeOptionalValue(query.TransactionHash)),
+            new KeyValuePair<string, string?>("authority", NormalizeOptionalAccountId(query.Authority, nameof(query.Authority))),
+            new KeyValuePair<string, string?>("account", NormalizeOptionalAccountId(query.Account, nameof(query.Account))),
+            new KeyValuePair<string, string?>("transaction_hash", NormalizeOptionalExactValue(query.TransactionHash, nameof(query.TransactionHash))),
             new KeyValuePair<string, string?>(
                 "transaction_status",
                 query.TransactionStatus is null ? null : FormatExplorerTransactionStatusFilter(query.TransactionStatus.Value)),
             new KeyValuePair<string, string?>("block", query.Block?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("kind", NormalizeOptionalValue(query.Kind)),
-            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalValue(query.AssetId)),
+            new KeyValuePair<string, string?>("kind", NormalizeOptionalExactValue(query.Kind, nameof(query.Kind))),
+            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
         ]);
     }
 
@@ -2679,6 +5198,429 @@ public sealed class ToriiClient : IDisposable
         return new StringContent(json, Encoding.UTF8, "application/json");
     }
 
+    private static ToriiAccountOnboardingRequest NormalizeAccountOnboardingRequest(
+        ToriiAccountOnboardingRequest request)
+    {
+        var accountId = request.AccountId is null
+            ? null
+            : ToriiAccountFaucetPow.RequireExactAccountId(request.AccountId, nameof(request.AccountId));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(
+            request.PublicKeyHex,
+            nameof(request.PublicKeyHex),
+            32);
+        if (accountId is null && publicKeyHex is null)
+        {
+            throw new ArgumentException(
+                "Provide either account_id or public_key_hex.",
+                nameof(request.AccountId));
+        }
+        if (accountId is not null && publicKeyHex is not null)
+        {
+            throw new ArgumentException(
+                "Provide exactly one of account_id or public_key_hex.",
+                nameof(request.AccountId));
+        }
+        if (request.Identity is not null)
+        {
+            throw new ArgumentException(
+                "Raw identity metadata is not accepted; provide identity_commitment_hex.",
+                nameof(request.Identity));
+        }
+
+        var permissions = NormalizeExactStringList(
+            request.Permissions,
+            nameof(request.Permissions),
+            allowEmpty: true);
+
+        return request with
+        {
+            Alias = NormalizeExactValue(request.Alias, nameof(request.Alias)),
+            AccountId = accountId,
+            PublicKeyHex = publicKeyHex,
+            Identity = null,
+            IdentityCommitmentHex = NormalizeOptionalExactSizedHex(
+                request.IdentityCommitmentHex,
+                nameof(request.IdentityCommitmentHex),
+                32),
+            Uaid = NormalizeUaidLiteral(request.Uaid, nameof(request.Uaid)),
+            Permissions = permissions,
+        };
+    }
+
+    private static ToriiMultisigAccountOnboardingRequest NormalizeMultisigAccountOnboardingRequest(
+        ToriiMultisigAccountOnboardingRequest request)
+    {
+        if (request.RequiredSigners == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.RequiredSigners),
+                "Required signers must be positive.");
+        }
+
+        var memberAccountIds = NormalizeAccountIdList(
+            request.MemberAccountIds,
+            nameof(request.MemberAccountIds),
+            allowEmpty: false);
+        var memberWeights = request.MemberWeights
+            ?? throw new ArgumentException(
+                "Member weights cannot be null.",
+                nameof(request.MemberWeights));
+
+        if (memberWeights.Count != memberAccountIds.Count)
+        {
+            throw new ArgumentException(
+                "Member weights count must match member account ids count.",
+                nameof(request.MemberWeights));
+        }
+        if (memberWeights.Any(weight => weight == 0))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.MemberWeights),
+                "Member weights must be positive.");
+        }
+        if (request.RequiredSigners > memberWeights.Aggregate(0, (total, weight) => total + weight))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.RequiredSigners),
+                "Required signers must not exceed total member weight.");
+        }
+        if (request.TransactionTtlMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.TransactionTtlMilliseconds),
+                "Transaction TTL must be positive when provided.");
+        }
+
+        return request with
+        {
+            Alias = NormalizeExactValue(request.Alias, nameof(request.Alias)),
+            MemberAccountIds = memberAccountIds,
+            MemberWeights = memberWeights.ToArray(),
+        };
+    }
+
+    private static ToriiAccountFaucetRequest NormalizeAccountFaucetRequest(
+        ToriiAccountFaucetRequest request)
+    {
+        var accountId = ToriiAccountFaucetPow.RequireExactAccountId(
+            request.AccountId,
+            nameof(request.AccountId));
+
+        string? nonceHex = null;
+        if (request.PowNonceHex is not null)
+        {
+            nonceHex = ToriiAccountFaucetPow.RequireExactHex(
+                request.PowNonceHex,
+                nameof(request.PowNonceHex));
+            if (nonceHex.Length > 64)
+            {
+                throw new ArgumentException(
+                    "Faucet PoW nonce must not exceed 32 bytes.",
+                    nameof(request.PowNonceHex));
+            }
+        }
+
+        if (request.PowAnchorHeight is null)
+        {
+            if (nonceHex is not null)
+            {
+                throw new ArgumentException(
+                    "Faucet PoW nonce requires an anchor height.",
+                    nameof(request.PowNonceHex));
+            }
+        }
+        else
+        {
+            if (request.PowAnchorHeight.Value == 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.PowAnchorHeight),
+                    "Faucet PoW anchor height must be positive.");
+            }
+            if (nonceHex is null)
+            {
+                throw new ArgumentException(
+                    "Faucet PoW anchor height requires a nonce.",
+                    nameof(request.PowAnchorHeight));
+            }
+        }
+
+        return new ToriiAccountFaucetRequest
+        {
+            AccountId = accountId,
+            PowAnchorHeight = request.PowAnchorHeight,
+            PowNonceHex = nonceHex,
+        };
+    }
+
+    private static ToriiVpnQuoteCreateRequest NormalizeVpnQuoteCreateRequest(
+        ToriiVpnQuoteCreateRequest request)
+    {
+        return request with
+        {
+            ExitClass = NormalizeOptionalVpnExitClass(request.ExitClass, nameof(request.ExitClass)),
+            MeteringPublicKeyHex = NormalizeExactSizedHex(
+                request.MeteringPublicKeyHex,
+                nameof(request.MeteringPublicKeyHex),
+                32),
+        };
+    }
+
+    private static ToriiVpnSessionCreateRequest NormalizeVpnSessionCreateRequest(
+        ToriiVpnSessionCreateRequest request)
+    {
+        return request with
+        {
+            ExitClass = NormalizeOptionalVpnExitClass(request.ExitClass, nameof(request.ExitClass)),
+            QuoteId = NormalizeExactSizedHex(request.QuoteId, nameof(request.QuoteId), 32),
+            PaymentTransactionHash = NormalizeExactSizedHex(
+                request.PaymentTransactionHash,
+                nameof(request.PaymentTransactionHash),
+                32),
+            MeteringPublicKeyHex = NormalizeExactSizedHex(
+                request.MeteringPublicKeyHex,
+                nameof(request.MeteringPublicKeyHex),
+                32),
+        };
+    }
+
+    private static ToriiVpnReceiptSubmitRequest NormalizeVpnReceiptSubmitRequest(
+        ToriiVpnReceiptSubmitRequest request)
+    {
+        return request with
+        {
+            RelayReceiptHex = NormalizeExactHex(request.RelayReceiptHex, nameof(request.RelayReceiptHex)),
+            ClientVoucherHex = NormalizeExactHex(request.ClientVoucherHex, nameof(request.ClientVoucherHex)),
+            LeaseIdHex = NormalizeOptionalExactSizedHexOrEmpty(
+                request.LeaseIdHex,
+                nameof(request.LeaseIdHex),
+                32),
+        };
+    }
+
+    private static ToriiDeployContractRequest NormalizeDeployContractRequest(
+        ToriiDeployContractRequest request)
+    {
+        return request with
+        {
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
+            CodeBase64 = NormalizeExactBase64(request.CodeBase64, nameof(request.CodeBase64)),
+            ContractAlias = NormalizeExactValue(request.ContractAlias, nameof(request.ContractAlias)),
+        };
+    }
+
+    private static ToriiDeployAndActivateContractInstanceRequest NormalizeDeployAndActivateContractInstanceRequest(
+        ToriiDeployAndActivateContractInstanceRequest request)
+    {
+        return request with
+        {
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
+            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
+            CodeBase64 = NormalizeExactBase64(request.CodeBase64, nameof(request.CodeBase64)),
+        };
+    }
+
+    private static ToriiActivateContractInstanceRequest NormalizeActivateContractInstanceRequest(
+        ToriiActivateContractInstanceRequest request)
+    {
+        return request with
+        {
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
+            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
+            CodeHash = NormalizeExactSizedHex(request.CodeHash, nameof(request.CodeHash), 32),
+        };
+    }
+
+    private static ToriiContractCallRequest NormalizeContractCallRequest(ToriiContractCallRequest request)
+    {
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        var (contractAddress, contractAlias) = NormalizeContractTarget(
+            request.ContractAddress,
+            request.ContractAlias,
+            nameof(request.ContractAddress),
+            nameof(request.ContractAlias),
+            requireTarget: true);
+        if (request.GasLimit == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive.");
+        }
+
+        return request with
+        {
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            ContractAddress = contractAddress,
+            ContractAlias = contractAlias,
+            Entrypoint = NormalizeOptionalExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+            GasAssetId = NormalizeOptionalExactValue(request.GasAssetId, nameof(request.GasAssetId)),
+            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+        };
+    }
+
+    private static ToriiContractViewRequest NormalizeContractViewRequest(ToriiContractViewRequest request)
+    {
+        var (contractAddress, contractAlias) = NormalizeContractTarget(
+            request.ContractAddress,
+            request.ContractAlias,
+            nameof(request.ContractAddress),
+            nameof(request.ContractAlias),
+            requireTarget: true);
+        if (request.GasLimit == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive.");
+        }
+
+        return request with
+        {
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            ContractAddress = contractAddress,
+            ContractAlias = contractAlias,
+            Entrypoint = NormalizeOptionalExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+        };
+    }
+
+    private static ToriiMultisigProposeRequest NormalizeMultisigProposeRequest(
+        ToriiMultisigProposeRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+            Instructions = NormalizeExactBase64List(
+                request.Instructions,
+                nameof(request.Instructions),
+                allowEmpty: false),
+        };
+    }
+
+    private static ToriiMultisigContractCallProposeRequest NormalizeMultisigContractCallProposeRequest(
+        ToriiMultisigContractCallProposeRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        if (request.GasLimit.HasValue && request.GasLimit.Value == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive when provided.");
+        }
+
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
+            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
+            Entrypoint = NormalizeExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+            GasAssetId = NormalizeOptionalExactValue(request.GasAssetId, nameof(request.GasAssetId)),
+            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+        };
+    }
+
+    private static ToriiMultisigContractCallApproveRequest NormalizeMultisigContractCallApproveRequest(
+        ToriiMultisigContractCallApproveRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        if (request.ProposalId is null && request.InstructionsHash is null)
+        {
+            throw new ArgumentException(
+                "Provide either proposal_id or instructions_hash.",
+                nameof(request.ProposalId));
+        }
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            ProposalId = request.ProposalId is null
+                ? null
+                : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
+            InstructionsHash = request.InstructionsHash is null
+                ? null
+                : NormalizeExactSizedHex(request.InstructionsHash, nameof(request.InstructionsHash), 32),
+        };
+    }
+
+    private static ToriiContractVerifiedSourceSubmission NormalizeContractVerifiedSourceSubmission(
+        ToriiContractVerifiedSourceSubmission request)
+    {
+        var language = NormalizeExactValue(request.Language, nameof(request.Language));
+        if (!string.Equals(language, "kotodama", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Verified source language must be kotodama.", nameof(request.Language));
+        }
+
+        return request with
+        {
+            Language = language,
+            SourceName = NormalizeOptionalSourceName(request.SourceName, nameof(request.SourceName)),
+            SourceText = NormalizeSourceText(request.SourceText, nameof(request.SourceText)),
+        };
+    }
+
     private static ByteArrayContent CreateBinaryContent(ReadOnlyMemory<byte> bytes, string mediaType)
     {
         var content = new ByteArrayContent(bytes.ToArray());
@@ -2686,34 +5628,131 @@ public sealed class ToriiClient : IDisposable
         return content;
     }
 
+    private static string EncodePathSegment(string? value, string paramName)
+    {
+        return Uri.EscapeDataString(NormalizeExactPathSegment(value, paramName));
+    }
+
+    private static string EncodeIdentifierPathSegment(string? value, string paramName)
+    {
+        return Uri.EscapeDataString(NormalizeExactIdentifierPathSegment(value, paramName));
+    }
+
+    private static string EncodeAccountIdPathSegment(string? value, string paramName)
+    {
+        return Uri.EscapeDataString(ToriiAccountFaucetPow.RequireExactAccountId(value, paramName));
+    }
+
+    private static string EncodeVpnSessionPathSegment(string? value, string paramName)
+    {
+        return Uri.EscapeDataString(NormalizeExactSizedHex(value, paramName, 32));
+    }
+
+    private static string EncodeSoraFsCidPathSegment(string? value, string paramName)
+    {
+        return Uri.EscapeDataString(NormalizeSoraFsContentCidArgument(value, paramName));
+    }
+
     private static string EncodePathSegment(string value)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        return Uri.EscapeDataString(value.Trim());
+        return EncodePathSegment(value, nameof(value));
+    }
+
+    private static string NormalizeExactIdentifierPathSegment(string? value, string paramName)
+    {
+        var normalized = NormalizeExactPathSegment(value, paramName);
+        if (normalized.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeExactPathSegment(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
+        }
+
+        return value;
     }
 
     private static string BuildSoraFsCidGatewayPath(string cid, string? relativePath)
     {
         var builder = new StringBuilder("/sorafs/cid/");
-        builder.Append(EncodePathSegment(cid));
+        builder.Append(EncodeSoraFsCidPathSegment(cid, nameof(cid)));
         builder.Append('/');
+
+        if (relativePath is null || relativePath.Length == 0)
+        {
+            return builder.ToString();
+        }
 
         if (string.IsNullOrWhiteSpace(relativePath))
         {
-            return builder.ToString();
+            throw new ArgumentException("Relative path must not be whitespace.", nameof(relativePath));
         }
 
-        var normalizedPath = relativePath.Trim().Trim('/');
-        if (normalizedPath.Length == 0)
+        if (!string.Equals(relativePath.Trim(), relativePath, StringComparison.Ordinal))
         {
-            return builder.ToString();
+            throw new ArgumentException("Relative path must not contain surrounding whitespace.", nameof(relativePath));
         }
 
-        var segments = normalizedPath
-            .Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Select(Uri.EscapeDataString);
-        builder.Append(string.Join('/', segments));
+        if (relativePath.Any(char.IsControl))
+        {
+            throw new ArgumentException("Relative path must not contain control characters.", nameof(relativePath));
+        }
+
+        var segments = relativePath.Split('/');
+        for (var index = 0; index < segments.Length; index++)
+        {
+            ValidateSoraFsRelativePathSegment(segments[index], index, nameof(relativePath));
+        }
+
+        var encodedSegments = segments.Select(Uri.EscapeDataString);
+        builder.Append(string.Join('/', encodedSegments));
         return builder.ToString();
+    }
+
+    private static void ValidateSoraFsRelativePathSegment(string segment, int index, string paramName)
+    {
+        var field = $"{nameof(BuildSoraFsCidGatewayPath)}.{nameof(segment)}[{index}]";
+        if (segment.Length == 0)
+        {
+            throw new ArgumentException("Relative path must not contain empty path segments.", paramName);
+        }
+
+        if (string.IsNullOrWhiteSpace(segment))
+        {
+            throw new ArgumentException($"{field} must not be blank.", paramName);
+        }
+
+        if (!string.Equals(segment.Trim(), segment, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{field} must not contain surrounding whitespace.", paramName);
+        }
+
+        if (segment.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{field} must not contain control characters.", paramName);
+        }
+
+        if (segment is "." or ".." || segment.Contains('\\', StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{field} must be a relative path component.", paramName);
+        }
     }
 
     private static ToriiVerifyingKeyRegisterRequest NormalizeVerifyingKeyRegisterRequest(
@@ -2739,21 +5778,21 @@ public sealed class ToriiClient : IDisposable
 
         return request with
         {
-            Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
             Backend = normalizedBackend,
             Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
             Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
-            CircuitId = NormalizeRequiredValue(request.CircuitId, nameof(request.CircuitId)),
+            CircuitId = NormalizeExactValue(request.CircuitId, nameof(request.CircuitId)),
             PublicInputsSchemaHashHex = NormalizeVerifyingKeyHex(
                 request.PublicInputsSchemaHashHex,
                 nameof(request.PublicInputsSchemaHashHex)),
-            Curve = NormalizeOptionalValue(request.Curve),
-            GasScheduleId = NormalizeRequiredValue(request.GasScheduleId, nameof(request.GasScheduleId)),
+            Curve = NormalizeOptionalExactValue(request.Curve, nameof(request.Curve)),
+            GasScheduleId = NormalizeExactValue(request.GasScheduleId, nameof(request.GasScheduleId)),
             VerifyingKeyLength = vkLength,
-            MaxProofBytes = request.MaxProofBytes,
-            MetadataUriCid = NormalizeOptionalValue(request.MetadataUriCid),
-            VerifyingKeyBytesCid = NormalizeOptionalValue(request.VerifyingKeyBytesCid),
+            MaxProofBytes = NormalizeOptionalPositiveUInt32(request.MaxProofBytes, nameof(request.MaxProofBytes)),
+            MetadataUriCid = NormalizeOptionalExactValue(request.MetadataUriCid, nameof(request.MetadataUriCid)),
+            VerifyingKeyBytesCid = NormalizeOptionalExactValue(request.VerifyingKeyBytesCid, nameof(request.VerifyingKeyBytesCid)),
             ActivationHeight = request.ActivationHeight,
             WithdrawHeight = request.WithdrawHeight,
             CommitmentHex = commitmentHex,
@@ -2785,22 +5824,22 @@ public sealed class ToriiClient : IDisposable
 
         return request with
         {
-            Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
             Backend = normalizedBackend,
             Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
             Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
-            CircuitId = NormalizeRequiredValue(request.CircuitId, nameof(request.CircuitId)),
+            CircuitId = NormalizeExactValue(request.CircuitId, nameof(request.CircuitId)),
             PublicInputsSchemaHashHex = NormalizeVerifyingKeyHex(
                 request.PublicInputsSchemaHashHex,
                 nameof(request.PublicInputsSchemaHashHex)),
-            Curve = NormalizeOptionalValue(request.Curve),
-            GasScheduleId = NormalizeOptionalValue(request.GasScheduleId),
+            Curve = NormalizeOptionalExactValue(request.Curve, nameof(request.Curve)),
+            GasScheduleId = NormalizeOptionalExactValue(request.GasScheduleId, nameof(request.GasScheduleId)),
             CommitmentHex = commitmentHex,
             VerifyingKeyLength = vkLength,
-            MaxProofBytes = request.MaxProofBytes,
-            MetadataUriCid = NormalizeOptionalValue(request.MetadataUriCid),
-            VerifyingKeyBytesCid = NormalizeOptionalValue(request.VerifyingKeyBytesCid),
+            MaxProofBytes = NormalizeOptionalPositiveUInt32(request.MaxProofBytes, nameof(request.MaxProofBytes)),
+            MetadataUriCid = NormalizeOptionalExactValue(request.MetadataUriCid, nameof(request.MetadataUriCid)),
+            VerifyingKeyBytesCid = NormalizeOptionalExactValue(request.VerifyingKeyBytesCid, nameof(request.VerifyingKeyBytesCid)),
             ActivationHeight = request.ActivationHeight,
             WithdrawHeight = request.WithdrawHeight,
             VerifyingKeyBytes = vkBytes,
@@ -2808,9 +5847,270 @@ public sealed class ToriiClient : IDisposable
         };
     }
 
+    private static void ValidateVerifyingKeyDetailDocument(JsonDocument document, string context)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        var root = RequireJsonObject(document.RootElement, context);
+        var id = RequireJsonObjectProperty(root, "id", $"{context}.id");
+        var idBackend = RequireJsonStringProperty(id, "backend", $"{context}.id.backend");
+        var idName = RequireJsonStringProperty(id, "name", $"{context}.id.name");
+        ValidateVerifyingKeyBackendResponseText(idBackend, $"{context}.id.backend");
+        ValidateVerifyingKeyNameResponseText(idName, $"{context}.id.name");
+
+        var record = RequireJsonObjectProperty(root, "record", $"{context}.record");
+        var recordBackend = RequireJsonStringProperty(record, "backend", $"{context}.record.backend");
+        ValidateVerifyingKeyBackendResponseText(recordBackend, $"{context}.record.backend");
+        if (!string.Equals(recordBackend, idBackend, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.record.backend must match {context}.id.backend.");
+        }
+
+        ValidatePositiveJsonUInt64Property(record, "version", $"{context}.record.version");
+        ValidateExactTokenText(
+            RequireJsonStringProperty(record, "circuit_id", $"{context}.record.circuit_id"),
+            $"{context}.record.circuit_id");
+        ValidateOptionalExactTokenText(
+            ReadOptionalJsonStringProperty(record, "curve", $"{context}.record.curve"),
+            $"{context}.record.curve");
+        ValidateExactSizedHex(
+            RequireJsonStringProperty(
+                record,
+                "public_inputs_schema_hash",
+                $"{context}.record.public_inputs_schema_hash"),
+            $"{context}.record.public_inputs_schema_hash",
+            32);
+        ValidateExactSizedHex(
+            RequireJsonStringProperty(record, "commitment", $"{context}.record.commitment"),
+            $"{context}.record.commitment",
+            32);
+        ValidatePositiveJsonUInt64Property(record, "vk_len", $"{context}.record.vk_len");
+        ReadOptionalPositiveJsonUInt64Property(record, "max_proof_bytes", $"{context}.record.max_proof_bytes");
+        ValidateOptionalExactTokenText(
+            ReadOptionalJsonStringProperty(record, "gas_schedule_id", $"{context}.record.gas_schedule_id"),
+            $"{context}.record.gas_schedule_id");
+        ValidateOptionalExactTokenText(
+            ReadOptionalJsonStringProperty(record, "metadata_uri_cid", $"{context}.record.metadata_uri_cid"),
+            $"{context}.record.metadata_uri_cid");
+        ValidateOptionalExactTokenText(
+            ReadOptionalJsonStringProperty(record, "vk_bytes_cid", $"{context}.record.vk_bytes_cid"),
+            $"{context}.record.vk_bytes_cid");
+
+        var activationHeight =
+            ReadOptionalJsonUInt64Property(record, "activation_height", $"{context}.record.activation_height");
+        var withdrawHeight =
+            ReadOptionalJsonUInt64Property(record, "withdraw_height", $"{context}.record.withdraw_height");
+        if (activationHeight.HasValue
+            && withdrawHeight.HasValue
+            && withdrawHeight.Value < activationHeight.Value)
+        {
+            throw new JsonException($"{context}.record.withdraw_height must be greater than or equal to activation_height.");
+        }
+
+        ValidateVerifyingKeyStatusResponseText(
+            RequireJsonStringProperty(record, "status", $"{context}.record.status"),
+            $"{context}.record.status");
+
+        if (TryReadOptionalJsonObjectProperty(record, "key", $"{context}.record.key", out var inlineKey))
+        {
+            ValidateVerifyingKeyInlineResponse(inlineKey, recordBackend, $"{context}.record.key");
+        }
+    }
+
+    private static void ValidateVerifyingKeyWriteDocument(JsonDocument document, string context)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        var root = RequireJsonObject(document.RootElement, context);
+        if (!root.TryGetProperty("accepted", out var accepted) || accepted.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context}.accepted must not be null.");
+        }
+
+        if (accepted.ValueKind != JsonValueKind.True)
+        {
+            throw new JsonException($"{context}.accepted must be true.");
+        }
+    }
+
+    private static void ValidateVerifyingKeyInlineResponse(JsonElement inlineKey, string recordBackend, string context)
+    {
+        var inlineBackend = RequireJsonStringProperty(inlineKey, "backend", $"{context}.backend");
+        ValidateVerifyingKeyBackendResponseText(inlineBackend, $"{context}.backend");
+        if (!string.Equals(inlineBackend, recordBackend, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.backend must match the enclosing verifying key backend.");
+        }
+
+        var bytes = DecodeExactBase64AllowEmpty(
+            RequireJsonStringProperty(inlineKey, "bytes_b64", $"{context}.bytes_b64"),
+            $"{context}.bytes_b64");
+        if (bytes.Length == 0)
+        {
+            throw new JsonException($"{context}.bytes_b64 must not decode to empty bytes.");
+        }
+    }
+
+    private static void ValidateVerifyingKeyBackendResponseText(string value, string field)
+    {
+        try
+        {
+            VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(value, field);
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException(error.Message, error);
+        }
+    }
+
+    private static void ValidateVerifyingKeyNameResponseText(string value, string field)
+    {
+        try
+        {
+            _ = NormalizeVerifyingKeyName(value, field);
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException(error.Message, error);
+        }
+    }
+
+    private static void ValidateVerifyingKeyStatusResponseText(string value, string field)
+    {
+        ValidateExactTokenText(value, field);
+        if (value is not ("Proposed" or "Active" or "Withdrawn"))
+        {
+            throw new JsonException($"{field} must be one of Proposed, Active, or Withdrawn.");
+        }
+    }
+
+    private static JsonElement RequireJsonObject(JsonElement element, string context)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException($"{context} must be an object.");
+        }
+
+        return element;
+    }
+
+    private static JsonElement RequireJsonObjectProperty(JsonElement element, string propertyName, string context)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        return RequireJsonObject(property, context);
+    }
+
+    private static bool TryReadOptionalJsonObjectProperty(
+        JsonElement element,
+        string propertyName,
+        string context,
+        out JsonElement value)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            value = default;
+            return false;
+        }
+
+        value = RequireJsonObject(property, context);
+        return true;
+    }
+
+    private static string RequireJsonStringProperty(JsonElement element, string propertyName, string context)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException($"{context} must be a string.");
+        }
+
+        return property.GetString() ?? throw new JsonException($"{context} must not be null.");
+    }
+
+    private static string? ReadOptionalJsonStringProperty(JsonElement element, string propertyName, string context)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException($"{context} must be a string.");
+        }
+
+        return property.GetString();
+    }
+
+    private static ulong ValidatePositiveJsonUInt64Property(
+        JsonElement element,
+        string propertyName,
+        string context)
+    {
+        var value = RequireJsonUInt64Property(element, propertyName, context);
+        if (value == 0)
+        {
+            throw new JsonException($"{context} must be positive.");
+        }
+
+        return value;
+    }
+
+    private static ulong RequireJsonUInt64Property(JsonElement element, string propertyName, string context)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        return ReadJsonUInt64(property, context);
+    }
+
+    private static ulong? ReadOptionalPositiveJsonUInt64Property(
+        JsonElement element,
+        string propertyName,
+        string context)
+    {
+        var value = ReadOptionalJsonUInt64Property(element, propertyName, context);
+        if (value == 0)
+        {
+            throw new JsonException($"{context} must be positive.");
+        }
+
+        return value;
+    }
+
+    private static ulong? ReadOptionalJsonUInt64Property(JsonElement element, string propertyName, string context)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return ReadJsonUInt64(property, context);
+    }
+
+    private static ulong ReadJsonUInt64(JsonElement element, string context)
+    {
+        if (element.ValueKind != JsonValueKind.Number || !element.TryGetUInt64(out var value))
+        {
+            throw new JsonException($"{context} must be an unsigned integer.");
+        }
+
+        return value;
+    }
+
     private static string NormalizeVerifyingKeyName(string? value, string paramName)
     {
-        var normalized = NormalizeRequiredValue(value, paramName);
+        var normalized = NormalizeExactValue(value, paramName);
         if (normalized.Contains(':', StringComparison.Ordinal))
         {
             throw new ArgumentException("Value must not contain ':' characters.", paramName);
@@ -2821,10 +6121,10 @@ public sealed class ToriiClient : IDisposable
 
     private static string NormalizeVerifyingKeyHex(string? value, string paramName)
     {
-        var normalized = NormalizeRequiredValue(value, paramName);
+        var normalized = NormalizeExactValue(value, paramName);
         if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
-            normalized = normalized[2..].Trim();
+            normalized = normalized[2..];
         }
 
         if (normalized.Length != 64 || !IsHex(normalized))
@@ -2837,7 +6137,7 @@ public sealed class ToriiClient : IDisposable
 
     private static string? NormalizeOptionalVerifyingKeyHex(string? value, string paramName)
     {
-        return string.IsNullOrWhiteSpace(value) ? null : NormalizeVerifyingKeyHex(value, paramName);
+        return value is null ? null : NormalizeVerifyingKeyHex(value, paramName);
     }
 
     private static byte[]? NormalizeOptionalVerifierBytes(
@@ -2874,12 +6174,12 @@ public sealed class ToriiClient : IDisposable
 
     private static string? NormalizeOptionalVerifyingKeyStatus(string? value, string paramName)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (value is null)
         {
             return null;
         }
 
-        var normalized = value.Trim().ToLowerInvariant();
+        var normalized = NormalizeExactValue(value, paramName).ToLowerInvariant();
         return normalized switch
         {
             "proposed" => "Proposed",
@@ -2946,6 +6246,26 @@ public sealed class ToriiClient : IDisposable
         return value.Value;
     }
 
+    private static uint? NormalizeOptionalPositiveUInt32(uint? value, string paramName)
+    {
+        if (value == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Value must be positive when provided.");
+        }
+
+        return value;
+    }
+
+    private static ulong? NormalizeOptionalPositiveUInt64(ulong? value, string paramName)
+    {
+        if (value == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Value must be positive when provided.");
+        }
+
+        return value;
+    }
+
     private static void ValidateInlineVerifyingKeyCommitment(
         string backend,
         byte[]? bytes,
@@ -3001,8 +6321,8 @@ public sealed class ToriiClient : IDisposable
 
         return new ToriiSoraFsPinRegisterWireRequest
         {
-            Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
+            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
+            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
             ChunkerProfileId = normalizedChunker.ProfileId,
             ChunkerNamespace = normalizedChunker.Namespace,
             ChunkerName = normalizedChunker.Name,
@@ -3029,7 +6349,7 @@ public sealed class ToriiClient : IDisposable
             Alias = request.Alias is null
                 ? null
                 : NormalizeSoraFsPinAlias(request.Alias, nameof(request.Alias)),
-            SuccessorOfHex = string.IsNullOrWhiteSpace(request.SuccessorOfHex)
+            SuccessorOfHex = request.SuccessorOfHex is null
                 ? null
                 : NormalizeSoraFsDigestHex(request.SuccessorOfHex, nameof(request.SuccessorOfHex)),
         };
@@ -3078,7 +6398,7 @@ public sealed class ToriiClient : IDisposable
             ManifestDigestHex = NormalizeSoraFsDigestHex(
                 response.ManifestDigestHex,
                 nameof(response.ManifestDigestHex)),
-            ChunkerHandle = NormalizeRequiredValue(
+            ChunkerHandle = NormalizeExactValue(
                 response.ChunkerHandle,
                 nameof(response.ChunkerHandle)),
             SubmittedEpoch = RequireSoraFsUnsigned(
@@ -3093,16 +6413,16 @@ public sealed class ToriiClient : IDisposable
                 response.PinFeeNano,
                 nameof(response.PinFeeNano),
                 allowZero: true),
-            PinFeeAssetId = NormalizeRequiredValue(
+            PinFeeAssetId = NormalizeExactValue(
                 response.PinFeeAssetId,
                 nameof(response.PinFeeAssetId)),
-            PinFeeTreasuryAccountId = NormalizeRequiredValue(
+            PinFeeTreasuryAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
                 response.PinFeeTreasuryAccountId,
                 nameof(response.PinFeeTreasuryAccountId)),
             Alias = response.Alias is null
                 ? null
                 : NormalizeSoraFsPinAlias(response.Alias, nameof(response.Alias)),
-            SuccessorOfHex = string.IsNullOrWhiteSpace(response.SuccessorOfHex)
+            SuccessorOfHex = response.SuccessorOfHex is null
                 ? null
                 : NormalizeSoraFsDigestHex(response.SuccessorOfHex, nameof(response.SuccessorOfHex)),
         };
@@ -3116,9 +6436,9 @@ public sealed class ToriiClient : IDisposable
                 chunker.ProfileId,
                 nameof(chunker.ProfileId),
                 allowZero: false),
-            Namespace = NormalizeRequiredValue(chunker.Namespace, nameof(chunker.Namespace)),
-            Name = NormalizeRequiredValue(chunker.Name, nameof(chunker.Name)),
-            Semver = NormalizeRequiredValue(chunker.Semver, nameof(chunker.Semver)),
+            Namespace = NormalizeExactValue(chunker.Namespace, nameof(chunker.Namespace)),
+            Name = NormalizeExactValue(chunker.Name, nameof(chunker.Name)),
+            Semver = NormalizeExactValue(chunker.Semver, nameof(chunker.Semver)),
             MultihashCode = chunker.MultihashCode ?? 0,
         };
     }
@@ -3145,8 +6465,8 @@ public sealed class ToriiClient : IDisposable
     {
         return new ToriiSoraFsPinAlias
         {
-            Namespace = NormalizeRequiredValue(alias.Namespace, $"{paramName}.{nameof(alias.Namespace)}"),
-            Name = NormalizeRequiredValue(alias.Name, $"{paramName}.{nameof(alias.Name)}"),
+            Namespace = NormalizeExactValue(alias.Namespace, $"{paramName}.{nameof(alias.Namespace)}"),
+            Name = NormalizeExactValue(alias.Name, $"{paramName}.{nameof(alias.Name)}"),
             ProofBase64 = NormalizeRequiredBase64(
                 alias.ProofBase64,
                 $"{paramName}.{nameof(alias.ProofBase64)}"),
@@ -3160,7 +6480,7 @@ public sealed class ToriiClient : IDisposable
             throw new ArgumentNullException(nameof(storageClass));
         }
 
-        var normalized = NormalizeRequiredValue(storageClass.Type, nameof(storageClass.Type)).ToLowerInvariant();
+        var normalized = NormalizeExactValue(storageClass.Type, nameof(storageClass.Type)).ToLowerInvariant();
         return normalized switch
         {
             "hot" => "Hot",
@@ -3202,10 +6522,10 @@ public sealed class ToriiClient : IDisposable
 
     private static string NormalizeSoraFsDigestHex(string? value, string paramName)
     {
-        var normalized = NormalizeRequiredValue(value, paramName);
+        var normalized = NormalizeExactValue(value, paramName);
         if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
-            normalized = normalized[2..].Trim();
+            normalized = normalized[2..];
         }
 
         if (normalized.Length != 64 || !IsHex(normalized))
@@ -3218,11 +6538,7 @@ public sealed class ToriiClient : IDisposable
 
     private static string NormalizeRequiredBase64(string? value, string paramName)
     {
-        var normalized = NormalizeRequiredValue(value, paramName);
-        if (normalized.Any(char.IsWhiteSpace))
-        {
-            throw new ArgumentException("Value must be base64 encoded without whitespace.", paramName);
-        }
+        var normalized = NormalizeExactValue(value, paramName);
 
         byte[] bytes;
         try
@@ -3239,7 +6555,13 @@ public sealed class ToriiClient : IDisposable
             throw new ArgumentException("Value must be a non-empty base64 payload.", paramName);
         }
 
-        return Convert.ToBase64String(bytes);
+        var canonical = Convert.ToBase64String(bytes);
+        if (!string.Equals(canonical, normalized, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must be canonical base64 text.", paramName);
+        }
+
+        return canonical;
     }
 
     private static bool IsHex(string value)
@@ -3259,14 +6581,405 @@ public sealed class ToriiClient : IDisposable
         return true;
     }
 
-    private static string NormalizeRequiredValue(string? value, string paramName)
+    private static bool IsLowercaseHex(string value)
+    {
+        foreach (var c in value)
+        {
+            var digit = c is >= '0' and <= '9' || c is >= 'a' and <= 'f';
+            if (!digit)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string NormalizeExactValue(string? value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new ArgumentException("Value cannot be null or whitespace.", paramName);
         }
 
-        return value.Trim();
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
+        }
+
+        return value;
+    }
+
+    private static string? NormalizeOptionalExactValue(string? value, string paramName)
+    {
+        return value is null ? null : NormalizeExactValue(value, paramName);
+    }
+
+    private static string? NormalizeOptionalExactHexPrefix(string? value, string paramName)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        var exact = NormalizeExactValue(value, paramName);
+        if (exact.Length > 64 || !exact.All(static character => Uri.IsHexDigit(character)))
+        {
+            throw new ArgumentException("Value must be a hexadecimal prefix up to 32 bytes.", paramName);
+        }
+
+        return exact.ToLowerInvariant();
+    }
+
+    private static string[]? NormalizeOptionalExactPathList(IReadOnlyList<string>? values, string paramName)
+    {
+        if (values is null)
+        {
+            return null;
+        }
+
+        if (values.Count == 0)
+        {
+            throw new ArgumentException("Value list cannot be empty.", paramName);
+        }
+
+        var normalized = new string[values.Count];
+        for (var index = 0; index < values.Count; index++)
+        {
+            normalized[index] = NormalizeExactValue(values[index], $"{paramName}[{index}]");
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyList<string> NormalizeExactStringList(
+        IReadOnlyList<string>? values,
+        string paramName,
+        bool allowEmpty)
+    {
+        if (values is null)
+        {
+            throw new ArgumentException("Value list cannot be null.", paramName);
+        }
+        if (!allowEmpty && values.Count == 0)
+        {
+            throw new ArgumentException("Value list must not be empty.", paramName);
+        }
+
+        var normalized = new string[values.Count];
+        for (var index = 0; index < values.Count; index++)
+        {
+            normalized[index] = NormalizeExactValue(values[index], $"{paramName}[{index}]");
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyList<string> NormalizeAccountIdList(
+        IReadOnlyList<string>? values,
+        string paramName,
+        bool allowEmpty)
+    {
+        if (values is null)
+        {
+            throw new ArgumentException("Value list cannot be null.", paramName);
+        }
+        if (!allowEmpty && values.Count == 0)
+        {
+            throw new ArgumentException("Value list must not be empty.", paramName);
+        }
+
+        var normalized = new string[values.Count];
+        for (var index = 0; index < values.Count; index++)
+        {
+            normalized[index] = ToriiAccountFaucetPow.RequireExactAccountId(
+                values[index],
+                $"{paramName}[{index}]");
+        }
+
+        return normalized;
+    }
+
+    private static string? NormalizeOptionalExactSizedHex(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        var exact = NormalizeExactValue(value, paramName);
+        if (exact.Length != expectedBytes * 2 || !exact.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException(
+                $"Value must be a {expectedBytes}-byte hex string.",
+                paramName);
+        }
+
+        return exact.ToLowerInvariant();
+    }
+
+    private static string NormalizeExactSizedHex(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        return NormalizeOptionalExactSizedHex(value, paramName, expectedBytes)
+            ?? throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+    }
+
+    private static string NormalizeOptionalExactSizedHexOrEmpty(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        if (value is null || value.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return NormalizeExactSizedHex(value, paramName, expectedBytes);
+    }
+
+    private static string NormalizeExactHex(string? value, string paramName)
+    {
+        var exact = NormalizeExactValue(value, paramName);
+        if (exact.Length % 2 != 0 || !IsHex(exact))
+        {
+            throw new ArgumentException(
+                "Value must contain an even number of hexadecimal characters.",
+                paramName);
+        }
+
+        return exact.ToLowerInvariant();
+    }
+
+    private static string NormalizeOptionalVpnExitClass(string? value, string paramName)
+    {
+        if (value is null || value.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return NormalizeExactValue(value, paramName);
+    }
+
+    private static string NormalizeSoraFsContentCidArgument(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
+        }
+
+        if (value[0] != 'b' || value.Length == 1)
+        {
+            throw new ArgumentException("Value must be lowercase multibase base32 CID text.", paramName);
+        }
+
+        for (var index = 1; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (character is not (>= 'a' and <= 'z') and not (>= '2' and <= '7'))
+            {
+                throw new ArgumentException("Value must be lowercase multibase base32 CID text.", paramName);
+            }
+        }
+
+        return value;
+    }
+
+    private static string NormalizeExactBase64(string? value, string paramName)
+    {
+        var exact = NormalizeExactValue(value, paramName);
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(exact);
+        }
+        catch (FormatException exception)
+        {
+            throw new ArgumentException("Value must be base64 encoded.", paramName, exception);
+        }
+
+        if (bytes.Length == 0)
+        {
+            throw new ArgumentException("Value must be a non-empty base64 payload.", paramName);
+        }
+
+        var canonical = Convert.ToBase64String(bytes);
+        if (!string.Equals(canonical, exact, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must be canonical base64 text.", paramName);
+        }
+
+        return canonical;
+    }
+
+    private static string? NormalizeOptionalExactBase64(string? value, string paramName)
+    {
+        return value is null ? null : NormalizeExactBase64(value, paramName);
+    }
+
+    private static IReadOnlyList<string> NormalizeExactBase64List(
+        IReadOnlyList<string>? values,
+        string paramName,
+        bool allowEmpty)
+    {
+        if (values is null)
+        {
+            throw new ArgumentException("Value list cannot be null.", paramName);
+        }
+        if (!allowEmpty && values.Count == 0)
+        {
+            throw new ArgumentException("Value list must not be empty.", paramName);
+        }
+
+        var normalized = new string[values.Count];
+        for (var index = 0; index < values.Count; index++)
+        {
+            normalized[index] = NormalizeExactBase64(values[index], $"{paramName}[{index}]");
+        }
+
+        return normalized;
+    }
+
+    private static (string? ContractAddress, string? ContractAlias) NormalizeContractTarget(
+        string? contractAddress,
+        string? contractAlias,
+        string contractAddressParamName,
+        string contractAliasParamName,
+        bool requireTarget)
+    {
+        var normalizedAddress = NormalizeOptionalExactValue(contractAddress, contractAddressParamName);
+        var normalizedAlias = NormalizeOptionalExactValue(contractAlias, contractAliasParamName);
+        if (normalizedAddress is not null && normalizedAlias is not null)
+        {
+            throw new ArgumentException(
+                "Provide exactly one of contract_address or contract_alias.",
+                contractAddressParamName);
+        }
+        if (requireTarget && normalizedAddress is null && normalizedAlias is null)
+        {
+            throw new ArgumentException(
+                "Provide either contract_address or contract_alias.",
+                contractAddressParamName);
+        }
+
+        return (normalizedAddress, normalizedAlias);
+    }
+
+    private static (string? MultisigAccountId, string? MultisigAccountAlias) NormalizeMultisigSelector(
+        string? multisigAccountId,
+        string? multisigAccountAlias)
+    {
+        var normalizedAccountId = NormalizeOptionalAccountId(
+            multisigAccountId,
+            nameof(ToriiMultisigProposeRequest.MultisigAccountId));
+        var normalizedAlias = NormalizeOptionalExactValue(
+            multisigAccountAlias,
+            nameof(ToriiMultisigProposeRequest.MultisigAccountAlias));
+        if (normalizedAccountId is not null && normalizedAlias is not null)
+        {
+            throw new ArgumentException(
+                "Provide exactly one of multisig_account_id or multisig_account_alias.",
+                nameof(ToriiMultisigProposeRequest.MultisigAccountId));
+        }
+        if (normalizedAccountId is null && normalizedAlias is null)
+        {
+            throw new ArgumentException(
+                "Provide either multisig_account_id or multisig_account_alias.",
+                nameof(ToriiMultisigProposeRequest.MultisigAccountId));
+        }
+
+        return (normalizedAccountId, normalizedAlias);
+    }
+
+    private static string? NormalizeOptionalAccountId(string? value, string paramName)
+    {
+        return value is null
+            ? null
+            : ToriiAccountFaucetPow.RequireExactAccountId(value, paramName);
+    }
+
+    private static void ValidateDetachedSigningPair(string? publicKeyHex, string? signatureBase64)
+    {
+        if ((publicKeyHex is null) != (signatureBase64 is null))
+        {
+            throw new ArgumentException(
+                "Detached signing requires both public_key_hex and signature_b64.",
+                publicKeyHex is null ? nameof(ToriiContractCallRequest.PublicKeyHex) : nameof(ToriiContractCallRequest.SignatureBase64));
+        }
+    }
+
+    private static void ValidateSigningMaterial(
+        string? privateKey,
+        string? publicKeyHex,
+        string? signatureBase64)
+    {
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
+        if (privateKey is not null && publicKeyHex is not null)
+        {
+            throw new ArgumentException(
+                "Provide either private_key or detached public_key_hex/signature_b64, not both.",
+                nameof(ToriiContractCallRequest.PrivateKey));
+        }
+    }
+
+    private static string NormalizeSourceText(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+
+        return value;
+    }
+
+    private static string? NormalizeOptionalSourceName(string? value, string paramName)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
+        }
+
+        return value;
+    }
+
+    private static ReadOnlyMemory<byte> NormalizeNonEmptyBinaryPayload(
+        ReadOnlyMemory<byte> bytes,
+        string paramName)
+    {
+        if (bytes.Length == 0)
+        {
+            throw new ArgumentException("Binary payload must not be empty.", paramName);
+        }
+
+        return bytes;
     }
 
     private static string NormalizeIdentifierPolicyId(string? value, string paramName)
@@ -3300,12 +7013,17 @@ public sealed class ToriiClient : IDisposable
             throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
         }
 
-        return value;
-    }
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
 
-    private static string? NormalizeOptionalValue(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
+        }
+
+        return value;
     }
 
     private static void ValidateExplorerPagination(ToriiExplorerPaginationQuery query, string paramName)
@@ -3323,55 +7041,119 @@ public sealed class ToriiClient : IDisposable
 
     private static PipelineTransactionStatus ParsePipelineTransactionStatus(JsonElement root, string transactionHashHex)
     {
-        var content = root.TryGetProperty("content", out var contentElement)
-            ? contentElement
-            : root;
+        const string context = "pipeline transaction status response";
+        var rootObject = RequireJsonObject(root, context);
+        JsonElement content;
+        if (rootObject.TryGetProperty("content", out var contentElement))
+        {
+            if (contentElement.ValueKind == JsonValueKind.Null)
+            {
+                throw new JsonException($"{context}.content must not be null.");
+            }
+
+            content = RequireJsonObject(contentElement, $"{context}.content");
+        }
+        else
+        {
+            content = rootObject;
+        }
 
         var statusElement = content.TryGetProperty("status", out var explicitStatus)
             ? explicitStatus
-            : root.GetProperty("status");
+            : rootObject.TryGetProperty("status", out var rootStatus)
+                ? rootStatus
+                : throw new JsonException($"{context}.status must not be null.");
 
-        var rawKind = statusElement.ValueKind switch
+        var rawKind = ReadPipelineStatusKind(statusElement, $"{context}.status");
+
+        var rejectionContentBase64 = ReadPipelineRejectionContent(statusElement, $"{context}.status.content");
+        ValidateOptionalBase64(
+            rejectionContentBase64,
+            $"{context}.status.content");
+
+        var hashHex = ReadOptionalJsonStringProperty(content, "hash", $"{context}.content.hash") is { } responseHash
+            ? NormalizePipelineResponseTransactionHashHex(responseHash, $"{context}.content.hash")
+            : transactionHashHex;
+        var blockHeight = statusElement.ValueKind == JsonValueKind.Object
+            ? ReadOptionalJsonUInt64Property(statusElement, "block_height", $"{context}.status.block_height")
+            : null;
+        blockHeight ??= ReadOptionalJsonUInt64Property(content, "block_height", $"{context}.content.block_height");
+        var scope = ReadOptionalJsonStringProperty(content, "scope", $"{context}.content.scope");
+        if (scope is not null)
         {
-            JsonValueKind.String => statusElement.GetString() ?? string.Empty,
-            JsonValueKind.Object when statusElement.TryGetProperty("kind", out var kindElement) => kindElement.GetString() ?? string.Empty,
-            _ => string.Empty,
-        };
+            ValidateExactTokenText(scope, $"{context}.content.scope");
+        }
+
+        var resolvedFrom = ReadOptionalJsonStringProperty(content, "resolved_from", $"{context}.content.resolved_from");
+        if (resolvedFrom is not null)
+        {
+            ValidateExactTokenText(resolvedFrom, $"{context}.content.resolved_from");
+        }
 
         return new PipelineTransactionStatus
         {
-            HashHex = content.TryGetProperty("hash", out var hashElement)
-                ? NormalizeTransactionHashHex(hashElement.GetString() ?? transactionHashHex)
-                : transactionHashHex,
+            HashHex = hashHex,
             RawKind = rawKind,
             State = ParsePipelineTransactionState(rawKind),
-            BlockHeight = ReadOptionalUInt64(statusElement, "block_height") ?? ReadOptionalUInt64(content, "block_height"),
-            Scope = content.TryGetProperty("scope", out var scopeElement)
-                ? scopeElement.GetString() ?? string.Empty
-                : string.Empty,
-            ResolvedFrom = content.TryGetProperty("resolved_from", out var resolvedElement)
-                ? resolvedElement.GetString() ?? string.Empty
-                : string.Empty,
-            RejectionContentBase64 = statusElement.ValueKind == JsonValueKind.Object
-                && statusElement.TryGetProperty("content", out var rejectionElement)
-                && rejectionElement.ValueKind == JsonValueKind.String
-                    ? rejectionElement.GetString()
-                    : null,
+            BlockHeight = blockHeight,
+            Scope = scope is null ? string.Empty : scope,
+            ResolvedFrom = resolvedFrom is null ? string.Empty : resolvedFrom,
+            RejectionContentBase64 = rejectionContentBase64,
         };
     }
 
-    private static ulong? ReadOptionalUInt64(JsonElement element, string propertyName)
+    private static string ReadPipelineStatusKind(JsonElement statusElement, string context)
     {
-        if (element.ValueKind != JsonValueKind.Object)
+        if (statusElement.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        string rawKind;
+        if (statusElement.ValueKind == JsonValueKind.String)
+        {
+            rawKind = statusElement.GetString() ?? throw new JsonException($"{context} must not be null.");
+        }
+        else if (statusElement.ValueKind == JsonValueKind.Object)
+        {
+            rawKind = RequireJsonStringProperty(statusElement, "kind", $"{context}.kind");
+        }
+        else
+        {
+            throw new JsonException($"{context} must be a string or object.");
+        }
+
+        ValidateExactTokenText(rawKind, $"{context}.kind");
+        return rawKind;
+    }
+
+    private static string? ReadPipelineRejectionContent(JsonElement statusElement, string context)
+    {
+        if (statusElement.ValueKind != JsonValueKind.Object
+            || !statusElement.TryGetProperty("content", out var rejectionElement)
+            || rejectionElement.ValueKind == JsonValueKind.Null)
         {
             return null;
         }
 
-        return element.TryGetProperty(propertyName, out var property)
-            && property.ValueKind == JsonValueKind.Number
-            && property.TryGetUInt64(out var value)
-                ? value
-                : null;
+        if (rejectionElement.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException($"{context} must be a string.");
+        }
+
+        return rejectionElement.GetString();
+    }
+
+    private static string NormalizePipelineResponseTransactionHashHex(string value, string context)
+    {
+        try
+        {
+            return NormalizeTransactionHashHex(value);
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException($"{context}: {error.Message}", error);
+        }
     }
 
     private static PipelineTransactionState ParsePipelineTransactionState(string rawKind)
@@ -3390,15 +7172,10 @@ public sealed class ToriiClient : IDisposable
 
     private static string NormalizeTransactionHashHex(string transactionHashHex)
     {
-        if (string.IsNullOrWhiteSpace(transactionHashHex))
-        {
-            throw new ArgumentException("Transaction hash cannot be null or whitespace.", nameof(transactionHashHex));
-        }
-
-        var trimmed = transactionHashHex.Trim();
-        var normalized = trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? trimmed[2..]
-            : trimmed;
+        var exact = NormalizeExactValue(transactionHashHex, nameof(transactionHashHex));
+        var normalized = exact.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? exact[2..]
+            : exact;
 
         if (normalized.Length != 64 || !normalized.All(static character => Uri.IsHexDigit(character)))
         {
@@ -3410,12 +7187,12 @@ public sealed class ToriiClient : IDisposable
 
     private static string NormalizePipelineScope(string scope)
     {
-        if (string.IsNullOrWhiteSpace(scope))
+        if (scope is null || scope.Length == 0)
         {
             return "auto";
         }
 
-        var normalized = scope.Trim().ToLowerInvariant();
+        var normalized = NormalizeExactValue(scope, nameof(scope)).ToLowerInvariant();
         return normalized switch
         {
             "auto" or "local" or "global" => normalized,
@@ -3444,28 +7221,71 @@ public sealed class ToriiClient : IDisposable
         };
     }
 
-    private static string NormalizeUaidLiteral(string raw)
+    private static string NormalizeUaidLiteral(string? raw, string paramName = "raw")
     {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            throw new ArgumentException("UAID literal cannot be null or whitespace.", nameof(raw));
-        }
-
-        var trimmed = raw.Trim();
-        var hexPortion = trimmed.StartsWith("uaid:", StringComparison.OrdinalIgnoreCase)
-            ? trimmed[5..].Trim()
-            : trimmed;
+        var exact = NormalizeExactValue(raw, paramName);
+        var hexPortion = exact.StartsWith("uaid:", StringComparison.OrdinalIgnoreCase)
+            ? exact[5..]
+            : exact;
 
         if (hexPortion.Length != 64 || !hexPortion.All(static character => Uri.IsHexDigit(character)))
         {
-            throw new ArgumentException("UAID literal must be `uaid:<64 hex chars>` or a bare 64-character hex string.", nameof(raw));
+            throw new ArgumentException(
+                "UAID literal must be `uaid:<64 hex chars>` or a bare 64-character hex string.",
+                paramName);
+        }
+
+        if ((HexNibble(hexPortion[^1]) & 1) == 0)
+        {
+            throw new ArgumentException(
+                "UAID literal must have the canonical low bit set.",
+                paramName);
         }
 
         return $"uaid:{hexPortion.ToLowerInvariant()}";
     }
 
-    private static Uri EnsureTrailingSlash(Uri baseUri)
+    private static int HexNibble(char character)
     {
+        if (character >= '0' && character <= '9')
+        {
+            return character - '0';
+        }
+        if (character >= 'a' && character <= 'f')
+        {
+            return character - 'a' + 10;
+        }
+        return character - 'A' + 10;
+    }
+
+    private static Uri NormalizeBaseUri(Uri baseUri)
+    {
+        if (!baseUri.IsAbsoluteUri)
+        {
+            throw new ArgumentException("baseUri must be absolute.", nameof(baseUri));
+        }
+
+        if (!string.Equals(baseUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("baseUri must use http or https.", nameof(baseUri));
+        }
+
+        if (!string.IsNullOrEmpty(baseUri.UserInfo))
+        {
+            throw new ArgumentException("baseUri must not include user information.", nameof(baseUri));
+        }
+
+        if (!string.IsNullOrEmpty(baseUri.Query))
+        {
+            throw new ArgumentException("baseUri must not include a query string.", nameof(baseUri));
+        }
+
+        if (!string.IsNullOrEmpty(baseUri.Fragment))
+        {
+            throw new ArgumentException("baseUri must not include a fragment.", nameof(baseUri));
+        }
+
         return baseUri.AbsoluteUri.Length > 0 && baseUri.AbsoluteUri[^1] == '/'
             ? baseUri
             : new Uri($"{baseUri.AbsoluteUri}/", UriKind.Absolute);

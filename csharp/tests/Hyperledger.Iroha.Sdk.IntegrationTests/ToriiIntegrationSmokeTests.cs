@@ -35,19 +35,19 @@ public sealed class ToriiIntegrationSmokeTests
 
         using var client = new ToriiClient(new Uri(baseUrl, UriKind.Absolute));
 
-        var capabilities = await client.GetNodeCapabilitiesAsync();
+        var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, capabilities.AbiVersion);
         Assert.Equal(1, capabilities.DataModelVersion);
         Assert.NotEmpty(capabilities.Crypto.Curves.AllowedCurveIds);
 
-        var activeAbi = await client.GetRuntimeAbiActiveAsync();
+        var activeAbi = await client.GetRuntimeAbiActiveAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, activeAbi.AbiVersion);
 
-        var accounts = await client.GetAccountsAsync(limit: 5);
+        var accounts = await client.GetAccountsAsync(limit: 5, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(accounts.Items);
         Assert.True(accounts.Total >= accounts.Items.Count);
 
-        var qrSnapshot = await client.GetExplorerAccountQrAsync(accounts.Items[0].Id);
+        var qrSnapshot = await client.GetExplorerAccountQrAsync(accounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(accounts.Items[0].Id, qrSnapshot.CanonicalId);
         Assert.Contains("<svg", qrSnapshot.Svg, StringComparison.Ordinal);
 
@@ -55,11 +55,11 @@ public sealed class ToriiIntegrationSmokeTests
         {
             Page = 1,
             PerPage = 1,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(explorerAccounts.Pagination.TotalItems >= (ulong)explorerAccounts.Items.Count);
         if (explorerAccounts.Items.Count > 0)
         {
-            var explorerAccount = await client.GetExplorerAccountAsync(explorerAccounts.Items[0].Id);
+            var explorerAccount = await client.GetExplorerAccountAsync(explorerAccounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerAccounts.Items[0].Id, explorerAccount.Id);
         }
 
@@ -67,11 +67,11 @@ public sealed class ToriiIntegrationSmokeTests
         {
             Page = 1,
             PerPage = 1,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(explorerDomains.Pagination.TotalItems >= (ulong)explorerDomains.Items.Count);
         if (explorerDomains.Items.Count > 0)
         {
-            var explorerDomain = await client.GetExplorerDomainAsync(explorerDomains.Items[0].Id);
+            var explorerDomain = await client.GetExplorerDomainAsync(explorerDomains.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerDomains.Items[0].Id, explorerDomain.Id);
         }
 
@@ -79,11 +79,11 @@ public sealed class ToriiIntegrationSmokeTests
         {
             Page = 1,
             PerPage = 1,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(explorerAssetDefinitions.Pagination.TotalItems >= (ulong)explorerAssetDefinitions.Items.Count);
         if (explorerAssetDefinitions.Items.Count > 0)
         {
-            var explorerAssetDefinition = await client.GetExplorerAssetDefinitionAsync(explorerAssetDefinitions.Items[0].Id);
+            var explorerAssetDefinition = await client.GetExplorerAssetDefinitionAsync(explorerAssetDefinitions.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerAssetDefinitions.Items[0].Id, explorerAssetDefinition.Id);
         }
 
@@ -91,11 +91,11 @@ public sealed class ToriiIntegrationSmokeTests
         {
             Page = 1,
             PerPage = 1,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(explorerAssets.Pagination.TotalItems >= (ulong)explorerAssets.Items.Count);
         if (explorerAssets.Items.Count > 0)
         {
-            var explorerAsset = await client.GetExplorerAssetAsync(explorerAssets.Items[0].Id);
+            var explorerAsset = await client.GetExplorerAssetAsync(explorerAssets.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerAssets.Items[0].Id, explorerAsset.Id);
         }
 
@@ -103,11 +103,11 @@ public sealed class ToriiIntegrationSmokeTests
         {
             Page = 1,
             PerPage = 1,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(explorerNfts.Pagination.TotalItems >= (ulong)explorerNfts.Items.Count);
         if (explorerNfts.Items.Count > 0)
         {
-            var explorerNft = await client.GetExplorerNftAsync(explorerNfts.Items[0].Id);
+            var explorerNft = await client.GetExplorerNftAsync(explorerNfts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerNfts.Items[0].Id, explorerNft.Id);
         }
 
@@ -115,24 +115,25 @@ public sealed class ToriiIntegrationSmokeTests
         {
             Page = 1,
             PerPage = 1,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(explorerRwas.Pagination.TotalItems >= (ulong)explorerRwas.Items.Count);
         if (explorerRwas.Items.Count > 0)
         {
-            var explorerRwa = await client.GetExplorerRwaAsync(explorerRwas.Items[0].Id);
+            var explorerRwa = await client.GetExplorerRwaAsync(explorerRwas.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerRwas.Items[0].Id, explorerRwa.Id);
         }
 
-        var faucetPuzzle = await client.GetAccountFaucetPuzzleAsync();
+        var faucetPuzzle = await client.GetAccountFaucetPuzzleAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("scrypt-leading-zero-bits-v1", faucetPuzzle.Algorithm);
         Assert.True(faucetPuzzle.AnchorHeight > 0);
         Assert.True(faucetPuzzle.MaxAnchorAgeBlocks > 0);
 
-        var identifierPolicies = await client.GetIdentifierPoliciesAsync();
+        var identifierPolicies = await client.GetIdentifierPoliciesAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(identifierPolicies.Total >= identifierPolicies.Items.Count);
 
-        var vpnProfile = await client.GetVpnProfileAsync();
-        Assert.True(vpnProfile.SupportedExitClasses.Count >= 0);
+        var vpnProfile = await client.GetVpnProfileAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var supportedExitClasses = Assert.IsAssignableFrom<IReadOnlyList<string>>(vpnProfile.SupportedExitClasses);
+        Assert.True(supportedExitClasses.Count >= 0);
         Assert.True(vpnProfile.LeaseSeconds > 0 || !vpnProfile.Available);
 
         var denylistCatalog = await TryGetOptionalReadAsync<ToriiSoraFsDenylistCatalogResponse>(
@@ -144,27 +145,27 @@ public sealed class ToriiIntegrationSmokeTests
 
             if (denylistCatalog.Packs.Count > 0)
             {
-                var denylistPack = await client.GetSoraFsDenylistPackAsync(denylistCatalog.Packs[0].PackId);
+                var denylistPack = await client.GetSoraFsDenylistPackAsync(denylistCatalog.Packs[0].PackId, cancellationToken: TestContext.Current.CancellationToken);
                 Assert.Equal(denylistCatalog.Packs[0].PackId, denylistPack.PackId);
             }
         }
 
-        var bindings = await client.GetUaidBindingsAsync(SmokeUaidLiteral);
+        var bindings = await client.GetUaidBindingsAsync(SmokeUaidLiteral, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SmokeUaidLiteral, bindings.Uaid);
         Assert.True(bindings.Dataspaces.Count >= 0);
 
-        var manifests = await client.GetUaidManifestsAsync(SmokeUaidLiteral);
+        var manifests = await client.GetUaidManifestsAsync(SmokeUaidLiteral, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SmokeUaidLiteral, manifests.Uaid);
         Assert.True(manifests.Total >= manifests.Manifests.Count);
 
-        var aliases = await client.LookupAliasesByAccountAsync(accounts.Items[0].Id);
+        var aliases = await client.LookupAliasesByAccountAsync(accounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(aliases);
         Assert.Equal(accounts.Items[0].Id, aliases!.AccountId);
         Assert.True(aliases.Total >= aliases.Items.Count);
 
         if (aliases.Items.Count > 0)
         {
-            var resolvedAlias = await client.ResolveAccountAliasAsync(aliases.Items[0].Alias);
+            var resolvedAlias = await client.ResolveAccountAliasAsync(aliases.Items[0].Alias, cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(resolvedAlias);
             Assert.Equal(accounts.Items[0].Id, resolvedAlias!.AccountId);
         }
@@ -195,13 +196,13 @@ public sealed class ToriiIntegrationSmokeTests
 
         if (!string.IsNullOrWhiteSpace(contractCodeHash))
         {
-            var contractCode = await client.GetContractCodeAsync(contractCodeHash);
+            var contractCode = await client.GetContractCodeAsync(contractCodeHash, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(contractCodeHash, contractCode.Manifest.CodeHash);
 
-            var contractBytes = await client.GetContractCodeBytesAsync(contractCodeHash);
+            var contractBytes = await client.GetContractCodeBytesAsync(contractCodeHash, cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotEmpty(contractBytes);
 
-            var contractView = await client.GetContractCodeViewAsync(contractCodeHash);
+            var contractView = await client.GetContractCodeViewAsync(contractCodeHash, cancellationToken: TestContext.Current.CancellationToken);
             Assert.False(string.IsNullOrWhiteSpace(contractView.CodeHash));
             Assert.False(string.IsNullOrWhiteSpace(contractView.RenderedSourceKind));
         }
@@ -210,11 +211,11 @@ public sealed class ToriiIntegrationSmokeTests
         if (!string.IsNullOrWhiteSpace(smokeCid))
         {
             var normalizedCid = smokeCid.Trim();
-            var cidLookup = await client.GetSoraFsCidLookupAsync(normalizedCid);
+            var cidLookup = await client.GetSoraFsCidLookupAsync(normalizedCid, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(normalizedCid, cidLookup.ContentCid);
 
             var smokePath = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_SORAFS_PATH");
-            var content = await client.GetSoraFsCidContentAsync(normalizedCid, smokePath);
+            var content = await client.GetSoraFsCidContentAsync(normalizedCid, smokePath, cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotEmpty(content.Bytes);
         }
 
@@ -233,7 +234,7 @@ public sealed class ToriiIntegrationSmokeTests
             var quote = await signedClient.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
             {
                 MeteringPublicKeyHex = meteringPublicKeyHex,
-            });
+            }, cancellationToken: TestContext.Current.CancellationToken);
             Assert.False(string.IsNullOrWhiteSpace(quote.QuoteId));
             Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction?.WireId);
             Assert.NotEmpty(quote.TxInstructions);

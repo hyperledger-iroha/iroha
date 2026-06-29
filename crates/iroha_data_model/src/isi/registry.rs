@@ -74,6 +74,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
+    InstructionRegistry::register_slice::<nexus::UpsertFeeSponsorPolicy>,
+    InstructionRegistry::register_slice::<nexus::RemoveFeeSponsorPolicy>,
     |registry| {
         registry.register_with_id_slice::<bridge::UpsertSccpRouteManifest>(
             "iroha_data_model::isi::bridge::UpsertSccpRouteManifest",
@@ -622,6 +624,10 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id_slice::<nexus::RegisterVerifiedNexusFeeBudget>(
         "nexus::RegisterVerifiedNexusFeeBudget",
     );
+    registry = registry
+        .register_with_id_slice::<nexus::UpsertFeeSponsorPolicy>("nexus::UpsertFeeSponsorPolicy");
+    registry = registry
+        .register_with_id_slice::<nexus::RemoveFeeSponsorPolicy>("nexus::RemoveFeeSponsorPolicy");
     registry
 }
 

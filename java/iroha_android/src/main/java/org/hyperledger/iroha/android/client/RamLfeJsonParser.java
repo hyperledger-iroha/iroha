@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -152,7 +153,7 @@ public final class RamLfeJsonParser {
   @SuppressWarnings("unchecked")
   private static List<Object> asArrayOrEmpty(final Object value, final String path) {
     if (value == null) {
-      return List.of();
+      return Collections.emptyList();
     }
     if (!(value instanceof List<?> list)) {
       throw new IllegalStateException(path + " must be a JSON array");
@@ -162,7 +163,7 @@ public final class RamLfeJsonParser {
 
   private static String requiredString(final Object value, final String path) {
     final String string = optionalString(value);
-    if (string == null || string.isBlank()) {
+    if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();
@@ -170,7 +171,7 @@ public final class RamLfeJsonParser {
 
   private static String requiredExactString(final Object value, final String path) {
     final String string = optionalString(value);
-    if (string == null || string.isBlank()) {
+    if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     if (!string.trim().equals(string)) {

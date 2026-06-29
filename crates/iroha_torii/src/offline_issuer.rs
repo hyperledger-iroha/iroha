@@ -633,7 +633,7 @@ fn parse_and_authorize(
     body: &[u8],
     endpoint: &'static str,
 ) -> Result<ParsedOfflineRequest, Error> {
-    reject_legacy_auth_headers(headers)?;
+    reject_x_iroha_auth_headers(headers)?;
     let value: Value = json::from_slice(body).map_err(|err| {
         validation_owned(
             "OFFLINE_INVALID_JSON",
@@ -731,7 +731,7 @@ fn parse_and_authorize(
     })
 }
 
-fn reject_legacy_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
+fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
     for name in [
         app_auth::HEADER_ACCOUNT,
         app_auth::HEADER_SIGNATURE,
@@ -893,6 +893,7 @@ fn verify_device_attestation(
             "Offline Notes assertion public key must not be empty.",
         ));
     }
+    reject_retired_assertion_public_key_aliases(request)?;
     verify_optional_assertion_public_key(request, &assertion_public_key)?;
 
     let attestation_report_hash = required_string(receipt, "attestation_report_hash_hex")?;
@@ -1725,15 +1726,27 @@ fn decode_canonical_base64(
     Ok(bytes)
 }
 
+fn reject_retired_assertion_public_key_aliases(
+    request: &ParsedOfflineRequest,
+) -> Result<(), Error> {
+    for field in ["app_attest_public_key_base64", "device_public_key"] {
+        if request.device_binding.get(field).is_some() {
+            return Err(validation_owned(
+                "OFFLINE_INVALID_ASSERTION_PUBLIC_KEY",
+                format!(
+                    "Offline Notes device_binding retired assertion public key alias `{field}` is not accepted."
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn verify_optional_assertion_public_key(
     request: &ParsedOfflineRequest,
     expected: &[u8],
 ) -> Result<(), Error> {
-    for field in [
-        "assertion_public_key",
-        "app_attest_public_key_base64",
-        "device_public_key",
-    ] {
+    for field in ["assertion_public_key"] {
         if let Some(raw) = optional_string(&request.device_binding, field) {
             let bytes = decode_key_material(raw)
                 .filter(|bytes| !bytes.is_empty())
@@ -2540,7 +2553,7 @@ mod tests {
     }
 
     #[test]
-    fn body_auth_rejects_legacy_x_iroha_auth_headers() {
+    fn body_auth_rejects_x_iroha_auth_headers() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
         let (key_pair, account, account_literal) = signer_account(0x45);
         let asset_definition_id = asset_definition_for_tests();
@@ -2555,10 +2568,13 @@ mod tests {
             minimal_parse_body(&account_literal, &asset_literal),
             &account_literal,
             now_ms(),
-            "legacy-header-rejected",
+            "x-iroha-header-rejected",
         );
         let mut headers = HeaderMap::new();
-        headers.insert(app_auth::HEADER_ACCOUNT, HeaderValue::from_static("legacy"));
+        headers.insert(
+            app_auth::HEADER_ACCOUNT,
+            HeaderValue::from_static("x-iroha-account"),
+        );
 
         assert_eq!(
             app_error_code(parse_offline_request(
@@ -2708,6 +2724,25 @@ mod tests {
             validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
             "OFFLINE_INVALID_ASSERTION_PUBLIC_KEY"
         );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_retired_assertion_public_key_aliases() {
+        let (issuer, verifier) = sample_issuer();
+
+        for field in ["app_attest_public_key_base64", "device_public_key"] {
+            let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+            insert_field(
+                &mut request.device_binding,
+                field,
+                string_value(BASE64_STANDARD.encode(vec![0xB6; 65])),
+            );
+
+            assert_eq!(
+                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+                "OFFLINE_INVALID_ASSERTION_PUBLIC_KEY"
+            );
+        }
     }
 
     #[test]

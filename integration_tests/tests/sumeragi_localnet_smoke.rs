@@ -8490,14 +8490,29 @@ fn sumeragi_snapshot_value_maps_fields() {
         pacemaker_backpressure_deferrals_total: 2,
         tx_queue_depth: 3,
         tx_queue_capacity: 4,
+        tx_queue_retained_bytes: 5,
+        tx_queue_max_retained_bytes: 6,
         tx_queue_saturated: true,
-        commit_qc_height: 5,
+        tx_queue_saturated_by_count: false,
+        tx_queue_saturated_by_bytes: true,
+        tx_queue_saturated_by_age: true,
+        tx_queue_oldest_queued_age_ms: 7,
+        commit_qc_height: 8,
     };
     let value = sumeragi_snapshot_value(&snapshot);
     let Value::Object(map) = value else {
         panic!("expected object");
     };
-    assert_eq!(map.get("commit_qc_height"), Some(&Value::from(5)));
+    assert_eq!(map.get("commit_qc_height"), Some(&Value::from(8)));
+    assert_eq!(map.get("tx_queue_retained_bytes"), Some(&Value::from(5)));
+    assert_eq!(
+        map.get("tx_queue_saturated_by_bytes"),
+        Some(&Value::from(true))
+    );
+    assert_eq!(
+        map.get("tx_queue_oldest_queued_age_ms"),
+        Some(&Value::from(7))
+    );
     assert_eq!(map.get("tx_queue_saturated"), Some(&Value::from(true)));
 }
 
@@ -8717,7 +8732,13 @@ struct SumeragiStatusSnapshot {
     pacemaker_backpressure_deferrals_total: u64,
     tx_queue_depth: u64,
     tx_queue_capacity: u64,
+    tx_queue_retained_bytes: u64,
+    tx_queue_max_retained_bytes: u64,
     tx_queue_saturated: bool,
+    tx_queue_saturated_by_count: bool,
+    tx_queue_saturated_by_bytes: bool,
+    tx_queue_saturated_by_age: bool,
+    tx_queue_oldest_queued_age_ms: u64,
     commit_qc_height: u64,
 }
 
@@ -8728,7 +8749,13 @@ impl SumeragiStatusSnapshot {
             pacemaker_backpressure_deferrals_total: status.pacemaker_backpressure_deferrals_total,
             tx_queue_depth: status.tx_queue_depth,
             tx_queue_capacity: status.tx_queue_capacity,
+            tx_queue_retained_bytes: status.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
             tx_queue_saturated: status.tx_queue_saturated,
+            tx_queue_saturated_by_count: status.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: status.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: status.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: status.tx_queue_oldest_queued_age_ms,
             commit_qc_height: status.commit_qc.height,
         }
     }
@@ -9245,8 +9272,32 @@ fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
         Value::from(snapshot.tx_queue_capacity),
     );
     map.insert(
+        "tx_queue_retained_bytes".to_string(),
+        Value::from(snapshot.tx_queue_retained_bytes),
+    );
+    map.insert(
+        "tx_queue_max_retained_bytes".to_string(),
+        Value::from(snapshot.tx_queue_max_retained_bytes),
+    );
+    map.insert(
         "tx_queue_saturated".to_string(),
         Value::from(snapshot.tx_queue_saturated),
+    );
+    map.insert(
+        "tx_queue_saturated_by_count".to_string(),
+        Value::from(snapshot.tx_queue_saturated_by_count),
+    );
+    map.insert(
+        "tx_queue_saturated_by_bytes".to_string(),
+        Value::from(snapshot.tx_queue_saturated_by_bytes),
+    );
+    map.insert(
+        "tx_queue_saturated_by_age".to_string(),
+        Value::from(snapshot.tx_queue_saturated_by_age),
+    );
+    map.insert(
+        "tx_queue_oldest_queued_age_ms".to_string(),
+        Value::from(snapshot.tx_queue_oldest_queued_age_ms),
     );
     map.insert(
         "commit_qc_height".to_string(),

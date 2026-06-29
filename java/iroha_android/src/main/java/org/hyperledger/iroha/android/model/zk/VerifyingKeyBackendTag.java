@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.android.model.zk;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -134,7 +136,7 @@ public enum VerifyingKeyBackendTag {
   }
 
   private static final Set<String> PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS =
-      Set.of(
+      immutableSet(
           "halo2/pasta/kaigi-roster-v1",
           "halo2/pasta/kaigi-usage-v1",
           "halo2/pasta/ivm-overlay-bind",
@@ -233,14 +235,14 @@ public enum VerifyingKeyBackendTag {
   }
 
   private static final Set<String> STARK_FRI_PRODUCTION_BACKENDS =
-      Set.of(
+      immutableSet(
           "stark/fri",
           "stark/fri/sha256-goldilocks",
           "stark/fri/poseidon2-goldilocks",
           "stark/fri/sha256_goldilocks.v1");
 
   private static final Set<String> TRUSTED_SETUP_BACKEND_SEGMENTS =
-      Set.of(
+      immutableSet(
           "groth16",
           "kzg",
           "bn254",
@@ -253,7 +255,7 @@ public enum VerifyingKeyBackendTag {
           "powersoftau");
 
   private static final Set<String> TRUSTED_SETUP_COMPACT_TOKENS =
-      Set.of(
+      immutableSet(
           "groth16",
           "kzg",
           "bn254",
@@ -489,6 +491,10 @@ public enum VerifyingKeyBackendTag {
       }
     }
     return false;
+  }
+
+  private static Set<String> immutableSet(final String... values) {
+    return Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(values)));
   }
 
   private static String trimWhitespace(final String value) {

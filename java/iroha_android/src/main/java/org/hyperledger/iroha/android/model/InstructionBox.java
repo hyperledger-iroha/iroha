@@ -188,7 +188,7 @@ public final class InstructionBox {
     private final Map<String, String> arguments;
 
     private WireInstructionPayload(final String wireName, final byte[] payloadBytes) {
-      if (wireName == null || wireName.isBlank()) {
+      if (wireName == null || wireName.trim().isEmpty()) {
         throw new IllegalArgumentException("wireName must not be blank");
       }
       if (payloadBytes == null || payloadBytes.length == 0) {

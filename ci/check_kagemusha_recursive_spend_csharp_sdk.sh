@@ -4,8 +4,11 @@ set -euo pipefail
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet}"
 BRIDGE_TARGET_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR:-${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target}"
+DOTNET_ARTIFACTS_PATH="${BRIDGE_TARGET_DIR}/dotnet-artifacts"
 export DOTNET_CLI_TELEMETRY_OPTOUT="${DOTNET_CLI_TELEMETRY_OPTOUT:-1}"
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-${TMPDIR:-/tmp}/iroha-dotnet-home}"
+export DOTNET_NOLOGO="${DOTNET_NOLOGO:-1}"
+export DOTNET_SKIP_FIRST_TIME_EXPERIENCE="${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1}"
 
 cd "${ROOT_DIR}"
 if ! command -v "${DOTNET_BIN}" >/dev/null 2>&1; then
@@ -56,8 +59,11 @@ printf 'connect_norito_bridge native bridge sha256: %s\n' "${BRIDGE_LIBRARY_SHA2
 export DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
 export LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PATH="${BRIDGE_LIBRARY_DIR}:${PATH}"
+rm -rf "${DOTNET_ARTIFACTS_PATH}"
 
 "${DOTNET_BIN}" test \
   csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
+  --artifacts-path "${DOTNET_ARTIFACTS_PATH}" \
   --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiIdentifierReceiptTests" \
+  -p:ProduceReferenceAssembly=false \
   --logger "console;verbosity=minimal"

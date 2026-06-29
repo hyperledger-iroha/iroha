@@ -44,7 +44,6 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
 public enum KagemushaOfflineSpendMode: String, Equatable {
     case recursiveCompactV1 = "recursive_compact_v1"
     case recursiveSpendV1 = "recursive_spend_v1"
-    case checkedPrefoldV1 = "checked_prefold_v1"
 }
 
 public enum KagemushaRecursiveSpendProver {
@@ -106,28 +105,21 @@ public enum KagemushaRecursiveSpendProver {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
     }
 
-    public static var preferredMode: KagemushaOfflineSpendMode {
+    public static var preferredMode: KagemushaOfflineSpendMode? {
         preferredMode(
             recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable,
             recursiveSpendAvailable: isNativeAvailable
         )
     }
 
-    public static func preferredMode(recursiveSpendAvailable: Bool) -> KagemushaOfflineSpendMode {
-        preferredMode(
-            recursiveCompactAvailable: false,
-            recursiveSpendAvailable: recursiveSpendAvailable
-        )
-    }
-
     public static func preferredMode(
         recursiveCompactAvailable: Bool,
         recursiveSpendAvailable: Bool
-    ) -> KagemushaOfflineSpendMode {
+    ) -> KagemushaOfflineSpendMode? {
         if recursiveCompactAvailable {
             return .recursiveCompactV1
         }
-        return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1
+        return recursiveSpendAvailable ? .recursiveSpendV1 : nil
     }
 
     public static func canRedeemWitnessless(circuitId: String, hopCount: UInt32) -> Bool {
@@ -144,8 +136,7 @@ public enum KagemushaRecursiveSpendProver {
     }
 
     public static func isLineageAppendOutputCircuitId(_ outputCircuitId: String?) -> Bool {
-        outputCircuitId == recursiveSpendLineageProofCircuitIdV1
-            || outputCircuitId == recursiveSpendLineageAppendProofCircuitIdV1
+        outputCircuitId == recursiveSpendLineageAppendProofCircuitIdV1
     }
 
     public static func isSupportedLineageKeyArtifactOpeningLen(_ verifierOpeningLen: UInt32) -> Bool {
@@ -574,10 +565,7 @@ public enum KagemushaRecursiveSpendProver {
 
     public static func normalizedAppendOutputCircuitId(_ outputCircuitId: String?) -> String {
         guard let outputCircuitId, !outputCircuitId.isEmpty else {
-            return recursiveAggregationProofCircuitIdV1
-        }
-        if outputCircuitId == recursiveSpendLineageProofCircuitIdV1 {
-            return recursiveSpendLineageAppendProofCircuitIdV1
+            return ""
         }
         return outputCircuitId
     }

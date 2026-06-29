@@ -6,6 +6,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -37,8 +38,8 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
         PlatformHttpTransportExecutor.createDefault(),
         URI.create("http://localhost:8080"),
         Duration.ofSeconds(15),
-        Map.of(),
-        List.of(),
+        Collections.emptyMap(),
+        Collections.emptyList(),
         100);
   }
 
@@ -52,21 +53,27 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
     this.executor = Objects.requireNonNull(executor, "executor");
     this.baseUri = Objects.requireNonNull(baseUri, "baseUri");
     this.timeout = timeout;
-    this.defaultHeaders = new LinkedHashMap<>(defaultHeaders == null ? Map.of() : defaultHeaders);
-    this.observers = List.copyOf(observers == null ? List.of() : observers);
+    this.defaultHeaders =
+        new LinkedHashMap<>(defaultHeaders == null ? Collections.emptyMap() : defaultHeaders);
+    this.observers =
+        Collections.unmodifiableList(
+            new ArrayList<>(observers == null ? Collections.emptyList() : observers));
     this.perPage = perPage;
   }
 
   @Override
   public CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> listOutcomes() {
+    final CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> issue =
+        fetchKind(OfflineNoteOutcomeIndex.KIND_ISSUE);
     final CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> audit =
         fetchKind(OfflineNoteOutcomeIndex.KIND_AUDIT);
     final CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> redeem =
         fetchKind(OfflineNoteOutcomeIndex.KIND_REDEEM);
-    return CompletableFuture.allOf(audit, redeem)
+    return CompletableFuture.allOf(issue, audit, redeem)
         .thenApply(
             ignored -> {
               final List<OfflineNoteExplorerInstructionOutcome> outcomes = new ArrayList<>();
+              outcomes.addAll(issue.join());
               outcomes.addAll(audit.join());
               outcomes.addAll(redeem.join());
               return outcomes;
@@ -209,7 +216,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
   private String requireNestedEncoded(final Map<String, Object> box) {
     final Map<String, Object> json = requireObject(box.get("json"), "instruction box json");
     final Object encoded = json.get("encoded");
-    if (!(encoded instanceof String value) || value.isBlank()) {
+    if (!(encoded instanceof String value) || value.trim().isEmpty()) {
       throw new IllegalArgumentException("instruction box encoded payload missing");
     }
     return value;
@@ -225,7 +232,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
 
   private String requiredString(final Map<String, Object> value, final String field) {
     final Object raw = value.get(field);
-    if (!(raw instanceof String text) || text.isBlank()) {
+    if (!(raw instanceof String text) || text.trim().isEmpty()) {
       throw new IllegalArgumentException(field + " must be a non-empty string");
     }
     return text;
@@ -257,7 +264,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
         continue;
       }
       for (final String value : entry.getValue()) {
-        if (value != null && !value.isBlank()) {
+        if (value != null && !value.trim().isEmpty()) {
           return value.trim();
         }
       }

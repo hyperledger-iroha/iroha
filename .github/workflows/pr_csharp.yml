@@ -4,8 +4,13 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pr_csharp.yml"
+      - "ci/check_csharp_sdk_package_consumer.sh"
+      - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
       - "csharp/**"
+      - "crates/connect_norito_bridge/**"
       - "fixtures/account/address_vectors.json"
+      - "fixtures/kagemusha_recursive_spend_abi6/**"
+      - "fixtures/kagemusha_recursive_spend_abi7/**"
   workflow_dispatch:
 
 jobs:
@@ -25,10 +30,35 @@ jobs:
         run: dotnet restore Hyperledger.Iroha.Sdk.sln
 
       - name: Build
-        run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore
+        run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
 
       - name: Test
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
 
       - name: Pack
-        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build
+        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+
+      - name: Package consumer smoke
+        run: ../ci/check_csharp_sdk_package_consumer.sh
+
+  kagemusha-native-bridge-sdk:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Kagemusha recursive spend C# SDK tests
+        shell: bash
+        run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh

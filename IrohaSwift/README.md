@@ -620,7 +620,7 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Classic Offline Note issuance, audit, redeem, and defund transaction paths are
+Retired Offline Note issuance, audit, redeem, and defund transaction paths are
 retired. The Swift builders and default submitters fail closed before signing or
 submitting; production offline payments use Kagemusha top-up, transfer, and
 recursive redeem flows.
@@ -645,25 +645,26 @@ apps can decide how to remediate.
 
 ### Offline APIs
 
-Torii exposes `/v1/offline/readiness` for offline HTTP discovery and keeps
-body-signed key refill for compatibility. Classic note issue, redemption, audit,
-and defund submission paths are retired; the Swift SDK surfaces their historical
-models for fixture compatibility while default builders and submitters fail
-closed. Production offline payments use Kagemusha transaction builders.
+Torii exposes `/v1/offline/readiness` for offline HTTP discovery and accepts
+body-signed key refill on the maintained Offline V2 API. Retired note issue,
+redemption, audit, and defund submission paths are retired; the Swift SDK
+surfaces their historical fixture models while default builders and submitters
+fail closed. Production offline payments use Kagemusha transaction builders.
 Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
 models plus retired `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
-`buildAuditOfflineNote`, and `buildDefundOfflineNote` compatibility methods on
-`IrohaSDK`.
+`buildAuditOfflineNote`, and `buildDefundOfflineNote` methods on `IrohaSDK`.
 
-The legacy `buildRedeemOfflineNote`, `buildAuditOfflineNote`,
-`buildIssueOfflineNote`, and `buildDefundOfflineNote` methods are retained only
-for source compatibility and now throw before signing. Do not use them for new
-wallet flows.
+The retired `buildRedeemOfflineNote`, `buildAuditOfflineNote`,
+`buildIssueOfflineNote`, and `buildDefundOfflineNote` methods now throw before
+signing. Do not use them for new wallet flows.
 
-`OfflineNoteWallet` remains available for historical model and fixture
-compatibility, but its default issuer and transaction submitter surfaces fail
-closed for classic note issue, audit, redeem, and defund paths. Production
-offline payments use Kagemusha flows.
+`OfflineNoteWallet` remains available for historical fixture records, but its
+default issuer and transaction submitter surfaces fail
+closed for retired note issue, audit, redeem, and defund paths. Production
+offline payments use Kagemusha flows. When an injected test issuer path is
+used, `load` records issued notes as `.issuePending` until `sync()`
+observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
+the pending note.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
@@ -709,9 +710,8 @@ Swift. `KagemushaRecursiveSpendProver.preferredMode` selects
 `recursive_spend_v1` when an ABI 6-or-later bridge exposes init, append, both
 transition-profile helpers, the append-boundary helper, both lineage-witness
 helpers, verify, and redeem, and every required symbol rejects the malformed
-availability probe without returning output bytes. It falls back to
-`checked_prefold_v1` for
-legacy checked pre-fold runtimes. `transitionProfileInit(requestArchive:)` and
+availability probe without returning output bytes. It returns `nil` when no
+recursive-capable production bridge is available. `transitionProfileInit(requestArchive:)` and
 `transitionProfileAppend(requestArchive:)` return the canonical
 Reserved-lineage accumulator transition profile as raw Norito archives for
 fixture generation and circuit preflight.
@@ -763,7 +763,9 @@ wallets reject unknown previous recursive proof circuits and include
 tells wallet code whether the selected append output circuit requires the
 request to carry the previous recursive proof opening archive. The
 `outputCircuitId` argument is the append request's `output_proof_circuit_id`;
-missing or empty request values preserve semantic compatibility append. The
+wallets must pass either the semantic aggregation circuit id or the
+append-specific Reserved-lineage circuit id explicitly; missing, empty, and
+family-id selectors are rejected before native dispatch. The
 `KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive:)`
 and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive:)` helpers ask
 the native bridge to generate the opaque Pallas opening archives for the current
@@ -790,9 +792,8 @@ same public-binding preflight before the native bridge returns a
 `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a
 matching active `lineage_verifier_record`, semantic bundles must omit it, and
 unsupported proof attachments are rejected as malformed requests rather than
-soft invalid proof results. Decoded verify results expose both
-`lineageWitnessRequiredForRedeem` and the earlier `lineageWitnessRequired`
-alias for the same redeem decision. Production init requests and
+soft invalid proof results. Decoded verify results expose only
+`lineageWitnessRequiredForRedeem` for the redeem decision. Production init requests and
 Reserved-lineage append-output requests must also include packaged lineage key
 artifacts in the raw Norito request: `lineage_verifier_key` and
 `lineage_proving_key_archive`. Missing artifacts are rejected before runtime key
@@ -800,13 +801,13 @@ generation. The
 previous bundle must already be Reserved-lineage before a Reserved-lineage
 append output is valid; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
-Swift typed redeem builders accept the legacy single `lineageVerifierRecord`
+Swift typed redeem builders accept the single-record `lineageVerifierRecord`
 path plus `lineageVerifierRecords` / raw `lineage_verifier_records` for
 additional Reserved-lineage verifier records. Use the plural field for
 multi-profile record-backed lineage witnesses, or place every Reserved-lineage
 verifier record there for vector-only callers.
 `normalizedAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId`
-helpers expose that defaulting rule for wallet-side preflight. The
+helpers expose that explicit-selector rule for wallet-side preflight. The
 `recursivePreviousProofOpenEnvelopesRequiredCountV1` and
 `recursivePreviousProofOpenEnvelopesMaxBytes` expose the exactly-one-envelope
 cardinality rule and native 8 MiB pre-decode cap for that archive.
@@ -893,8 +894,9 @@ transfer.
 `OfflineNoteKeychainStore` writes wallet state through revisioned
 ThisDeviceOnly Keychain records and deletes the previous revision after each
 commit, so app-container rollback cannot revive an earlier note set without the
-deleted revision item. Legacy `spendPending` records decode as `spent`, and
-legacy `changePending` records decode as `spendable`.
+deleted revision item. Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
+wallet-note state names are rejected; first-release records must use current
+state names.
 Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
 one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
 source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a

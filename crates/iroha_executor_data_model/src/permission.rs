@@ -493,9 +493,19 @@ pub mod nexus {
     }
 
     permission! {
-        /// Permission to charge Nexus fees to the specified sponsor account.
+        /// Permission to charge Nexus fees to a named policy owned by the sponsor account.
         pub struct CanUseFeeSponsor {
             /// Sponsor account that may be debited for fees.
+            pub sponsor: AccountId,
+            /// Sponsor-local policy name that must allow the transaction.
+            pub policy: Name,
+        }
+    }
+
+    permission! {
+        /// Permission to manage fee sponsor policies owned by the specified sponsor account.
+        pub struct CanManageFeeSponsorPolicy {
+            /// Sponsor account whose policies may be managed.
             pub sponsor: AccountId,
         }
     }

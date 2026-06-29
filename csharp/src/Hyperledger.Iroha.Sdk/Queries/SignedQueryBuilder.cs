@@ -1,3 +1,4 @@
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Transactions;
@@ -32,7 +33,7 @@ public sealed class SignedQueryBuilder
 
     public SignedQueryBuilder(string authorityAccountId)
     {
-        AuthorityAccountId = NormalizeRequiredValue(authorityAccountId, nameof(authorityAccountId));
+        AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
     }
 
     public string AuthorityAccountId { get; }
@@ -62,9 +63,9 @@ public sealed class SignedQueryBuilder
     {
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindAliasesByAccountId;
-        subjectAccountId = NormalizeRequiredValue(accountId, nameof(accountId));
-        dataspaceAlias = NormalizeOptionalValue(dataspace);
-        this.domain = NormalizeOptionalValue(domain);
+        subjectAccountId = NormalizeAccountId(accountId, nameof(accountId));
+        dataspaceAlias = NormalizeOptionalValue(dataspace, nameof(dataspace));
+        this.domain = NormalizeOptionalValue(domain, nameof(domain));
         return this;
     }
 
@@ -73,7 +74,7 @@ public sealed class SignedQueryBuilder
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindAssetById;
         this.assetDefinitionId = NormalizeRequiredValue(assetDefinitionId, nameof(assetDefinitionId));
-        subjectAccountId = NormalizeRequiredValue(accountId, nameof(accountId));
+        subjectAccountId = NormalizeAccountId(accountId, nameof(accountId));
         this.dataspaceId = dataspaceId;
         return this;
     }
@@ -256,7 +257,7 @@ public sealed class SignedQueryBuilder
     private byte[] EncodeFindAliasesByAccountId(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeAccountId(subjectAccountId!));
+        writer.WriteField(context.EncodeAccountId(RequireSelected(subjectAccountId, nameof(subjectAccountId))));
         writer.WriteField(context.EncodeOptionalString(dataspaceAlias));
         writer.WriteField(context.EncodeOptionalString(domain));
         return writer.ToArray();
@@ -265,96 +266,110 @@ public sealed class SignedQueryBuilder
     private byte[] EncodeFindAssetById(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeAssetId(assetDefinitionId!, subjectAccountId!, dataspaceId));
+        writer.WriteField(context.EncodeAssetId(
+            RequireSelected(assetDefinitionId, nameof(assetDefinitionId)),
+            RequireSelected(subjectAccountId, nameof(subjectAccountId)),
+            dataspaceId));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindAssetDefinitionById(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeAssetDefinitionId(assetDefinitionId!));
+        writer.WriteField(context.EncodeAssetDefinitionId(RequireSelected(assetDefinitionId, nameof(assetDefinitionId))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindContractManifestByCodeHash(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeHashLiteral(codeHash!));
+        writer.WriteField(context.EncodeHashLiteral(RequireSelected(codeHash, nameof(codeHash))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindProofRecordById(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeString(proofBackend!));
-        writer.WriteField(context.EncodeFixedBytesLiteral(proofHash!, expectedLength: 32));
+        writer.WriteField(context.EncodeString(RequireSelected(proofBackend, nameof(proofBackend))));
+        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(proofHash, nameof(proofHash)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindTwitterBindingByHash(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeString(twitterPepperId!));
-        writer.WriteField(context.EncodeHashLiteral(twitterBindingDigest!));
+        writer.WriteField(context.EncodeString(RequireSelected(twitterPepperId, nameof(twitterPepperId))));
+        writer.WriteField(context.EncodeHashLiteral(RequireSelected(twitterBindingDigest, nameof(twitterBindingDigest))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDomainId(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeName(domain!));
+        writer.WriteField(context.EncodeName(RequireSelected(domain, nameof(domain))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDomainCommittee(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeString(committeeId!));
+        writer.WriteField(context.EncodeString(RequireSelected(committeeId, nameof(committeeId))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByTicket(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeFixedBytesLiteral(storageTicket!, expectedLength: 32));
+        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(storageTicket, nameof(storageTicket)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByManifest(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeFixedBytesLiteral(manifestDigest!, expectedLength: 32));
+        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(manifestDigest, nameof(manifestDigest)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByAlias(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeString(pinAlias!));
+        writer.WriteField(context.EncodeString(RequireSelected(pinAlias, nameof(pinAlias))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByLaneEpochSequence(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeUInt32(laneId!.Value));
-        writer.WriteField(context.EncodeUInt64(pinEpoch!.Value));
-        writer.WriteField(context.EncodeUInt64(pinSequence!.Value));
+        writer.WriteField(context.EncodeUInt32(RequireSelected(laneId, nameof(laneId))));
+        writer.WriteField(context.EncodeUInt64(RequireSelected(pinEpoch, nameof(pinEpoch))));
+        writer.WriteField(context.EncodeUInt64(RequireSelected(pinSequence, nameof(pinSequence))));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindSorafsProviderOwner(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeFixedBytesLiteral(providerId!, expectedLength: 32));
+        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(providerId, nameof(providerId)), expectedLength: 32));
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDataspaceNameOwnerById(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(context.EncodeUInt64(dataspaceOwnerId!.Value));
+        writer.WriteField(context.EncodeUInt64(RequireSelected(dataspaceOwnerId, nameof(dataspaceOwnerId))));
         return writer.ToArray();
+    }
+
+    private static string RequireSelected(string? value, string field)
+    {
+        return value ?? throw new InvalidOperationException($"{field} must be selected before encoding.");
+    }
+
+    private static T RequireSelected<T>(T? value, string field)
+        where T : struct
+    {
+        return value ?? throw new InvalidOperationException($"{field} must be selected before encoding.");
     }
 
     private static byte[] EncodeEnumVariant(uint discriminant, params byte[][] fields)
@@ -398,17 +413,35 @@ public sealed class SignedQueryBuilder
         {
             throw new ArgumentException("Value cannot be null or empty.", paramName);
         }
-        if (value != value.Trim() || value.Any(char.IsControl))
+        if (value.Any(char.IsWhiteSpace))
         {
-            throw new ArgumentException("Value must not contain surrounding whitespace or control characters.", paramName);
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
         }
 
         return value;
     }
 
-    private static string? NormalizeOptionalValue(string? value)
+    private static string? NormalizeOptionalValue(string? value, string paramName)
     {
-        return value is null ? null : NormalizeRequiredValue(value, nameof(value));
+        return value is null ? null : NormalizeRequiredValue(value, paramName);
+    }
+
+    private static string NormalizeAccountId(string value, string paramName)
+    {
+        var exact = NormalizeRequiredValue(value, paramName);
+        try
+        {
+            return AccountAddress.Parse(exact, AccountAddress.DefaultChainDiscriminant)
+                .ToI105(AccountAddress.DefaultChainDiscriminant);
+        }
+        catch (AccountAddressException exception)
+        {
+            throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
+        }
     }
 
     private static string NormalizeProofHashHex(string value, string paramName)

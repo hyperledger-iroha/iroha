@@ -9,7 +9,7 @@ internal static class ToriiIdentifierJson
 {
     internal static string RequireExactPolicyId(string? value, string field)
     {
-        var exact = RequireExactNonBlank(value, field);
+        var exact = RequireNonBlankWithoutSurroundingWhitespaceOrControl(value, field);
         var separator = exact.IndexOf('#', StringComparison.Ordinal);
         if (separator <= 0 || separator != exact.LastIndexOf('#') || separator == exact.Length - 1)
         {
@@ -23,6 +23,17 @@ internal static class ToriiIdentifierJson
 
     internal static string RequireExactNonBlank(string? value, string field)
     {
+        value = RequireNonBlankWithoutSurroundingWhitespaceOrControl(value, field);
+        if (ContainsWhitespace(value))
+        {
+            throw new JsonException($"{field} must not contain whitespace.");
+        }
+
+        return value;
+    }
+
+    private static string RequireNonBlankWithoutSurroundingWhitespaceOrControl(string? value, string field)
+    {
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new JsonException($"{field} must not be empty.");
@@ -31,6 +42,11 @@ internal static class ToriiIdentifierJson
         if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
         {
             throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{field} must not contain control characters.");
         }
 
         return value;
@@ -49,6 +65,30 @@ internal static class ToriiIdentifierJson
         }
 
         return RequireExactNonBlank(reader.GetString(), field);
+    }
+
+    internal static string ReadExactHex(ref Utf8JsonReader reader, string field)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            throw new JsonException($"{field} must be a string.");
+        }
+
+        return RequireExactHex(reader.GetString(), field);
+    }
+
+    internal static string RequireExactHex(string? value, string field)
+    {
+        var exact = RequireExactNonBlank(value, field);
+        var body = exact.StartsWith("0x", StringComparison.Ordinal)
+            ? exact[2..]
+            : exact;
+        if (body.Length == 0 || body.Length % 2 != 0 || !IsHex(body))
+        {
+            throw new JsonException($"{field} must be an exact hex string.");
+        }
+
+        return exact;
     }
 
     internal static string? ReadOptionalExactString(ref Utf8JsonReader reader, string field)
@@ -83,9 +123,70 @@ internal static class ToriiIdentifierJson
         return value;
     }
 
-    internal static JsonNode? ReadOptionalNode(ref Utf8JsonReader reader)
+    internal static bool IsCanonicalUnsignedDecimalText(string value)
     {
-        return reader.TokenType == JsonTokenType.Null ? null : JsonNode.Parse(ref reader);
+        if (value.Length == 0 || (value.Length > 1 && value[0] == '0'))
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (character < '0' || character > '9')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static JsonNode? ReadOptionalNode(ref Utf8JsonReader reader, string field)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.ParseValue(ref reader);
+        RejectDuplicateProperties(document.RootElement, field);
+        return JsonNode.Parse(document.RootElement.GetRawText());
+    }
+
+    internal static JsonNode? ParseNodeRejectingDuplicateProperties(string json, string field)
+    {
+        using var document = JsonDocument.Parse(json);
+        RejectDuplicateProperties(document.RootElement, field);
+        return JsonNode.Parse(document.RootElement.GetRawText());
+    }
+
+    internal static void SkipRejectingDuplicateProperties(ref Utf8JsonReader reader, string field)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        RejectDuplicateProperties(document.RootElement, field);
+    }
+
+    internal static bool IsDuplicatePropertyError(JsonException exception)
+    {
+        return exception.Message.Contains("must not appear more than once", StringComparison.Ordinal);
+    }
+
+    internal static void ValidatePolicySummary(ToriiIdentifierPolicySummary? value, string context)
+    {
+        if (value is null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+
+        RequireExactPolicyId(value.PolicyId, $"{context}.policy_id");
+        RequireExactNonBlank(value.Owner, $"{context}.owner");
+        RequireExactNonBlank(value.Normalization, $"{context}.normalization");
+        RequireExactNonBlank(value.ResolverPublicKey, $"{context}.resolver_public_key");
+        RequireExactNonBlank(value.Backend, $"{context}.backend");
+        RequireOptionalExactNonBlank(value.InputEncryption, $"{context}.input_encryption");
+        RequireOptionalExactNonBlank(
+            value.InputEncryptionPublicParameters,
+            $"{context}.input_encryption_public_parameters");
     }
 
     internal static void RequireUniqueProperty(HashSet<string> seen, string propertyName, string context)
@@ -95,15 +196,90 @@ internal static class ToriiIdentifierJson
             throw new JsonException($"{context}.{propertyName} must not appear more than once.");
         }
     }
+
+    internal static void RejectDuplicateProperties(JsonElement element, string field)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var property in element.EnumerateObject())
+                {
+                    RequireUniqueProperty(seen, property.Name, field);
+                    RejectDuplicateProperties(property.Value, $"{field}.{property.Name}");
+                }
+
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    RejectDuplicateProperties(item, $"{field}[{index}]");
+                    index++;
+                }
+
+                break;
+        }
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsControlCharacter(string value)
+    {
+        foreach (var character in value)
+        {
+            if (char.IsControl(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsHex(string value)
+    {
+        foreach (var character in value)
+        {
+            var isHex =
+                character is >= '0' and <= '9'
+                || character is >= 'a' and <= 'f'
+                || character is >= 'A' and <= 'F';
+            if (!isHex)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
 
 internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<ToriiIdentifierPolicySummary>
 {
+    public override bool HandleNull => true;
+
     public override ToriiIdentifierPolicySummary Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
         JsonSerializerOptions options)
     {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            throw new JsonException("identifier policy summary must not be null.");
+        }
+
         if (reader.TokenType != JsonTokenType.StartObject)
         {
             throw new JsonException("identifier policy summary must be an object.");
@@ -187,18 +363,29 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
                         "policy.input_encryption_public_parameters");
                     break;
                 case "input_encryption_public_parameters_decoded":
-                    inputEncryptionPublicParametersDecoded = ToriiIdentifierJson.ReadOptionalNode(ref reader);
+                    inputEncryptionPublicParametersDecoded = ToriiIdentifierJson.ReadOptionalNode(
+                        ref reader,
+                        "policy.input_encryption_public_parameters_decoded");
                     break;
                 case "ram_fhe_profile":
-                    ramFheProfile = ToriiIdentifierJson.ReadOptionalNode(ref reader);
+                    ramFheProfile = ToriiIdentifierJson.ReadOptionalNode(ref reader, "policy.ram_fhe_profile");
                     break;
                 case "note":
-                    note = reader.TokenType == JsonTokenType.Null
-                        ? null
-                        : reader.GetString() ?? throw new JsonException("policy.note must be a string.");
+                    if (reader.TokenType == JsonTokenType.Null)
+                    {
+                        note = null;
+                    }
+                    else if (reader.TokenType == JsonTokenType.String)
+                    {
+                        note = reader.GetString();
+                    }
+                    else
+                    {
+                        throw new JsonException("policy.note must be a string.");
+                    }
                     break;
                 default:
-                    reader.Skip();
+                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"policy.{propertyName}");
                     break;
             }
         }
@@ -211,6 +398,8 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
         ToriiIdentifierPolicySummary value,
         JsonSerializerOptions options)
     {
+        ToriiIdentifierJson.ValidatePolicySummary(value, "policy");
+
         writer.WriteStartObject();
         writer.WriteString("policy_id", value.PolicyId);
         writer.WriteString("owner", value.Owner);
@@ -252,6 +441,182 @@ internal sealed class ToriiIdentifierPolicySummaryJsonConverter : JsonConverter<
         }
 
         value.WriteTo(writer, options);
+    }
+}
+
+internal sealed class ToriiIdentifierPoliciesResponseJsonConverter :
+    JsonConverter<ToriiIdentifierPoliciesResponse>
+{
+    public override bool HandleNull => true;
+
+    public override ToriiIdentifierPoliciesResponse Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            throw new JsonException("identifier policies response must not be null.");
+        }
+
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            throw new JsonException("identifier policies response must be an object.");
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        long? total = null;
+        List<ToriiIdentifierPolicySummary>? items = null;
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+            {
+                var response = new ToriiIdentifierPoliciesResponse
+                {
+                    Total = RequireTotal(total),
+                    Items = RequireItems(items),
+                };
+                ValidateResponse(response);
+                return response;
+            }
+
+            if (reader.TokenType != JsonTokenType.PropertyName)
+            {
+                throw new JsonException("identifier policies response property name expected.");
+            }
+
+            var propertyName = reader.GetString()
+                ?? throw new JsonException("identifier policies response property name must be a string.");
+            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, "identifier policies response");
+            if (!reader.Read())
+            {
+                throw new JsonException($"identifier policies response.{propertyName} is truncated.");
+            }
+
+            switch (propertyName)
+            {
+                case "total":
+                    total = ToriiIdentifierJson.ReadNonNegativeInt64(ref reader, "identifier policies response.total");
+                    break;
+                case "items":
+                    items = ReadItems(ref reader, options);
+                    break;
+                default:
+                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(
+                        ref reader,
+                        $"identifier policies response.{propertyName}");
+                    break;
+            }
+        }
+
+        throw new JsonException("identifier policies response object is truncated.");
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        ToriiIdentifierPoliciesResponse value,
+        JsonSerializerOptions options)
+    {
+        ValidateResponse(value);
+
+        writer.WriteStartObject();
+        writer.WriteNumber("total", value.Total);
+        writer.WritePropertyName("items");
+        writer.WriteStartArray();
+        for (var index = 0; index < value.Items.Count; index++)
+        {
+            JsonSerializer.Serialize(writer, value.Items[index], options);
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static List<ToriiIdentifierPolicySummary>? ReadItems(
+        ref Utf8JsonReader reader,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            return null;
+        }
+
+        if (reader.TokenType != JsonTokenType.StartArray)
+        {
+            throw new JsonException("identifier policies response.items must be an array.");
+        }
+
+        var items = new List<ToriiIdentifierPolicySummary>();
+        var index = 0;
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndArray)
+            {
+                return items;
+            }
+
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                throw new JsonException($"identifier policies response.items[{index}] must not be null.");
+            }
+
+            if (reader.TokenType != JsonTokenType.StartObject)
+            {
+                throw new JsonException($"identifier policies response.items[{index}] must be an object.");
+            }
+
+            items.Add(JsonSerializer.Deserialize<ToriiIdentifierPolicySummary>(ref reader, options)
+                ?? throw new JsonException($"identifier policies response.items[{index}] must not be null."));
+            index++;
+        }
+
+        throw new JsonException("identifier policies response.items array is truncated.");
+    }
+
+    private static void ValidateResponse(ToriiIdentifierPoliciesResponse? value)
+    {
+        if (value is null)
+        {
+            throw new JsonException("identifier policies response must not be null.");
+        }
+
+        if (value.Total < 0)
+        {
+            throw new JsonException("identifier policies response.total must be non-negative.");
+        }
+
+        if (value.Items is null)
+        {
+            throw new JsonException("identifier policies response.items is required.");
+        }
+
+        for (var index = 0; index < value.Items.Count; index++)
+        {
+            ToriiIdentifierJson.ValidatePolicySummary(
+                value.Items[index],
+                $"identifier policies response.items[{index}]");
+        }
+    }
+
+    private static IReadOnlyList<ToriiIdentifierPolicySummary> RequireItems(
+        IReadOnlyList<ToriiIdentifierPolicySummary>? items)
+    {
+        if (items is null)
+        {
+            throw new JsonException("identifier policies response.items is required.");
+        }
+
+        return items;
+    }
+
+    private static long RequireTotal(long? value)
+    {
+        if (!value.HasValue)
+        {
+            throw new JsonException("identifier policies response.total must not be null.");
+        }
+
+        return value.Value;
     }
 }
 
@@ -297,6 +662,8 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
 
                     return ReadNestedResolveResponse(payload, attestation);
                 }
+
+                ValidateLegacySignaturePayload(signaturePayload, "identifier receipt.signature_payload");
 
                 return new ToriiIdentifierResolveResponse
                 {
@@ -350,15 +717,13 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
                     break;
                 case "resolved_at_ms":
                     seenLegacyField = true;
-                    resolvedAtMilliseconds = ToriiIdentifierJson.ReadNonNegativeInt64(
-                        ref reader,
-                        "identifier receipt.resolved_at_ms");
+                    resolvedAtMilliseconds = ReadPositiveInt64(ref reader, "identifier receipt.resolved_at_ms");
                     break;
                 case "expires_at_ms":
                     seenLegacyField = true;
                     expiresAtMilliseconds = reader.TokenType == JsonTokenType.Null
                         ? null
-                        : ToriiIdentifierJson.ReadNonNegativeInt64(ref reader, "identifier receipt.expires_at_ms");
+                        : ReadPositiveInt64(ref reader, "identifier receipt.expires_at_ms");
                     break;
                 case "backend":
                     seenLegacyField = true;
@@ -366,17 +731,19 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
                     break;
                 case "signature":
                     seenLegacyField = true;
-                    signature = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.signature");
+                    signature = ToriiIdentifierJson.ReadExactHex(ref reader, "identifier receipt.signature");
                     break;
                 case "signature_payload_hex":
                     seenLegacyField = true;
-                    signaturePayloadHex = ToriiIdentifierJson.ReadExactString(
+                    signaturePayloadHex = ToriiIdentifierJson.ReadExactHex(
                         ref reader,
                         "identifier receipt.signature_payload_hex");
                     break;
                 case "signature_payload":
                     seenLegacyField = true;
-                    signaturePayload = ToriiIdentifierJson.ReadOptionalNode(ref reader);
+                    signaturePayload = ToriiIdentifierJson.ReadOptionalNode(
+                        ref reader,
+                        "identifier receipt.signature_payload");
                     break;
                 case "payload":
                     payload = ReadObjectNode(ref reader, "identifier receipt.payload");
@@ -385,12 +752,151 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
                     attestation = ReadObjectNode(ref reader, "identifier receipt.attestation");
                     break;
                 default:
-                    reader.Skip();
+                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(
+                        ref reader,
+                        $"identifier receipt.{propertyName}");
                     break;
             }
         }
 
         throw new JsonException("identifier resolve response object is truncated.");
+    }
+
+    private static void ValidateLegacySignaturePayload(JsonNode? payload, string context)
+    {
+        if (payload is not JsonObject payloadObject)
+        {
+            return;
+        }
+
+        ValidateSignaturePayloadObject(payloadObject, context);
+
+        if (payloadObject.TryGetPropertyValue("payload", out var nestedPayload)
+            && nestedPayload is JsonObject nestedPayloadObject)
+        {
+            ValidateSignaturePayloadObject(nestedPayloadObject, $"{context}.payload");
+        }
+
+        if (payloadObject.TryGetPropertyValue("attestation", out var attestation)
+            && attestation is JsonObject attestationObject)
+        {
+            ValidateSignaturePayloadAttestation(attestationObject, $"{context}.attestation");
+        }
+    }
+
+    private static void ValidateSignaturePayloadObject(JsonObject payload, string context)
+    {
+        ValidateOptionalPolicyId(payload, "policy_id", $"{context}.policy_id");
+        ValidateOptionalExactString(payload, "account_id", $"{context}.account_id");
+        ValidateOptionalExactString(payload, "opaque_id", $"{context}.opaque_id");
+        ValidateOptionalExactString(payload, "receipt_hash", $"{context}.receipt_hash");
+        ValidateOptionalExactString(payload, "uaid", $"{context}.uaid");
+        ValidateSignaturePayloadAttestation(payload, context);
+
+        if (TryGetOptionalObject(payload, "execution", $"{context}.execution", out var execution))
+        {
+            ValidateOptionalExactString(execution, "program_id", $"{context}.execution.program_id");
+            ValidateOptionalExactString(execution, "program_digest", $"{context}.execution.program_digest");
+            ValidateOptionalExactString(execution, "backend", $"{context}.execution.backend");
+            ValidateOptionalExactString(execution, "verification_mode", $"{context}.execution.verification_mode");
+            ValidateOptionalExactString(
+                execution,
+                "input_ciphertext_hash",
+                $"{context}.execution.input_ciphertext_hash");
+            ValidateOptionalExactString(
+                execution,
+                "output_ciphertext_hash",
+                $"{context}.execution.output_ciphertext_hash");
+            ValidateOptionalExactString(execution, "parameter_digest", $"{context}.execution.parameter_digest");
+            ValidateOptionalExactString(
+                execution,
+                "evaluation_key_digest",
+                $"{context}.execution.evaluation_key_digest");
+            ValidateOptionalExactString(execution, "output_hash", $"{context}.execution.output_hash");
+            ValidateOptionalExactString(
+                execution,
+                "associated_data_hash",
+                $"{context}.execution.associated_data_hash");
+            ValidateOptionalPositiveInt64(execution, "executed_at_ms", $"{context}.execution.executed_at_ms");
+            ValidateOptionalPositiveInt64(execution, "expires_at_ms", $"{context}.execution.expires_at_ms");
+        }
+
+        if (TryGetOptionalObject(payload, "opening", $"{context}.opening", out var opening))
+        {
+            ValidateOptionalExactHexString(opening, "signature", $"{context}.opening.signature");
+            if (TryGetOptionalObject(opening, "payload", $"{context}.opening.payload", out var openingPayload))
+            {
+                ValidateOptionalExactString(
+                    openingPayload,
+                    "program_id",
+                    $"{context}.opening.payload.program_id");
+                ValidateOptionalExactString(
+                    openingPayload,
+                    "input_ciphertext_hash",
+                    $"{context}.opening.payload.input_ciphertext_hash");
+                ValidateOptionalExactString(
+                    openingPayload,
+                    "output_ciphertext_hash",
+                    $"{context}.opening.payload.output_ciphertext_hash");
+                ValidateOptionalExactString(
+                    openingPayload,
+                    "parameter_digest",
+                    $"{context}.opening.payload.parameter_digest");
+                ValidateOptionalExactString(
+                    openingPayload,
+                    "evaluation_key_digest",
+                    $"{context}.opening.payload.evaluation_key_digest");
+                ValidateOptionalExactString(
+                    openingPayload,
+                    "opened_output_hash",
+                    $"{context}.opening.payload.opened_output_hash");
+                ValidateOptionalPositiveInt64(
+                    openingPayload,
+                    "opened_at_ms",
+                    $"{context}.opening.payload.opened_at_ms");
+                ValidateOptionalPositiveInt64(
+                    openingPayload,
+                    "expires_at_ms",
+                    $"{context}.opening.payload.expires_at_ms");
+            }
+        }
+    }
+
+    private static void ValidateSignaturePayloadAttestation(JsonObject attestation, string context)
+    {
+        ValidateOptionalExactHexString(attestation, "signature", $"{context}.signature");
+
+        var hasKind = attestation.TryGetPropertyValue("kind", out _);
+        var hasProofBackend = attestation.TryGetPropertyValue("proof_backend", out _);
+        var hasProofBase64 = attestation.TryGetPropertyValue("proof_b64", out _);
+        if (!hasKind)
+        {
+            if (hasProofBackend || hasProofBase64)
+            {
+                throw new JsonException($"{context}.kind is required when proof fields are present.");
+            }
+
+            return;
+        }
+
+        var kind = RequireExactString(attestation, "kind", $"{context}.kind");
+        switch (kind)
+        {
+            case "signed":
+                if (hasProofBackend || hasProofBase64)
+                {
+                    throw new JsonException($"{context} signed attestations must not include proof fields.");
+                }
+
+                break;
+            case "proof":
+                _ = RequireExactString(attestation, "proof_backend", $"{context}.proof_backend");
+                var proof = RequireExactString(attestation, "proof_b64", $"{context}.proof_b64");
+                ValidateExactBase64(proof, $"{context}.proof_b64");
+                break;
+            default:
+                throw new JsonException($"{context}.kind must be signed or proof.");
+        }
     }
 
     private static ToriiIdentifierResolveResponse ReadNestedResolveResponse(
@@ -408,18 +914,14 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         }
 
         var execution = RequireObject(payload, "execution", "identifier receipt.payload.execution");
+        ValidateNestedResolvePayload(payload, execution);
         var kind = RequireExactString(attestation, "kind", "identifier receipt.attestation.kind");
         var signature = kind switch
         {
-            "signed" => RequireExactString(attestation, "signature", "identifier receipt.attestation.signature"),
-            "proof" => string.Empty,
+            "signed" => ReadSignedAttestationSignature(attestation),
+            "proof" => ReadProofAttestation(attestation),
             _ => throw new JsonException("identifier receipt.attestation.kind must be signed or proof."),
         };
-
-        if (kind == "proof" && attestation.ContainsKey("signature"))
-        {
-            throw new JsonException("identifier receipt.attestation proof attestations must not include signature.");
-        }
 
         var signaturePayload = new JsonObject
         {
@@ -434,11 +936,11 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
             ReceiptHash = RequireExactString(payload, "receipt_hash", "identifier receipt.payload.receipt_hash"),
             Uaid = RequireExactString(payload, "uaid", "identifier receipt.payload.uaid"),
             AccountId = RequireExactString(payload, "account_id", "identifier receipt.payload.account_id"),
-            ResolvedAtMilliseconds = RequireNonNegativeInt64(
+            ResolvedAtMilliseconds = RequirePositiveInt64(
                 execution,
                 "executed_at_ms",
                 "identifier receipt.payload.execution.executed_at_ms"),
-            ExpiresAtMilliseconds = ReadOptionalNonNegativeInt64(
+            ExpiresAtMilliseconds = ReadOptionalPositiveInt64(
                 execution,
                 "expires_at_ms",
                 "identifier receipt.payload.execution.expires_at_ms"),
@@ -449,9 +951,102 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         };
     }
 
+    private static string ReadSignedAttestationSignature(JsonObject attestation)
+    {
+        if (attestation.ContainsKey("proof_backend") || attestation.ContainsKey("proof_b64"))
+        {
+            throw new JsonException("identifier receipt.attestation signed attestations must not include proof fields.");
+        }
+
+        return RequireExactHexString(attestation, "signature", "identifier receipt.attestation.signature");
+    }
+
+    private static string ReadProofAttestation(JsonObject attestation)
+    {
+        if (attestation.ContainsKey("signature"))
+        {
+            throw new JsonException("identifier receipt.attestation proof attestations must not include signature.");
+        }
+
+        _ = RequireExactString(attestation, "proof_backend", "identifier receipt.attestation.proof_backend");
+        var proof = RequireExactString(attestation, "proof_b64", "identifier receipt.attestation.proof_b64");
+        ValidateExactBase64(proof, "identifier receipt.attestation.proof_b64");
+        return string.Empty;
+    }
+
+    private static void ValidateNestedResolvePayload(JsonObject payload, JsonObject execution)
+    {
+        ValidateOptionalExactString(execution, "program_id", "identifier receipt.payload.execution.program_id");
+        ValidateOptionalExactString(execution, "program_digest", "identifier receipt.payload.execution.program_digest");
+        ValidateOptionalExactString(execution, "backend", "identifier receipt.payload.execution.backend");
+        ValidateOptionalExactString(execution, "verification_mode", "identifier receipt.payload.execution.verification_mode");
+        ValidateOptionalExactString(
+            execution,
+            "input_ciphertext_hash",
+            "identifier receipt.payload.execution.input_ciphertext_hash");
+        ValidateOptionalExactString(
+            execution,
+            "output_ciphertext_hash",
+            "identifier receipt.payload.execution.output_ciphertext_hash");
+        ValidateOptionalExactString(execution, "parameter_digest", "identifier receipt.payload.execution.parameter_digest");
+        ValidateOptionalExactString(
+            execution,
+            "evaluation_key_digest",
+            "identifier receipt.payload.execution.evaluation_key_digest");
+        ValidateOptionalExactString(execution, "output_hash", "identifier receipt.payload.execution.output_hash");
+        ValidateOptionalExactString(
+            execution,
+            "associated_data_hash",
+            "identifier receipt.payload.execution.associated_data_hash");
+
+        if (!TryGetOptionalObject(payload, "opening", "identifier receipt.payload.opening", out var opening))
+        {
+            return;
+        }
+
+        ValidateOptionalExactHexString(opening, "signature", "identifier receipt.payload.opening.signature");
+        if (!TryGetOptionalObject(opening, "payload", "identifier receipt.payload.opening.payload", out var openingPayload))
+        {
+            return;
+        }
+
+        ValidateOptionalExactString(
+            openingPayload,
+            "program_id",
+            "identifier receipt.payload.opening.payload.program_id");
+        ValidateOptionalExactString(
+            openingPayload,
+            "input_ciphertext_hash",
+            "identifier receipt.payload.opening.payload.input_ciphertext_hash");
+        ValidateOptionalExactString(
+            openingPayload,
+            "output_ciphertext_hash",
+            "identifier receipt.payload.opening.payload.output_ciphertext_hash");
+        ValidateOptionalExactString(
+            openingPayload,
+            "parameter_digest",
+            "identifier receipt.payload.opening.payload.parameter_digest");
+        ValidateOptionalExactString(
+            openingPayload,
+            "evaluation_key_digest",
+            "identifier receipt.payload.opening.payload.evaluation_key_digest");
+        ValidateOptionalExactString(
+            openingPayload,
+            "opened_output_hash",
+            "identifier receipt.payload.opening.payload.opened_output_hash");
+        ValidateOptionalPositiveInt64(
+            openingPayload,
+            "opened_at_ms",
+            "identifier receipt.payload.opening.payload.opened_at_ms");
+        ValidateOptionalPositiveInt64(
+            openingPayload,
+            "expires_at_ms",
+            "identifier receipt.payload.opening.payload.expires_at_ms");
+    }
+
     private static JsonObject ReadObjectNode(ref Utf8JsonReader reader, string field)
     {
-        var node = JsonNode.Parse(ref reader);
+        var node = ToriiIdentifierJson.ReadOptionalNode(ref reader, field);
         return node as JsonObject ?? throw new JsonException($"{field} must be an object.");
     }
 
@@ -465,11 +1060,50 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         return node as JsonObject ?? throw new JsonException($"{field} must be an object.");
     }
 
+    private static bool TryGetOptionalObject(
+        JsonObject payload,
+        string propertyName,
+        string field,
+        out JsonObject value)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var node) || node is null)
+        {
+            value = new JsonObject();
+            return false;
+        }
+
+        if (node is JsonObject jsonObject)
+        {
+            value = jsonObject;
+            return true;
+        }
+
+        throw new JsonException($"{field} must be an object.");
+    }
+
     private static string RequirePolicyId(JsonObject payload, string propertyName, string field)
     {
         return ToriiIdentifierJson.RequireExactPolicyId(
             RequireExactString(payload, propertyName, field),
             field);
+    }
+
+    private static void ValidateOptionalPolicyId(JsonObject payload, string propertyName, string field)
+    {
+        if (payload.TryGetPropertyValue(propertyName, out var node) && node is not null)
+        {
+            _ = ToriiIdentifierJson.RequireExactPolicyId(RequireJsonString(node, field), field);
+        }
+    }
+
+    private static string RequireJsonString(JsonNode node, string field)
+    {
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return text;
+        }
+
+        throw new JsonException($"{field} must be a string.");
     }
 
     private static string RequireExactString(JsonObject payload, string propertyName, string field)
@@ -487,21 +1121,80 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         throw new JsonException($"{field} must be a string.");
     }
 
-    private static long RequireNonNegativeInt64(JsonObject payload, string propertyName, string field)
+    private static string RequireExactHexString(JsonObject payload, string propertyName, string field)
     {
         if (!payload.TryGetPropertyValue(propertyName, out var node))
         {
             throw new JsonException($"{field} is required.");
         }
 
-        return ReadNonNegativeInt64(node, field);
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return ToriiIdentifierJson.RequireExactHex(text, field);
+        }
+
+        throw new JsonException($"{field} must be a string.");
     }
 
-    private static long? ReadOptionalNonNegativeInt64(JsonObject payload, string propertyName, string field)
+    private static void ValidateOptionalExactString(JsonObject payload, string propertyName, string field)
+    {
+        if (payload.TryGetPropertyValue(propertyName, out var node) && node is not null)
+        {
+            _ = RequireExactString(payload, propertyName, field);
+        }
+    }
+
+    private static void ValidateOptionalExactHexString(JsonObject payload, string propertyName, string field)
+    {
+        if (payload.TryGetPropertyValue(propertyName, out var node) && node is not null)
+        {
+            _ = RequireExactHexString(payload, propertyName, field);
+        }
+    }
+
+    private static long RequirePositiveInt64(JsonObject payload, string propertyName, string field)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var node))
+        {
+            throw new JsonException($"{field} is required.");
+        }
+
+        return ReadPositiveInt64(node, field);
+    }
+
+    private static long? ReadOptionalPositiveInt64(JsonObject payload, string propertyName, string field)
     {
         return payload.TryGetPropertyValue(propertyName, out var node) && node is not null
-            ? ReadNonNegativeInt64(node, field)
+            ? ReadPositiveInt64(node, field)
             : null;
+    }
+
+    private static void ValidateOptionalPositiveInt64(JsonObject payload, string propertyName, string field)
+    {
+        if (payload.TryGetPropertyValue(propertyName, out var node) && node is not null)
+        {
+            _ = ReadPositiveInt64(node, field);
+        }
+    }
+
+    private static long ReadPositiveInt64(ref Utf8JsonReader reader, string field)
+    {
+        return ValidatePositiveInt64(ToriiIdentifierJson.ReadNonNegativeInt64(ref reader, field), field);
+    }
+
+    private static long ReadPositiveInt64(JsonNode? node, string field)
+    {
+        return ValidatePositiveInt64(ReadNonNegativeInt64(node, field), field);
+    }
+
+    private static long ValidatePositiveInt64(long value, string field)
+    {
+        if (value <= 0)
+        {
+            throw new JsonException($"{field} must be positive.");
+        }
+
+        return value;
     }
 
     private static long ReadNonNegativeInt64(JsonNode? node, string field)
@@ -524,9 +1217,14 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         else if (value.TryGetValue<string>(out var text))
         {
             text = ToriiIdentifierJson.RequireExactNonBlank(text, field);
-            if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out parsed))
+            if (text.StartsWith("-", StringComparison.Ordinal))
             {
-                throw new JsonException($"{field} must be an integer.");
+                throw new JsonException($"{field} must be non-negative.");
+            }
+            if (!ToriiIdentifierJson.IsCanonicalUnsignedDecimalText(text)
+                || !long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out parsed))
+            {
+                throw new JsonException($"{field} must be canonical unsigned decimal text.");
             }
         }
         else
@@ -542,11 +1240,48 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         return parsed;
     }
 
+    private static void ValidateExactBase64(string value, string field)
+    {
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                throw new JsonException($"{field} must not contain whitespace.");
+            }
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(value);
+        }
+        catch (FormatException exception)
+        {
+            throw new JsonException($"{field} must be valid base64.", exception);
+        }
+
+        if (bytes.Length == 0)
+        {
+            throw new JsonException($"{field} must not decode to empty bytes.");
+        }
+
+        if (!string.Equals(Convert.ToBase64String(bytes), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must be canonical base64 text.");
+        }
+    }
+
     public override void Write(
         Utf8JsonWriter writer,
         ToriiIdentifierResolveResponse value,
         JsonSerializerOptions options)
     {
+        ValidatePositiveInt64(value.ResolvedAtMilliseconds, "identifier receipt.resolved_at_ms");
+        if (value.ExpiresAtMilliseconds is long expiresAtMilliseconds)
+        {
+            ValidatePositiveInt64(expiresAtMilliseconds, "identifier receipt.expires_at_ms");
+        }
+
         writer.WriteStartObject();
         writer.WriteString("policy_id", value.PolicyId);
         writer.WriteString("opaque_id", value.OpaqueId);

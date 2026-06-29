@@ -32,10 +32,13 @@ public final class PublicKeyCodec {
    * Returns {@code null} when the literal is not a valid multihash key.
    */
   public static PublicKeyPayload decodePublicKeyLiteral(final String literal) {
-    if (literal == null || literal.isBlank()) {
+    if (literal == null) {
       return null;
     }
     String trimmed = literal.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
     final int colonIndex = trimmed.indexOf(':');
     if (colonIndex > 0) {
       trimmed = trimmed.substring(colonIndex + 1);

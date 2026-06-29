@@ -46,7 +46,7 @@ public final class IdentifierReceiptVerifier {
 
   private static String requireExactResolverPublicKey(final String literal) {
     Objects.requireNonNull(literal, "resolverPublicKey");
-    if (literal.isBlank()) {
+    if (literal.trim().isEmpty()) {
       throw new IllegalArgumentException("resolverPublicKey must not be empty");
     }
     if (!literal.trim().equals(literal)) {
@@ -57,7 +57,7 @@ public final class IdentifierReceiptVerifier {
 
   private static String requireExactPolicyId(final String literal) {
     Objects.requireNonNull(literal, "policy.policy_id");
-    if (literal.isBlank()) {
+    if (literal.trim().isEmpty()) {
       throw new IllegalArgumentException("policy.policy_id must not be empty");
     }
     if (!literal.trim().equals(literal)) {

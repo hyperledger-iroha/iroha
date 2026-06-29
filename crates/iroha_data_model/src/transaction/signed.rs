@@ -985,12 +985,22 @@ impl iroha_version::Version for SignedTransaction {
     }
 }
 
+fn encode_default_layout_versioned<T>(version: u8, value: &T) -> Vec<u8>
+where
+    T: norito::NoritoSerialize,
+{
+    let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
+    bytes.push(version);
+    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    value
+        .serialize(&mut bytes)
+        .expect("versioned transaction encoding should not fail");
+    bytes
+}
+
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
     fn encode_versioned(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(1);
-        bytes.push(self.version());
-        bytes.extend(norito::codec::encode_adaptive(self));
-        bytes
+        encode_default_layout_versioned(self.version(), self)
     }
 }
 
@@ -1012,10 +1022,7 @@ impl iroha_version::Version for TransactionEntrypoint {
 
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
     fn encode_versioned(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(1);
-        bytes.push(self.version());
-        bytes.extend(norito::codec::encode_adaptive(self));
-        bytes
+        encode_default_layout_versioned(self.version(), self)
     }
 }
 
