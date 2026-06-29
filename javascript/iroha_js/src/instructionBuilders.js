@@ -11037,12 +11037,16 @@ export function buildMultisigProposeRequest(options) {
     source.validationFeePolicyHash ?? source.validation_fee_policy_hash;
   const validationFeeInstructionIndex =
     source.validationFeeInstructionIndex ?? source.validation_fee_instruction_index;
+  const validationFeeTransferEntryIndex =
+    source.validationFeeTransferEntryIndex ?? source.validation_fee_transfer_entry_index;
   const hasValidationFeePolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasValidationFeePolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
   const hasValidationFeeInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
+  const hasValidationFeeTransferEntryIndex =
+    validationFeeTransferEntryIndex !== undefined && validationFeeTransferEntryIndex !== null;
   if (hasValidationFeePolicyVersion !== hasValidationFeePolicyHash) {
     fail(
       ValidationErrorCode.INVALID_OBJECT,
@@ -11055,6 +11059,20 @@ export function buildMultisigProposeRequest(options) {
       ValidationErrorCode.INVALID_OBJECT,
       "multisigPropose validation fee instruction index requires policy metadata",
       "multisigPropose.validationFeeInstructionIndex",
+    );
+  }
+  if (!hasValidationFeePolicyVersion && hasValidationFeeTransferEntryIndex) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose validation fee transfer entry index requires policy metadata",
+      "multisigPropose.validationFeeTransferEntryIndex",
+    );
+  }
+  if (hasValidationFeeTransferEntryIndex && !hasValidationFeeInstructionIndex) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigPropose validation fee transfer entry index requires instruction index",
+      "multisigPropose.validationFeeTransferEntryIndex",
     );
   }
   if (hasValidationFeePolicyVersion) {
@@ -11073,6 +11091,14 @@ export function buildMultisigProposeRequest(options) {
         asNonNegativeInteger(
           validationFeeInstructionIndex,
           "multisigPropose.validationFeeInstructionIndex",
+        ),
+      );
+    }
+    if (hasValidationFeeTransferEntryIndex) {
+      payload.validation_fee_transfer_entry_index = String(
+        asNonNegativeInteger(
+          validationFeeTransferEntryIndex,
+          "multisigPropose.validationFeeTransferEntryIndex",
         ),
       );
     }

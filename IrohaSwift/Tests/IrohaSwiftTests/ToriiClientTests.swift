@@ -13797,6 +13797,7 @@ id: 88
             XCTAssertEqual(json["validation_fee_policy_version"] as? String, "7")
             XCTAssertEqual(json["validation_fee_policy_hash"] as? String, String(repeating: "ab", count: 32))
             XCTAssertEqual(json["validation_fee_instruction_index"] as? String, "1")
+            XCTAssertEqual(json["validation_fee_transfer_entry_index"] as? String, "2")
             let instructions = json["instructions"] as? [[String: Any]]
             XCTAssertEqual(instructions?.first?["kind"] as? String, "Transfer")
             let response = HTTPURLResponse(url: request.url!,
@@ -13817,6 +13818,7 @@ id: 88
             validationFeePolicyVersion: 7,
             validationFeePolicyHash: "0x\(String(repeating: "AB", count: 32))",
             validationFeeInstructionIndex: 1,
+            validationFeeTransferEntryIndex: 2,
             instructions: [
                 try ToriiMultisigProposeInstruction(object: ["kind": .string("Transfer")])
             ]
@@ -13941,6 +13943,32 @@ id: 88
             instructions: [instruction]
         )
         XCTAssertThrowsError(try JSONEncoder().encode(coordinateWithoutPolicyRequest)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+
+        let transferEntryWithoutPolicyRequest = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: signer,
+            validationFeeTransferEntryIndex: 2,
+            instructions: [instruction]
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(transferEntryWithoutPolicyRequest)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+
+        let transferEntryWithoutInstructionRequest = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            signerAccountId: signer,
+            validationFeePolicyVersion: 7,
+            validationFeePolicyHash: String(repeating: "ab", count: 32),
+            validationFeeTransferEntryIndex: 2,
+            instructions: [instruction]
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(transferEntryWithoutInstructionRequest)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }

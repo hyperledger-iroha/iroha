@@ -61132,6 +61132,7 @@ pub(crate) mod tests_runtime_handlers {
             code_b64: code_b64.clone(),
             contract_alias: "rate-limit::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
         };
         // Exhaust the exact handler key up front so this regression does not depend
         // on how quickly the first deploy request completes on the current host.
@@ -62109,6 +62110,7 @@ pub(crate) mod tests_runtime_handlers {
             code_b64,
             contract_alias: "deploy-test::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
         };
         let resp = super::handler_post_contract_deploy(
             State(app),

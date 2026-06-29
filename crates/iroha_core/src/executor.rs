@@ -9261,6 +9261,7 @@ mod tests {
     }
 
     #[test]
+
     fn nexus_fee_dataspace_default_sponsor_accepts_native_batch() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()

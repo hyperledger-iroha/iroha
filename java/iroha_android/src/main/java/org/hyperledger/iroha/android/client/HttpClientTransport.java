@@ -2132,7 +2132,8 @@ public final class HttpClientTransport implements IrohaClient {
         payload,
         request.validationFeePolicyVersion(),
         request.validationFeePolicyHash(),
-        request.validationFeeInstructionIndex());
+        request.validationFeeInstructionIndex(),
+        request.validationFeeTransferEntryIndex());
     final List<String> instructions = new ArrayList<>();
     int index = 0;
     for (final byte[] instruction : request.instructions()) {
@@ -2150,10 +2151,12 @@ public final class HttpClientTransport implements IrohaClient {
       final Map<String, Object> payload,
       final Long validationFeePolicyVersion,
       final String validationFeePolicyHash,
-      final Long validationFeeInstructionIndex) {
+      final Long validationFeeInstructionIndex,
+      final Long validationFeeTransferEntryIndex) {
     final boolean hasPolicyVersion = validationFeePolicyVersion != null;
     final boolean hasPolicyHash = validationFeePolicyHash != null;
     final boolean hasInstructionIndex = validationFeeInstructionIndex != null;
+    final boolean hasTransferEntryIndex = validationFeeTransferEntryIndex != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
@@ -2161,6 +2164,14 @@ public final class HttpClientTransport implements IrohaClient {
     if (!hasPolicyVersion && hasInstructionIndex) {
       throw new IllegalArgumentException(
           "validationFeeInstructionIndex requires validation fee policy metadata");
+    }
+    if (!hasPolicyVersion && hasTransferEntryIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeTransferEntryIndex requires validation fee policy metadata");
+    }
+    if (hasTransferEntryIndex && !hasInstructionIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeTransferEntryIndex requires validationFeeInstructionIndex");
     }
     if (!hasPolicyVersion) {
       return;
@@ -2171,12 +2182,18 @@ public final class HttpClientTransport implements IrohaClient {
     if (hasInstructionIndex && validationFeeInstructionIndex.longValue() < 0L) {
       throw new IllegalArgumentException("validationFeeInstructionIndex must be non-negative");
     }
+    if (hasTransferEntryIndex && validationFeeTransferEntryIndex.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeeTransferEntryIndex must be non-negative");
+    }
     payload.put("validation_fee_policy_version", validationFeePolicyVersion.toString());
     payload.put(
         "validation_fee_policy_hash",
         normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
     if (hasInstructionIndex) {
       payload.put("validation_fee_instruction_index", validationFeeInstructionIndex.toString());
+    }
+    if (hasTransferEntryIndex) {
+      payload.put("validation_fee_transfer_entry_index", validationFeeTransferEntryIndex.toString());
     }
   }
 

@@ -245,6 +245,9 @@ const REBROADCAST_COOLDOWN_CEILING: Duration = Duration::from_millis(200);
 const REBROADCAST_COOLDOWN_DIVISOR: u32 = 8;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Frontier recovery can locally retry at the pacemaker nudge cadence, but network-wide
+/// NEW_VIEW convergence rebroadcasts need a wider cadence to avoid filling per-peer post queues.
+const FRONTIER_RECOVERY_NEW_VIEW_REBROADCAST_MULTIPLIER: u32 = 4;
 /// Targeted payload/body rescue sends full payload material to stragglers, so keep it
 /// materially slower than READY/vote repair even on fast 1s localnets.
 const TARGETED_PAYLOAD_RESCUE_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
@@ -13987,16 +13990,20 @@ struct CommitState {
     inflight: Option<CommitInFlight>,
     work_tx: Option<mpsc::SyncSender<commit::CommitWork>>,
     result_rx: Option<mpsc::Receiver<commit::CommitResult>>,
+    retired_result_ids: VecDeque<u64>,
     next_id: u64,
     worker_disconnect_logged: bool,
 }
 
 impl CommitState {
+    const RETIRED_RESULT_ID_CAP: usize = 128;
+
     fn new() -> Self {
         Self {
             inflight: None,
             work_tx: None,
             result_rx: None,
+            retired_result_ids: VecDeque::new(),
             next_id: 0,
             worker_disconnect_logged: false,
         }
@@ -14006,6 +14013,25 @@ impl CommitState {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         id
+    }
+
+    fn remember_retired_result_id(&mut self, id: u64) {
+        self.retired_result_ids.push_back(id);
+        while self.retired_result_ids.len() > Self::RETIRED_RESULT_ID_CAP {
+            let _ = self.retired_result_ids.pop_front();
+        }
+    }
+
+    fn take_retired_result_id(&mut self, id: u64) -> bool {
+        let Some(index) = self
+            .retired_result_ids
+            .iter()
+            .position(|retired_id| *retired_id == id)
+        else {
+            return false;
+        };
+        let _ = self.retired_result_ids.remove(index);
+        true
     }
 }
 
@@ -30267,6 +30293,14 @@ impl Actor {
         self.effective_timing.get().rebroadcast_cooldown
     }
 
+    fn frontier_recovery_new_view_rebroadcast_cooldown(&self) -> Duration {
+        saturating_mul_duration(
+            self.control_plane_rebroadcast_cooldown(),
+            FRONTIER_RECOVERY_NEW_VIEW_REBROADCAST_MULTIPLIER,
+        )
+        .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+    }
+
     fn control_plane_rebroadcast_cooldown(&self) -> Duration {
         self.effective_timing
             .get()
@@ -33678,6 +33712,7 @@ impl Actor {
                     | "lock_lag_future_prune"
                     | "sidecar_mismatch"
                     | "highest_qc_committed_conflict"
+                    | "missing_block_far_ahead_retry"
             )
     }
 
@@ -39333,8 +39368,9 @@ impl Actor {
                 same_slot_missing_commit_qc_repair_active
                     && reason != "quorum_timeout"
                     && !same_slot_ingress_hard_cap_elapsed;
-            let suppress_same_slot_vote_backed_recovery =
-                same_slot_vote_backed_recovery_active && !same_slot_ingress_hard_cap_elapsed;
+            let suppress_same_slot_vote_backed_recovery = same_slot_vote_backed_recovery_active
+                && reason != "quorum_timeout"
+                && !same_slot_ingress_hard_cap_elapsed;
             let suppress_same_height_rbc_sender_activity =
                 same_height_rbc_sender_activity_active && !same_slot_ingress_hard_cap_elapsed;
             if same_height_dependency_backlog_active
@@ -44703,6 +44739,7 @@ enum ProposalDeferWarningKind {
     InsufficientOnlinePeers,
     EmptyCommitTopologyProposal,
     EmptyCommitTopologyFinalize,
+    CommittedQcNoNewViewFallback,
     FrontierRecoveryProposalDeferred,
     FrontierOwnerYieldBlocked,
 }

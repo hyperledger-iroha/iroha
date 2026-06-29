@@ -1108,6 +1108,24 @@ pub(crate) fn dataspace_fee_sponsor_from_config(
         })
 }
 
+pub(crate) fn dataspace_fee_sponsor_matches(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
+    dataspace: DataSpaceId,
+    account_id: &AccountId,
+) -> bool {
+    dataspace_fee_sponsor_from_config(
+        world,
+        dataspace_catalog,
+        dataspace_fee_sponsors,
+        dataspace,
+    )
+    .ok()
+    .flatten()
+    .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
+}
+
 pub(crate) fn dataspace_fee_sponsor_policy_from_config(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -7911,6 +7929,40 @@ impl<'state> StateBlock<'state> {
         }
     }
 
+    fn clear_expired_vrf_public_lane_jails(&mut self, current_epoch: u64) {
+        let to_restore: Vec<_> = self
+            .world
+            .public_lane_validators
+            .iter()
+            .filter_map(|(key, record)| {
+                if !public_lane_validator_record_matches_key(key, record) {
+                    return None;
+                }
+                let PublicLaneValidatorStatus::Jailed(reason) = &record.status else {
+                    return None;
+                };
+                let penalty_epoch = vrf_penalty_jail_epoch(reason)?;
+                (penalty_epoch < current_epoch).then(|| (key.clone(), record.status.clone()))
+            })
+            .collect();
+
+        for (key, previous_status) in to_restore {
+            let Some(mut record) = self.world.public_lane_validators.get(&key).cloned() else {
+                continue;
+            };
+            record.status = PublicLaneValidatorStatus::Active;
+            #[cfg(feature = "telemetry")]
+            self.telemetry.record_public_lane_validator_status(
+                key.0,
+                Some(&previous_status),
+                &record.status,
+            );
+            #[cfg(not(feature = "telemetry"))]
+            let _ = previous_status;
+            self.world.public_lane_validators.insert(key, record);
+        }
+    }
+
     fn apply_axt_envelope(&mut self, envelope: &AxtEnvelopeRecord, current_slot: u64) {
         for handle in &envelope.handles {
             let dsid = handle.intent.asset_dsid;
@@ -8854,6 +8906,12 @@ pub(crate) fn public_lane_validator_record_matches_key(
     key.0 == record.lane_id && key.1 == record.validator
 }
 
+fn vrf_penalty_jail_epoch(reason: &str) -> Option<u64> {
+    reason
+        .strip_prefix("vrf_penalty_epoch_")
+        .and_then(|epoch| epoch.parse().ok())
+}
+
 pub(crate) fn public_lane_stake_share_matches_key(
     key: &(LaneId, AccountId, AccountId),
     share: &PublicLaneStakeShare,
@@ -9075,6 +9133,73 @@ pub(crate) fn eligible_lane_relay_emergency_peers(
     eligible.sort();
     eligible.dedup();
     eligible
+}
+
+fn active_stake_elected_validator_peers_for_checkpoint_lanes<I, P>(
+    world: &impl WorldReadOnly,
+    candidate_peers: I,
+    checkpoint_lane_ids: &BTreeSet<LaneId>,
+    block_height: u64,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<PeerId>
+where
+    I: IntoIterator<Item = P>,
+    P: std::borrow::Borrow<PeerId>,
+{
+    if checkpoint_lane_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let candidate_peers: BTreeSet<PeerId> = candidate_peers
+        .into_iter()
+        .map(|peer| peer.borrow().clone())
+        .collect();
+    if candidate_peers.is_empty() {
+        return Vec::new();
+    }
+
+    let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
+    let active_lane_ids = nexus_active_lane_ids(nexus);
+    let mut peers: Vec<_> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
+        .filter(|(_, record)| checkpoint_lane_ids.contains(&record.lane_id))
+        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
+        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .filter_map(|(_, record)| {
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                return None;
+            };
+            if !meets_min {
+                return None;
+            }
+
+            let peer = record.peer_id.clone();
+            if !candidate_peers.contains(&peer) || !present_peers.contains(&peer) {
+                return None;
+            }
+            if !peer_has_live_consensus_key(world, &peer, block_height) {
+                return None;
+            }
+            Some(peer)
+        })
+        .collect();
+
+    peers.sort();
+    peers.dedup();
+    peers
 }
 
 /// Stake-snapshot trait: provides an epoch-specific validator roster snapshot.
@@ -9754,6 +9879,127 @@ mod stake_snapshot_tests {
         );
         assert_eq!(mismatched.activation_epoch, None);
         assert_eq!(mismatched.activation_height, None);
+    }
+
+    #[test]
+    fn state_block_clears_only_expired_vrf_public_lane_jails() {
+        let world = World::default();
+        let expired_kp = crate::state::checked_keypair();
+        let current_kp = crate::state::checked_keypair();
+        let generic_kp = crate::state::checked_keypair();
+        let mismatched_kp = crate::state::checked_keypair();
+        let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
+        let current_validator = DMAccountId::of(current_kp.public_key().clone());
+        let generic_validator = DMAccountId::of(generic_kp.public_key().clone());
+        let mismatched_validator = DMAccountId::of(mismatched_kp.public_key().clone());
+
+        let record =
+            |lane_id, validator: DMAccountId, peer_key, status| PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id: PeerId::from(peer_key),
+                stake_account: validator,
+                total_stake: Numeric::new(10, 0),
+                self_stake: Numeric::new(10, 0),
+                metadata: Metadata::default(),
+                status,
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            };
+
+        {
+            let mut block = world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(21), expired_validator.clone()),
+                record(
+                    LaneId::new(21),
+                    expired_validator.clone(),
+                    expired_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_string()),
+                ),
+            );
+            block.insert(
+                (LaneId::new(22), current_validator.clone()),
+                record(
+                    LaneId::new(22),
+                    current_validator.clone(),
+                    current_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_3".to_string()),
+                ),
+            );
+            block.insert(
+                (LaneId::new(23), generic_validator.clone()),
+                record(
+                    LaneId::new(23),
+                    generic_validator.clone(),
+                    generic_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::Jailed("downtime".to_string()),
+                ),
+            );
+            block.insert(
+                (LaneId::new(24), mismatched_validator.clone()),
+                record(
+                    LaneId::new(25),
+                    mismatched_validator.clone(),
+                    mismatched_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_string()),
+                ),
+            );
+            block.commit();
+        }
+
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, std::sync::Arc::clone(&kura), query);
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(13).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut state_block = state.block(header);
+
+        state_block.clear_expired_vrf_public_lane_jails(3);
+
+        let expired = state_block
+            .world
+            .public_lane_validators
+            .get(&(LaneId::new(21), expired_validator))
+            .expect("expired VRF-jailed validator remains present");
+        assert!(matches!(expired.status, PublicLaneValidatorStatus::Active));
+
+        let current = state_block
+            .world
+            .public_lane_validators
+            .get(&(LaneId::new(22), current_validator))
+            .expect("current VRF-jailed validator remains present");
+        assert!(matches!(
+            current.status,
+            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "vrf_penalty_epoch_3"
+        ));
+
+        let generic = state_block
+            .world
+            .public_lane_validators
+            .get(&(LaneId::new(23), generic_validator))
+            .expect("generic-jailed validator remains present");
+        assert!(matches!(
+            generic.status,
+            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "downtime"
+        ));
+
+        let mismatched = state_block
+            .world
+            .public_lane_validators
+            .get(&(LaneId::new(24), mismatched_validator))
+            .expect("mismatched VRF-jailed validator remains present");
+        assert!(matches!(
+            mismatched.status,
+            PublicLaneValidatorStatus::Jailed(ref reason) if reason == "vrf_penalty_epoch_2"
+        ));
     }
 
     #[test]
@@ -20430,12 +20676,34 @@ impl State {
         }
 
         let mut saw_da_commitments = false;
-        for (idx, expected_hash) in hashes.iter().take(replay_len).enumerate() {
+        let hash_only_prefix = self.kura.hash_only_unavailable_prefix_len(replay_len);
+        if hash_only_prefix > 0 {
+            debug!(
+                hash_only_prefix,
+                replay_len,
+                "skipping hash-only hard-fork snapshot blocks while hydrating DA indexes"
+            );
+        }
+        for (idx, expected_hash) in hashes
+            .iter()
+            .take(replay_len)
+            .enumerate()
+            .skip(hash_only_prefix)
+        {
             let height = idx + 1;
             let Some(block) = self
                 .kura
                 .get_block(NonZeroUsize::new(height).expect("non-zero block height"))
             else {
+                if self.kura.is_hash_only_block_height(
+                    NonZeroUsize::new(height).expect("non-zero block height"),
+                ) {
+                    debug!(
+                        height,
+                        "skipping hash-only hard-fork snapshot block while hydrating DA indexes"
+                    );
+                    continue;
+                }
                 warn!(height, "missing block while hydrating DA indexes from Kura");
                 continue;
             };
@@ -21869,6 +22137,7 @@ impl State {
             .max(1);
         let current_epoch = sb._curr_block.height().get().saturating_sub(1) / epoch_length;
         sb.activate_due_public_lane_validators(current_epoch);
+        sb.clear_expired_vrf_public_lane_jails(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
         let current_slot =
@@ -26923,6 +27192,9 @@ pub trait StateReadOnly: WorldStateSnapshot {
     ) -> impl DoubleEndedIterator<Item = Arc<SignedBlock>> + '_ {
         (start.get()..=self.height()).filter_map(|height| {
             let height = NonZeroUsize::new(height)?;
+            if self.kura().is_hash_only_block_height(height) {
+                return None;
+            }
             self.kura().get_block(height).map_or_else(
                 || {
                     warn!(
@@ -26955,6 +27227,11 @@ pub trait StateReadOnly: WorldStateSnapshot {
     #[inline]
     fn genesis_timestamp(&self) -> Option<Duration> {
         if self.block_hashes().is_empty() {
+            None
+        } else if self.kura().is_hash_only_block_height(nonzero!(1_usize)) {
+            debug!(
+                "genesis block body is hash-only from snapshot bootstrap; uptime timestamp unavailable"
+            );
             None
         } else {
             let opt = self
@@ -30696,13 +30973,41 @@ impl<'state> StateBlock<'state> {
                 .collect();
             if !missing.is_empty() && npos_mode_active {
                 missing.sort();
-                warn!(
-                    height = block_height,
-                    block = %block_hash,
-                    missing = missing.len(),
-                    "ignoring non-validator world peers for NPoS commit topology reconciliation"
-                );
-                checkpoint_topology.clone()
+                let missing_active_validators =
+                    active_stake_elected_validator_peers_for_checkpoint_lanes(
+                        &self.world,
+                        missing.iter(),
+                        &checkpoint_lane_ids,
+                        checkpoint_block_height,
+                        &self.nexus,
+                    );
+                if missing_active_validators.is_empty() {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        missing = missing.len(),
+                        "ignoring non-validator world peers for NPoS commit topology reconciliation"
+                    );
+                    checkpoint_topology.clone()
+                } else {
+                    let active_validator_set: BTreeSet<_> =
+                        missing_active_validators.iter().cloned().collect();
+                    let ignored = missing
+                        .iter()
+                        .filter(|peer| !active_validator_set.contains(*peer))
+                        .count();
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        missing_active_validators = missing_active_validators.len(),
+                        ignored_non_validators = ignored,
+                        lanes = checkpoint_lane_ids.len(),
+                        "commit topology missing active NPoS validators; appending"
+                    );
+                    let mut combined = checkpoint_topology.clone();
+                    combined.extend(missing_active_validators);
+                    combined
+                }
             } else {
                 if !missing.is_empty() {
                     missing.sort();
@@ -33624,6 +33929,7 @@ pub fn replay_blocks_from_kura(
 #[derive(Debug, Default)]
 struct ReplayKuraTiming {
     blocks: usize,
+    hash_only_skipped: usize,
     block_read: Duration,
     topology: Duration,
     validation: Duration,
@@ -33645,6 +33951,8 @@ impl ReplayKuraTiming {
             start_height,
             block_count,
             blocks = self.blocks,
+            replayed_blocks = self.blocks.saturating_sub(self.hash_only_skipped),
+            hash_only_skipped = self.hash_only_skipped,
             total_ms = Self::duration_ms(total),
             block_read_ms = Self::duration_ms(self.block_read),
             topology_ms = Self::duration_ms(self.topology),
@@ -33658,6 +33966,47 @@ impl ReplayKuraTiming {
             "replayed Kura range timing"
         );
     }
+}
+
+fn hash_only_replay_snapshot_hash(
+    kura: &Kura,
+    state: &State,
+    height: NonZeroUsize,
+) -> Result<Option<HashOf<BlockHeader>>> {
+    if !kura.is_hash_only_block_height(height) {
+        return Ok(None);
+    }
+
+    let Some(kura_hash) = kura
+        .block_hash_at_height(height)
+        .or_else(|| kura.get_durable_block_hash(height))
+    else {
+        return Err(eyre!(
+            "hash-only block at height {} has no canonical Kura hash during replay",
+            height.get()
+        ));
+    };
+
+    let state_hash = {
+        let index = height.get().saturating_sub(1);
+        state.block_hashes.view().get(index).copied()
+    };
+    let Some(state_hash) = state_hash else {
+        return Err(eyre!(
+            "hash-only block at height {} is not covered by the restored state block-hash list",
+            height.get()
+        ));
+    };
+    if state_hash != kura_hash {
+        return Err(eyre!(
+            "hash-only block at height {} does not match restored state hash: state={:?}, kura={:?}",
+            height.get(),
+            state_hash,
+            kura_hash
+        ));
+    }
+
+    Ok(Some(kura_hash))
 }
 
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
@@ -33723,10 +34072,20 @@ pub fn replay_blocks_from_kura_range(
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
         let block_read_start = Instant::now();
-        let block_arc = kura
-            .get_block(nz)
-            .ok_or_else(|| eyre!("missing block at height {height} during replay"))?;
+        let maybe_block = kura.get_block(nz);
         replay_timing.block_read += block_read_start.elapsed();
+        let Some(block_arc) = maybe_block else {
+            if let Some(hash) = hash_only_replay_snapshot_hash(kura.as_ref(), state, nz)? {
+                replay_timing.hash_only_skipped = replay_timing.hash_only_skipped.saturating_add(1);
+                iroha_logger::debug!(
+                    height,
+                    hash = ?hash,
+                    "skipping hash-only hard-fork snapshot block during replay"
+                );
+                continue;
+            }
+            return Err(eyre!("missing block at height {height} during replay"));
+        };
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
         let signed_block = (*block_arc).clone();
         let view = signed_block.header().view_change_index();
@@ -34335,6 +34694,88 @@ mod replay_validation_tests {
         assert!(
             result.is_err(),
             "corrupted genesis should be rejected during replay"
+        );
+    }
+
+    #[test]
+    fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
+        let chain_id = ChainId::from("iroha:test:hash-only-replay");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let make_state = |kura: Arc<Kura>| {
+            let world = World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+                [new_genesis_account(&genesis_id).build(&genesis_id)],
+                [],
+            );
+            State::new_with_chain(
+                world,
+                kura,
+                crate::query::store::LiveQueryStore::start_test(),
+                chain_id.clone(),
+            )
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let snapshot_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));
+        kura.extend_hash_only_prefix_from_snapshot(&[snapshot_hash])
+            .expect("install hash-only snapshot prefix");
+        let height = NonZeroUsize::new(1).expect("non-zero test height");
+        assert!(kura.is_hash_only_block_height(height));
+        assert!(kura.get_block(height).is_none());
+
+        let leader =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let mut restored_state = make_state(Arc::clone(&kura));
+        restored_state.push_block_hash_for_testing(snapshot_hash);
+        replay_blocks_from_kura_range(
+            &kura,
+            &mut restored_state,
+            &topology,
+            1,
+            1,
+            ConsensusMode::Permissioned,
+        )
+        .expect("hash-only block covered by the restored state snapshot should be skipped");
+
+        let mut unhydrated_state = make_state(Arc::clone(&kura));
+        let missing_snapshot = replay_blocks_from_kura_range(
+            &kura,
+            &mut unhydrated_state,
+            &topology,
+            1,
+            1,
+            ConsensusMode::Permissioned,
+        )
+        .expect_err("hash-only replay requires a restored state hash");
+        assert!(
+            missing_snapshot
+                .to_string()
+                .contains("not covered by the restored state block-hash list"),
+            "{missing_snapshot:?}"
+        );
+
+        let mut mismatched_state = make_state(Arc::clone(&kura));
+        mismatched_state.push_block_hash_for_testing(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7B; Hash::LENGTH])),
+        );
+        let mismatch = replay_blocks_from_kura_range(
+            &kura,
+            &mut mismatched_state,
+            &topology,
+            1,
+            1,
+            ConsensusMode::Permissioned,
+        )
+        .expect_err("hash-only replay requires the restored state hash to match Kura");
+        assert!(
+            mismatch
+                .to_string()
+                .contains("does not match restored state hash"),
+            "{mismatch:?}"
         );
     }
 
@@ -35817,6 +36258,42 @@ mod permission_cache_tests {
             stx.can_use_fee_sponsor(&caller, &sponsor),
             "dataspace default sponsor should not require an account grant"
         );
+    }
+
+    #[test]
+    fn dataspace_fee_sponsor_match_uses_configured_default_sponsor() {
+        let (sponsor, _) = gen_account_in("wonderland");
+        let (caller, _) = gen_account_in("wonderland");
+
+        let domain: Domain = Domain::new(wonderland_domain_id()).build(&sponsor);
+        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
+        let caller_account = new_wonderland_account(&caller).build(&sponsor);
+        let world = World::with([domain], [sponsor_account, caller_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.nexus
+            .dataspace_fee_sponsors
+            .insert(DataSpaceId::UNIVERSAL, sponsor.to_string());
+
+        assert!(super::dataspace_fee_sponsor_matches(
+            &stx.world,
+            &stx.nexus.dataspace_catalog,
+            &stx.nexus.dataspace_fee_sponsors,
+            DataSpaceId::UNIVERSAL,
+            &sponsor
+        ));
+        assert!(!super::dataspace_fee_sponsor_matches(
+            &stx.world,
+            &stx.nexus.dataspace_catalog,
+            &stx.nexus.dataspace_fee_sponsors,
+            DataSpaceId::UNIVERSAL,
+            &caller
+        ));
     }
 
     #[allow(clippy::too_many_lines)]
@@ -72527,6 +73004,107 @@ mod tests {
         let view = state.view();
         let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
         assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
+    }
+
+    #[test]
+    fn apply_without_execution_widens_npos_commit_topology_with_active_public_validator() {
+        use iroha_config::parameters::actual::LaneValidatorMode;
+        use iroha_data_model::parameter::system::{Parameter, SumeragiNposParameters};
+
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        crate::sumeragi::status::set_mode_tags(crate::sumeragi::consensus::NPOS_TAG, None, None);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        {
+            let mut params = state.world.parameters.block();
+            params.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            params.commit();
+        }
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let keypairs = configure_commit_topology(&state, 3);
+        let missing_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let missing_peer = PeerId::new(missing_keypair.public_key().clone());
+
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.push(missing_peer.clone());
+                peers.apply();
+            }
+            for keypair in keypairs.iter().chain(core::iter::once(&missing_keypair)) {
+                let validator = AccountId::new(keypair.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::SINGLE, validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(keypair.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            world_block.commit();
+        }
+        seed_consensus_keys_with_pops(
+            &state,
+            &keypairs
+                .iter()
+                .chain(core::iter::once(&missing_keypair))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        let mut widened_roster = base_topology.clone();
+        widened_roster.push(missing_peer.clone());
+        expected_topology.block_committed(widened_roster, prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        assert!(actual.contains(&missing_peer));
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
 

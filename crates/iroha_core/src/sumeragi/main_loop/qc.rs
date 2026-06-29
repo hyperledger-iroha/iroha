@@ -1745,6 +1745,93 @@ impl Actor {
         true
     }
 
+    fn deferred_commit_frontier_payload_fetch_due(
+        &self,
+        entry: &DeferredQcEntry,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        let qc = &entry.qc;
+        matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            && qc.height == committed_height.saturating_add(1)
+            && qc.height == self.active_consensus_round_height()
+            && !self.frontier_block_materialized_locally(qc.subject_block_hash)
+            && entry.attempts < DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS
+            && now.saturating_duration_since(entry.last_attempt)
+                >= self
+                    .config
+                    .recovery
+                    .exact_body_fetch_retry_floor
+                    .max(Duration::from_millis(1))
+    }
+
+    fn force_deferred_commit_frontier_payload_fetch(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        reason: &'static str,
+        now: Instant,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            || qc.height != self.committed_height_snapshot().saturating_add(1)
+            || qc.height != self.active_consensus_round_height()
+            || self.frontier_block_materialized_locally(qc.subject_block_hash)
+        {
+            return false;
+        }
+
+        self.note_frontier_commit_qc_observed(qc.subject_block_hash, qc.height, qc.view, now);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
+        let mut roster = self.roster_for_vote_with_mode_observing_sidecar(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            consensus_mode,
+            "deferred_missing_payload_frontier_commit_fetch",
+        );
+        if roster.is_empty() {
+            roster = qc.validator_set.clone();
+        }
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
+        let mut exact_owner_routed = false;
+        let mut exact_body_requested = false;
+        if !roster.is_empty() {
+            let topology = super::network_topology::Topology::new(roster);
+            let signer_set =
+                super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len())
+                    .map(|parsed| parsed.voting.into_iter().collect::<BTreeSet<_>>())
+                    .unwrap_or_default();
+            exact_owner_routed = self.handle_frontier_body_gap_with_topology(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                &signer_set,
+                &topology,
+                /*exact_fetch_armed*/ true,
+                now,
+            );
+            if exact_owner_routed {
+                exact_body_requested = self.emit_frontier_block_body_fetch_urgent(now);
+            }
+        }
+        let certified_fetch_requested =
+            self.force_targeted_missing_payload_fetch_for_qc(qc, reason);
+        if exact_owner_routed || exact_body_requested || certified_fetch_requested {
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                exact_owner_routed,
+                exact_body_requested,
+                certified_fetch_requested,
+                reason,
+                "prompted deferred frontier commit-QC payload repair"
+            );
+        }
+        exact_owner_routed || exact_body_requested || certified_fetch_requested
+    }
+
     pub(super) fn request_certified_block_for_qc(
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
@@ -2050,6 +2137,11 @@ impl Actor {
                 qc: crate::sumeragi::consensus::Qc,
                 reason: &'static str,
             },
+            PromptCommitPayloadFetch {
+                key: QcVoteKey,
+                qc: crate::sumeragi::consensus::Qc,
+                reason: &'static str,
+            },
             Expire {
                 key: QcVoteKey,
                 qc: crate::sumeragi::consensus::Qc,
@@ -2100,6 +2192,14 @@ impl Actor {
                 .map(|snapshot| snapshot.stall_window);
             if self.try_recover_block_for_qc(&entry.qc) {
                 actions.push(ReplayAction::Replay {
+                    key,
+                    qc: entry.qc.clone(),
+                    reason: entry.reason,
+                });
+                continue;
+            }
+            if self.deferred_commit_frontier_payload_fetch_due(&entry, committed_height, now) {
+                actions.push(ReplayAction::PromptCommitPayloadFetch {
                     key,
                     qc: entry.qc.clone(),
                     reason: entry.reason,
@@ -2266,6 +2366,17 @@ impl Actor {
                         }
                         progress = true;
                     }
+                }
+                ReplayAction::PromptCommitPayloadFetch { key, qc, reason } => {
+                    let fetched =
+                        self.force_deferred_commit_frontier_payload_fetch(&qc, reason, now);
+                    if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
+                        entry.last_attempt = now;
+                        if fetched {
+                            entry.attempts = entry.attempts.saturating_add(1);
+                        }
+                    }
+                    progress |= fetched;
                 }
                 ReplayAction::Expire { key, qc, reason } => {
                     let mut branch_progress = false;
@@ -3289,11 +3400,18 @@ impl Actor {
                 } else {
                     false
                 };
-                let requested = if frontier_exact_owner_unresolved {
+                let requested = if frontier_exact_owner_unresolved && exact_retry_emitted {
                     false
                 } else {
+                    if frontier_exact_owner_unresolved {
+                        let _ = self.handoff_contiguous_frontier_to_passive_catchup(
+                            frontier_height,
+                            now,
+                            "missing_block_far_ahead_retry",
+                        );
+                    }
                     self.request_range_pull_from_anchor(
-                        keep_through_height,
+                        frontier_height,
                         "missing_block_far_ahead_retry",
                         now,
                     )
@@ -3321,8 +3439,9 @@ impl Actor {
                     phase = ?stats_snapshot.phase,
                     block = ?block_hash,
                     local_height,
+                    frontier_height,
                     keep_through_height,
-                    range_pull_height = keep_through_height,
+                    range_pull_height = frontier_height,
                     pending_removed,
                     missing_removed,
                     deferred_updates_removed,

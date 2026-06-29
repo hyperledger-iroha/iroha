@@ -15992,6 +15992,7 @@ mod zk_roots_selector_tests {
             Some("7".to_owned()),
             Some(policy_hash.to_owned()),
             Some("1".to_owned()),
+            Some("2".to_owned()),
         )
         .expect("valid policy metadata");
 
@@ -15999,11 +16000,16 @@ mod zk_roots_selector_tests {
             state.as_ref(),
             Some("sponsor@cbsi"),
             Some("memo"),
-            validation_fee_policy_metadata
-                .as_ref()
-                .map(|(version, hash, instruction_index)| {
-                    (*version, hash.as_str(), *instruction_index)
-                }),
+            validation_fee_policy_metadata.as_ref().map(
+                |(version, hash, instruction_index, transfer_entry_index)| {
+                    (
+                        *version,
+                        hash.as_str(),
+                        *instruction_index,
+                        *transfer_entry_index,
+                    )
+                },
+            ),
         );
         let gas_asset_id = metadata
             .get("gas_asset_id")
@@ -16021,10 +16027,15 @@ mod zk_roots_selector_tests {
             .get(iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
             .cloned()
             .and_then(|value| value.try_into_any_norito::<u64>().ok());
+        let transfer_entry_index = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
 
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
         assert_eq!(policy_version, Some(7));
         assert_eq!(instruction_index, Some(1));
+        assert_eq!(transfer_entry_index, Some(2));
         assert_eq!(
             policy_hash.as_deref(),
             Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
@@ -16034,7 +16045,7 @@ mod zk_roots_selector_tests {
     #[test]
     fn normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair() {
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, None)
+            normalize_validation_fee_policy_metadata(None, None, None, None)
                 .expect("absent policy metadata is allowed")
                 .is_none()
         );
@@ -16046,28 +16057,51 @@ mod zk_roots_selector_tests {
                         .to_owned(),
                 ),
                 Some(" 1 ".to_owned()),
+                Some(" 2 ".to_owned()),
             )
             .expect("valid metadata")
             .as_ref()
-            .map(|(version, hash, instruction_index)| {
-                (*version, hash.as_str(), *instruction_index)
+            .map(|(version, hash, instruction_index, transfer_entry_index)| {
+                (
+                    *version,
+                    hash.as_str(),
+                    *instruction_index,
+                    *transfer_entry_index,
+                )
             }),
             Some((
                 7,
                 "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
                 Some(1),
+                Some(2),
             )),
         );
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, Some("1".to_owned())).is_err()
+            normalize_validation_fee_policy_metadata(None, None, Some("1".to_owned()), None)
+                .is_err()
         );
         assert!(
-            normalize_validation_fee_policy_metadata(Some("7".to_owned()), None, None,).is_err()
+            normalize_validation_fee_policy_metadata(None, None, None, Some("2".to_owned()))
+                .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(Some("7".to_owned()), None, None, None,)
+                .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                Some("0".repeat(64)),
+                None,
+                Some("2".to_owned()),
+            )
+            .is_err()
         );
         assert!(
             normalize_validation_fee_policy_metadata(
                 Some("x".to_owned()),
                 Some("0".repeat(64)),
+                None,
                 None,
             )
             .is_err()
@@ -16077,6 +16111,16 @@ mod zk_roots_selector_tests {
                 Some("7".to_owned()),
                 Some("0".repeat(64)),
                 Some("not-integer".to_owned()),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                Some("0".repeat(64)),
+                Some("1".to_owned()),
+                Some("not-integer".to_owned()),
             )
             .is_err()
         );
@@ -16084,6 +16128,7 @@ mod zk_roots_selector_tests {
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
                 Some("0".repeat(63)),
+                None,
                 None,
             )
             .is_err()
@@ -20279,6 +20324,7 @@ async fn submit_contract_call_request(
         entrypoint,
         payload,
         creation_time_ms,
+        transaction_ttl_ms,
         gas_asset_id,
         fee_sponsor,
         gas_limit,
@@ -20320,6 +20366,9 @@ async fn submit_contract_call_request(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+    }
     let executable = iroha_data_model::transaction::executable::ContractInvocation {
         contract_address: contract_address.clone(),
         entrypoint: resolved_entrypoint.to_owned(),
@@ -20344,6 +20393,7 @@ async fn submit_contract_call_request(
             code_hash_hex,
             abi_hash_hex,
             creation_time_ms,
+            transaction_ttl_ms,
             tx_hash_hex: Some(tx_hash_hex.clone()),
             pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
@@ -20410,6 +20460,7 @@ async fn submit_contract_call_request(
             code_hash_hex,
             abi_hash_hex,
             creation_time_ms,
+            transaction_ttl_ms,
             tx_hash_hex: Some(tx_hash_hex.clone()),
             pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
             entrypoint_hash_hex: Some(entrypoint_hash_hex),
@@ -20434,6 +20485,7 @@ async fn submit_contract_call_request(
         code_hash_hex,
         abi_hash_hex,
         creation_time_ms,
+        transaction_ttl_ms,
         tx_hash_hex: None,
         pipeline_status: None,
         entrypoint_hash_hex: Some(entrypoint_hash_hex),
@@ -22401,7 +22453,8 @@ fn normalize_validation_fee_policy_metadata(
     version: Option<String>,
     hash: Option<String>,
     instruction_index: Option<String>,
-) -> Result<Option<(u64, String, Option<u64>)>> {
+    transfer_entry_index: Option<String>,
+) -> Result<Option<(u64, String, Option<u64>, Option<u64>)>> {
     let version = version
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -22411,15 +22464,18 @@ fn normalize_validation_fee_policy_metadata(
     let instruction_index = instruction_index
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    match (version, hash, instruction_index) {
-        (None, None, None) => Ok(None),
-        (None, None, Some(_)) => Err(conversion_error(
-            "validation_fee_instruction_index requires validation fee policy metadata".to_owned(),
+    let transfer_entry_index = transfer_entry_index
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    match (version, hash, instruction_index, transfer_entry_index) {
+        (None, None, None, None) => Ok(None),
+        (None, None, Some(_), _) | (None, None, _, Some(_)) => Err(conversion_error(
+            "validation fee coordinate metadata requires validation fee policy metadata".to_owned(),
         )),
-        (Some(_), None, _) | (None, Some(_), _) => Err(conversion_error(
+        (Some(_), None, _, _) | (None, Some(_), _, _) => Err(conversion_error(
             "validation fee policy metadata requires both version and hash".to_owned(),
         )),
-        (Some(version), Some(hash), instruction_index) => {
+        (Some(version), Some(hash), instruction_index, transfer_entry_index) => {
             let version = version.parse::<u64>().map_err(|_| {
                 conversion_error(
                     "validation_fee_policy_version must be an unsigned integer".to_owned(),
@@ -22440,10 +22496,27 @@ fn normalize_validation_fee_policy_metadata(
                     })
                 })
                 .transpose()?;
+            let transfer_entry_index = transfer_entry_index
+                .map(|value| {
+                    value.parse::<u64>().map_err(|_| {
+                        conversion_error(
+                            "validation_fee_transfer_entry_index must be an unsigned integer"
+                                .to_owned(),
+                        )
+                    })
+                })
+                .transpose()?;
+            if transfer_entry_index.is_some() && instruction_index.is_none() {
+                return Err(conversion_error(
+                    "validation_fee_transfer_entry_index requires validation_fee_instruction_index"
+                        .to_owned(),
+                ));
+            }
             Ok(Some((
                 version,
                 hash.to_ascii_lowercase(),
                 instruction_index,
+                transfer_entry_index,
             )))
         }
     }
@@ -22487,14 +22560,16 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
     state: &CoreState,
     fee_sponsor: Option<&str>,
     memo: Option<&str>,
-    validation_fee_policy_metadata: Option<(u64, &str, Option<u64>)>,
+    validation_fee_policy_metadata: Option<(u64, &str, Option<u64>, Option<u64>)>,
 ) -> Metadata {
     let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
     }
-    if let Some((policy_version, policy_hash, instruction_index)) = validation_fee_policy_metadata {
+    if let Some((policy_version, policy_hash, instruction_index, transfer_entry_index)) =
+        validation_fee_policy_metadata
+    {
         let version_key = Name::from_str(
             iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         )
@@ -22511,6 +22586,16 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
             )
             .expect("static metadata key `validation_fee_instruction_index`");
             metadata.insert(instruction_index_key, IrohaJson::new(instruction_index));
+        }
+        if let Some(transfer_entry_index) = transfer_entry_index {
+            let transfer_entry_index_key = Name::from_str(
+                iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
+            )
+            .expect("static metadata key `validation_fee_transfer_entry_index`");
+            metadata.insert(
+                transfer_entry_index_key,
+                IrohaJson::new(transfer_entry_index),
+            );
         }
     }
     metadata
@@ -25520,6 +25605,7 @@ mod multisig_selector_tests {
                 entrypoint: Some("main".to_owned()),
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
+                transaction_ttl_ms: None,
                 gas_asset_id: None,
                 fee_sponsor: None,
                 gas_limit: 10_000,
@@ -25562,6 +25648,7 @@ mod multisig_selector_tests {
                 entrypoint: Some("main".to_owned()),
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
+                transaction_ttl_ms: None,
                 gas_asset_id: None,
                 fee_sponsor: None,
                 gas_limit: 10_000,
@@ -27611,6 +27698,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27659,6 +27747,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27683,6 +27772,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27707,6 +27797,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27741,6 +27832,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27774,6 +27866,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27803,6 +27896,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27828,6 +27922,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27938,6 +28033,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: inner_instructions,
             }),
         )
@@ -28041,6 +28137,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -28075,6 +28172,7 @@ seiyaku BlobPayloadNormalizeTest {
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
             validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
             instructions: vec![instruction.clone()],
         };
 
@@ -28213,6 +28311,7 @@ seiyaku BlobPayloadNormalizeTest {
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
             validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -28899,6 +28998,7 @@ pub async fn handle_post_multisig_propose(
         validation_fee_policy_version,
         validation_fee_policy_hash,
         validation_fee_instruction_index,
+        validation_fee_transfer_entry_index,
         instructions,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
@@ -28907,6 +29007,7 @@ pub async fn handle_post_multisig_propose(
         validation_fee_policy_version,
         validation_fee_policy_hash,
         validation_fee_instruction_index,
+        validation_fee_transfer_entry_index,
     )?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -28941,11 +29042,16 @@ pub async fn handle_post_multisig_propose(
         state.as_ref(),
         fee_sponsor.as_deref(),
         memo.as_deref(),
-        validation_fee_policy_metadata
-            .as_ref()
-            .map(|(version, hash, instruction_index)| {
-                (*version, hash.as_str(), *instruction_index)
-            }),
+        validation_fee_policy_metadata.as_ref().map(
+            |(version, hash, instruction_index, transfer_entry_index)| {
+                (
+                    *version,
+                    hash.as_str(),
+                    *instruction_index,
+                    *transfer_entry_index,
+                )
+            },
+        ),
     );
     let builder = builder
         .with_metadata(tx_metadata.clone())
@@ -30527,6 +30633,9 @@ pub struct DeployContractDto {
     /// Optional lease expiry timestamp (unix ms) for the alias binding.
     #[norito(default)]
     pub lease_expiry_ms: Option<u64>,
+    /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
 }
 
 #[cfg(feature = "app_api")]
@@ -30611,6 +30720,9 @@ pub struct DeployContractBundleDto {
     /// Optional default dataspace alias used by contracts that omit one.
     #[norito(default)]
     pub default_dataspace: Option<String>,
+    /// Optional transaction time-to-live in milliseconds applied to deploy and init transactions.
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
     /// Contracts to deploy as part of the bundle.
     pub contracts: Vec<DeployContractBundleContractDto>,
     /// Optional initialization calls to run after deployment.
@@ -31551,6 +31663,9 @@ pub struct ContractCallDto {
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
@@ -31614,6 +31729,10 @@ pub struct ContractCallResponseDto {
     pub abi_hash_hex: String,
     /// Creation timestamp used for the transaction payload.
     pub creation_time_ms: u64,
+    /// Optional transaction time-to-live in milliseconds embedded in the payload.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub transaction_ttl_ms: Option<u64>,
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
@@ -32139,6 +32258,9 @@ pub struct MultisigProposeDto {
     /// Optional validation-fee instruction index forwarded to transaction metadata.
     #[norito(default)]
     pub validation_fee_instruction_index: Option<String>,
+    /// Optional validation-fee transfer entry index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_transfer_entry_index: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -33896,6 +34018,7 @@ async fn submit_contract_deploy_request(
         code_b64,
         contract_alias,
         lease_expiry_ms,
+        transaction_ttl_ms,
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
@@ -33966,13 +34089,14 @@ async fn submit_contract_deploy_request(
         dm::Json::new(next_nonce),
     )));
     let metadata = metadata_with_default_gas_asset(&state);
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_metadata(metadata)
-            .with_instructions(instructions.into_iter()),
-        &private_key.0,
-        endpoint,
-    )?;
+    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+    }
+    let builder = builder
+        .with_metadata(metadata)
+        .with_instructions(instructions.into_iter());
+    let tx = sign_app_api_transaction(builder, &private_key.0, endpoint)?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
@@ -34209,6 +34333,7 @@ async fn execute_contract_bundle_request(
                     code_b64: contract.code_b64.clone(),
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
+                    transaction_ttl_ms: req.transaction_ttl_ms,
                 },
                 Some(deploy_nonce),
                 "/v1/contracts/deploy-bundle",
@@ -34287,6 +34412,7 @@ async fn execute_contract_bundle_request(
                     entrypoint: call.entrypoint.clone(),
                     payload: call.payload.clone(),
                     creation_time_ms: None,
+                    transaction_ttl_ms: req.transaction_ttl_ms,
                     gas_asset_id: call.gas_asset_id.clone(),
                     fee_sponsor: call.fee_sponsor.clone(),
                     gas_limit: call.gas_limit,
@@ -34360,12 +34486,14 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         code_b64,
         contract_alias,
         lease_expiry_ms,
+        transaction_ttl_ms,
     } = req;
     DeployContractBundleDto {
         bundle_name: "single-contract-deploy".to_owned(),
         authority,
         private_key,
         default_dataspace: None,
+        transaction_ttl_ms,
         contracts: vec![DeployContractBundleContractDto {
             name: contract_alias.to_string(),
             contract_alias,
@@ -34643,6 +34771,7 @@ mod contract_bundle_tests {
             authority,
             private_key,
             default_dataspace: None,
+            transaction_ttl_ms: None,
             contracts: vec![DeployContractBundleContractDto {
                 name: "demo.greeter".to_owned(),
                 contract_alias: sample_alias("greeter::universal"),
@@ -37979,6 +38108,7 @@ mod deploy_tests {
             code_b64,
             contract_alias: "fixture::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
         };
 
         #[cfg(feature = "telemetry")]

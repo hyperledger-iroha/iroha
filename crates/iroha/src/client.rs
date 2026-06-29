@@ -16581,6 +16581,23 @@ impl Client {
         Ok(())
     }
 
+    /// Convenience: GET `/v1/zk/vk` as JSON Value.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_zk_vk_list_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/zk/vk");
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to list VKs with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
     /// Convenience: GET `/v1/zk/vk/{backend}/{name}` as JSON Value.
     ///
     /// # Errors

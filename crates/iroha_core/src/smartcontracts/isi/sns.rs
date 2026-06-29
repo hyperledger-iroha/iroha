@@ -243,6 +243,53 @@ fn should_externally_settle_sns_quote(
     Ok(route_dataspace != home_dataspace)
 }
 
+fn account_alias_lease_payer_matches_dataspace_sponsor(
+    payer: &AccountId,
+    quote: &crate::sns::LeaseQuote,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<bool, Error> {
+    if !should_externally_settle_sns_quote(quote, state_transaction)? {
+        return Ok(false);
+    }
+    let Some(route_dataspace) = state_transaction
+        .current_dataspace_id
+        .or(state_transaction.world.current_dataspace_id)
+    else {
+        return Ok(false);
+    };
+    Ok(crate::state::dataspace_fee_sponsor_matches(
+        state_transaction.world(),
+        &state_transaction.nexus.dataspace_catalog,
+        &state_transaction.nexus.dataspace_fee_sponsors,
+        route_dataspace,
+        payer,
+    ))
+}
+
+fn ensure_account_alias_lease_payer_allowed(
+    payer: &AccountId,
+    authority: &AccountId,
+    quote: &crate::sns::LeaseQuote,
+    instruction_name: &str,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    if payer == authority
+        || account_alias_lease_payer_matches_dataspace_sponsor(payer, quote, state_transaction)?
+    {
+        return Ok(());
+    }
+
+    Err(InstructionExecutionError::InvalidParameter(
+        InvalidParameterError::SmartContract(
+            format!(
+                "{instruction_name} payment payer must match transaction authority or configured dataspace fee sponsor"
+            )
+            .into(),
+        ),
+    )
+    .into())
+}
+
 impl Execute for AcquireAccountAliasLease {
     #[metrics(+"acquire_account_alias_lease")]
     fn execute(
@@ -257,14 +304,6 @@ impl Execute for AcquireAccountAliasLease {
             term_years,
             pricing_class_hint,
         } = self;
-
-        if payer != *authority {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "AcquireAccountAliasLease payer must match the transaction authority".into(),
-                ),
-            ));
-        }
 
         if owner != *authority
             && !authority_can_manage_account_alias(&state_transaction.world, authority, &alias)
@@ -286,6 +325,13 @@ impl Execute for AcquireAccountAliasLease {
             now_ms,
         )
         .map_err(alias_lease_instruction_error)?;
+        ensure_account_alias_lease_payer_allowed(
+            &payer,
+            authority,
+            &quote,
+            "AcquireAccountAliasLease",
+            state_transaction,
+        )?;
         let payment = charge_sns_quote(&quote, payer, authority, state_transaction)?;
         let controllers = vec![account_controller_for(&owner)?];
         crate::sns::register_name(
