@@ -1,8 +1,10819 @@
 # Status
 
-Last updated: 2026-06-27
+Last updated: 2026-06-29
 
-## 2026-06-27 Readiness Section Guard Pinning
+## 2026-06-29 Windows C# SDK / Kagemusha Certification
+
+- Hardened `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` for Windows UNC
+  workspaces by keeping `dotnet test` artifacts under the native bridge target
+  directory, disabling first-run/no-logo noise, and preserving the freshly
+  built bridge directory on the Windows loader `PATH`.
+- Updated the C# test project to copy the shared ABI-6 and ABI-7 recursive
+  spend fixture JSON files into the test output. The SDK parity guard and
+  JavaScript parity meta-test now pin both the Windows-local dotnet artifacts
+  path and the fixture-output project entries, with workflow-routed negative
+  controls for each.
+- Collected the Windows Kagemusha C# SDK evidence on `.NET SDK 8.0.422`
+  (`win-x64`) using `connect_norito_bridge.dll` SHA-256
+  `cd2719615c3aa68062040b4f83ce46e8662f77560cd736ea66d81846bf8b88e5`.
+  The focused `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` run passed
+  5545 tests with 0 failed / 0 skipped.
+- Ran the full Windows C# test project with the same Windows-local native
+  bridge loader setup and artifacts directory; VSTest reported 5676 passed,
+  0 failed, 0 skipped for `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)`.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-artifacts-path-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-recursive-spend-fixtures-project`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - Windows Git Bash:
+    `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    with `DOTNET_ROOT=/c/Users/mtake/AppData/Local/Temp/iroha-dotnet-win-sdk-complete`,
+    `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/c/Users/mtake/AppData/Local/Temp/iroha-dotnet-win-sdk-complete/dotnet`,
+    `KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR=/c/Users/mtake/AppData/Local/Temp/iroha-sccp-windows-msvc-target`,
+    and `RUSTUP_TOOLCHAIN=1.93.1-x86_64-pc-windows-msvc`
+  - Windows Git Bash direct full C# test:
+    `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --artifacts-path /c/Users/mtake/AppData/Local/Temp/iroha-sccp-windows-msvc-target/dotnet-full-artifacts -p:ProduceReferenceAssembly=false --logger "console;verbosity=minimal"`
+
+## 2026-06-29 C# Package Consumer Guard
+
+- Added `ci/check_csharp_sdk_package_consumer.sh`, a reusable release guard
+  that creates an isolated temporary `net8.0` consumer, installs the packed
+  `Hyperledger.Iroha.Sdk 0.1.0-preview.1` from `csharp/artifacts/packages`
+  through a local NuGet source, verifies the generated project uses
+  `PackageReference` with no `ProjectReference`, builds Release with warnings
+  as errors, and runs managed Ed25519, canonical-request, and Ethereum SCCP
+  route checks through the package assembly.
+- Added `pytests/scripts/check_csharp_sdk_package_consumer_test.py` to pin the
+  guard's package-consumption corridor, isolated NuGet cache, local-source
+  install evidence, managed API smoke markers, and negative-control inventory.
+- Wired `.github/workflows/pr_csharp.yml` to run the guard after packing into
+  `csharp/artifacts/packages`; the workflow now builds the C# SDK with
+  warnings as errors, packs to the same artifact directory the consumer guard
+  validates, triggers when the guard script changes, and rejects static
+  workflow drift for missing trigger coverage, missing `-warnaserror`, missing
+  package output, missing consumer smoke, and consumer-before-pack ordering.
+- Updated `csharp/README.md` so local release instructions use the same
+  warning-as-error build, package output directory, and package-consumer smoke
+  as the C# PR workflow.
+- Hardened `.github/workflows/sccp_production_corridor.yml` so the SCCP
+  `dotnet-sdk` phase now runs on `windows-latest` instead of Ubuntu, installs
+  the pinned Rust `1.93.1-x86_64-pc-windows-msvc` toolchain before Rust cache
+  restore, keeps Rust cache setup for the native `connect_norito_bridge.dll`
+  build, triggers on `rust-toolchain.toml` changes, and explicitly uses Bash
+  for the existing corridor runner. The workflow self-check now rejects Linux
+  runner drift, missing Rust setup, Rust cache before setup, missing Rust
+  cache, missing `rust-toolchain.toml` trigger coverage, and missing Bash shell
+  for this phase.
+- Hardened the Windows `.NET` SCCP corridor itself: `sha2-asm` is excluded on
+  MSVC, Rust 2024 Windows FFI extern blocks are explicit unsafe blocks,
+  Windows shutdown signal handling no longer depends on Unix signals,
+  `iroha_data_model` writes embedded build constants into `OUT_DIR` instead of
+  copying from UNC workspace paths, `dotnet test` writes build artifacts under
+  the Windows target directory, and readiness/bundle source-inventory gates now
+  accept current .NET host `Architecture` output while rejecting ambiguous or
+  missing architecture evidence.
+- Collected the actual Windows `.NET 8.0.422` SCCP phase evidence on
+  `win-x64`: `connect_norito_bridge.dll` built with SHA-256
+  `cd2719615c3aa68062040b4f83ce46e8662f77560cd736ea66d81846bf8b88e5`,
+  `dotnet restore` succeeded through the native bridge loader path,
+  `dotnet test` ran `FullyQualifiedName~Sccp` with a Windows-local artifacts
+  directory, VSTest reported 43 passed / 0 failed / 0 skipped, and the direct
+  TRX result was `csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx`
+  with 66537 bytes.
+- Validation passed:
+  - `bash -n ci/check_csharp_sdk_package_consumer.sh`
+  - `python3 -m py_compile pytests/scripts/check_csharp_sdk_package_consumer_test.py`
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/check_csharp_sdk_package_consumer_test.py`
+    (11 passed)
+  - Windows Git Bash with
+    `DOTNET_ROOT=/c/Users/mtake/AppData/Local/Temp/iroha-dotnet-win-sdk-complete`
+    and
+    `CSHARP_SDK_PACKAGE_CONSUMER_DOTNET_BIN=/c/Users/mtake/AppData/Local/Temp/iroha-dotnet-win-sdk-complete/dotnet`
+    ran `ci/check_csharp_sdk_package_consumer.sh` successfully against
+    `csharp/artifacts/packages`.
+  - `ci/check_csharp_sdk_package_consumer.sh --negative-control-missing-local-package`
+  - `ci/check_csharp_sdk_package_consumer.sh --negative-control-project-reference`
+  - `ci/check_csharp_sdk_package_consumer.sh --negative-control-managed-smoke`
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py`
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (59 passed)
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (516 passed)
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory`
+    (1 passed)
+  - `cargo test -p iroha_data_model --lib build_consts -- --nocapture`
+    (crate compiled; 0 matching tests, 1624 filtered)
+  - `bash scripts/check_sccp_production_corridor.sh --dry-run --phase dotnet-sdk`
+  - Windows Git Bash:
+    `DOTNET_ROOT=/c/Users/mtake/AppData/Local/Temp/iroha-dotnet-win-sdk-complete RUSTUP_TOOLCHAIN=1.93.1-x86_64-pc-windows-msvc CARGO_TARGET_DIR=/c/Users/mtake/AppData/Local/Temp/iroha-sccp-windows-msvc-target scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (SCCP production corridor completed)
+- The Windows `.NET` SCCP certification blocker for this release-corridor row
+  is cleared. Full workspace `cargo test --workspace` was not rerun because it
+  remains a multi-hour validation corridor.
+
+## 2026-06-28 C# Package Consumer and SCCP Verifier Matrix
+
+- Validated the packed C# SDK from outside the solution with a temporary
+  `net8.0` console consumer project. The consumer installed
+  `Hyperledger.Iroha.Sdk 0.1.0-preview.1` from
+  `csharp/artifacts/packages`, built in Release with warnings as errors, and
+  executed managed Ed25519 signing/verification, canonical request query/body
+  hashing, and Ethereum SCCP route guards through the NuGet package assembly.
+- Closed a native EVM prover artifact guard gap in the JavaScript SCCP SDK:
+  `proofArtifactBytes` are now scanned for forbidden local/remote prover
+  dependency markers before verified native prover artifacts can satisfy
+  outbound proof submission. Source and `dist` JS were updated together, and
+  the Ethereum mainnet SCCP JS test now asserts `proofArtifactBytes contains
+  forbidden prover dependency marker: wasm`.
+- Repaired stale SCCP readiness/bundle tests to match the stricter public
+  release schema: readiness fixtures now use nonempty evidence artifacts and
+  canonical relative public artifact paths, copied-hash drift fixtures use
+  valid nonzero wrong hashes so integrity checks run, and stale diagnostics now
+  expect the stricter nonzero/positive-integer wording.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet add /tmp/iroha-csharp-package-consumer-smoke/iroha-csharp-package-consumer-smoke.csproj package Hyperledger.Iroha.Sdk --version 0.1.0-preview.1 --source /home/mtakemiya/dev/iroha/csharp/artifacts/packages`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet build /tmp/iroha-csharp-package-consumer-smoke/iroha-csharp-package-consumer-smoke.csproj --configuration Release --no-restore -warnaserror`
+    (0 warnings, 0 errors)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet run --project /tmp/iroha-csharp-package-consumer-smoke/iroha-csharp-package-consumer-smoke.csproj --configuration Release --no-build`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (29 passed)
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py`
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (1414 passed)
+- Remaining blocker: Windows `.NET 8.0.x` SCCP certification is still required
+  for `connect_norito_bridge.dll`, Windows loader paths, Windows
+  RID/architecture, direct TRX output, and positive TRX bytes.
+
+## 2026-06-28 C# SDK Inventory Exhaustion and Release Build Gate
+
+- Exhausted the C#/.NET-adjacent Kagemusha negative-control inventory with a
+  41-control sweep covering every `--negative-control-*` flag in the SDK parity
+  guard whose name includes `csharp` or `dotnet`, the C# README native-output
+  guard, the non-C# Pallas guard spillover that protects shared C# Pallas
+  assumptions, SDK default/cross-SDK selector guards, and active non-C# TODO
+  leakage scanners. Every injected mutation was rejected.
+- Rebuilt the C# solution in Release with warnings promoted to errors; the SDK,
+  integration tests, unit tests, and sample all compiled with zero warnings and
+  zero errors.
+- Repacked the Release SDK package with `--no-build` after the warning-as-error
+  build. The package artifacts were regenerated under
+  `csharp/artifacts/packages`:
+  `Hyperledger.Iroha.Sdk.0.1.0-preview.1.nupkg` (652838 bytes) and
+  `Hyperledger.Iroha.Sdk.0.1.0-preview.1.symbols.nupkg` (951164 bytes).
+- Validation passed:
+  - `python3` driver over 41 selected negative controls from
+    `ci/check_kagemusha_recursive_spend_sdk_parity.sh`,
+    `ci/check_kagemusha_production_readiness.sh`, and
+    `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet build csharp/Hyperledger.Iroha.Sdk.sln --configuration Release --no-restore -warnaserror`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj --configuration Release --no-build --output csharp/artifacts/packages`
+- Remaining blocker: Windows `.NET 8.0.x` SCCP certification is still required
+  for `connect_norito_bridge.dll`, Windows loader paths, Windows
+  RID/architecture, direct TRX output, and positive TRX bytes.
+
+## 2026-06-28 C# Offline/Torii Focused and Negative-Control Sweep
+
+- Ran focused C# filters for the newer Offline Note codecs, the large Torii
+  response/request converter surface, and shared Norito/address/query/
+  transaction/canonical-request code paths that are changed in this worktree.
+  These focused filters complement the full Debug/Release solution runs and
+  passed with zero skipped tests.
+- Completed the remaining C# Kagemusha adversarial negative controls that were
+  not in the previous batch: Kagemusha instruction transaction builders,
+  recursive redeem metadata, lineage key package binding, CID1 exactness,
+  Pallas open-envelope preflight, lineage witness availability probes, archive
+  copy immutability, recursive-compact verifier unavailable mapping, C# SDK job
+  and setup workflow presence, workflow `.NET 8` pinning, override and major
+  version script guards, workflow inventory, C# SDK test workflow execution,
+  C# SDK dependency ordering, cross-SDK default selector drift, and TODO scan
+  inventory/content drift. Each injected mutation was rejected for the expected
+  reason.
+- Clean parity/readiness/policy guards were rerun after the negative controls
+  and still pass, confirming the negative-control mutations did not leave
+  residue.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-build --filter "FullyQualifiedName~OfflineNote"`
+    (48 passed, 0 skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-build --filter "FullyQualifiedName~ToriiClientTests|FullyQualifiedName~ToriiIdentifierReceiptTests"`
+    (4745 passed, 0 skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-build --filter "FullyQualifiedName~NoritoCodecTests|FullyQualifiedName~AddressFixtureTests"`
+    (28 passed, 0 skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-build --filter "FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests"`
+    (470 passed, 0 skipped)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-recursive-redeem-builder-metadata`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-key-package-binding`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-cid1-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-open-envelope-preflight`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-availability-probe`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-append-availability-probe`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-archive-copy`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-recursive-compact-verifier-unavailable`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-job-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-setup-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-version-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-override-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-needs-workflow`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default-cross-sdk`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory`
+  - Clean reruns:
+    `ci/check_kagemusha_recursive_spend_sdk_parity.sh`,
+    `ci/check_kagemusha_production_readiness.sh`, and
+    `ci/check_kagemusha_recursive_spend_policy.sh`.
+- Remaining blocker: Windows `.NET 8.0.x` SCCP certification is still required
+  for `connect_norito_bridge.dll`, Windows loader paths, Windows
+  RID/architecture, direct TRX output, and positive TRX bytes.
+
+## 2026-06-28 C# Native Guard and Negative-Control Revalidation
+
+- Re-ran the native-backed C# Kagemusha recursive-spend guard against a fresh
+  Linux `connect_norito_bridge` build using `.NET SDK 8.0.419`. The bridge was
+  `/tmp/iroha-kagemusha-csharp-native-target/debug/libconnect_norito_bridge.so`
+  with SHA-256
+  `8ecda02659d13bdb18bf34e5bec8f6c4874189b6733996fa5e5f1fbeb4527dad`.
+- Re-ran the SoraFS pin-register C# guard and the privacy C# guard against the
+  fresh bridge loader path. All focused runs passed with zero skipped tests.
+- Re-ran C# workflow/script negative controls for .NET version/info evidence,
+  native bridge build and native library path/SHA evidence, strict C# test
+  filters, verifier-backend filter coverage, and setup ordering. Each injected
+  drift was rejected for the expected guard reason.
+- Re-ran source-level adversarial controls for canonical request exactness,
+  identifier receipt exactness, transaction builder/encoding exactness, Pallas
+  builder surface, and typed init/append request codecs. Cross-guard controls
+  for SDK default selector drift and active non-C# Kagemusha TODO drift also
+  rejected the injected failures.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (5545 passed, 0 skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet SORAFS_PIN_REGISTER_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet ci/check_sorafs_pin_register_csharp_sdk.sh`
+    (28 passed, 0 skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet PRIVACY_CSHARP_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet LD_LIBRARY_PATH=/tmp/iroha-kagemusha-csharp-native-target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} PATH=/tmp/iroha-kagemusha-csharp-native-target/debug:$PATH ci/check_privacy_csharp_sdk.sh`
+    (35 privacy-native tests and 226 verifying-key backend-tag tests passed, 0
+    skipped)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-version-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-info-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-sha-case-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-setup-order-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-canonical-request-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-builder-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-encoding-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-builder-surface`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-init-append-request-codecs`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo`
+  - Clean reruns after negative controls:
+    `ci/check_kagemusha_recursive_spend_sdk_parity.sh`,
+    `ci/check_kagemusha_production_readiness.sh`, and
+    `ci/check_kagemusha_recursive_spend_policy.sh`.
+- Remaining blocker: this still provides Linux native-backed C# evidence only.
+  The Windows-only SCCP `.NET` row still requires a Windows `.NET 8.0.x` host
+  proving `connect_norito_bridge.dll`, loader paths, RID/architecture, direct
+  TRX output, and positive TRX bytes.
+
+## 2026-06-28 C# SDK Broad Production Validation
+
+- Re-ran the full C# SDK solution in Debug and Release after the SCCP/.NET
+  corridor hardening and broader C# SDK changes. Unit tests and integration
+  smoke tests pass with zero skipped tests on the local Linux `.NET 8.0.419`
+  host.
+- Rebuilt the Release NuGet packages and inspected package contents with
+  Python's standard `zipfile` tooling because `unzip` is unavailable on this
+  host. The main package contains the nuspec, net8 DLL/XML docs, README, and
+  metadata; the symbols package additionally contains the net8 PDB.
+- Re-ran package audits. The SDK and sample have no vulnerable, deprecated, or
+  outdated packages; the test and integration-test projects have no vulnerable
+  packages and retain the existing transitive test-platform deprecation/update
+  findings.
+- Re-ran the Kagemusha C# production gates after the latest C# changes; SDK
+  parity, production-readiness routing, and Reserved-lineage policy checks all
+  pass.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore`
+    (5676 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5676 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj --no-restore --configuration Release --output csharp/artifacts/packages`
+  - `python3 -m zipfile -l csharp/artifacts/packages/Hyperledger.Iroha.Sdk.0.1.0-preview.1.nupkg`
+  - `python3 -m zipfile -l csharp/artifacts/packages/Hyperledger.Iroha.Sdk.0.1.0-preview.1.symbols.nupkg`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- Remaining blocker: this Linux host still cannot certify the Windows-only
+  SCCP `.NET` row for `connect_norito_bridge.dll`, Windows loader paths,
+  Windows RID/architecture, direct TRX output, and positive TRX bytes.
+
+## 2026-06-28 SCCP .NET Corridor Evidence Hardening
+
+- Hardened the SCCP `dotnet-sdk` production-corridor phase so an inherited
+  `PATH` with empty path-list segments is rejected before the native
+  `connect_norito_bridge` loader path is constructed. The phase now builds a
+  non-empty loader path from the fresh bridge directory plus the inherited
+  `PATH` only after the Windows `.NET` OS/RID/architecture markers have passed.
+- Kept the release-readiness and release-bundle verifiers pinned to strict
+  Windows `.NET 8.0.x` SCCP evidence: canonical Windows RID and architecture
+  agreement, fresh `connect_norito_bridge.dll` path/SHA markers, full
+  `FullyQualifiedName~Sccp` test command, direct
+  `TestResults/sccp-dotnet-sdk.trx`, positive TRX bytes, and no empty traced
+  restore/test `PATH` segments.
+- Repaired SCCP source-inventory marker drift after the C# SCCP hardening work:
+  Ethereum local-admission byte snapshots, noncanonical `eth_chainId`
+  rejection including overflow quantities, immutable outbound signal-word
+  snapshots, and fixed ASCII token fields are again source-gated by the bundle
+  verifier.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~Sccp"`
+    (43 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5676 passed)
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dotnet'`
+    (22 passed, 27 deselected)
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'dotnet'`
+    (68 passed, 446 deselected)
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'dotnet'`
+    (66 passed, 785 deselected)
+  - `/tmp/iroha-sccp-pytest-venv/bin/python -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial or ethereum_local_admission or ethereum_noncanonical_chain_id or sccp_proof_request_bundle_gate'`
+    (16 passed, 1349 deselected)
+- Remaining blocker: this Linux host cannot certify the Windows-only SCCP row.
+  Final release evidence still needs a Windows `.NET 8.0.x` run proving
+  `connect_norito_bridge.dll`, Windows loader paths, RID, architecture, direct
+  TRX output, and nonzero TRX bytes.
+
+## 2026-06-28 C# SDK Negative-Control Revalidation
+
+- Re-ran the C#/.NET Kagemusha SDK adversarial guard modes that mutate source,
+  workflow, script, native-bridge evidence, package/default selector, and TODO
+  scanner expectations. Each negative control was rejected for the expected
+  production-readiness reason, confirming the guard still detects drift instead
+  of only passing the current happy path.
+- Source-level C# negative controls passed for Kagemusha instruction
+  transaction builders, recursive redeem metadata, lineage key package binding,
+  CID1 exactness, canonical request exactness, identifier receipt exactness,
+  transaction builder exactness, transaction encoding exactness, Pallas builder
+  surface/preflight, init/append request codecs, archive copy immutability,
+  recursive-compact verifier unavailable mapping, and lineage witness
+  availability probes.
+- Workflow/script C# negative controls passed for the C# SDK job, setup order,
+  .NET version/info/override/major-version checks, native bridge build,
+  native-library path and lowercase SHA evidence, recursive-spend/privacy/Torii
+  test filters, workflow inventory, test workflow routing, and dependency
+  ordering.
+- Cross-guard adversarial controls passed for SDK default selector drift,
+  cross-SDK default selector drift, active non-C# Kagemusha TODO injection, TODO
+  path scan inventory, and TODO content scan inventory.
+- Validation passed:
+  - C# source-level adversarial modes:
+    `--negative-control-csharp-kagemusha-instruction-transaction-builder`,
+    `--negative-control-csharp-kagemusha-recursive-redeem-builder-metadata`,
+    `--negative-control-csharp-lineage-key-package-binding`,
+    `--negative-control-csharp-lineage-cid1-exactness`,
+    `--negative-control-csharp-canonical-request-exactness`,
+    `--negative-control-csharp-identifier-receipt-exactness`,
+    `--negative-control-csharp-transaction-builder-exactness`,
+    `--negative-control-csharp-transaction-encoding-exactness`,
+    `--negative-control-csharp-pallas-builder-surface`,
+    `--negative-control-csharp-pallas-open-envelope-preflight`,
+    `--negative-control-csharp-init-append-request-codecs`,
+    `--negative-control-csharp-archive-copy`,
+    `--negative-control-csharp-recursive-compact-verifier-unavailable`,
+    `--negative-control-csharp-lineage-witness-availability-probe`, and
+    `--negative-control-csharp-lineage-witness-append-availability-probe`.
+  - C# workflow/script adversarial modes:
+    `--negative-control-csharp-sdk-job-workflow`,
+    `--negative-control-csharp-sdk-setup-workflow`,
+    `--negative-control-csharp-sdk-dotnet-version-workflow`,
+    `--negative-control-csharp-sdk-setup-order-workflow`,
+    `--negative-control-csharp-sdk-dotnet-version-script`,
+    `--negative-control-csharp-sdk-dotnet-info-script`,
+    `--negative-control-csharp-sdk-dotnet-override-script`,
+    `--negative-control-csharp-sdk-dotnet-major-script`,
+    `--negative-control-csharp-sdk-native-bridge-script`,
+    `--negative-control-csharp-sdk-native-library-evidence-script`,
+    `--negative-control-csharp-sdk-native-library-sha-case-script`,
+    `--negative-control-csharp-sdk-test-filter-script`,
+    `--negative-control-csharp-sdk-verifier-backend-test-filter-script`,
+    `--negative-control-csharp-sdk-workflow-inventory`,
+    `--negative-control-csharp-sdk-test-workflow`, and
+    `--negative-control-csharp-sdk-needs-workflow`.
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default-cross-sdk`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~KagemushaRecursiveSpendNativeTests"`
+    (618 passed)
+
+## 2026-06-28 C# SDK Parity Exactness Repair
+
+- Restored the C# SDK parity guard for canonical request and transaction
+  encoding exactness after the guard detected missing source markers for
+  exact account-id, nonce, signature, private-key seed, and transaction
+  boundary preflight.
+- Kept canonical request behavior fail-closed by explicitly separating
+  nonblank text preflight from canonical I105 account, nonce, timestamp,
+  signature, and private-key account-binding checks.
+- Kept transaction encoding boundary checks exact by using non-trimming
+  `RequireExactNonBlank` preflight on numeric/account boundary paths, and
+  renamed the identifier receipt timestamp negative test to the guard-pinned
+  `IdentifierResolveResponseRejectsNegativeReceiptTimes` marker.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+    (recursive Kagemusha ABI-6/ABI-7 SDK parity consistent)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~ToriiIdentifierReceiptTests"`
+    (549 passed)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet SORAFS_PIN_REGISTER_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet ci/check_sorafs_pin_register_csharp_sdk.sh`
+    (28 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5676 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5676 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj --no-restore --configuration Release --output csharp/artifacts/packages`
+  - NuGet package contents inspected: main package contains nuspec, net8
+    DLL/XML docs, README, and metadata; symbols package additionally contains
+    the net8 PDB.
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (5545 passed, 0 skipped; fresh Linux bridge SHA-256
+    `8ecda02659d13bdb18bf34e5bec8f6c4874189b6733996fa5e5f1fbeb4527dad`)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet PRIVACY_CSHARP_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet LD_LIBRARY_PATH=/tmp/iroha-kagemusha-csharp-native-target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} PATH=/tmp/iroha-kagemusha-csharp-native-target/debug:$PATH ci/check_privacy_csharp_sdk.sh`
+    (35 privacy-native tests and 226 verifying-key backend-tag tests passed, 0
+    skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+
+## 2026-06-28 C# Linux Native Guard Revalidation
+
+- Rebuilt `connect_norito_bridge` through the repository C# recursive-spend
+  guard on Linux with .NET SDK `8.0.419`; the fresh bridge was
+  `/tmp/iroha-kagemusha-csharp-native-target/debug/libconnect_norito_bridge.so`
+  with SHA-256
+  `8ecda02659d13bdb18bf34e5bec8f6c4874189b6733996fa5e5f1fbeb4527dad`.
+- Re-ran the native-backed C# Kagemusha recursive-spend guard and the privacy
+  C# guard against that bridge. This provides Linux coverage only and does not
+  clear the Windows-only SCCP row for `connect_norito_bridge.dll`, Windows RID,
+  loader, and architecture certification.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (5545 passed, 0 skipped)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet PRIVACY_CSHARP_DOTNET_BIN=/home/mtakemiya/.dotnet/dotnet LD_LIBRARY_PATH=/tmp/iroha-kagemusha-csharp-native-target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} PATH=/tmp/iroha-kagemusha-csharp-native-target/debug:$PATH ci/check_privacy_csharp_sdk.sh`
+    (35 privacy-native tests and 226 verifying-key backend-tag tests passed, 0
+    skipped)
+
+## 2026-06-28 C# UAID Response Direct Guards
+
+- Hardened direct UAID portfolio totals, portfolio asset/account/dataspace,
+  portfolio response, bindings dataspace/response, manifest
+  revocation/lifecycle/record, and manifest-list response DTO construction so
+  malformed UAID literals, dataspace and lifecycle counters, canonical I105
+  account lists, asset ids, canonical quantities, manifest hashes/status text,
+  and revocation metadata reject before callers serialize or trust manually
+  constructed space-directory metadata.
+- Preserved raw UAID diagnostics by wrapping direct DTO guard failures in the
+  UAID converters as contextual `JsonException`s with wire field names for
+  portfolio totals/assets/accounts/dataspaces, bindings dataspaces, manifest
+  lifecycle/revocation records, and manifest lists.
+- Extended UAID response tests with adversarial direct metadata coverage and
+  kept serializer validation adversarial by corrupting valid DTO private backing
+  fields before writing malformed UAID response objects.
+- Updated the C# README UAID inventory notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~Uaid|FullyQualifiedName~UAID"`
+    (276 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5676 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5676 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj --no-restore --configuration Release --output csharp/artifacts/packages`
+  - NuGet package contents inspected: main package contains nuspec, net8
+    DLL/XML docs, README, and metadata; symbols package additionally contains
+    the net8 PDB.
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --no-restore --verify-no-changes`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# SoraFS Response Direct Guards
+
+- Hardened direct SoraFS file-entry, CID lookup, pin-register response,
+  denylist pack summary, denylist catalog, and denylist pack response DTO
+  construction so malformed CIDs, hashes, path components, required pin fields,
+  fee treasury account ids, alias proofs, pack metadata, and counters reject
+  before callers serialize or trust manually constructed SoraFS metadata.
+- Preserved raw SoraFS diagnostics by wrapping direct DTO guard failures in the
+  SoraFS converters as contextual `JsonException`s with wire field names for
+  file entries, CID lookup files, pin-register fields and aliases, denylist
+  catalog lists/packs, and denylist pack fields.
+- Extended SoraFS response tests with adversarial direct metadata coverage and
+  kept serializer validation adversarial by corrupting valid DTO private backing
+  fields before writing malformed SoraFS response objects.
+- Updated the C# README SoraFS response DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~SoraFs|FullyQualifiedName~SoraFS"`
+    (360 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5647 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5647 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# VPN Response Direct Guards
+
+- Hardened direct VPN profile, quote, session, receipt, receipt-list, and
+  native instruction response DTO construction so malformed route/DNS/tunnel
+  list elements, noncanonical account ids, non-exact ids/hashes/keys/SPKI
+  material, malformed native instruction payloads, non-exact status/text
+  fields, and non-positive operational counters reject before callers serialize
+  or trust manually constructed tunnel or settlement metadata.
+- Preserved raw VPN diagnostics by wrapping direct DTO guard failures in the
+  VPN converters as contextual `JsonException`s with wire field names for
+  profile, quote, session, receipt, receipt-list item, string-list item, and
+  nested native-instruction fields.
+- Extended VPN response tests with adversarial direct metadata coverage and
+  kept serializer validation adversarial by corrupting valid DTO private backing
+  fields before writing.
+- Updated the C# README VPN response DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~Vpn|FullyQualifiedName~VPN"`
+    (520 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5622 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5622 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Runtime Metadata Direct Guards
+
+- Hardened direct runtime ABI active, runtime metrics, runtime upgrade
+  counters, and runtime ABI hash DTO construction so non-v1 ABI versions,
+  missing metrics counters, negative upgrade counters, non-`V1` ABI hash
+  policies, and malformed ABI hashes reject before callers serialize or trust
+  manually constructed runtime metadata.
+- Preserved raw runtime diagnostics by wrapping direct DTO guard failures in
+  the runtime converters as contextual `JsonException`s with existing wire
+  field names for ABI version, upgrade counters, policy, and ABI hash fields.
+- Extended runtime metadata tests with adversarial direct metadata coverage and
+  kept serializer validation adversarial by corrupting a valid ABI hash
+  response's private hash backing field before writing.
+- Updated the C# README runtime DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~RuntimeMetadata|FullyQualifiedName~RuntimeUpgradeCounters|FullyQualifiedName~RuntimeAbi|FullyQualifiedName~RuntimeMetrics"`
+    (76 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5603 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5603 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+
+## 2026-06-28 C# Node Capability Direct Guards
+
+- Hardened direct node capability DTO construction so malformed first-release
+  ABI/data-model counters, schema hashes, nested capability objects,
+  SM/default/policy labels, curve id lists, query aggregate labels, projection
+  constants/codecs, checkpoint heights, and checkpoint block hashes reject
+  before callers serialize or trust manually constructed capability metadata.
+- Preserved raw node capability diagnostics by wrapping direct DTO guard
+  failures in the node capability converters as contextual `JsonException`s
+  with existing wire field names for top-level, crypto, SM, acceleration,
+  curve, query, aggregate, and projection capability records.
+- Extended node capability tests with adversarial direct metadata coverage and
+  kept serializer validation adversarial by corrupting a valid response's
+  private schema-hash backing field before writing.
+- Updated the C# README node capability DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~NodeCapabilities|FullyQualifiedName~Capabilities"`
+    (246 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5592 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5592 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+
+## 2026-06-28 C# Contract Code-View Direct Guards
+
+- Hardened direct contract code-view graph construction so malformed
+  access-hint keys, entrypoint params, entrypoint metadata, syscall names,
+  analysis memory/syscall lists, top-level code/ABI hashes, permissions,
+  warnings, and rendered-source fields reject before callers serialize or trust
+  manually constructed code-view metadata.
+- Preserved raw code-view diagnostics by wrapping nested direct DTO guard
+  failures in the code-view converters as contextual `JsonException`s with
+  existing wire field names for access hints, entrypoint params, entrypoints,
+  syscalls, analysis, and top-level code-view fields.
+- Extended code-view tests with adversarial direct metadata coverage and kept
+  serializer validation adversarial by corrupting a valid entrypoint's private
+  backing field before writing.
+- Updated the C# README contract code-view DTO notes to document direct
+  metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~ContractCodeView|FullyQualifiedName~AccessHints|FullyQualifiedName~Entrypoint|FullyQualifiedName~Analysis|FullyQualifiedName~Syscall|FullyQualifiedName~Memory"`
+    (53 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5557 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5557 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Contract Metadata Direct Guards
+
+- Hardened direct contract manifest/code-record and verified-source
+  reference/job construction so malformed manifest hashes, source provenance
+  text, verified-source job ids/status/timestamps/messages, and actual-code
+  hashes reject before callers serialize or trust manually constructed metadata
+  records.
+- Preserved raw metadata diagnostics by wrapping direct DTO guard failures in
+  the manifest and verified-source converters as contextual `JsonException`s
+  with existing wire field names. The larger code-view graph remains a separate
+  hardening surface.
+- Extended metadata tests with adversarial direct metadata coverage and kept the
+  verified-source reference write-path test adversarial by corrupting the
+  private backing field after valid construction before serializer validation.
+- Updated the C# README metadata response DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~ContractMetadata|FullyQualifiedName~VerifiedSource|FullyQualifiedName~ContractCodeRecord|FullyQualifiedName~ManifestSummary"`
+    (86 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5532 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5532 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Contract Instance Direct Guards
+
+- Hardened direct contract instance and instance-inventory response
+  construction so malformed contract ids, code hashes, and namespace text reject
+  before callers serialize or trust manually constructed instance listings.
+- Preserved raw contract instance diagnostics by wrapping direct DTO guard
+  failures in the instance converters as contextual `JsonException`s with
+  existing wire field names, while keeping pagination consistency checks in the
+  converter/writer path.
+- Extended contract instance tests with adversarial direct metadata coverage and
+  kept hash write-path validation adversarial by corrupting the private backing
+  field after valid construction before serializer validation.
+- Updated the C# README instance response DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~ContractInstances|FullyQualifiedName~ContractInstance"`
+    (110 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5517 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5517 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Contract Code/State Direct Guards
+
+- Hardened direct contract code-byte, contract state entry, and contract state
+  response construction so non-exact `code_b64`, malformed state paths/path
+  lists, noncanonical `value_b64`, and malformed decode-error text reject
+  before callers serialize or trust manually constructed contract code/state
+  results.
+- Preserved raw contract state diagnostics by wrapping direct DTO guard
+  failures in the state converters as contextual `JsonException`s with existing
+  wire field names; contract code-byte base64 remains a `FormatException`
+  surface to match the existing decode contract.
+- Extended code-byte/state tests with adversarial direct metadata coverage and
+  kept code-byte write-path validation adversarial by corrupting the private
+  backing field after valid construction before serializer validation.
+- Updated the C# README contract code/state response DTO notes to document
+  direct metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~ContractCodeBytes|FullyQualifiedName~ContractState"`
+    (116 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5514 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5514 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Contract Call/View Direct Guards
+
+- Hardened direct contract-call, contract-view success, contract-view error,
+  and VM diagnostic response construction so malformed `ok` envelopes,
+  returned dataspace/contract-id/address/entrypoint/error text, returned
+  code/ABI/transaction hashes, positive creation-time counters, canonical
+  transaction base64 material, VM diagnostic text, and positive
+  gas/cycle/stack limits reject before callers serialize or trust manually
+  constructed execution results.
+- Preserved raw contract call/view diagnostics by wrapping direct DTO guard
+  failures in the contract call/view converters as contextual `JsonException`s
+  with existing wire field names and the established `.ok must be true/false`
+  wording.
+- Extended contract call/view tests with adversarial direct metadata coverage
+  and kept write-path tests adversarial by corrupting private backing fields
+  after valid construction before serializer validation.
+- Updated the C# README contract call/view response DTO notes to document
+  direct metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Contract"`
+    (760 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5500 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5500 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Contract Deployment Direct Guards
+
+- Hardened direct contract deploy, deploy-and-activate, and activate response
+  construction so explicit `ok = false`, malformed returned contract addresses,
+  dataspace/namespace/contract-id text, and non-exact code/ABI hashes reject
+  before callers serialize or trust manually constructed deployment results.
+- Preserved raw deployment diagnostics by wrapping direct DTO guard failures in
+  the deployment response converters as contextual `JsonException`s with
+  existing wire field names, including the established `.ok must be true`
+  wording.
+- Extended contract deployment tests with adversarial direct metadata coverage
+  and kept existing write-path tests adversarial by corrupting private backing
+  fields after valid construction before serializer validation.
+- Updated the C# README deployment response DTO notes to document direct
+  metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~ContractDeploymentDtosRejectMalformedDirectMetadata|FullyQualifiedName~ContractDeploymentAsyncRejectsFalseOkResponse|FullyQualifiedName~ContractDeploymentAsyncRejectsNonExactHashResponse|FullyQualifiedName~ContractDeploymentAsyncRejectsNonExactIdentifierResponse|FullyQualifiedName~ContractDeploymentAsyncRejectsMissingRequiredStringResponse|FullyQualifiedName~RawContractDeploymentResponsesRejectMissingRequiredStrings|FullyQualifiedName~RawDeployContractResponseRejectsMalformedPayloads|FullyQualifiedName~RawDeployAndActivateContractInstanceResponseRejectsMalformedPayloads|FullyQualifiedName~RawActivateContractInstanceResponseRejectsMalformedPayloads|FullyQualifiedName~RawDeployContractResponseWriteRejectsMalformedHash|FullyQualifiedName~RawDeployAndActivateContractInstanceResponseWriteRejectsMalformedContractId|FullyQualifiedName~RawActivateContractInstanceResponseWriteRejectsFalseOk|FullyQualifiedName~DeployContractAsyncEncodesRouteAndDeserializesResponse|FullyQualifiedName~DeployAndActivateContractInstanceAsyncEncodesRouteAndDeserializesResponse|FullyQualifiedName~ActivateContractInstanceAsyncEncodesRouteAndDeserializesResponse"`
+    (107 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5465 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5465 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Multisig Response Direct Guards
+
+- Hardened direct generic and contract-call multisig response construction so
+  explicit `ok = false`, noncanonical resolved multisig account ids, malformed
+  proposal/instruction hashes, malformed optional transaction hashes, zero
+  creation times, and noncanonical signing-message base64 reject before callers
+  serialize or trust manually constructed multisig signing material.
+- Preserved raw multisig diagnostics by wrapping direct DTO guard failures in
+  the multisig response converters as contextual `JsonException`s with existing
+  wire field names.
+- Extended multisig response tests with adversarial direct metadata coverage and
+  kept existing write-path tests adversarial by corrupting private backing
+  fields after valid construction before serializer validation.
+- Updated the C# README multisig response DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~MultisigResponseDtosRejectMalformedDirectMetadata|FullyQualifiedName~RawMultisigResponsesRejectMalformedPayloads|FullyQualifiedName~RawMultisigResponseWriteRejectsMalformedSigningMaterial|FullyQualifiedName~RawMultisigResponseWriteRejectsZeroCreationTime|FullyQualifiedName~RawMultisigContractCallResponseWriteRejectsMalformedResolvedAccount|FullyQualifiedName~MultisigResponsesRejectNonExactResolvedAccountIds|FullyQualifiedName~MultisigResponsesRejectMissingResolvedAccountIds|FullyQualifiedName~ProposeMultisigAsyncRejectsMalformedSuccessResponse|FullyQualifiedName~ProposeMultisigAsyncRejectsFalseOkResponse|FullyQualifiedName~ProposeMultisigAsyncRejectsEmptySigningMessageResponse|FullyQualifiedName~ProposeMultisigAsyncRejectsNonExactProposalAndInstructionsHashResponses|FullyQualifiedName~ProposeMultisigAsyncRejectsNegativeCreationTimeResponse|FullyQualifiedName~ApproveMultisigContractCallAsyncDeserializesScaffoldResponse|FullyQualifiedName~ProposeMultisigAsyncPostsNativeNoritoInstructionFrames|FullyQualifiedName~ProposeMultisigContractCallAsyncPostsSignedContractCallProposal"`
+    (76 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5454 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5454 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Onboarding/Faucet Direct Guards
+
+- Hardened direct account onboarding, account faucet, multisig onboarding, and
+  faucet puzzle construction so canonical account ids, UAID/status/asset/amount
+  text, optional transaction hashes, exact PoW algorithm and anchor hashes,
+  optional lowercase even-length salt hex, positive anchor/age fields, and
+  checked scrypt work factors reject malformed values before callers serialize
+  or trust manually constructed onboarding/faucet DTOs.
+- Preserved raw onboarding/faucet diagnostics by wrapping direct DTO guard
+  failures inside onboarding and faucet puzzle converters as contextual
+  `JsonException`s with existing wire field names.
+- Extended onboarding/faucet tests with adversarial direct metadata coverage,
+  kept write-path tests adversarial by corrupting private backing fields after
+  valid construction before serializer validation, and kept solver-side faucet
+  PoW validation covered with intentionally corrupted puzzle backing fields.
+- Updated the C# README onboarding/faucet DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~OnboardingFaucetDtosRejectMalformedDirectMetadata|FullyQualifiedName~AccountFaucetPuzzleRejectsMalformedRawPayload|FullyQualifiedName~AccountFaucetPuzzleRejectsMissingRequiredRawPayloadFields|FullyQualifiedName~AccountFaucetPuzzleWriteRejectsZeroMaxAnchorAge|FullyQualifiedName~AccountFaucetPuzzleWriteRejectsZeroScryptLogN|FullyQualifiedName~AccountFaucetPuzzleRejectsMalformedRawEnvelope|FullyQualifiedName~RawOnboardingTransactionHashResponsesRejectMalformedPayloads|FullyQualifiedName~RawOnboardingResponsesRejectMalformedRequiredStrings|FullyQualifiedName~RawOnboardingTransactionHashResponsesAllowEmptyOrNullTransactionHash|FullyQualifiedName~RawOnboardingTransactionHashResponseWriteRejectsMalformedHash|FullyQualifiedName~RawOnboardingTransactionHashResponseWriteRejectsNoncanonicalAccountId|FullyQualifiedName~OnboardingResponsesRejectMalformedRequiredStrings|FullyQualifiedName~GetAccountFaucetPuzzleAsyncRejectsMalformedResponse|FullyQualifiedName~GetAccountFaucetPuzzleAsyncRejectsMissingRequiredResponseFields|FullyQualifiedName~GetAccountFaucetPuzzleAsyncDeserializesTypedResponse"`
+    (202 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5438 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore`
+    (5438 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-restore`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing deprecated
+    transitive legacy test dependencies)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated --include-transitive`
+    (SDK and sample clean; tests/integration retain existing transitive test
+    dependency updates)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Alias Direct Guards
+
+- Hardened direct account alias lookup item/response, account alias
+  resolution/index, asset alias binding/resolution, and contract alias
+  binding/resolution construction so exact alias/dataspace/domain/source/status
+  text, canonical account ids, asset/contract identifiers, non-negative alias
+  indexes, and positive binding timestamps reject malformed values before
+  callers serialize or trust manually constructed alias DTOs.
+- Preserved raw alias diagnostics by wrapping direct DTO guard failures inside
+  account alias lookup and alias resolution converters as contextual
+  `JsonException`s with existing wire field names.
+- Extended alias tests with adversarial direct metadata coverage and kept
+  existing write-path tests adversarial by corrupting private backing fields
+  after valid construction before serializer validation.
+- Updated the C# README alias DTO notes to document direct metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~AliasDtosRejectMalformedDirectMetadata|FullyQualifiedName~RawAccountAliasLookupItemRejectsMalformedPayloads|FullyQualifiedName~RawAccountAliasLookupResponseRejectsMalformedPayloads|FullyQualifiedName~RawAccountAliasLookupItemWriteRejectsMalformedAlias|FullyQualifiedName~RawAccountAliasLookupResponseWriteRejectsNegativeTotal|FullyQualifiedName~RawAccountAliasLookupResponseWriteRejectsNoncanonicalAccountId|FullyQualifiedName~ResolveAccountAliasIndexAsyncRejectsMalformedResponse|FullyQualifiedName~RawAccountAliasIndexResponseRejectsMalformedPayloads|FullyQualifiedName~RawAccountAliasIndexResponseWriteRejectsMalformedAccountId|FullyQualifiedName~RawAccountAliasIndexResponseWriteRejectsNoncanonicalAccountId|FullyQualifiedName~RawAliasResolutionResponsesRejectMalformedPayloads|FullyQualifiedName~RawAliasResolutionWriteRejectsMalformedNestedBinding|FullyQualifiedName~RawAccountAliasResolutionWriteRejectsNoncanonicalAccountId|FullyQualifiedName~RawAliasBindingWriteRejectsNonPositiveTimestamp|FullyQualifiedName~LookupAliasesByAccountAsyncRejectsMalformedResponse|FullyQualifiedName~ResolveAccountAliasAsyncReturnsTypedResponse|FullyQualifiedName~ResolveAssetAliasAsyncReturnsTypedResponse|FullyQualifiedName~ResolveContractAliasAsyncReturnsTypedResponse"`
+    (182 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5416 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore -c Release`
+    (5416 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj --no-restore -c Release`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Account Query Direct Guards
+
+- Hardened direct account summary, asset-balance, account-permission, and
+  transaction-summary construction so canonical account ids, exact text fields,
+  canonical quantity strings, permission names, positive timestamps, and exact
+  lowercase 32-byte entrypoint hashes reject malformed values before callers
+  serialize or trust manually constructed account-query DTOs.
+- Preserved raw account-query diagnostics by wrapping direct DTO guard failures
+  inside the account summary, asset balance, permission, and transaction
+  converters as contextual `JsonException`s with existing wire field names.
+- Extended account-query tests with adversarial direct metadata coverage and
+  kept existing write-path tests adversarial by corrupting private backing
+  fields after valid construction before serializer validation.
+- Updated the C# README account-query DTO notes to document direct metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter "FullyQualifiedName~AccountQueryDtosRejectMalformedDirectMetadata|FullyQualifiedName~RawAccountSummaryRejectsMalformedPayloads|FullyQualifiedName~RawAccountsPageRejectsMalformedPayloads|FullyQualifiedName~RawAccountAssetBalanceRejectsMalformedPayloads|FullyQualifiedName~RawAccountAssetBalancesPageRejectsMalformedPayloads|FullyQualifiedName~RawAccountAssetBalanceWriteRejectsMalformedQuantity|FullyQualifiedName~RawAccountTransactionSummaryRejectsMalformedPayloads|FullyQualifiedName~RawAccountTransactionsPageRejectsMalformedPayloads|FullyQualifiedName~RawAccountTransactionSummaryWriteRejectsMalformedHash|FullyQualifiedName~RawAccountTransactionSummaryWriteRejectsNonPositiveTimestamp|FullyQualifiedName~RawAccountPermissionRejectsMalformedPayloads|FullyQualifiedName~RawAccountPermissionPreservesArbitraryPayload|FullyQualifiedName~RawAccountPermissionsPageRejectsMalformedPayloads|FullyQualifiedName~RawAccountPermissionWriteRejectsMalformedName|FullyQualifiedName~AccountQueryResponseListsSnapshotInitAndAccessValues|FullyQualifiedName~GetAccountsAsyncRejectsMalformedResponse|FullyQualifiedName~GetAccountAssetsAsyncRejectsMalformedResponse|FullyQualifiedName~GetAccountTransactionsAsyncRejectsMalformedResponse|FullyQualifiedName~GetAccountPermissionsAsyncRejectsMalformedResponse"`
+    (220 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    (5386 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore -c Release`
+    (5386 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj --no-restore -c Release`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer Supplemental Direct Guards
+
+- Hardened direct explorer account QR construction so canonical account ids,
+  exact QR literals/error-correction labels, non-negative network prefixes,
+  positive module/version geometry, and non-empty SVG text reject malformed
+  values before callers serialize or trust manually constructed DTOs.
+- Hardened direct explorer health and metrics construction so optional
+  head/block timestamps and required sampled timestamps reject empty,
+  surrounding-whitespace, and control-character text before serialization.
+- Preserved raw explorer supplemental diagnostics by wrapping direct DTO guard
+  failures inside the account QR, health, and metrics converters as contextual
+  `JsonException`s with existing wire field names.
+- Extended explorer tests with adversarial direct supplemental metadata and
+  kept existing write-path tests adversarial by corrupting private backing
+  fields after valid construction before serializer validation.
+- Updated the C# README explorer DTO notes to document direct supplemental
+  metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSupplementalDtosRejectMalformedDirectMetadata|FullyQualifiedName~ExplorerSupplementalResponsesRejectMalformedResponse|FullyQualifiedName~ExplorerRawSupplementalDtosRejectMalformedPayloads|FullyQualifiedName~RawExplorerAccountQrWriteRejectsMalformedModules|FullyQualifiedName~RawExplorerAccountQrWriteRejectsNoncanonicalCanonicalId|FullyQualifiedName~RawExplorerHealthWriteRejectsMalformedSampleTime|FullyQualifiedName~RawExplorerMetricsWriteRejectsMalformedBlockTime|FullyQualifiedName~GetExplorerAccountQrAsyncEncodesAccountIdAndDeserializesSvgSnapshot|FullyQualifiedName~GetExplorerHealthAsyncDeserializesSnapshot|FullyQualifiedName~GetExplorerMetricsAsyncDeserializesSnapshot" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (81 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5367 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5367 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer Directory/Inventory Direct Guards
+
+- Hardened direct explorer account, domain, asset-definition, asset, NFT, RWA
+  parent, and RWA construction so canonical account ids, token fields,
+  optional logo/status labels, mintability, asset quantities, RWA references,
+  and parent quantities reject malformed values before callers serialize or
+  trust manually constructed DTOs.
+- Preserved raw explorer directory/inventory diagnostics by wrapping direct DTO
+  guard failures inside the explorer converters as contextual `JsonException`s
+  with existing wire field names.
+- Extended explorer tests with adversarial direct directory/inventory metadata
+  and kept existing write-path tests adversarial by corrupting private backing
+  fields after valid construction before serializer validation.
+- Updated the C# README explorer DTO notes to document direct
+  directory/inventory metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerDirectoryInventoryDtosRejectMalformedDirectMetadata|FullyQualifiedName~ExplorerDirectoryResponsesRejectMalformedResponse|FullyQualifiedName~RawExplorerDirectoryResponsesRejectMalformedPayloads|FullyQualifiedName~ExplorerInventoryResponsesRejectMalformedResponse|FullyQualifiedName~RawExplorerInventoryResponsesRejectMalformedPayloads|FullyQualifiedName~RawExplorerAccountWriteRejectsMalformedI105Address|FullyQualifiedName~RawExplorerRwaWriteRejectsMalformedQuantity|FullyQualifiedName~RawExplorerResponseWriteRejectsNoncanonicalAccountIds|FullyQualifiedName~ExplorerDirectoryInventoryListsSnapshotInitAndAccessValues" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (229 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5353 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5353 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer Econometrics Direct Guards
+
+- Hardened direct explorer asset-definition econometrics construction so
+  `DefinitionId`, velocity/issuance window keys, canonical quantity text, and
+  issuance series values reject malformed text before callers serialize or
+  trust manually constructed DTOs.
+- Hardened direct explorer distribution, Lorenz, top-holder, and asset
+  snapshot construction so finite ratio bounds, non-negative metric doubles,
+  optional percentile quantities, canonical top-holder account ids, total
+  supply, and non-null distribution snapshots reject malformed values before
+  serialization.
+- Preserved raw explorer supplemental diagnostics by wrapping direct DTO guard
+  failures inside the explorer converters as contextual `JsonException`s with
+  existing wire field names, while keeping explicit null `distribution`
+  failures on the previous `must not be null` diagnostic path.
+- Extended explorer tests with adversarial direct econometrics/snapshot
+  metadata and kept write-path tests adversarial by corrupting private backing
+  fields after valid construction to prove serializers still fail closed.
+- Updated the C# README explorer DTO notes to document direct econometrics and
+  snapshot metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerEconometricsDtosRejectMalformedDirectMetadata|FullyQualifiedName~ExplorerSupplementalResponsesRejectMalformedResponse|FullyQualifiedName~ExplorerRawSupplementalDtosRejectMalformedPayloads|FullyQualifiedName~ExplorerEconometricsListsSnapshotInitAndAccessValues|FullyQualifiedName~RawExplorerDistributionWriteRejectsOutOfRangeRatio|FullyQualifiedName~RawExplorerResponseWriteRejectsNoncanonicalAccountIds" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (115 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5327 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5327 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer Wrapper Direct Guards
+
+- Hardened direct `ToriiExplorerPaginationMeta` construction so explicit
+  `Page` and `PerPage` zero values reject before callers serialize or trust
+  manually constructed pagination metadata.
+- Hardened direct `ToriiExplorerLatestTransactionsResponse` and
+  `ToriiExplorerLatestInstructionsResponse` construction so `SampledAt`
+  rejects empty text, surrounding whitespace, and control characters before
+  serialization.
+- Preserved raw explorer pagination/latest diagnostics by wrapping direct DTO
+  guard failures inside the explorer converters as contextual `JsonException`s
+  with `page`, `per_page`, and `sampled_at` wire field names.
+- Extended explorer tests with adversarial direct wrapper metadata while
+  retaining raw page/latest malformed-payload coverage.
+- Updated the C# README explorer DTO notes to document direct wrapper metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerWrapperDtosRejectMalformedDirectMetadata|FullyQualifiedName~ExplorerRawPagesRejectMalformedItemsWithItemContext|FullyQualifiedName~ExplorerDirectoryRawDtosRejectMalformedPayloads" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (55 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5303 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5303 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer Transaction Detail Direct Guards
+
+- Hardened direct `ToriiExplorerTransactionDetail` construction so canonical
+  authority, transaction hash, `created_at`, executable/status labels, and
+  signature text reject malformed values before callers serialize or trust
+  manually constructed transaction detail DTOs.
+- Hardened direct `ToriiExplorerTransactionRejection` construction so encoded
+  rejection bytes and rejection messages reject malformed hex, empty text,
+  control characters, and whitespace drift before serialization.
+- Preserved raw explorer transaction-detail/rejection diagnostics by wrapping
+  direct DTO guard failures inside the explorer converters as contextual
+  `JsonException`s with existing wire field names.
+- Extended explorer tests with adversarial direct transaction-detail and
+  rejection DTO metadata while retaining raw page/detail, encoded-field, and
+  JSON snapshot regression coverage.
+- Updated the C# README explorer DTO notes to document direct transaction
+  detail/rejection metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerTransactionDetailDtosRejectMalformedDirectMetadata|FullyQualifiedName~ExplorerRawPagesRejectMalformedItemsWithItemContext|FullyQualifiedName~ExplorerResponsesRejectNonExactHashesAndEncodedFields|FullyQualifiedName~ExplorerJsonSnapshotsAreDetached" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (82 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5296 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5296 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer SSE DTO Direct Guards
+
+- Hardened direct `ToriiExplorerBlock` construction so block hash,
+  `created_at`, previous-block hash, and transactions hash metadata reject
+  empty text, control characters, whitespace drift, non-lowercase/non-exact
+  32-byte hashes, and malformed hex before callers serialize or trust manually
+  constructed explorer block events.
+- Hardened direct `ToriiExplorerTransaction`, `ToriiExplorerInstruction`,
+  `ToriiExplorerInstructionBox`, and `ToriiExplorerInstructionJson`
+  construction so canonical authorities, transaction hashes, timestamps,
+  executable/status/kind labels, nested instruction boxes, and encoded
+  instruction payloads reject malformed values before serialization.
+- Preserved raw explorer JSON and explorer SSE stream diagnostics by wrapping
+  direct DTO guard failures inside explorer converters as contextual
+  `JsonException`s with existing wire field names; outer instruction-box hex
+  keeps the existing lowercase `0x` prefix tolerance while nested instruction
+  JSON encoded bytes remain lowercase even-length hex without a prefix.
+- Extended explorer SSE tests with adversarial direct block/transaction/
+  instruction DTO metadata plus raw SSE, duplicate-key, page-item, and
+  write-time regression coverage.
+- Updated the C# README SSE notes to document direct explorer DTO metadata
+  rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSseStreamsRejectMalformedPayloads|FullyQualifiedName~ExplorerSseStreamsRejectMalformedJsonData|FullyQualifiedName~ExplorerSseStreamsRejectDuplicateJsonDataBeforeConverterCollapse|FullyQualifiedName~ExplorerRawSseDtosRejectMalformedPayloads|FullyQualifiedName~ExplorerSseDtosRejectMalformedDirectMetadata|FullyQualifiedName~ExplorerRawPagesRejectMalformedPayloads|FullyQualifiedName~RawExplorerCreatedAtWritesRejectMissingTimestamp" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (86 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5285 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5285 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Typed SSE DTO Direct Guards
+
+- Hardened direct `ToriiPipelineEvent` construction so category/event labels,
+  optional status/kind/detail/hash fields, typed SSE projection metadata, and
+  retry milliseconds reject malformed text, non-lowercase/non-exact hashes,
+  control characters, whitespace drift, and negative retry values before
+  callers serialize or trust manually constructed events.
+- Hardened direct `ToriiProofEvent` and `ToriiProofRemovedRecord` construction
+  so proof category/event/backend/hash/verifying-key/prune metadata, projection
+  metadata, retry values, and copied removed-record entries reject malformed
+  values before serialization.
+- Preserved raw JSON and typed stream error contracts by wrapping direct DTO
+  guard failures inside the SSE converters as contextual `JsonException`s with
+  existing wire field names.
+- Extended Torii SSE tests with adversarial direct pipeline/proof DTO metadata,
+  removed-record copy, and negative retry coverage alongside raw converter and
+  stream malformed-payload regressions.
+- Updated the C# README typed SSE notes to document direct pipeline/proof DTO
+  metadata rejection.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiPipelineEventRejectsMalformedDirectMetadata|FullyQualifiedName~ToriiPipelineEventRejectsNegativeDirectRetryMetadata|FullyQualifiedName~ToriiProofEventRejectsMalformedDirectMetadata|FullyQualifiedName~ToriiProofEventRejectsNegativeDirectRetryMetadata|FullyQualifiedName~ToriiProofRemovedRecordRejectsMalformedDirectMetadata|FullyQualifiedName~ToriiProofEventRejectsMalformedDirectRemovedRecordCopies|FullyQualifiedName~ToriiPipelineEventRejectsMalformedRawPayloads|FullyQualifiedName~ToriiProofEventRejectsMalformedRawPayloads|FullyQualifiedName~StreamPipelineEventsAsyncRejectsMalformedPipelinePayloads|FullyQualifiedName~StreamProofEventsAsyncRejectsMalformedProofPayloads" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (129 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5262 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5262 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiPipelineEvent.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiProofEvent.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSseEventJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# SSE Direct Metadata Guards
+
+- Hardened `ToriiServerSentEvent` direct construction so optional `Event` and
+  `Id` metadata reject empty, surrounding-whitespace, and control-character
+  values, and optional `RetryMilliseconds` rejects negative values.
+- Updated `ToriiClient` SSE parsing so inbound metadata rejected by the DTO
+  guard is translated back into `JsonException` with
+  `sse_event_name`/`last_event_id`/`retry` context, preserving stream error
+  contracts for typed pipeline/proof projections.
+- Extended SSE tests with adversarial direct metadata construction plus
+  focused pipeline/proof malformed last-event-id coverage.
+- Updated the C# README SSE notes to document direct metadata rejection and
+  parser error-shaping behavior.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~StreamEventsAsyncParsesCommentAndJsonFrames|FullyQualifiedName~ToriiServerSentEventRejectsMalformedDirectMetadata|FullyQualifiedName~StreamEventsAsyncRejectsMalformedRetryMetadata|FullyQualifiedName~OpenEventSseAsyncRejectsNonExactLastEventIdsBeforeDispatch" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (16 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~StreamPipelineEventsAsyncRejectsMalformedPipelinePayloads|FullyQualifiedName~StreamProofEventsAsyncRejectsMalformedProofPayloads|FullyQualifiedName~ToriiServerSentEventRejectsMalformedDirectMetadata" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (43 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5221 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5221 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiServerSentEvent.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# SoraFS Content Metadata Guards
+
+- Hardened `ToriiSoraFsContentResponse` direct construction so optional
+  `ContentLength` metadata rejects negative values and optional `ContentCid`
+  metadata rejects empty, whitespace-containing, control-character, uppercase,
+  non-`b`-prefixed, or non-base32 CID text.
+- Preserved buffered response byte snapshotting while aligning direct
+  `ContentCid` validation with the same lowercase multibase base32 shape
+  required for `sora-content-cid` headers.
+- Extended SoraFS content tests with adversarial direct metadata construction
+  for malformed CIDs and negative content length alongside the existing header
+  rejection and byte snapshot coverage.
+- Updated the C# README SoraFS content note to document direct content metadata
+  rejection in addition to header validation and buffered byte snapshots.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetSoraFsCidContentAsyncEncodesNestedPathAndReturnsHeaders|FullyQualifiedName~SoraFsContentResponseRejectsMalformedDirectMetadata|FullyQualifiedName~GetSoraFsCidContentAsyncRejectsMalformedContentCidHeader" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (14 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5217 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5217 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsContentResponse.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Signed Envelope Body Consistency
+
+- Hardened `SignedQueryEnvelope` direct construction so the encoded signed
+  query body must contain exactly signature and payload fields, the signature
+  field must be a 64-byte one-byte-field const-vec, and the exposed
+  `SignatureBytes`/`PayloadBytes` must match the encoded body before callers
+  submit or inspect the envelope.
+- Hardened `SignedTransactionEnvelope` direct construction so signed
+  transaction bytes must parse as the current four-field body
+  (signature/payload/attachments/multisig), the signature field must be a
+  64-byte one-byte-field const-vec, `PayloadBytes` must match the encoded body,
+  and current attachments/multisig markers must remain empty.
+- Extended signed-query and transaction-builder adversarial tests to build
+  minimal valid direct-constructor wire bodies, then reject malformed/truncated
+  bodies, payload/signature disagreement, non-empty transaction attachments,
+  and trailing encoded fields.
+- Updated the C# README transaction-boundary note to call out malformed
+  encoded-body rejection for signed transaction/query envelope construction.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SignedQueryEnvelope|FullyQualifiedName~SignedTransactionEnvelope|FullyQualifiedName~BuildSignedProducesDeterministicGoldenOutputs" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (7 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5210 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5210 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Queries/SignedQueryEnvelope.cs csharp/src/Hyperledger.Iroha.Sdk/Transactions/SignedTransactionEnvelope.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SignedQueryBuilderTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Signed Envelope Constructor Invariants
+
+- Hardened `SignedQueryEnvelope` direct construction so submit-ready query
+  envelopes reject empty versioned/signed/payload byte fields, non-v1 signed
+  query versions, versioned bytes whose body disagrees with `SignedQueryBytes`,
+  and non-64-byte Ed25519 signatures before callers submit or inspect them.
+- Hardened `SignedTransactionEnvelope` direct construction so submit-ready
+  transaction envelopes reject empty Norito/signed/payload byte fields, enforce
+  the current Norito bytes == signed transaction bytes wire invariant, and
+  reject transaction hashes that do not match the signed transaction entrypoint.
+- Extended signed-query and transaction-builder tests with direct-constructor
+  negative coverage for empty fields, wrong-size signatures/hashes, mismatched
+  query version/body bytes, mismatched transaction submission bytes, and
+  mismatched transaction hashes; builder structural tests also assert signed
+  transaction hash consistency.
+- Updated the C# README transaction-boundary note to document that signed
+  transaction/query envelopes reject empty, mismatched, or wrong-size direct
+  constructor byte fields in addition to defensively copying public byte arrays.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SignedQueryEnvelope|FullyQualifiedName~SignedTransactionEnvelope|FullyQualifiedName~BuildSignedProducesDeterministicGoldenOutputs" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (7 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5210 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release --nologo --logger "console;verbosity=minimal"`
+    (5210 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Queries/SignedQueryEnvelope.cs csharp/src/Hyperledger.Iroha.Sdk/Transactions/SignedTransactionEnvelope.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SignedQueryBuilderTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Torii List Element Guards
+
+- Hardened the shared Torii list-snapshot helper so helper-backed DTO lists
+  reject null elements during direct initialization while preserving detached
+  list snapshots and the existing whole-list null handling for optional or
+  later-preflighted fields.
+- Applied indexed fail-fast guards to account onboarding permission lists,
+  multisig onboarding member-account lists, and multisig proposal instruction
+  lists, and covered representative VPN route/DNS and native-instruction/item
+  list DTOs through the shared helper.
+- Extended Torii snapshot tests to cover null-element adversarial construction
+  for permissions, member accounts, proposal instructions, VPN route/DNS
+  strings, VPN native instructions, and VPN receipt-list items.
+- Updated the C# README Torii list-snapshot notes to document direct
+  null-element rejection for request and VPN helper-backed list DTOs.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountOnboardingRequestSnapshotsPermissionListsOnInitAndAccess|FullyQualifiedName~MultisigAccountOnboardingRequestSnapshotsMemberListsOnInitAndAccess|FullyQualifiedName~ProposeMultisigAsyncSnapshotsInstructionListBeforeDispatchAndAccess|FullyQualifiedName~VpnNetworkRouteListsSnapshotInitAndAccessValues|FullyQualifiedName~VpnInstructionAndReceiptListsSnapshotInitAndAccessValues" --no-restore --configuration Debug`
+    (5 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug`
+    (5208 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5208 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# SCCP Byte Array Constructor Guards
+
+- Hardened SCCP DTO byte-array construction paths so BSC testnet
+  local-admission, BSC mainnet local-admission/outbound, Ethereum mainnet
+  local-admission/outbound, and Ethereum Beacon REST response records reject
+  null byte arrays with `ArgumentNullException` during direct construction and
+  `with` initializers instead of failing later through ambiguous null-reference
+  paths.
+- Extended BSC testnet, BSC mainnet, and Ethereum mainnet SCCP negative tests
+  for direct constructor and initializer null byte arrays across
+  local-admission payloads/submissions, outbound request/result/submission
+  bytes, and Beacon REST response body bytes.
+- Updated the C# README SCCP coverage note to document direct DTO null
+  byte-array guards.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpBscTestnetTests|FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug`
+    (43 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug`
+    (5208 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5208 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscTestnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscTestnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# SCCP Outbound Array Element Guards
+
+- Hardened Ethereum and BSC mainnet outbound SCCP request/result/submission
+  records so direct DTO construction and `with` initializers reject null
+  elements in public signal word arrays, public input word arrays, and
+  submission argument arrays while preserving detached array snapshots.
+- Extended BSC and Ethereum SCCP negative tests to cover null elements in
+  direct outbound request/result/submission DTO construction in addition to
+  existing mutation and hex-view consistency checks.
+- Updated the C# README SCCP coverage note to document the direct DTO
+  null-element guards.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug`
+    (41 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug`
+    (5208 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5208 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Offline Note Wallet JSON Field Strictness
+
+- Hardened `OfflineNoteWalletNoteJsonCodec.Decode` so version-1 wallet-note
+  persistence envelopes reject unknown root fields and origin fields that do
+  not belong to the decoded origin variant, while preserving the existing
+  optional `spent_payment_request_id` and audit-trail compatibility.
+- Added adversarial wallet-note JSON tests for root-field injection,
+  issuer-origin/P2P-origin field confusion, and P2P-origin extra lineage
+  material.
+- Updated the C# README wallet-note persistence section to document the strict
+  version-1 field and origin-variant checks.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter OfflineNoteWalletNoteTests --no-restore --configuration Debug`
+    (24 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug`
+    (5208 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln --no-restore --configuration Release`
+    (5208 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --include csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Kagemusha Native Buffer Cleanup
+
+- Hardened `KagemushaRecursiveSpendNative` so managed request, bundle,
+  witness, compact-token, verifier-record, record-bundle, Pallas-envelope, and
+  recursive compact key-artifact copies are zeroed after native dispatch,
+  availability failure, validation failure after copying, or sanitized
+  native-call exceptions.
+- Hardened `ReadBridgeOutput` so bounded non-null native output buffers are
+  zeroed before release on success, malformed-output, and bridge-error paths;
+  bridge-error paths now also release non-null output pointers instead of
+  throwing before the free path.
+- Hardened the Kagemusha availability probe result consumer so unexpected
+  bounded non-null native probe outputs are zeroed before release.
+- Added adversarial bridge-output regressions for non-null bridge-error buffers,
+  malformed Norito success output, and valid success output, all asserting the
+  native buffer is zeroed before the free callback releases it. Added the same
+  adversarial zero-before-free regression for unexpected native probe output.
+- Updated the C# README native Kagemusha section to document request-copy and
+  native-output cleanup.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (69 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5207 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5207 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Privacy Native Exception-Safe Request Zeroing
+
+- Hardened `PrivacyNative.CallProofRequest` so proof-request selector,
+  public-input, witness, and proof temporary arrays are allocated under the
+  same `try/finally` cleanup scope; if a later component validation or native
+  dispatch path fails, already-allocated request material is still zeroed.
+- Switched managed privacy-native temporary cleanup to
+  `CryptographicOperations.ZeroMemory` for proof requests, proof/archive calls,
+  invalid managed native-output copies, and availability probe archives.
+- Extended the native-exception sanitization regression to cover
+  `iroha_privacy_proof_request_v1`, proving native exceptions do not expose
+  private witness text and all captured request-component arrays are zeroed on
+  failure.
+- Updated the C# README native privacy section to document request-side
+  temporary zeroing.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~PrivacyNativeTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5204 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5204 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Ed25519 Exception-Safe Temporary Buffer Cleanup
+
+- Hardened `Ed25519Signer.GetPublicKey`, `Sign`, and `Verify` so managed
+  temporary copies of private seeds, expanded private keys, messages,
+  signatures, and public keys are zeroed with `CryptographicOperations` after
+  use or after intermediate expansion/allocation/Chaos.NaCl failures.
+- Hardened `Ed25519KeyPair.FromSeed` to validate the 32-byte seed boundary
+  before copying and to zero the copied seed if public-key derivation fails
+  before the key pair is constructed.
+- Preserved caller-owned buffer semantics: public APIs still snapshot inputs
+  before native/Chaos.NaCl calls and do not mutate the arrays supplied by SDK
+  callers.
+- Added focused signing coverage proving sign/verify still succeeds without
+  caller-buffer mutation, plus adversarial malformed signature/public-key length
+  checks for `Verify`; updated the C# README to document signer temporary
+  cleanup.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (233 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5204 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5204 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Crypto/Ed25519Signer.cs csharp/src/Hyperledger.Iroha.Sdk/Crypto/Ed25519KeyPair.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Privacy Native Managed Output Cleanup
+
+- Hardened `PrivacyNative.ReadPrivacyOutput` so managed temporary copies of
+  native output are cleared before validation or copy failures are rethrown.
+- Kept successful validated native output archives unchanged for callers while
+  ensuring invalid/malformed native output does not leave its managed copy live
+  past the fail-closed boundary.
+- Updated the C# README privacy-native section to document managed invalid
+  output cleanup alongside native output buffer cleanup.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~PrivacyNativeTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5197 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5197 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Privacy Native Error Buffer Cleanup
+
+- Hardened `PrivacyNative.ReadPrivacyOutput` so bounded non-null native output
+  buffers are cleared before release on bridge-error paths as well as success
+  paths.
+- Replaced the bridge-error cleanup regression with an allocated native buffer
+  carrying sentinel error text, proving the buffer is zeroed before the free
+  callback releases it.
+- Updated the C# README privacy-native section to document ABI 7 availability
+  and bounded native output buffer cleanup on both success and bridge-error
+  paths.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~PrivacyNativeTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5197 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5197 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Canonical Request Account-Key Binding
+
+- Hardened `CanonicalRequest.BuildHeaders` and
+  `CanonicalRequestCredentials` so canonical Torii request headers are emitted
+  only when the supplied Ed25519 private seed derives the claimed canonical
+  I105 account id.
+- Aligned canonical request auth with the existing transaction/query signing
+  authority preflight, failing locally before a mismatched signer/account pair
+  can produce headers that the node must reject later.
+- Added an adversarial mismatch regression that mutates the fixture seed and
+  proves both direct header signing and credential construction reject the
+  mismatched account/key pair; updated the C# README to document the binding.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (226 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5197 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5197 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Crypto/Ed25519Signer.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Ed25519 Seed Boundary Exactness
+
+- Hardened `CanonicalRequestCredentials` so invalid Ed25519 private seed
+  lengths fail at credential construction instead of being accepted until a
+  later Torii signing attempt.
+- Reused the signer-owned 32-byte Ed25519 seed rule for canonical request
+  credentials and retained defensive seed copying after validation.
+- Added adversarial seed-length coverage for 0, 1, 31, 33, and 64 byte inputs
+  across `Ed25519Signer.GetPublicKey`, `Ed25519Signer.Sign`,
+  `Ed25519KeyPair.FromSeed`, `CanonicalRequestCredentials`, and
+  `CanonicalRequest.BuildHeaders`; updated the C# README to document exact
+  32-byte Ed25519 seed requirements.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (225 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5196 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5196 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Crypto/Ed25519Signer.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Canonical Request Nonce Shape
+
+- Hardened public `CanonicalRequest.BuildHeaders`,
+  `CanonicalRequest.BuildSignatureMessage`, and direct
+  `CanonicalRequestHeaders` construction so caller-supplied signing nonces must
+  match the generated SDK wire shape: exactly 16 bytes rendered as 32 lowercase
+  hex characters.
+- Closed the remaining canonical signing header-value gap where punctuation,
+  uppercase hex, wrong-length, or otherwise noncanonical nonce text could be
+  accepted into signature messages or manually constructed Torii auth headers.
+- Added positive coverage for generated nonce shape plus adversarial caller
+  nonce cases across header building, signature-message construction, and
+  manual header DTO construction; updated the C# README to document the
+  lowercase-hex nonce contract.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders|FullyQualifiedName~ToriiClientTests.SendAsyncAllowsConfigureRequestToAddNonReservedHeadersBeforeDispatch" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (221 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5191 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5191 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, lockfile drift scan, xUnit v2 metadata
+    scan, broad C# `?? string.Empty` fallback scan excluding the documented
+    optional defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans all passed.
+
+## 2026-06-28 C# Torii configureRequest Protected State
+
+- Hardened public `ToriiClient.SendAsync(..., configureRequest: ...)` so the
+  callback can add ordinary headers but cannot mutate the validated HTTP method,
+  request URI, content object, Authorization header, Accept header, signed body
+  bytes, or canonical signing headers after request setup.
+- Closed the post-signing mutation path where a caller could otherwise change
+  request routing or signed material after canonical headers were computed but
+  before HTTP dispatch.
+- Added adversarial tests for method, URI, content, Authorization, Accept, and
+  canonical signature header mutation plus positive coverage for adding an
+  ordinary non-reserved header and for the existing SSE `Last-Event-ID` hook.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncAllowsConfigureRequestToAddNonReservedHeadersBeforeDispatch|FullyQualifiedName~ToriiClientTests.SendAsyncRejectsConfigureRequestMutatingProtectedStateBeforeDispatch|FullyQualifiedName~ToriiClientTests.OpenEventSseAsyncRequestsEventStreamAcceptHeader|FullyQualifiedName~ToriiClientTests.OpenEventSseAsyncRejectsNonExactLastEventIdsBeforeDispatch|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (13 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5170 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5170 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii Accept Header Exactness
+
+- Hardened public `ToriiClient.SendAsync` `accept` request setup so caller
+  values must be a single HTTP media range before `MediaTypeWithQualityHeaderValue`
+  parsing, dispatch, or canonical signing setup.
+- Preserved accepted exact media ranges such as `application/json`,
+  `application/vnd.iroha+json`, `application/*`, and `*/*`, while rejecting
+  missing type/subtype, malformed wildcards, parameters, comma lists, separators,
+  raw backslashes, DEL/control bytes, and non-ASCII media range text.
+- Added focused positive and adversarial tests around public `accept` handling
+  plus the existing SSE `text/event-stream` internal path.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactAcceptHeadersBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.SendAsyncAcceptsSingleMediaRangeAcceptHeadersBeforeCanonicalSigning|FullyQualifiedName~ToriiClientTests.OpenEventSseAsyncRequestsEventStreamAcceptHeader|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (26 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5163 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5163 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii Bearer Token Exactness
+
+- Hardened `ToriiClient` bearer-token request setup so optional
+  `ToriiClientOptions.BearerToken` must match the HTTP Bearer token grammar
+  before an `Authorization` header is created, preserving common JWT,
+  base64url, and trailing-padded base64 token shapes.
+- Rejected empty-padding tokens, non-trailing padding, separators, quotes,
+  backslashes, DEL/control bytes, and non-ASCII token text before HTTP dispatch
+  or canonical signing.
+- Added positive coverage for `dev-token`, JWT-like dotted tokens, and
+  `+`/`/`/trailing-`=` token material plus adversarial rejection coverage for
+  unsafe punctuation and padding drift.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactBearerTokensBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.SendAsyncAcceptsBearerTokenGrammarBeforeCanonicalSigning|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (25 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5144 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5144 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# HTTP Method Token Exactness
+
+- Hardened public `CanonicalRequest` signing helpers so method text must be an
+  exact RFC HTTP token before canonical message construction or signing.
+- Hardened low-level `ToriiClient.SendAsync` request setup with the same token
+  rule before dispatch or canonical signing while preserving valid custom token
+  methods such as `M-SEARCH` and `PATCH+SAFE`.
+- Added adversarial canonical request coverage for separator, quote,
+  backslash, DEL, and non-ASCII method text across header, message, and
+  timestamp/nonce-bound signature-message construction.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.SendAsyncRejectsBlankMethodsBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.SendAsyncAcceptsHttpTokenMethodsBeforeCanonicalSigning|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (203 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5127 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5127 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# URI-Stable Request Paths
+
+- Hardened low-level `ToriiClient.SendAsync` request paths and standalone
+  `CanonicalRequest` signing paths against `System.Uri` normalization drift:
+  raw backslashes, malformed percent escapes, invalid UTF-8 path escapes,
+  percent-decoded controls, and raw or percent-encoded `.`/`..` path segments
+  are rejected before URI construction, dispatch, or signing.
+- Added adversarial coverage for raw and encoded dot traversal, raw backslash
+  slash-normalization, malformed path percent escapes, invalid percent-encoded
+  UTF-8, and decoded NUL/control path bytes across Torii dispatch and canonical
+  header/message/signature-message construction.
+- Preserved ordinary path segments such as `.hidden` and percent-encoded
+  non-normalizing route values; the guard targets only shapes that URI builders
+  rewrite or that produce unsafe decoded control material.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactPathsBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders|FullyQualifiedName~ToriiClientTests.ToriiClientPreservesBasePathPrefixAndNormalizesTrailingSlash" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (191 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5088 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5088 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii Base URI Exactness
+
+- Hardened `ToriiClient` construction so base URIs must be absolute HTTP(S)
+  Torii roots without embedded user-info, query, or fragment components before
+  request construction can derive any relative endpoint.
+- Preserved path-prefix deployments by normalizing missing trailing slashes and
+  proving `https://host/root/torii` dispatches `/root/torii/v1/...`.
+- Added adversarial constructor coverage for relative URIs, non-HTTP schemes,
+  local file URIs, credentialed authorities, query-bearing roots, and
+  fragment-bearing roots.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.ToriiClientRejectsAmbiguousBaseUris|FullyQualifiedName~ToriiClientTests.ToriiClientPreservesBasePathPrefixAndNormalizesTrailingSlash|FullyQualifiedName~ToriiClientTests.GetHealthAsyncReturnsTextResponse|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders|FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactPathsBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactQueriesBeforeDispatchAndCanonicalSigning" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (50 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5044 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5044 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Canonical Query Segment Exactness
+
+- Hardened low-level `ToriiClient.SendAsync` query preflight to reject bare
+  `?`, empty query segments, and empty or whitespace-decoded parameter names
+  before URI construction, HTTP dispatch, or canonical request signing.
+- Hardened `CanonicalRequest.BuildCanonicalQueryString` with the same
+  ambiguous-segment and blank-name rejection before canonical sorting.
+- Added adversarial coverage for leading/trailing/doubled `&`, bare `?`,
+  empty `=value` names, and percent-decoded blank names in low-level Torii
+  request preflight, SSE event-filter preflight, and canonical query signing.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactQueriesBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders|FullyQualifiedName~ToriiClientTests.SubmitSignedQueryAsyncPostsVersionedNoritoPayload|FullyQualifiedName~ToriiClientTests.OpenEventSseAsyncRejectsMalformedOrControlFilterQueryEscapesBeforeRequest|FullyQualifiedName~ToriiClientTests.OpenEventSseAsyncRejectsAmbiguousFilterQuerySegmentsBeforeRequest" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (170 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5037 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5037 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Canonical Request Root-Relative Signing Paths
+
+- Hardened `CanonicalRequest.BuildHeaders`, `BuildMessage`, and
+  `BuildSignatureMessage` so public canonical signing helpers require
+  single-slash root-relative paths before signing.
+- Added adversarial canonical request tests for relative paths, absolute
+  `http://`/`https://` paths, scheme-relative `//host` paths, and raw-colon
+  paths across header construction, canonical message construction, and
+  timestamp/nonce-bound signature-message construction.
+- Kept percent-encoded route values supported by typed Torii helpers; the guard
+  rejects only raw request target shapes that could sign an off-base URI or an
+  ambiguous scheme-bearing path.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (119 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (5012 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (5012 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii Root-Relative Low-Level Request Paths
+
+- Hardened `ToriiClient.SendAsync` request construction so public low-level
+  paths must be single-slash root-relative Torii paths before URI construction,
+  HTTP dispatch, or canonical request signing.
+- Added adversarial pre-dispatch coverage for relative paths, absolute
+  `http://`/`https://` paths, scheme-relative `//host` paths, and raw-colon
+  paths, closing the bypass where `new Uri(BaseUri, absolute)` could ignore the
+  configured Torii base URI.
+- Kept typed route helpers unchanged; route values that require colons, slashes,
+  or spaces already flow through segment encoders and remain percent-encoded.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactPathsBeforeDispatchAndCanonicalSigning|FullyQualifiedName~ToriiClientTests.GetJsonDocumentAsyncAddsBearerAndCanonicalHeaders|FullyQualifiedName~ToriiClientTests.SubmitSignedQueryAsyncPostsVersionedNoritoPayload" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (19 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4070 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4997 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4997 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii VPN/SoraFS Canonical Route Identifiers
+
+- Hardened `ToriiClient` VPN session read/delete route construction so
+  `sessionId` must be an exact 32-byte hex identifier before URI construction
+  or HTTP dispatch.
+- Hardened SoraFS CID lookup/content route construction so `cid` must be
+  lowercase multibase base32 CID text before URI construction or HTTP dispatch.
+  SoraFS denylist pack ids remain on the space-preserving exact path-segment
+  helper because valid pack ids such as `global core` intentionally contain
+  internal spaces.
+- Updated positive VPN route fixtures to production-shaped session ids and
+  expanded the adversarial VPN/SoraFS route matrix to reject internal ASCII and
+  non-breaking whitespace, non-hex VPN session ids, short session ids, uppercase
+  or non-base32 CIDs, and non-`b` multibase CID text before dispatch.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.VpnAndSoraFsRouteReadsRejectMalformedIdentifiersBeforeDispatch|FullyQualifiedName~ToriiClientTests.GetVpnSessionAsyncReturnsNullOnNotFoundAndDeserializesActiveSession|FullyQualifiedName~ToriiClientTests.DeleteVpnSessionAsyncReturnsNullForNotFound|FullyQualifiedName~ToriiClientTests.DeleteVpnSessionAsyncDeserializesDisconnectedReceipt|FullyQualifiedName~ToriiClientTests.GetSoraFsCidLookupAsyncDeserializesListing|FullyQualifiedName~ToriiClientTests.OpenSoraFsCidContentAsyncReturnsRawResponse|FullyQualifiedName~ToriiClientTests.GetSoraFsCidContentAsyncBuffersBytesAndContentCid" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (59 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4065 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4992 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4992 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii Explorer Route Identifier Whitespace Gate
+
+- Hardened `ToriiClient` explorer/account route identifier construction so
+  explorer account/domain/asset-definition/asset/NFT/RWA/block/transaction and
+  explorer instruction route identifiers reject internal whitespace before URI
+  construction or HTTP dispatch.
+- Kept SoraFS denylist pack route ids on the existing exact path-segment helper
+  because those pack ids legitimately use spaces; the stricter route-identifier
+  helper is scoped to the explorer/account identifier routes covered by the
+  release checklist.
+- Added adversarial route-segment matrix cases for ordinary internal spaces and
+  non-breaking-space separators across the exact route-read operations.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.ExactRouteSegmentReadsRejectMalformedIdentifiersBeforeDispatch|FullyQualifiedName~ToriiClientTests.AccountRouteReadsRejectNonCanonicalAccountIdsBeforeDispatch" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (131 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4040 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4967 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4967 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# SCCP TokenAdd Fixed ASCII Canonicalization
+
+- Hardened `SccpMessageProofBundles` TokenAdd payload parsing so fixed
+  32-byte `name` and `symbol` fields must be non-empty printable ASCII with
+  canonical zero padding after the first NUL byte.
+- Added adversarial bundle-level TokenAdd regressions for control characters,
+  non-zero bytes after NUL padding, and empty fixed fields, plus a positive
+  printable-ASCII boundary that reaches the later commitment check instead of
+  the fixed-field gate.
+- Updated the C# README SCCP coverage note for TokenAdd fixed ASCII
+  canonicalization.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpBscTestnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (43 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4935 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4935 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# SCCP Source-Proof Canonical Norito Lengths
+
+- Hardened `SccpMessageProofBundles` so SCCP source-proof Norito compact
+  lengths must use minimal canonical encodings, reject invalid terminal bytes,
+  and fail before oversized compact lengths are trusted.
+- Switched SCCP bundle text decoding to strict UTF-8 at both payload codec and
+  source-proof string boundaries, preserving the existing canonical UTF-8 error
+  contract while avoiding replacement decoding.
+- Added adversarial non-SORA SCCP proof-bundle regressions for overlong compact
+  field lengths, invalid terminal compact lengths, oversized canonical compact
+  lengths, overlong nested source-chain string lengths, invalid source-chain
+  UTF-8, and invalid UTF-8 inside a SORA payload sender field.
+- Updated the C# README SCCP coverage note for canonical compact lengths and
+  strict source-proof UTF-8.
+- Validation passed:
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (29 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpBscTestnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (42 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4934 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4934 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, xUnit v2
+    metadata scan, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Test Tooling Vulnerability and Deprecation Audit
+
+- Updated central C# test-tooling package versions in
+  `csharp/Directory.Packages.props`: `coverlet.collector` 10.0.1,
+  `Microsoft.NET.Test.Sdk` 18.7.0, `xunit.v3` 3.2.2, and
+  `xunit.runner.visualstudio` 3.1.5.
+- Migrated the unit and integration test projects to xUnit v3 executable test
+  assemblies and propagated `TestContext.Current.CancellationToken` through the
+  463 async test-helper/client calls flagged by xUnit v3 analyzer `xUnit1051`.
+- This clears the NuGet vulnerability and deprecated-package audits for the test
+  and integration-test projects, which previously resolved vulnerable transitive
+  `System.Net.Http` 4.3.0 and `System.Text.RegularExpressions` 4.3.0 packages
+  through older test tooling and still carried the deprecated `xunit` v2 package.
+  The packaged SDK project was already clean.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet restore csharp/Hyperledger.Iroha.Sdk.sln --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --vulnerable --include-transitive`
+    (no vulnerable packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --deprecated`
+    (no deprecated packages for SDK, tests, integration tests, or sample)
+  - `/home/mtakemiya/.dotnet/dotnet list csharp/Hyperledger.Iroha.Sdk.sln package --outdated`
+    (no package updates for SDK, tests, integration tests, or sample)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --configuration Debug --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 unit tests and 2 integration tests passed)
+  - `DOTNET_ROOT=/home/mtakemiya/.dotnet /home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineCashLifecycleTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests/ToriiIntegrationSmokeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# solution metadata-drift scan, broad C# `?? string.Empty` fallback scan
+    excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed. The test project metadata changes are intentional for
+    the xUnit v3 executable-test-project migration.
+
+## 2026-06-28 C# SCCP Source-Proof Norito Padding Cap
+
+- Hardened `SccpMessageProofBundles` source-proof Norito frame parsing to
+  reject more than 64 zero padding bytes between the header and payload,
+  matching the SDK's strict Norito v1 decoder contract.
+- Added adversarial non-SORA SCCP proof-bundle regressions that replace both
+  the supplied source proof and the embedded finality proof with structurally
+  valid padded Norito frames, accepting the 64-byte zero-padding boundary and
+  rejecting the 65-byte frame with `payload length is invalid` after equality
+  checks pass.
+- Updated the C# README SCCP coverage note for the source-proof Norito
+  header-padding cap.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests.MessageProofBundleGateRejectsMissingAndMismatchedNonSoraSourceProof" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpBscTestnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (41 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4933 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# SCCP Outbound Hex View Consistency
+
+- Hardened BSC and Ethereum outbound SCCP submission DTOs so `CallDataHex` and
+  `EnvelopeHex` derive from the current private byte snapshots instead of
+  remaining constructor-cached strings after record `with` copies.
+- Constructor-supplied outbound hex strings are now consumed and checked against
+  the supplied byte arrays, preserving positional construction while rejecting
+  internally inconsistent manual DTO construction.
+- Added adversarial BSC/Ethereum outbound regressions that replace `CallData`
+  and `EnvelopeBytes` through record `with` copies and assert the public hex
+  views follow the replacement snapshots, and that mismatched manual
+  `CallDataHex`/`EnvelopeHex` constructor or init values are rejected.
+- Updated the C# README SCCP coverage note for current-snapshot-derived
+  outbound call/envelope hex views.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseBscMainnetBinding|FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseEthereumMainnetBinding" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpBscTestnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (41 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4933 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Ethereum SCCP Local Admission Hex View Consistency
+
+- Hardened Ethereum mainnet local-admission payload/submission DTOs so
+  companion `*Hex` properties derive from the current private byte snapshots
+  instead of one-time constructor parameters, matching the BSC SCCP behavior.
+- Added an adversarial Ethereum SCCP regression that replaces local-admission
+  proof/public-input/bundle/envelope byte arrays through record `with` copies
+  and verifies the companion hex views update from the replacement snapshots.
+- Updated the C# README SCCP coverage note to document BSC/Ethereum
+  current-snapshot-derived local-admission hex views.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests.LocalAdmissionSubmissionWrapsNativeEthereumOutput" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpBscTestnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (41 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4933 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# SCCP Local Admission Hex View Consistency
+
+- Hardened BSC testnet and BSC mainnet local-admission payload/submission DTOs
+  so companion `*Hex` properties derive from the current private byte snapshots
+  instead of one-time constructor parameters. Record `with` copies that replace
+  proof/public-input/bundle/envelope bytes can no longer leave stale hex views.
+- Added adversarial SCCP regressions that update local-admission byte arrays via
+  record `with` copies and assert the detached byte snapshots and companion hex
+  accessors stay synchronized.
+- Updated the C# README SCCP coverage note for current-snapshot-derived
+  local-admission hex views.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscTestnetTests|FullyQualifiedName~SccpBscMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (13 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscTestnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscTestnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4933 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Norito V1 Frame Decode Validation
+
+- Added shared `NoritoCodec.Decode(...)` / `DecodeWithSchemaHash(...)`
+  helpers that enforce the documented v1 header contract before exposing
+  payload bytes: magic/version, schema hash, unsupported compression, reserved
+  or incomplete layout-flag combinations, declared payload length, zero header
+  padding bounded to 64 bytes, and CRC64.
+- Hardened generic Norito encoding so callers cannot emit reserved v1 layout
+  bits or incomplete `FIELD_BITSET` flag combinations.
+- Added direct adversarial Norito codec tests for supported and unsupported
+  flag combinations, truncated headers, malformed magic/version/schema,
+  unsupported compression, declared-length drift, checksum drift, nonzero
+  padding, oversized padding, and decoded-payload snapshotting.
+- Updated the C# README Norito scope note for strict v1 frame decode coverage.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~NoritoCodecTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (19 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Norito/NoritoCodec.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/NoritoCodecTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4933 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4933 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Canonical Request Signature Header Validation
+
+- Hardened `CanonicalRequestHeaders` so manually constructed Torii signing
+  headers require canonical base64 text that decodes to the 64-byte Ed25519
+  signature size, instead of accepting arbitrary exact nonblank text.
+- Updated canonical request tests to use a valid signature fixture when testing
+  account/timestamp/nonce failures and added malformed signature cases for
+  non-base64, noncanonical base64, and wrong decoded length.
+- Updated the C# README signing coverage note for canonical 64-byte signature
+  header base64 validation.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (104 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4917 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4917 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Offline Cash Issuer Key Base64 Validation
+
+- Hardened `OfflineCashConfigurationSnapshot.RequireUsableForOfflineExchange`
+  so cached issuer public keys must be canonical, non-empty base64 text instead
+  of merely printable ASCII.
+- Updated offline cash lifecycle tests to use a canonical cached issuer key and
+  reject printable-but-not-base64, invalid base64, and noncanonical base64
+  issuer-key values before offline exchange.
+- Updated the C# README offline cash lifecycle note to distinguish printable
+  cached identifiers from canonical base64 issuer public keys.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineCashLifecycleTests.ConfigurationSnapshot" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineCashLifecycle.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineCashLifecycleTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4914 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4914 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Faucet PoW Nonce Range Preflight
+
+- Hardened `ToriiAccountFaucetPow.Solve` so `StartNonce` plus
+  `MaxAttempts` is validated before scrypt derivation starts. Invalid ranges
+  now fail with an argument error instead of surfacing an overflow from inside
+  the nonce search loop.
+- Added adversarial coverage for `StartNonce = UInt64.MaxValue` with two
+  attempts, verifying the solver rejects the impossible range before work.
+- Updated the C# README faucet PoW coverage note for nonce-range preflight.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FaucetPowSolveRejectsNonceRangeOverflowBeforeWork" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountFaucetPow.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4914 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4914 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Torii Client Options Snapshots
+
+- Hardened `ToriiClientOptions.JsonSerializerOptions` so assignment and public
+  access return detached `JsonSerializerOptions` snapshots, reject null
+  assignment, and prevent caller-owned converter-list mutations from drifting
+  option state after construction.
+- Updated `ToriiClient` construction to store a snapped options instance, so
+  `client.Options` no longer aliases the caller's mutable options object while
+  preserving the already-private effective serializer copy.
+- Added adversarial coverage that mutates source serializer options,
+  getter-returned serializer options, and client-exposed serializer options,
+  then verifies stored option state and converter-list shape remain fixed.
+- Updated the C# README low-level Torii coverage note for custom serializer
+  option snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ToriiClientOptionsSnapshotJsonSerializerOptionsOnInitAccessAndClientConstruction" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClientOptions.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4913 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4913 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, direct mutable `JsonSerializerOptions` auto-property scan, and
+    lockfile drift scan all passed.
+
+## 2026-06-28 C# Native EVM Prover Manifest Collection Snapshots
+
+- Hardened native Ethereum EVM prover manifest DTOs so public required
+  implementation/audit-role collections are runtime read-only, bundle artifact
+  rows and audit hashes use private normalized snapshots, and parity/self-test
+  public signal words plus SDK result maps no longer expose mutable backing
+  arrays or dictionaries.
+- Added adversarial coverage that mutates constructor-owned artifact arrays,
+  audit-hash dictionaries, public signal arrays, SDK result maps, returned
+  getter collections, and the static required manifest collections, then
+  verifies the stored prover bundle, parity fixture, and self-test fixture
+  values remain fixed.
+- Updated the C# README SCCP coverage note for native EVM prover manifest
+  collection snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "NativeEvmProverManifestCollectionsSnapshotInitAndAccessValues" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4912 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4912 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, native EVM prover auto-property exposure scan, and lockfile drift
+    scan all passed.
+
+## 2026-06-28 C# SCCP Inbound Evidence Dictionary Snapshots
+
+- Hardened public BSC and Ethereum inbound evidence DTOs so receipt, block, and
+  finality dictionaries are deep-copied on assignment and public access.
+  Ethereum inbound evidence now also snapshots `BlockReceipts` lists and
+  rejects null list items.
+- Added adversarial direct DTO tests that mutate caller-owned dictionaries,
+  nested receipt log dictionaries/arrays, source block-receipt lists, and
+  getter-returned dictionaries, then verify the stored evidence remains fixed.
+- Added shared internal SCCP object snapshot helpers for nested dictionaries,
+  arrays, byte arrays, and enumerable values, and updated the C# README SCCP
+  coverage note.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpObjectSnapshots.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscMainnetTests.InboundEvidenceDictionariesSnapshotInitAndAccessValues|FullyQualifiedName~SccpEthereumMainnetTests.InboundEvidenceDictionariesSnapshotInitAndAccessValues" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4911 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4911 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-28 C# Torii JSON Node Snapshots
+
+- Hardened Torii DTO properties that expose arbitrary `JsonNode`/`JsonObject`
+  payloads so assigned nodes are deep-cloned and public getters return detached
+  clones. Covered onboarding identity, account permission payloads, explorer
+  metadata/rejection/instruction payloads, UAID manifests, identifier
+  parameter/signature payloads, contract state/view/call payloads, multisig
+  contract-call payloads, and SSE `JsonData`.
+- Added an adversarial JSON-node snapshot regression that mutates caller-owned
+  nodes after DTO construction and mutates getter-returned nodes, then verifies
+  the stored DTO values remain unchanged. The same test also pins default
+  explorer metadata getter isolation.
+- Updated the C# README Torii DTO snapshot note to document JSON-node
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ToriiJsonNodesSnapshotInitAndAccessValues" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiServerSentEvent.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4909 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4909 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, direct Torii list/JSON auto-property scans, and lockfile drift scan
+    all passed.
+
+## 2026-06-28 C# Multisig Instruction List Snapshots
+
+- Hardened native multisig propose request instruction lists so assigned arrays
+  are copied and public getters return detached arrays.
+- Preserved null-vs-empty request validation by keeping `Instructions`
+  nullable at the DTO boundary; null still fails as `cannot be null`, while
+  empty non-null lists still fail as empty before dispatch.
+- Added an adversarial multisig regression that mutates caller-owned arrays and
+  getter-returned arrays, then verifies the posted JSON still carries the
+  construction-time instruction frame.
+- Updated the C# README multisig note to document instruction-list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ProposeMultisigAsyncSnapshotsInstructionListBeforeDispatchAndAccess|FullyQualifiedName~ProposeMultisigAsyncPostsNativeNoritoInstructionFrames|FullyQualifiedName~ProposeMultisigAsyncPostsCanonicalAccountSelectorSignerAndFeeSponsor|FullyQualifiedName~ProposeMultisigAsyncRejectsMalformedRequestBeforeDispatch|FullyQualifiedName~ProposeMultisigAsyncRejectsMalformedSuccessResponse|FullyQualifiedName~ProposeMultisigAsyncRejectsFalseOkResponse" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (28 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4908 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4908 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Identifier and Contract Response List Snapshots
+
+- Hardened identifier policy, contract instance inventory, and contract state
+  response list DTOs so assigned arrays are copied and public getters return
+  detached arrays.
+- Moved required identifier policy `items`, contract instance `instances`, and
+  contract state `entries` checks before DTO construction so missing/null
+  malformed-list JSON keeps the existing fail-closed errors while DTO setters
+  snapshot non-null lists.
+- Added an adversarial response-list regression that mutates caller-owned
+  arrays and getter-returned arrays, then round-trips serialization to prove
+  only construction-time list values are emitted.
+- Updated the C# README identifier/contract note to document response-list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~IdentifierAndContractResponseListsSnapshotInitAndAccessValues|FullyQualifiedName~GetIdentifierPoliciesAsyncDeserializesPolicySummaries|FullyQualifiedName~RawIdentifierPoliciesResponseRejectsMalformedPayloads|FullyQualifiedName~GetContractInstancesAsyncAddsFiltersAndDeserializesResponse|FullyQualifiedName~GetContractInstancesAsyncRejectsMalformedResponse|FullyQualifiedName~RawContractInstancesResponseRejectsMalformedPayloads|FullyQualifiedName~GetContractStateAsyncAddsQueryAndDeserializesResponse|FullyQualifiedName~GetContractStateAsyncRejectsMalformedResponseFields|FullyQualifiedName~RawContractStateResponsesRejectMalformedPayloads|FullyQualifiedName~GetContractStateAsyncSnapshotsPathListsBeforeDispatchAndAccess" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (71 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4907 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4907 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Explorer Ledger Projection List Snapshots
+
+- Hardened explorer ledger projection list DTOs so assigned arrays are copied
+  and public getters return detached arrays for block pages, transaction pages,
+  latest-transaction responses, instruction pages, and latest-instruction
+  responses.
+- Kept the existing raw converter fail-closed behavior for missing/null item
+  lists; these converters already require the list fields before DTO
+  construction.
+- Added an adversarial explorer ledger projection regression that mutates
+  caller-owned arrays and getter-returned arrays, then round-trips
+  serialization to prove only construction-time list values are emitted.
+- Updated the C# README explorer note to document ledger projection list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerLedgerProjectionListsSnapshotInitAndAccessValues|FullyQualifiedName~GetExplorerBlocksAsyncAddsPaginationAndDeserializesPage|FullyQualifiedName~GetExplorerTransactionsAsyncAddsFiltersAndDeserializesPage|FullyQualifiedName~GetExplorerLatestTransactionsAsyncUsesLatestPathAndDeserializesResponse|FullyQualifiedName~GetExplorerInstructionsAsyncAddsFiltersAndDeserializesPage|FullyQualifiedName~GetExplorerLatestInstructionsAsyncUsesLatestPathAndDeserializesResponse|FullyQualifiedName~ExplorerRawPagesRejectMalformedItemsWithItemContext|FullyQualifiedName~RawExplorerCreatedAtWritesRejectMissingTimestamp" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (58 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4906 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4906 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Explorer Econometrics List Snapshots
+
+- Hardened explorer econometrics list DTOs so assigned arrays are copied and
+  public getters return detached arrays for velocity windows, issuance windows,
+  issuance series points, Lorenz points, and top-holder rows.
+- Kept the existing raw converter fail-closed behavior for missing/null
+  econometrics and distribution lists; these converters already require the
+  list fields before DTO construction.
+- Added an adversarial explorer econometrics regression that mutates
+  caller-owned arrays and getter-returned arrays, then round-trips
+  serialization to prove only construction-time list values are emitted.
+- Updated the C# README explorer note to document econometrics list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerEconometricsListsSnapshotInitAndAccessValues|FullyQualifiedName~GetExplorerAssetDefinitionEconometricsAsyncEncodesIdentifierAndDeserializesSnapshot|FullyQualifiedName~GetExplorerAssetDefinitionSnapshotAsyncEncodesIdentifierAndDeserializesSnapshot|FullyQualifiedName~ExplorerSupplementalResponsesRejectMalformedResponse|FullyQualifiedName~RawExplorerSnapshotDtosRejectMalformedPayloads|FullyQualifiedName~RawExplorerDistributionWriteRejectsOutOfRangeRatio" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (129 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4905 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4905 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Explorer Directory and Inventory List Snapshots
+
+- Hardened explorer directory/inventory list DTOs so assigned arrays are copied
+  and public getters return detached arrays for account, domain,
+  asset-definition, asset, NFT, and RWA pages plus nested RWA parent lists.
+- Kept the existing raw converter fail-closed behavior for missing/null
+  `items` and `parents` lists; these converters already require those lists
+  before DTO construction.
+- Added an adversarial explorer regression that mutates caller-owned arrays and
+  getter-returned arrays, then round-trips serialization to prove only
+  construction-time list values are emitted.
+- Updated the C# README explorer note to document directory/inventory list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerDirectoryInventoryListsSnapshotInitAndAccessValues|FullyQualifiedName~ExplorerDirectoryResponsesRejectMalformedResponse|FullyQualifiedName~RawExplorerDirectoryResponsesRejectMalformedPayloads|FullyQualifiedName~ExplorerInventoryResponsesRejectMalformedResponse|FullyQualifiedName~RawExplorerInventoryResponsesRejectMalformedPayloads|FullyQualifiedName~RawExplorerRwaWriteRejectsMalformedQuantity|FullyQualifiedName~RawExplorerResponseWriteRejectsNoncanonicalAccountIds" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (202 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4904 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4904 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Account Query Page List Snapshots
+
+- Hardened account-query page/list DTOs so assigned arrays are copied and
+  public getters return detached arrays for account summaries, asset balances,
+  account permissions, account transactions, and by-account alias lookup items.
+- Moved required account-query and alias lookup item-list checks before DTO
+  construction in the raw converters so missing/null malformed-list JSON keeps
+  the existing fail-closed errors while DTO setters snapshot non-null lists.
+- Added an adversarial account-query regression that mutates caller-owned
+  arrays and getter-returned arrays, then round-trips serialization to prove
+  only construction-time list values are emitted.
+- Updated the C# README account-query note to document assignment/access
+  snapshots for these list DTOs.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountQueryResponseListsSnapshotInitAndAccessValues|FullyQualifiedName~GetAccountsAsyncRejectsMalformedResponse|FullyQualifiedName~RawAccountsPageRejectsMalformedPayloads|FullyQualifiedName~GetAccountAssetsAsyncRejectsMalformedResponse|FullyQualifiedName~RawAccountAssetBalancesPageRejectsMalformedPayloads|FullyQualifiedName~GetAccountTransactionsAsyncRejectsMalformedResponse|FullyQualifiedName~RawAccountTransactionsPageRejectsMalformedPayloads|FullyQualifiedName~GetAccountPermissionsAsyncRejectsMalformedResponse|FullyQualifiedName~RawAccountPermissionsPageRejectsMalformedPayloads|FullyQualifiedName~LookupAliasesByAccountAsyncRejectsMalformedResponse|FullyQualifiedName~RawAccountAliasLookupResponseRejectsMalformedPayloads" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (179 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4903 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4903 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# VPN Instruction and Receipt List Snapshots
+
+- Hardened VPN quote/receipt native-instruction list DTOs and receipt-list item
+  DTOs so assigned arrays are copied and public getters return detached arrays.
+- Moved required VPN instruction/item list checks before DTO construction in the
+  raw converter so missing/null malformed-list JSON keeps the existing
+  fail-closed errors while DTO setters snapshot non-null lists.
+- Added adversarial VPN regressions that mutate caller-owned arrays and
+  converter-created getter-returned arrays for quote instructions, receipt
+  instructions, and receipt-list items.
+- Updated the C# README VPN note to document instruction and receipt-list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VpnInstructionAndReceiptListsSnapshotInitAndAccessValues|FullyQualifiedName~CreateVpnQuoteAsyncPostsMeteringKeyAndDeserializesNativeInstruction|FullyQualifiedName~SubmitVpnReceiptAsyncPostsReceiptAndDeserializesSettlementInstruction|FullyQualifiedName~ListVpnReceiptsAsyncDeserializesNativeSettlementItems|FullyQualifiedName~RawVpnQuoteWriteRejectsZeroExpiration|FullyQualifiedName~RawVpnReceiptListWriteRejectsInconsistentTotal|FullyQualifiedName~ToriiVpnTxInstructionRejectsMalformedRawPayloads|FullyQualifiedName~ToriiVpnTxInstructionWriteRejectsMalformedPayloadHex" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (26 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4902 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4902 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Node Capability List Snapshots
+
+- Hardened node capability list DTO fields so assigned arrays are copied and
+  public getters return detached arrays for signing labels, curve ids/bitmaps,
+  row enrichment fields, aggregate resources, projection metadata keys, and
+  export resources.
+- Moved required node capability list checks before DTO construction in the raw
+  converter so missing/null malformed-list JSON keeps the existing fail-closed
+  errors while DTO setters snapshot non-null lists.
+- Added adversarial node capability regressions that mutate caller-owned arrays
+  and converter-created getter-returned arrays across crypto and query
+  capability lists.
+- Updated the C# README capabilities note to document list assignment/access
+  snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsyncDeserializesTypedResponse|FullyQualifiedName~NodeCapabilitiesListsSnapshotInitAndAccessValues|FullyQualifiedName~GetNodeCapabilitiesAsyncAcceptsConsistentSm2Capabilities|FullyQualifiedName~GetNodeCapabilitiesAsyncRejectsMalformedResponse|FullyQualifiedName~RawNodeCapabilitiesDtosRejectMalformedPayloads|FullyQualifiedName~RawNodeCapabilitiesWriteRejectsMalformedProjectionMetadata" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (209 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4901 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4901 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Contract Code-View List Snapshots
+
+- Hardened contract code-view access-hint, entrypoint, analysis, permission,
+  and warning list DTO fields so assigned arrays are copied and public getters
+  return detached arrays for nested params, key lists, skipped hints, triggers,
+  syscalls, entrypoints, and warning text.
+- Added an adversarial contract code-view regression that mutates caller-owned
+  arrays and getter-returned arrays for directly constructed DTOs and
+  converter-created DTOs.
+- Updated the C# README contract code-view note to document list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetContractCodeViewAsyncEncodesCodeHashAndDeserializesView|FullyQualifiedName~ContractCodeViewListsSnapshotInitAndAccessValues|FullyQualifiedName~ContractCodeViewResponsesRejectMalformedShape|FullyQualifiedName~RawContractCodeViewResponsesRejectMalformedPayloads|FullyQualifiedName~RawContractCodeViewWriteRejectsMalformedEntrypointToken" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (27 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4900 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4900 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# UAID Inventory List Snapshots
+
+- Hardened UAID portfolio, bindings, and manifest inventory DTO list fields so
+  assigned arrays are copied and public getters return detached arrays for
+  nested assets, accounts, dataspaces, and manifest records.
+- Moved required UAID list checks before DTO construction in the raw converter
+  so missing/null malformed-list JSON keeps the existing fail-closed errors
+  while DTO setters can snapshot non-null lists.
+- Added adversarial UAID regressions that mutate caller-owned arrays and
+  getter-returned arrays for portfolio, bindings, and manifest inventory lists,
+  and extended deserialization tests to prove converter-created DTOs are
+  detached.
+- Updated the C# README UAID note to document inventory-list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetUaidPortfolioAsyncCanonicalizesLiteralAndAddsAssetIdQuery|FullyQualifiedName~UaidInventoryListsSnapshotInitAndAccessValues|FullyQualifiedName~GetUaidPortfolioAsyncRejectsMalformedResponse|FullyQualifiedName~RawUaidPortfolioDtosRejectMalformedPayloads|FullyQualifiedName~GetUaidBindingsAsyncCanonicalizesLiteralAndDeserializesDataspaces|FullyQualifiedName~GetUaidBindingsAsyncRejectsMalformedResponse|FullyQualifiedName~RawUaidBindingsDtosRejectMalformedPayloads|FullyQualifiedName~GetUaidManifestsAsyncAddsQueryAndPreservesManifestPayload|FullyQualifiedName~GetUaidManifestsAsyncRejectsMalformedResponse" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (161 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4899 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4899 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# SoraFS Response List Snapshots
+
+- Hardened SoraFS CID lookup file paths/file lists and denylist catalog
+  opt-out, extra-pack, and pack-summary lists so assigned arrays are copied and
+  public getters return detached arrays.
+- Moved required SoraFS list checks before DTO construction in the raw
+  converter so missing/null malformed-list JSON keeps the existing fail-closed
+  errors while DTO setters can snapshot non-null lists.
+- Added adversarial SoraFS regressions that mutate caller-owned arrays and
+  getter-returned arrays for file paths, file lists, and denylist catalog lists,
+  and extended deserialization tests to prove converter-created DTOs are
+  detached.
+- Updated the C# README SoraFS note to document response-list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetSoraFsCidLookupAsyncDeserializesListing|FullyQualifiedName~SoraFsResponseListsSnapshotInitAndAccessValues|FullyQualifiedName~GetSoraFsCidLookupAsyncRejectsMalformedResponse|FullyQualifiedName~RawSoraFsCidLookupResponseRejectsMalformedPayloads|FullyQualifiedName~GetSoraFsDenylistCatalogAsyncDeserializesPackSummaries|FullyQualifiedName~GetSoraFsDenylistCatalogAsyncRejectsMalformedResponse|FullyQualifiedName~RawSoraFsDenylistCatalogResponseRejectsMalformedPayloads" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (99 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4898 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4898 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Contract State Path List Snapshots
+
+- Hardened contract-state query and response path-list DTOs so assigned arrays
+  are copied and public getters return detached arrays while preserving nullable
+  single-path, path-list, and prefix query modes.
+- Added an adversarial Torii regression that mutates caller-owned path arrays,
+  query getter-returned arrays, and response getter-returned arrays while
+  proving dispatch query strings and deserialized response state keep the
+  original paths.
+- Updated the C# README contract-state note to document path-list
+  assignment/access snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetContractStateAsyncAddsQueryAndDeserializesResponse|FullyQualifiedName~GetContractStateAsyncSnapshotsPathListsBeforeDispatchAndAccess|FullyQualifiedName~GetContractStateAsyncRejectsMalformedQueryBeforeDispatch|FullyQualifiedName~GetContractStateAsyncRejectsMalformedResponseFields" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (27 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4897 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4897 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# VPN Network Route List Snapshots
+
+- Hardened VPN profile, quote, and session DTO network route, DNS, tunnel, and
+  supported-exit list properties so assigned arrays are copied and public
+  getters return detached arrays while preserving null/missing list validation.
+- Added adversarial VPN regressions that mutate caller-owned arrays and
+  getter-returned arrays for profile, quote, and session route/DNS/tunnel lists,
+  and updated the integration smoke assertion for the nullable validated-list
+  DTO shape.
+- Updated the C# README VPN note to document route-list assignment/access
+  snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetVpnProfileAsyncDeserializesSnapshot|FullyQualifiedName~VpnNetworkRouteListsSnapshotInitAndAccessValues|FullyQualifiedName~CreateVpnQuoteAsyncPostsMeteringKeyAndDeserializesNativeInstruction|FullyQualifiedName~CreateVpnSessionAsyncPostsQuotePaymentAndDeserializesSession" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4896 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4896 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Onboarding Request List Snapshots
+
+- Hardened account and multisig onboarding request DTOs so permission lists,
+  multisig member account lists, and multisig member-weight lists preserve null
+  malformed-request semantics while copying non-null lists on initialization
+  and returning detached arrays on public access.
+- Added adversarial Torii regressions that mutate caller-owned list arrays and
+  getter-returned arrays while proving request DTO state and dispatch JSON keep
+  the original values.
+- Updated the C# README onboarding note to document assignment/access snapshots
+  and multisig dispatch snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountOnboardingRequestSnapshotsPermissionListsOnInitAndAccess|FullyQualifiedName~MultisigAccountOnboardingRequestSnapshotsMemberListsOnInitAndAccess|FullyQualifiedName~RegisterAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch|FullyQualifiedName~RegisterMultisigAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch|FullyQualifiedName~RegisterMultisigAccountAsyncSnapshotsMemberListsBeforeDispatch" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (41 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4895 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4895 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Credential Key-Material Snapshots
+
+- Added adversarial canonical-request credential and Ed25519 key-pair
+  regressions that mutate caller-owned private seed arrays and getter-returned
+  seed/public-key arrays while proving stored credentials, signatures, public
+  keys, and derived account addresses remain stable.
+- Updated the C# README foundation notes to document defensive key-material
+  byte snapshots for canonical request credentials and Ed25519 key pairs.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (101 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4893 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4893 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# tests, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Multisig Onboarding Dispatch Snapshots
+
+- Added an adversarial Torii regression for multisig account onboarding that
+  mutates caller-owned member account and member-weight arrays in the HTTP
+  handler before reading the serialized request body, proving dispatch uses the
+  original normalized member set.
+- Updated the C# README Torii notes to document multisig onboarding member-list
+  dispatch snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RegisterMultisigAccountAsyncSnapshotsMemberListsBeforeDispatch|FullyQualifiedName~RegisterMultisigAccountAsyncPostsMembersAndAcceptsExistsResponse|FullyQualifiedName~RegisterMultisigAccountAsyncRejectsMalformedOnboardingRequestsBeforeDispatch" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (17 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4891 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4891 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Foundational Byte Snapshots
+
+- Hardened `NoritoHeader` so the 16-byte schema hash is copied on construction
+  and initialization, public access returns a detached copy, and header encoding
+  reads the private snapshot.
+- Added adversarial regressions for `NoritoHeader` and `AccountAddress` that
+  mutate caller-owned byte arrays plus getter-returned arrays while proving
+  Norito header bytes, I105 literals, canonical bytes, controller bytes, and
+  public keys remain stable.
+- Updated the C# README foundation notes to document detached account-address
+  byte snapshots and Norito header schema-hash snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~NoritoCodecTests|FullyQualifiedName~AddressFixtureTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (12 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4890 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4890 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Norito/address source
+    and tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# SCCP Inbound Proof List Snapshots
+
+- Hardened BSC mainnet and Ethereum mainnet SCCP receipt proof records,
+  Ethereum EVM receipt trie proof records, and Ethereum inbound evidence
+  inclusion branches so list properties deep-copy byte arrays on initialization
+  and public access returns detached read-only list snapshots.
+- Added adversarial BSC and Ethereum regressions that mutate caller-owned proof
+  node/branch arrays and nested arrays returned by public getters while proving
+  the stored receipt proof, trie proof, and inbound evidence lists remain stable.
+- Updated the C# README SCCP note to document detached inbound
+  receipt/trie/evidence byte-list snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ReceiptProofByteListsSnapshotConstructorAndGetterValues|FullyQualifiedName~InboundProofByteListsSnapshotConstructorAndGetterValues|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4888 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4888 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched SCCP source and tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# SCCP Local Admission Byte Snapshots
+
+- Hardened BSC testnet, BSC mainnet, and Ethereum mainnet SCCP local-admission
+  input, payload, and submission records so proof, public-input, bundle, and
+  envelope byte arrays are copied on initialization and public getters return
+  detached snapshots.
+- Extended local-admission tests to mutate caller-owned constructor arrays,
+  input getter arrays, payload getter arrays, and submission getter arrays while
+  proving each record keeps the original bytes and hex metadata stable.
+- Updated the C# README SCCP note to document detached local-admission
+  input/payload/submission byte snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~LocalAdmissionSubmissionWrapsNativeBscTestnetOutput|FullyQualifiedName~LocalAdmissionSubmissionWrapsNativeBscOutput|FullyQualifiedName~LocalAdmissionSubmissionWrapsNativeEthereumOutput" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscTestnetTests|FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4886 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4886 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched SCCP source and tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Beacon REST Body Byte Snapshots
+
+- Hardened `EthereumMainnetBeaconRestResponse.Body` so buffered Beacon REST
+  response bodies are copied on initialization and public access returns a fresh
+  copy.
+- Added an adversarial Beacon response DTO regression that mutates the
+  constructor body array and a getter-returned body array while proving the
+  stored body remains unchanged.
+- Updated the C# README SCCP note to document detached buffered Beacon REST
+  response bodies.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~BeaconRestResponseBodySnapshotsConstructorAndGetterBytes|FullyQualifiedName~BeaconRest" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (6 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4886 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4886 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Ethereum mainnet SCCP
+    source and test, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# SCCP Outbound Record Byte Snapshots
+
+- Hardened BSC mainnet and Ethereum mainnet SCCP outbound proof request,
+  proof-result, and calldata submission records so byte arrays and public
+  string/argument arrays are copied on initialization and public getters return
+  detached snapshots.
+- Extended outbound SCCP tests to prove prover callback attempts to mutate
+  request arrays through getters no longer alter the request, proof results keep
+  stable request/signaling arrays, and returned calldata submissions keep stable
+  words, arguments, calldata, envelope, proof, and public-input byte arrays after
+  getter-returned arrays are mutated.
+- Updated the C# README SCCP note to document detached outbound
+  request/result/submission snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseBscMainnetBinding|FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseEthereumMainnetBinding|FullyQualifiedName~OutboundCallbackAndSubmissionSnapshotsRejectMutation" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (33 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4885 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4885 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched SCCP source and tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# SCCP Outbound Input Byte Snapshots
+
+- Hardened BSC mainnet and Ethereum mainnet SCCP outbound proof request input
+  DTOs so bundle bytes and optional source-proof bytes are copied on
+  initialization and every public access returns a fresh copy.
+- Extended the mainnet outbound proof request tests to mutate caller-owned
+  bundle/source-proof arrays and arrays returned by request-input getters before
+  proving request construction still uses the original bundle bytes.
+- Updated the C# README SCCP note to document outbound proof request input byte
+  snapshotting before request construction.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseBscMainnetBinding|FullyQualifiedName~OutboundProofRequestCalldataAndSubmitUseEthereumMainnetBinding" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpBscMainnetTests|FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (33 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4885 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4885 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched SCCP source and tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# Torii Request Byte Snapshots
+
+- Hardened Torii verifying-key register/update request DTOs and SoraFS pin
+  registration request DTOs so inline byte-array payloads are copied on object
+  initialization and every public access returns a fresh copy.
+- Extended Torii request tests to mutate the caller-owned verifying-key and
+  manifest byte arrays, mutate arrays returned by request getters, and prove the
+  normalized JSON bodies still carry the original base64 payloads.
+- Updated the C# README verifying-key and SoraFS Torii notes to document inline
+  byte snapshotting before serialization.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RegisterSoraFsPinManifestAsyncPostsNormalizedPayloadAndDeserializesResponse|FullyQualifiedName~RegisterVerifyingKeyAsyncCanonicalizesInlineCommitmentPayload|FullyQualifiedName~UpdateVerifyingKeyAsyncCanonicalizesInlineCommitmentPayload" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3989 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4885 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4885 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source and test,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving scans, and lockfile
+    drift scan all passed.
+
+## 2026-06-28 C# SoraFS Buffered Content Byte Snapshots
+
+- Hardened `ToriiSoraFsContentResponse.Bytes` so buffered SoraFS content bytes
+  are copied on object initialization and every public access returns a fresh
+  copy.
+- Extended the buffered SoraFS content test to mutate bytes returned from
+  `GetSoraFsCidContentAsync(...)`, mutate bytes supplied to a direct response
+  initializer, and mutate arrays returned by the direct response getter while
+  proving stored content remains unchanged.
+- Updated the C# README SoraFS content notes to document buffered byte
+  snapshotting.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetSoraFsCidContentAsyncEncodesNestedPathAndReturnsHeaders" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3989 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4885 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4885 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched SoraFS response source
+    and Torii test, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional
+    defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans, and lockfile drift scan all
+    passed.
+
+## 2026-06-28 C# SSE Event DTO Public Snapshots
+
+- Hardened raw `ToriiPipelineEvent` and `ToriiProofEvent` DTO extension-data
+  accessors so assignment clones `JsonElement` values and public getters return
+  detached dictionaries instead of exposing the trusted post-validation
+  extension map.
+- Hardened `ToriiProofEvent.Removed` so removed-record lists and nested record
+  objects are cloned on assignment and on public access, preventing caller
+  mutation of already validated proof-prune metadata.
+- Added adversarial raw SSE DTO tests that mutate returned extension
+  dictionaries, mutate returned removed-record lists and records, and serialize
+  the DTOs again to prove trusted event state remains unchanged.
+- Updated the C# README Torii/SSE boundary note to document detached extension
+  and removed-list snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiPipelineEventDeserializesRawPayloadWithExtensionData|FullyQualifiedName~ToriiProofEventDeserializesRawPayloadWithExtensionData" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3989 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4885 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4885 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source and
+    tests, `git diff --check`, anchored conflict-marker scan, `reader.Skip(`
+    scan, C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans, and lockfile drift scan all passed.
+
+## 2026-06-28 C# Transaction Builder Public Snapshots
+
+- Hardened `TransactionBuilder.Instructions` and `TransactionBuilder.Metadata`
+  so public accessors return detached snapshots instead of exposing the live
+  instruction list or metadata dictionary used for signing.
+- Metadata snapshots clone `JsonNode` values and wrap the returned dictionary as
+  read-only, preserving the existing free-form JSON metadata surface without
+  letting public accessor mutation drift later signed payloads.
+- Added an adversarial signing regression that mutates the caller's original
+  metadata JSON, casts and mutates the public instruction snapshot, mutates
+  metadata JSON returned by the public snapshot, and attempts dictionary writes
+  before proving the signed Norito payload still contains the original transfer
+  instruction and metadata.
+- Updated the C# README transaction-boundary note to document detached
+  transaction-builder instruction/metadata snapshots.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (186 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4885 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4885 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched transaction-builder
+    source and tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional
+    defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans, and lockfile drift scan all
+    passed.
+
+## 2026-06-28 C# Explorer QR Canonical Account IDs
+
+- Hardened Explorer account QR snapshot validation so returned `canonical_id`
+  values must be canonical I105 account ids before callers trust rendered QR
+  account projections; `literal` remains exact token text because it reflects
+  the caller-facing literal string.
+- Replaced the legacy-shaped QR canonical-id fixture with the deterministic
+  Explorer account fixture, added positive literal/canonical assertions, and
+  added alias-style, hex-literal, `n753...` sentinel, and stale `i105:` prefix
+  negatives across high-level responses, raw DTO deserialization, and raw DTO
+  write-side validation.
+- Removed the unused Explorer pagination defaulting helper so raw Explorer page
+  parsing has no dead fail-open pagination fallback path.
+- Updated the C# README and roadmap Explorer QR notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (507 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3989 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4881 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4881 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults,
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans, and a `ReadPaginationOrDefault` dead-helper scan all
+    passed.
+
+## 2026-06-28 C# Explorer Account And Owner Canonical IDs
+
+- Hardened Explorer account directory and inventory response validation so
+  account `id`, `i105_address`, asset `account_id`, domain/asset-definition/
+  NFT/RWA `owned_by`, and asset-definition top-holder `account_id` fields must
+  be canonical I105 account ids before callers trust indexed Explorer data.
+- Hardened Explorer `owned_by` query filters for domains, asset definitions,
+  assets, NFTs, and RWAs so those filters require canonical I105 account ids
+  before HTTP dispatch.
+- Added deterministic canonical Explorer account, owner, asset, and top-holder
+  fixtures, positive response/query assertions, and alias-style, hex-literal,
+  `n753...` sentinel, and stale `i105:` prefix negatives across high-level
+  responses, raw DTO deserialization, raw DTO write-side validation, and query
+  filter preflight.
+- Updated the C# README and roadmap Explorer account/owner notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (495 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3977 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4869 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4869 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# VPN Response Canonical Account IDs
+
+- Hardened VPN profile, quote, session, receipt, and receipt-list response
+  validation so returned account, escrow, and operator account ids must be
+  canonical I105 account ids before callers trust tunnel or settlement
+  metadata.
+- Added deterministic canonical VPN account, escrow, and operator fixtures,
+  positive typed response assertions, and alias-style, hex-literal, and
+  `n753...` sentinel negatives across high-level responses, raw DTO
+  deserialization, and raw DTO write-side validation.
+- Updated the C# README and roadmap VPN response notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Vpn" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (474 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3822 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4714 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4714 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Alias Response Canonical Account IDs
+
+- Hardened by-account alias lookup, account alias resolution, and account alias
+  index resolution response validation so returned `account_id` values must be
+  canonical I105 account ids before callers trust alias metadata.
+- Added deterministic canonical alias lookup/resolution/index account fixtures,
+  positive response assertions, and alias-style, hex-literal, and `n753...`
+  sentinel negatives across high-level responses, raw DTO deserialization, and
+  raw DTO write-side validation.
+- Updated the C# README and roadmap alias metadata notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Alias" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (333 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3696 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4588 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4588 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Onboarding Response Canonical Account IDs
+
+- Hardened account onboarding, account faucet, and multisig account onboarding
+  response validation so returned `account_id` values must be canonical I105
+  account ids before callers trust queued or existing-account responses.
+- Replaced legacy-shaped onboarding response fixtures with deterministic
+  canonical account fixtures, added positive faucet/multisig response account
+  assertions, and added alias-style, hex-literal, and `n753...` sentinel
+  negatives across high-level responses, raw DTO deserialization, and raw DTO
+  write-side validation.
+- Updated the C# README and roadmap onboarding/faucet response notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Onboarding|FullyQualifiedName~Faucet" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (245 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3669 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4561 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4561 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# UAID Inventory Canonical Account IDs
+
+- Hardened UAID portfolio account response validation so nested
+  `account_id` values must be canonical I105 account ids before callers trust
+  portfolio inventory.
+- Hardened UAID bindings and manifest response validation so account-list
+  entries must be canonical I105 account ids before callers trust
+  space-directory bindings or manifest membership.
+- Added deterministic canonical UAID portfolio, bindings, issuer, and manifest
+  account fixtures, positive payload assertions, raw DTO write-side checks, and
+  alias-style, hex-literal, whitespace, and `n753...` sentinel negatives across
+  high-level responses and raw DTO deserialization.
+- Updated the C# README and roadmap UAID account-id notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Uaid" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (246 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3642 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4534 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4534 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Explorer Transaction Authority Canonical Account IDs
+
+- Hardened Explorer transaction and instruction query normalization so
+  `authority` filters, and the Explorer instruction `account` filter, must be
+  canonical I105 account ids before HTTP dispatch.
+- Hardened Explorer transaction/detail/instruction response validation, including
+  REST pages/latest/detail, SSE projections, and raw DTO reads/writes, so
+  returned `authority` fields must be canonical I105 account ids before callers
+  trust indexed ledger projections.
+- Added deterministic canonical Explorer transaction/instruction authority and
+  instruction account fixtures, positive query/payload assertions, and
+  alias-style, hex-literal, control-character, whitespace, and `n753...`
+  sentinel negatives across query filters, REST payloads, and SSE payloads.
+- Updated the C# README and roadmap Explorer account-id notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (363 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3621 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4513 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4513 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# SoraFS Pin Canonical Account IDs
+
+- Hardened SoraFS pin registration request normalization so `authority` must be
+  a canonical I105 account id before HTTP dispatch.
+- Hardened SoraFS pin registration response validation, including raw DTO
+  reads/writes, so `pin_fee_treasury_account_id` must be a canonical I105
+  account id before callers trust returned fee material.
+- Added deterministic canonical SoraFS authority and treasury fixtures, positive
+  JSON payload/response assertions, and alias-style, hex-literal, and `n753...`
+  sentinel negatives across request and response coverage.
+- Updated the C# README and roadmap SoraFS pin notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFs" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (302 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3597 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4489 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4489 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Verifying-Key Write Canonical Authority IDs
+
+- Hardened verifying-key register/update request normalization so `authority`
+  must be a canonical I105 account id before HTTP dispatch.
+- Replaced the placeholder verifying-key write authority fixture with a
+  deterministic canonical account id, asserted posted JSON payloads, and added
+  alias-style, hex-literal, and `n753...` sentinel negatives across register
+  and update request matrices.
+- Updated the C# README and roadmap verifying-key write notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VerifyingKey" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (295 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3591 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4483 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4483 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Multisig Fee Sponsor Canonical Account IDs
+
+- Hardened generic and contract-call multisig proposal request normalization so
+  optional `fee_sponsor` values must be canonical I105 account ids before HTTP
+  dispatch.
+- Added a deterministic canonical multisig fee-sponsor fixture, positive JSON
+  payload assertions, and alias-style, hex-literal, control-character, and
+  `n753...` sentinel negatives for multisig fee-sponsor request fields.
+- Updated the C# README and roadmap contract-write/multisig request notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Multisig" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (155 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3585 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4477 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4477 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Contract Request Canonical Account IDs
+
+- Hardened contract deploy, deploy-and-activate, activate, call, and view
+  request normalization so `authority` must be a canonical I105 account id
+  before HTTP dispatch.
+- Hardened contract-call request normalization so optional `fee_sponsor` values
+  must also be canonical I105 account ids instead of alias-style or hex account
+  literals.
+- Added deterministic canonical contract authority and fee-sponsor fixtures,
+  asserted the posted JSON payloads, and expanded request-negative matrices with
+  alias-style, hex-literal, and `n753...` sentinel account-id values.
+- Updated the C# README and roadmap contract-write notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Contract" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (709 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3577 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4469 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4469 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Multisig Response Canonical Account IDs
+
+- Hardened generic and contract-call multisig response validation so
+  `resolved_multisig_account_id` must be a canonical I105 account id before
+  callers trust returned signing/proposal material.
+- Updated multisig response fixtures to use canonical account IDs and added
+  alias-style, hex-literal, and `n753...` sentinel negatives in both client
+  response and raw DTO deserialization coverage.
+- Updated the C# README and roadmap multisig response notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Multisig" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (147 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3559 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4451 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4451 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Multisig Request Canonical Account IDs
+
+- Hardened multisig propose/approve request normalization so explicit
+  `multisig_account_id` selectors and `signer_account_id` values must be
+  canonical I105 account ids before HTTP dispatch; `multisig_account_alias`
+  remains the alias selector path.
+- Added deterministic canonical multisig account/signer fixtures, a positive
+  explicit-account-selector proposal test, and alias-style, hex-literal, and
+  `n753...` sentinel negatives across generic and contract-call multisig
+  propose/approve request matrices.
+- Updated the C# README and roadmap multisig request notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Multisig" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (141 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3553 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4445 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4445 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Multisig Onboarding Canonical Member IDs
+
+- Hardened multisig account onboarding request normalization so
+  `member_account_ids` must be canonical I105 account ids before HTTP dispatch.
+- Replaced placeholder multisig member fixtures with deterministic canonical
+  account ids derived from fixed public-key bytes, asserted the posted payload,
+  and added alias-style, hex-literal, and `n753...` sentinel member negatives.
+- Updated the C# README and roadmap onboarding notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RegisterMultisigAccountAsync|FullyQualifiedName~RawOnboarding" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (60 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3534 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4426 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4426 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Account Onboarding Canonical IDs
+
+- Hardened account onboarding request normalization so supplied `account_id`
+  material must be a canonical I105 account id; callers can still provide
+  `public_key_hex` instead, but not both fields.
+- Updated onboarding tests and the shared valid onboarding request fixture to
+  use the canonical account fixture, and added alias-style, hex-literal, and
+  `n753...` sentinel negatives before HTTP dispatch.
+- Updated the C# README and roadmap onboarding notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RegisterAccountAsync|FullyQualifiedName~RawOnboarding" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (68 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3531 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4423 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4423 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Torii Account Route Canonical IDs
+
+- Hardened `/v1/accounts/{account_id}/assets`, `/transactions`, and
+  `/permissions` helpers so route account ids must be canonical I105 before
+  HTTP dispatch.
+- Hardened `LookupAliasesByAccountAsync(...)` so the by-account alias lookup
+  request body carries a canonical I105 account id instead of accepting
+  alias-style, hex-literal, or `n753...` sentinel values.
+- Updated account-route and alias-lookup tests to use the canonical account
+  fixture for valid calls and added noncanonical route/request negatives.
+- Rewrote the intentional optional pipeline-status `Scope`/`ResolvedFrom`
+  defaults away from the brittle `?? string.Empty` pattern so the broad fallback
+  hygiene scan stays line-number independent.
+- Updated the C# README and roadmap account-route/alias-lookup notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountAssetsAsync|FullyQualifiedName~GetAccountTransactionsAsync|FullyQualifiedName~GetAccountPermissionsAsync|FullyQualifiedName~LookupAliasesByAccountAsync|FullyQualifiedName~ExactRouteSegmentReadsReject|FullyQualifiedName~AccountRouteReadsReject|FullyQualifiedName~ExactQueryFiltersReject" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (286 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3528 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4420 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4420 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding only the documented onboarding/VPN defaults, and
+    source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Torii Account Query Canonical IDs
+
+- Hardened account-query response validation so account summary `id`, asset
+  balance `account_id`, and transaction-summary `authority` fields require
+  canonical I105 account ids before callers trust Torii DTOs.
+- Preserved existing null, surrounding-whitespace, embedded-whitespace, and
+  control-character diagnostics before account-address parsing, then reject
+  alias-style, hex-literal, and `n753...` sentinel values as noncanonical I105.
+- Updated account-query test fixtures to use the canonical account fixture for
+  positive DTOs and added noncanonical account-id negatives for raw and typed
+  account summary, asset-balance, and transaction-summary response paths.
+- Updated the C# README and roadmap account-query notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountsAsync|FullyQualifiedName~RawAccountSummary|FullyQualifiedName~RawAccountsPage|FullyQualifiedName~GetAccountAssetsAsync|FullyQualifiedName~RawAccountAssetBalance|FullyQualifiedName~GetAccountTransactionsAsync|FullyQualifiedName~RawAccountTransaction" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (168 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3522 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4414 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4414 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Torii source/tests,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, and source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    scans all passed.
+
+## 2026-06-28 C# Signed Envelope Byte Snapshots
+
+- Hardened `SignedTransactionEnvelope` and `SignedQueryEnvelope` so constructor
+  inputs are copied and every byte-array getter returns a fresh copy instead of
+  exposing mutable signed payload, signature, hash, or wire bytes.
+- Added adversarial tests that mutate arrays returned from built envelopes and
+  arrays supplied to direct envelope constructors; transaction signatures,
+  query signatures, transaction hash text, and stored wire bytes remain stable.
+- Updated the C# README transaction-boundary note to document signed
+  transaction/query envelope byte snapshotting.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (235 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4884 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4884 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched signed-envelope source
+    and tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional
+    defaults, source-wide `GetString()!`, `Deserialize<T>()!`,
+    `items[index]!`, and null-forgiving scans, and lockfile drift scan all
+    passed.
+
+## 2026-06-28 C# Transaction JSON Payload Snapshots
+
+- Hardened JSON-bearing transaction instruction records so `Set*KeyValue` and
+  `ExecuteTrigger` clone `JsonNode` payloads at construction and `with` init
+  time, and expose cloned getters instead of mutable internal references.
+- Added signing-level adversarial coverage that mutates original `JsonObject`
+  inputs, mutates clones returned by instruction getters, and mutates values
+  assigned through `with` setters before signing; the encoded Norito JSON stays
+  pinned to the original canonical payloads.
+- Updated the C# README transaction-boundary note to clarify that JSON metadata
+  remains free-form but is snapshotted before signing.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (184 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4882 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4882 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched transaction
+    source/tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Transaction Instruction Account IDs
+
+- Hardened account-bearing transaction instructions so transfer destinations,
+  asset key-value account selectors, and account key-value selectors require
+  canonical I105 account ids before signing.
+- Added validating backing fields to the instruction records so builder helper
+  calls, static instruction factories, direct constructors, and `with` updates
+  all use the same canonical account-id preflight.
+- Extended `TransactionBuilderTests` with alias-style, hex-literal, and
+  `n753...` sentinel negatives across those construction/update paths, while
+  retaining the broader instruction exactness tests for fields that still fail
+  during final Norito encoding.
+- Updated the C# README and roadmap transaction boundary notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (183 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4396 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4396 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched transaction
+    source/tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Transaction Authority Account IDs
+
+- Hardened `TransactionBuilder` so the public transaction authority field is
+  canonicalized and rejected at construction instead of waiting for
+  `TransactionEncodingContext` during signing.
+- Exposed the transaction encoder's account-id canonicalizer inside the
+  transactions namespace and wrapped account-address parser failures as
+  `ArgumentException` with the caller's parameter name.
+- Extended `TransactionBuilderTests` with alias-style, hex-literal, and
+  `n753...` sentinel negatives for both builder construction and direct
+  encoding-context account canonicalization.
+- Updated the C# README and roadmap transaction boundary notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (180 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4393 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4393 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched transaction
+    source/tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Signed Query Builder Account IDs
+
+- Hardened `SignedQueryBuilder` and `SignedIterableQueryBuilder` so authority
+  account ids and account-id selectors require canonical I105 literals instead
+  of accepting alias-style, hex-literal, or `n753...` default-discriminant
+  aliases.
+- Extended signed-query builder tests with constructor and selector negatives
+  for alias-style, hex-literal, and sentinel account ids while preserving the
+  existing exact selector/filter, cursor, sort-key, proof-hash, and continue
+  gas-budget preflight coverage.
+- Updated the C# README and roadmap signed-query notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (49 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4387 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4387 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched signed-query builder
+    source/tests, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving scans all passed.
+
+## 2026-06-28 C# Faucet PoW Account and Scrypt Bounds
+
+- Hardened `ToriiAccountFaucetPow` and `ToriiClient` faucet claim
+  normalization so faucet challenge hashing and claim dispatch require
+  canonical I105 account ids instead of accepting alias-style or checksum-invalid
+  literals.
+- Added explicit scrypt work-factor bounds before allocation: `scrypt_p` is
+  capped, oversized `N*r` ROMix memory shapes are rejected, and too-large `r`
+  values fail as `ArgumentOutOfRangeException` instead of surfacing overflow or
+  allocation failures. Raw faucet puzzle DTO validation uses the same bounds.
+- Updated deterministic faucet challenge/nonce vectors to use the canonical
+  account fixture and extended tests with alias, unsafe parallelization,
+  oversized ROMix memory, and too-large `r` negatives.
+- Updated the C# README and roadmap faucet notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Faucet|FullyQualifiedName~ToriiAccountFaucet" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (108 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3504 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4381 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4381 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for faucet PoW source/tests passed.
+
+## 2026-06-28 C# Canonical Request Account IDs
+
+- Hardened canonical request auth so `CanonicalRequest.BuildHeaders(...)`,
+  `CanonicalRequestHeaders`, and `CanonicalRequestCredentials` require
+  canonical I105 account ids for `X-Iroha-Account` material instead of accepting
+  domain-qualified aliases, hex literals, or `n753...` aliases for the default
+  SORA discriminant.
+- Extended `CanonicalRequestTests` with alias, hex, and noncanonical sentinel
+  account-id negatives and confirmed Torii signed-dispatch tests still pass.
+- Updated the C# README signed-route credential note and roadmap canonical
+  request auth note.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (99 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3495 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4372 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4372 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for canonical request source/tests
+    passed.
+
+## 2026-06-28 C# Offline Note Canonical Account IDs
+
+- Hardened the C# Offline Note wallet, receipt ACK, and payment-token recipient
+  lookup boundaries so account-id inputs must be canonical I105 account ids
+  instead of alias-style labels such as `merchant@sora`.
+- Wallet notes now canonicalize persisted `asset_id` values and reject asset
+  account components that do not match the note `account_id`, preventing JSON
+  persistence from storing split account/asset identities.
+- Extended focused Offline Note tests with alias, whitespace, control-character,
+  mismatched asset-account, and noncanonical dataspace-scope negatives for
+  constructors, raw Norito decode paths, JSON decode paths, and direct token
+  recipient lookup.
+- Updated the C# README examples and roadmap Offline Note C# notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNoteCanonicalPayloadTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4366 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4366 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched Offline Note source and
+    tests, `git diff --check`, anchored conflict-marker scan, `reader.Skip(`
+    scan, C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, and source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    operator scans passed.
+
+## 2026-06-28 C# Torii Query Percent Preflight
+
+- Hardened generic `ToriiClient` request query preflight and the lower-level
+  `CanonicalRequest` query normalizer so malformed percent escapes, invalid
+  percent-encoded UTF-8 byte sequences, and percent-decoded control characters
+  are rejected before URI construction, HTTP dispatch, or canonical request
+  signing. Percent-encoded and `+`-encoded spaces remain accepted while raw
+  whitespace remains rejected.
+- Extended `SendAsyncRejectsNonExactQueriesBeforeDispatchAndCanonicalSigning`,
+  `CanonicalQueryStringRejectsMalformedOrControlPercentEscapes`, and SSE
+  filter-query coverage with malformed `%`, non-hex `%GG`, invalid
+  `%FF`/`%C3%28` UTF-8, `%00`, and `%0A` adversarial vectors.
+- Updated the C# README and roadmap query-preflight notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~SendAsyncRejectsNonExactQueriesBeforeDispatchAndCanonicalSigning|FullyQualifiedName~OpenEventSseAsyncRejectsMalformedOrControlFilterQueryEscapesBeforeRequest" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (117 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3495 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4366 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4366 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for `CanonicalRequest.cs`,
+    `ToriiClient.cs`, `CanonicalRequestTests.cs`, and `ToriiClientTests.cs`,
+    `git diff --check`, anchored conflict-marker scan, `reader.Skip(` scan,
+    C# project/solution metadata-drift scan, broad C# `?? string.Empty`
+    fallback scan excluding the documented optional defaults, and source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    operator scans passed.
+
+## 2026-06-28 C# Torii Text Response UTF-8
+
+- Hardened plain Torii text response decoding so `/v1/health` and
+  `/v1/metrics` reject malformed UTF-8 bytes instead of accepting replacement
+  characters.
+- Preserved `ToriiApiException` status and request URI reporting for
+  non-success HTTP responses while redacting malformed UTF-8 error bodies, so
+  diagnostics no longer expose replacement-decoded garbage or hide the HTTP
+  failure behind a body decoder exception.
+- Added adversarial `ToriiClientTests` coverage for invalid UTF-8 health,
+  metrics, and API error bodies, plus a positive metrics text route check.
+- Updated the C# README and roadmap Torii text-response notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetHealthAsync|FullyQualifiedName~GetMetricsAsync|FullyQualifiedName~SendAsyncRedactsInvalidUtf8ErrorBodyButPreservesStatus|FullyQualifiedName~SendAsyncThrowsToriiApiExceptionWithStatusBodyAndUri" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (6 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3487 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4356 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4356 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for `ToriiClient.cs` and
+    `ToriiClientTests.cs`, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving operator scans passed.
+
+## 2026-06-28 C# Torii SSE Strict UTF-8
+
+- Hardened the shared Torii SSE reader so event-stream bytes decode with a
+  strict UTF-8 decoder before raw `StreamEventsAsync(...)` frames or typed
+  pipeline/proof/explorer SSE projections can observe payload text. Malformed
+  bytes now fail closed instead of being converted to replacement characters;
+  a leading UTF-8 BOM is still tolerated on the first stream line.
+- Added adversarial `ToriiClientTests` coverage proving invalid UTF-8 bytes in
+  an SSE `data:` frame are rejected before raw event data is yielded.
+- Updated the C# README and roadmap SSE notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~StreamEventsAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (11 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3483 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4352 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4352 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for `ToriiClient.cs` and
+    `ToriiClientTests.cs`, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving operator scans passed.
+
+## 2026-06-28 C# SCCP Native Prover JSON UTF-8
+
+- Hardened C# SCCP native EVM prover bundle, cross-SDK parity fixture, and
+  native self-test fixture byte decoders so `FromJsonBytes(...)` rejects
+  malformed UTF-8 before JSON parsing. This prevents replacement-character
+  fallback from turning corrupt signed-manifest or fixture bytes into trusted
+  native prover evidence.
+- Added adversarial `SccpEthereumMainnetTests` coverage for invalid UTF-8 bytes
+  across all three public native prover JSON byte entry points.
+- Updated the C# README and SCCP roadmap native-prover notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3482 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4351 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4351 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for `EthereumMainnetSccp.cs` and
+    `SccpEthereumMainnetTests.cs`, `git diff --check`, anchored
+    conflict-marker scan, `reader.Skip(` scan, C# project/solution
+    metadata-drift scan, broad C# `?? string.Empty` fallback scan excluding
+    the documented optional defaults, and source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving operator scans
+    passed.
+
+## 2026-06-27 C# Offline Wallet-Note Envelope Negatives
+
+- Extended `OfflineNoteWalletNoteJsonCodec` adversarial coverage to pin
+  top-level JSON `null` and invalid UTF-8 payload rejection before persisted
+  wallet-note metadata is trusted. This confirms the existing fail-closed
+  decoder path for non-object roots and strict UTF-8 parsing in addition to the
+  existing duplicate-property and malformed-field vectors.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (23 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3482 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4351 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4351 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for
+    `OfflineNoteWalletNoteTests.cs`, `git diff --check`, anchored
+    conflict-marker scan, `reader.Skip(` scan, C# project/solution
+    metadata-drift scan, broad C# `?? string.Empty` fallback scan excluding
+    the documented optional defaults, and source-wide `GetString()!`,
+    `Deserialize<T>()!`, `items[index]!`, and null-forgiving operator scans
+    passed.
+
+## 2026-06-27 C# Event SSE Filter JSON Preflight
+
+- Hardened `ToriiClient.OpenEventSseAsync(...)` event-filter normalization so
+  `filter=` values that are JSON-shaped but malformed now fail before HTTP
+  dispatch instead of being forwarded as opaque text. Existing duplicate-key,
+  padded JSON, production verifier-backend, verifier-key name, and proof-hash
+  exactness checks remain intact.
+- Added adversarial request-preflight coverage for truncated object/array
+  filters and type-confused object syntax, asserting that no request is sent.
+- Updated the C# README and roadmap to document malformed JSON-shaped event
+  filter rejection.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OpenEventSseAsyncRejects|FullyQualifiedName~StreamEventsAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3482 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4351 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4351 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for `ToriiClient.cs` and
+    `ToriiClientTests.cs`, `git diff --check`, anchored conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, broad C#
+    `?? string.Empty` fallback scan excluding the documented optional defaults,
+    and source-wide `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and
+    null-forgiving operator scans passed.
+
+## 2026-06-27 C# Torii Empty-String Fallback Audit
+
+- Removed the remaining actionable empty-string substitutions outside explicit
+  optional response defaults. Torii runtime required-string decoding now fails
+  closed if the JSON API ever yields null after token validation, account
+  onboarding UAID normalization routes nullable input through the exact UAID
+  preflight directly, and ZK verifying-key backend catalog classification maps
+  null labels to `Unsupported` explicitly instead of normalizing through `""`.
+  Ethereum SCCP manifest and Beacon/REST string helpers now also use explicit
+  fail-closed errors instead of null-forgiving `GetString()!` unwraps; a
+  source-wide scan now finds no `GetString()!` in C# SDK sources.
+  Shared Torii explorer and contract-metadata object/list readers now also
+  throw field-scoped `JsonException`s if nested DTO deserialization ever
+  returns null, eliminating null-forgiving `Deserialize<T>()!` and
+  `items[index]!` JSON helper paths from C# SDK sources.
+  The broader C# SDK source null-forgiving audit now also replaces selector
+  state assertions in signed query builders, transaction JSON key serialization,
+  Torii validation locals, SoraFS writer required values, SCCP proof-result
+  validation, and Kagemusha append-output normalization with explicit guards; a
+  source-wide null-forgiving operator scan now finds no matches in
+  `csharp/src/Hyperledger.Iroha.Sdk`.
+- Re-ran the broad C# empty-string fallback scan. The remaining
+  `?? string.Empty` sites are intentional Torii compatibility defaults for
+  optional response fields: onboarding `tx_hash_hex`, VPN receipt
+  `lease_id_hex`, and pipeline status `scope`/`resolved_from` when older
+  status-only envelopes omit that metadata.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Runtime|FullyQualifiedName~Onboarding|FullyQualifiedName~Uaid" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (395 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VerifyingKeyBackendTagTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (226 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer|FullyQualifiedName~ContractMetadata" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (390 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFs|FullyQualifiedName~NodeCapabilities|FullyQualifiedName~Explorer|FullyQualifiedName~ContractState|FullyQualifiedName~StreamProofEvents|FullyQualifiedName~ProofSse|FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests|FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (1264 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3478 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4347 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4347 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, broad C# `?? string.Empty` fallback
+    scan excluding the documented optional defaults, and source-wide
+    `GetString()!`, `Deserialize<T>()!`, `items[index]!`, and null-forgiving
+    operator scans passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# VPN Required String Presence Exactness
+
+- Hardened VPN profile, quote, session, receipt, receipt-list item, string-list
+  item, and native-instruction response deserialization so required returned
+  identity, endpoint, account, asset, status, hash/text, and instruction fields
+  must be present and non-null before exact validation runs. Optional receipt
+  `lease_id_hex`, TLS SPKI hashes, and nullable instruction objects retain
+  their existing nullable semantics.
+- Added endpoint and raw DTO coverage for JSON-null and omitted required VPN
+  strings across profile/quote/session/receipt/list paths, plus standalone
+  native-instruction wire id/payload checks and string-list item null checks,
+  while preserving duplicate-key, ignored-extension duplicate-key, collection,
+  counter, timestamp-order, accounting, and optional lease-id validation.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Vpn" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (348 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3478 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4343 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4343 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and VPN required-field empty-string
+    fallback scan passed. The only remaining VPN `?? string.Empty` fallback is
+    the optional receipt `lease_id_hex` compatibility path.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# UAID Required String Presence Exactness
+
+- Hardened UAID portfolio, bindings, and manifest response deserialization so
+  required returned UAID literals, portfolio asset/account/quantity strings,
+  manifest hashes/status text, and account-list entries must be present and
+  non-null instead of being converted to empty strings before validation.
+  Optional aliases, labels, revocation reasons, and preserved manifest JSON
+  remain nullable.
+- Added endpoint and raw DTO coverage for JSON-null and omitted required UAID
+  strings, including nested portfolio assets/accounts, bindings account lists,
+  manifest records, and top-level response UAID literals, while preserving
+  duplicate-key, ignored-extension duplicate-key, counter, list, lifecycle, and
+  arbitrary manifest JSON validation.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Uaid" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (225 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3409 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4274 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4274 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and UAID empty-string fallback scan
+    passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Contract Call/View Required String Presence Exactness
+
+- Hardened contract-call, contract-view success, contract-view error, and VM
+  diagnostic response deserialization so required returned dataspace, contract
+  id, code/ABI hashes, view entrypoint/error text, and diagnostic trap/message
+  text must be present and non-null instead of being converted to empty strings
+  before validation. Nullable returned contract addresses and call entrypoints
+  remain optional but exact when present.
+- Added endpoint and raw DTO coverage for JSON-null and omitted required
+  contract-call/view strings and hashes, including nested VM diagnostic
+  trap/message text, while preserving false-`ok`, duplicate-key,
+  ignored-extension duplicate-key, optional transaction/scaffold material, and
+  VM diagnostic counter/limit validation.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCall|FullyQualifiedName~ContractView" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (239 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3376 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4241 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4241 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and contract-call empty-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Multisig Resolved Account Presence Exactness
+
+- Hardened generic and contract-call multisig response deserialization so
+  required `resolved_multisig_account_id` must be present and non-null instead
+  of being converted to an empty string before validation.
+- Added endpoint coverage for omitted and JSON-null resolved multisig account
+  ids across generic propose plus contract-call propose/approve responses, and
+  raw DTO coverage for generic and contract-call multisig response payloads
+  while preserving optional proposal, instruction, transaction, creation-time,
+  and signing-message validation.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Multisig" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (119 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3325 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4190 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4190 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and multisig empty-string fallback
+    scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Contract Deployment Required String Presence Exactness
+
+- Hardened contract deploy and deploy-and-activate response deserialization so
+  required returned contract address, dataspace, namespace, contract id,
+  `code_hash_hex`, and `abi_hash_hex` strings must be present and non-null
+  instead of being converted to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null deployment
+  strings and hashes while preserving false-`ok`, duplicate-key,
+  ignored-extension duplicate-key, deploy nonce, hash shape, and activation
+  response validation.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractDeployment|FullyQualifiedName~DeployContract|FullyQualifiedName~DeployAndActivate|FullyQualifiedName~ActivateContractInstance" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (118 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3317 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4182 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4182 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and contract-deployment empty-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Onboarding Required String Presence Exactness
+
+- Hardened account onboarding, account faucet, and multisig onboarding response
+  deserialization so required account, UAID, asset, amount, and status strings
+  must be present, non-null, exact token text instead of being converted to
+  empty strings before validation. `tx_hash_hex` remains optional and may still
+  be empty or JSON null for existing queued/existing response semantics.
+- Added endpoint and raw DTO coverage for omitted, JSON-null, empty, padded,
+  internal-whitespace, and control-character required onboarding/faucet strings
+  while preserving duplicate-key rejection, ignored-extension duplicate-key
+  rejection, type checks, and optional transaction-hash behavior.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Onboarding|FullyQualifiedName~AccountFaucet|FullyQualifiedName~ToriiTransactionHashResponses" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (203 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3283 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4148 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4148 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and onboarding required-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# SoraFS Required String Presence Exactness
+
+- Hardened SoraFS CID lookup and denylist pack deserialization so required
+  `content_cid`, `manifest_digest_hex`, `manifest_id_hex`, `pack_id`, and
+  pack-response `source_path` strings must be present and non-null instead of
+  being converted to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null CID lookup
+  content/manifest fields, nested denylist catalog pack ids, raw denylist pack
+  summaries, and raw denylist pack responses while preserving optional
+  index-document, jurisdiction, metadata, and source-path summary behavior.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFsCidLookup|FullyQualifiedName~SoraFsDenylist" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (146 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3227 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4092 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4092 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and SoraFS empty-string fallback scan
+    passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Alias Resolution Required String Presence Exactness
+
+- Hardened account/asset/contract alias resolution and alias binding
+  deserialization so required alias, account, asset, contract, dataspace, and
+  binding status strings must be present and non-null instead of being converted
+  to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null alias
+  resolution strings across account alias index, account alias, asset alias,
+  asset binding, contract alias, and contract binding paths while preserving
+  optional source/description/logo fields, index/timestamp validation,
+  duplicate-key rejection, and exact-token checks.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AliasResolution|FullyQualifiedName~AliasBindings|FullyQualifiedName~AliasResolve|FullyQualifiedName~ResolveAccountAlias|FullyQualifiedName~ResolveAssetAlias|FullyQualifiedName~ResolveContractAlias|FullyQualifiedName~AccountAliasIndex" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (159 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3202 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4067 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4067 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and alias-resolution empty-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Account Alias Lookup Required String Presence Exactness
+
+- Hardened account alias lookup item/response deserialization so required item
+  `alias`/`dataspace` fields and response `account_id` must be present and
+  non-null instead of being converted to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null alias lookup
+  strings while preserving optional `domain`/`source`, exact token,
+  duplicate-key, total, list, item, and boolean validation. Updated the C#
+  README and roadmap alias metadata notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountAliasLookup|FullyQualifiedName~LookupAliasesByAccount" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (68 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3141 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4006 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (4006 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and account-alias lookup
+    empty-string fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Node Capability Required String Presence Exactness
+
+- Hardened node capability response deserialization so required capability
+  hashes, SM labels, acceleration policy, projection codec labels, and required
+  string-list elements must be present and non-null instead of being converted
+  to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null required
+  capability strings plus JSON-null string-list elements while preserving
+  existing ABI, data-model, SM consistency, curve bitmap, query projection,
+  feature-flag, duplicate-key, and extension validation. Updated the C# README
+  and roadmap node-capability notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~NodeCapabilities" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (208 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3127 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3992 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3992 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and node-capability empty-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Account Query Required String Presence Exactness
+
+- Hardened account-query DTO deserialization so required account summary ids,
+  asset-balance identifiers/quantities, permission names, and transaction
+  `entrypoint_hash` values must be present and non-null instead of being
+  converted to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null required
+  account-query strings while preserving optional asset aliases, optional
+  transaction authorities/timestamps, exact text, numeric, duplicate-key, page
+  total, and permission-payload validation. Updated the C# README and roadmap
+  account-query notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountSummary|FullyQualifiedName~AccountsPage|FullyQualifiedName~AccountAssets|FullyQualifiedName~AccountAssetBalance|FullyQualifiedName~AccountPermissions|FullyQualifiedName~AccountPermission|FullyQualifiedName~AccountTransactions|FullyQualifiedName~AccountTransactionSummary" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (178 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3090 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3955 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3955 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and account-query empty-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Contract State Path Presence Exactness
+
+- Hardened contract state response deserialization so returned state entry
+  `path` values and path-list elements must be present and non-null instead of
+  being converted to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null nested entry
+  paths and path-list elements while preserving existing path/prefix exactness,
+  entry shape, pagination, base64, decoded-length, and duplicate-key rejection.
+  Updated the C# README and roadmap contract-state notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractState" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (75 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3045 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3910 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3910 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and contract-state path fallback scan
+    passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Explorer Snapshot String Presence Exactness
+
+- Hardened explorer QR and health snapshot deserialization so required QR
+  account/rendering strings and health `sampled_at` must be present and
+  non-null instead of being converted to empty strings before validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null
+  `canonical_id`, `literal`, `error_correction`, `svg`, and `sampled_at`
+  while preserving existing empty, whitespace, numeric, and duplicate-key
+  rejection. Updated the C# README and roadmap explorer snapshot notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSupplemental|FullyQualifiedName~RawExplorerSnapshot|FullyQualifiedName~ExplorerAccountQr|FullyQualifiedName~ExplorerHealth|FullyQualifiedName~ExplorerMetrics" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (115 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3038 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3903 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3903 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and explorer snapshot string fallback
+    scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Faucet Puzzle String Presence Exactness
+
+- Hardened account faucet puzzle deserialization so required `algorithm` and
+  `anchor_block_hash_hex` fields must be present and non-null instead of being
+  converted to empty strings before PoW puzzle validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null puzzle
+  algorithm/hash fields while preserving existing exact algorithm, exact anchor
+  hash, salt, numeric, and scrypt parameter checks. Updated the C# README and
+  roadmap faucet puzzle notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountFaucetPuzzle" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (77 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3019 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3884 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3884 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and faucet puzzle string fallback
+    scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Contract Instance Required Field Presence Exactness
+
+- Hardened contract instance inventory deserialization so response
+  `namespace`, item `contract_id`, and item `code_hash_hex` fields must be
+  present and non-null instead of being converted to empty strings before
+  validation.
+- Added endpoint and raw DTO coverage for omitted and JSON-null required
+  instance inventory strings while preserving existing empty, whitespace,
+  malformed hash, pagination, and duplicate-key rejection. Updated the C#
+  README and roadmap contract inventory notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractInstances" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (53 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3011 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3876 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3876 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and contract-instance empty-string
+    fallback scan passed.
+- Full-solution `dotnet format --verify-no-changes` remains blocked by
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# SSE Required Field Presence Exactness
+
+- Hardened raw pipeline/proof SSE DTO deserialization so required
+  category/event/backend fields and removed proof-record backend/hash fields
+  must be present and non-null instead of being converted to empty strings
+  before validation.
+- Tightened typed proof SSE stream selection so missing or JSON-null proof
+  event selector text fails as a missing required field before proof-event
+  classification. Added raw DTO and typed stream coverage for omitted/null
+  required fields while preserving category-based stream skipping semantics for
+  non-selected event families. Updated the C# README and roadmap SSE notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~PipelineEvent|FullyQualifiedName~ProofEvent|FullyQualifiedName~ProofRemovedRecord|FullyQualifiedName~StreamPipelineEvents|FullyQualifiedName~StreamProofEvents" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (110 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2999 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3864 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3864 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - Targeted C# formatting verification for the touched C# files, `git diff
+    --check`, anchored conflict-marker scan, `reader.Skip(` scan, C#
+    project/solution metadata-drift scan, and SSE empty-string fallback scan
+    passed.
+- Full-solution `dotnet format --verify-no-changes` currently fails on
+  unrelated dirty whitespace in
+  `csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs` and
+  `csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`.
+
+## 2026-06-27 C# Contract Code Bytes Field Presence Exactness
+
+- Hardened raw and endpoint contract code-byte deserialization so `code_b64`
+  must be present and non-null before the exact base64 decoder runs, instead
+  of treating an absent field as an empty base64 string.
+- Added endpoint and raw DTO coverage for omitted and JSON-null `code_b64`
+  while preserving `FormatException` behavior for malformed string base64
+  payloads. Updated the C# README and roadmap contract code-byte notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCodeBytes" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (26 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2975 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3840 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3840 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, anchored conflict-marker
+    scan, `reader.Skip(` scan, C# project/solution metadata-drift scan, and
+    code-byte fallback scan passed.
+
+## 2026-06-27 C# Explorer Required String Presence Exactness
+
+- Hardened the shared explorer required-string reader so absent or JSON-null
+  required strings fail at read time instead of being converted to empty text
+  and rejected later by validators.
+- Switched the remaining explorer block, transaction, instruction, instruction
+  box, and instruction JSON summary readers off the old defaulting helper.
+  Added endpoint/raw coverage for missing required summary strings and updated
+  verified-source job null-id expectations. Updated the C# README and roadmap
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSupplemental|FullyQualifiedName~ExplorerResponses|FullyQualifiedName~RawExplorer|FullyQualifiedName~ContractMetadata|FullyQualifiedName~ContractVerifiedSource|FullyQualifiedName~ContractCodeView" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (260 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2971 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3836 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3836 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, anchored conflict-marker
+    scan, `reader.Skip(` scan, C# project/solution metadata-drift scan, and
+    explorer default-string helper scan passed.
+
+## 2026-06-27 C# VPN Collection Presence Exactness
+
+- Hardened Torii VPN profile, quote, session, receipt, and receipt-list
+  deserialization so required route/DNS/tunnel collections and
+  native-instruction arrays must be present instead of defaulting absent fields
+  to trusted empty lists.
+- Added adversarial endpoint and raw DTO coverage for missing VPN collections
+  while retaining explicit empty-array acceptance and existing element-shape
+  validation. Updated the C# README and roadmap VPN readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VpnEndpointsRejectMissingRequiredCollectionResponses|FullyQualifiedName~RawVpnResponsesRejectMalformedPayloads" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (118 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Vpn" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (279 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2968 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3833 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3833 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, anchored conflict-marker
+    scan, `reader.Skip(` scan, C# project/solution metadata-drift scan, and
+    VPN collection fallback scan passed.
+
+## 2026-06-27 C# Explorer Instruction Box Object Presence Exactness
+
+- Hardened explorer instruction deserialization so the nested `box` object must
+  be present in detail, page, latest, and raw DTO payloads instead of defaulting
+  an absent instruction box to an empty trusted object.
+- Added adversarial endpoint and raw DTO coverage for missing instruction
+  boxes while retaining the existing malformed encoded/json instruction-box
+  checks. Updated the C# README and roadmap readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerResponsesRejectNonExactHashesAndEncodedFields|FullyQualifiedName~ExplorerRawPagesRejectMalformedItemsWithItemContext" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (57 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2935 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3800 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3800 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, anchored conflict-marker
+    scan, `reader.Skip(` scan, C# project/solution metadata-drift scan, and
+    explorer instruction-box fallback scan passed.
+
+## 2026-06-27 C# Runtime Metadata Field Presence Exactness
+
+- Hardened runtime ABI active/hash and metrics deserialization so
+  `abi_version`, `policy`, `abi_hash_hex`, and the `upgrade_events_total`
+  envelope must be present instead of defaulting absent runtime metadata to
+  trusted zero or empty values.
+- Added adversarial endpoint and raw DTO coverage for missing/null first-release
+  runtime metadata fields while retaining duplicate-property, exact `V1`, ABI
+  hash, and upgrade-counter consistency checks. Updated the C# README and
+  roadmap readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RuntimeMetadata" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (55 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2930 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3795 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3795 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, anchored conflict-marker
+    scan, `reader.Skip(` scan, C# project/solution metadata-drift scan, and
+    runtime converter default-read scan passed.
+
+## 2026-06-27 C# SoraFS Denylist Pack Scalar Presence Exactness
+
+- Hardened SoraFS denylist pack summary/response deserialization so
+  `default_enabled`, `active`, and `entry_count` must be present in standalone,
+  catalog-nested, and raw DTO payloads instead of defaulting absent pack policy
+  fields to trusted `false` or zero values.
+- Added adversarial endpoint and raw DTO coverage for missing pack enablement,
+  activity, and entry-count fields in denylist catalog packs, pack summaries,
+  and pack responses. Updated the C# README and roadmap readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFsDenylist" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (73 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2918 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3783 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3783 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, and SoraFS
+    scalar-default scan passed; the remaining SoraFS converter `0` hits are
+    loop/list indexes.
+
+## 2026-06-27 C# Node Capability Scalar Presence Exactness
+
+- Hardened node capabilities response and raw node capability DTO
+  deserialization so required first-release version counters, curve-registry
+  counters, SM/query/aggregate/projection booleans, and projection numeric
+  constants must be present instead of defaulting absent wire fields to trusted
+  zero or `false` values.
+- Added adversarial endpoint and raw DTO coverage for missing
+  `abi_version`, `data_model_version`, `registry_version`, SM acceleration
+  flags, query aggregate flags, indexed snapshot marker support, and projection
+  capability constants. Updated the C# README and roadmap readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~NodeCapabilities" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (171 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2903 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3768 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3768 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, C# project/solution metadata-drift scan, and node
+    capability scalar-default scan passed; the remaining converter
+    `0`/`false` hits are loop counters and local signing-label bookkeeping.
+
+## 2026-06-27 C# Core Boolean Presence Exactness
+
+- Hardened raw account transaction, account-alias lookup, VPN profile, contract
+  deploy, contract-call/view, and contract-state DTO deserialization so returned
+  boolean fields must be present instead of defaulting absent wire fields to
+  trusted `false` values.
+- Added adversarial endpoint and raw DTO coverage for missing `result_ok`,
+  `is_primary`, `available`, `ok`, `submitted`, and `found` fields. Updated the
+  C# README and roadmap readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VpnResponses|FullyQualifiedName~AccountTransactions|FullyQualifiedName~AccountTransactionSummary|FullyQualifiedName~AccountAliasLookup|FullyQualifiedName~ContractState|FullyQualifiedName~ContractCallResponse|FullyQualifiedName~ContractView|FullyQualifiedName~DeployContractResponse|FullyQualifiedName~DeployAndActivate|FullyQualifiedName~ActivateContract" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (403 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2861 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3726 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3726 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, and C# project/solution metadata-drift scan passed.
+
+## 2026-06-27 C# Faucet Puzzle Numeric Presence Exactness
+
+- Hardened raw faucet puzzle DTO deserialization so serialized numeric
+  challenge/work-factor fields (`difficulty_bits`, `anchor_height`,
+  `scrypt_log_n`, `scrypt_r`, `scrypt_p`, and `max_anchor_age_blocks`) must be
+  present instead of defaulting absent wire fields to trusted zero values.
+- Added adversarial endpoint and raw DTO coverage for missing faucet puzzle
+  numeric fields. Updated the C# README and roadmap faucet readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountFaucetPuzzle|FullyQualifiedName~GetAccountFaucetPuzzle" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (69 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2843 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3708 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3708 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, and C# project/solution metadata-drift scan passed.
+
+## 2026-06-27 C# VPN Operational Field Presence Exactness
+
+- Hardened raw VPN profile, quote, session, receipt, and receipt-list DTO
+  deserialization so unconditionally serialized operational fields
+  (`lease_secs`, DNS/MTU/timestamp fields, `lease_fee_nanos`,
+  `settlement_grace_secs`, `flow_label_bits`, and `padding_budget_ms`) must be
+  present instead of defaulting absent wire fields to trusted zero values.
+- Added adversarial endpoint and raw DTO coverage for missing VPN operational
+  fields, including nested receipt-list items. Updated the C# README and
+  roadmap VPN readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VpnResponses|FullyQualifiedName~VpnProfile|FullyQualifiedName~VpnQuote|FullyQualifiedName~VpnSession|FullyQualifiedName~VpnReceipt" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (146 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2831 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3696 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3696 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, and C# project/solution metadata-drift scan passed.
+
+## 2026-06-27 C# Contract View Limit Presence Exactness
+
+- Hardened raw contract-view VM diagnostic DTO deserialization so required
+  positive limit fields (`gas_limit`, `max_cycles`, and `stack_limit_bytes`) must
+  be present instead of defaulting absent wire fields to trusted zero values.
+- Added adversarial endpoint, nested raw error-response, and standalone raw
+  diagnostic coverage for missing VM diagnostic limit fields. Updated the C#
+  README and roadmap contract-view readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractViewDiagnostic|FullyQualifiedName~ContractViewError|FullyQualifiedName~ContractCallViewResponses" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (95 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2787 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3652 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3652 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, and C# project/solution metadata-drift scan passed.
+
+## 2026-06-27 C# Positive Counter Presence Exactness
+
+- Hardened raw QR snapshot, SoraFS denylist catalog, alias binding, and
+  contract-call DTO deserialization so required positive fields (`modules`,
+  `qr_version`, catalog `version`, `bound_at_ms`, and `creation_time_ms`) must
+  be present instead of defaulting absent wire fields to trusted zero values.
+- Added adversarial endpoint and raw DTO coverage for missing QR dimensions,
+  catalog versions, alias binding timestamps, and contract-call creation times.
+  Updated the C# README and roadmap readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSupplemental|FullyQualifiedName~ExplorerSnapshot|FullyQualifiedName~SoraFsDenylistCatalog|FullyQualifiedName~AliasResolve|FullyQualifiedName~AliasBindings|FullyQualifiedName~ContractCallResponse|FullyQualifiedName~CallContractAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (224 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2778 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3643 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3643 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, and C# project/solution metadata-drift scan passed.
+
+## 2026-06-27 C# Contract Deploy/State Counter Exactness
+
+- Hardened raw contract deploy and state DTO deserialization so required
+  zero-allowed counters (`deploy_nonce`, state `offset`, and state `limit`) must
+  be present instead of defaulting absent wire fields to trusted zero values.
+- Added adversarial raw DTO coverage for missing deploy nonces and missing state
+  pagination counters. Updated the C# README and roadmap contract readiness
+  notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~DeployContractResponse|FullyQualifiedName~ContractStateResponse" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2768 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3633 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3633 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - C# formatting verification, `git diff --check`, conflict-marker scan,
+    `reader.Skip(` scan, and C# project/solution metadata-drift scan passed.
+
+## 2026-06-27 C# Contract View Diagnostic Counter Exactness
+
+- Hardened raw contract-view VM diagnostic DTO deserialization so zero-allowed
+  counters (`pc`, `gas_remaining`, `gas_used`, `cycles`, `stack_bytes_used`) and
+  the required `predecoded_loaded` flag must be present instead of defaulting
+  absent diagnostics to trusted zero/false values.
+- Added adversarial endpoint, nested raw error-response, and standalone raw
+  diagnostic coverage for missing VM diagnostic counters/flags. Updated the C#
+  README and roadmap contract-view readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractViewDiagnostic|FullyQualifiedName~ContractViewError|FullyQualifiedName~ContractCallViewResponses|FullyQualifiedName~ContractCallResponse" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (111 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2765 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3630 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3630 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# VPN Accounting Counter Exactness
+
+- Hardened raw VPN quote, session, receipt, and receipt-list item DTO
+  deserialization so zero-allowed accounting counters such as `lease_fee_nanos`,
+  `bytes_in`, `bytes_out`, `duration_ms`, `earned_fee_nanos`, and
+  `refunded_fee_nanos` must be present instead of defaulting absent counters to
+  trusted zero values.
+- Added adversarial endpoint, raw session/receipt, and nested receipt-list
+  coverage for missing accounting counters. Updated the C# README and roadmap
+  VPN readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VpnResponses|FullyQualifiedName~VpnSession|FullyQualifiedName~VpnReceipt" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (106 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2752 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3617 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3617 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# SoraFS File Geometry Exactness
+
+- Hardened raw SoraFS CID lookup file-entry DTO deserialization so `offset`,
+  `size`, `first_chunk`, and `chunk_count` must be present instead of
+  defaulting absent file geometry to trusted zero values.
+- Added adversarial endpoint, standalone raw file-entry, and nested raw CID
+  lookup coverage for missing file geometry. Updated the C# README and roadmap
+  SoraFS readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFsCidLookup|FullyQualifiedName~SoraFsFileEntry" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (62 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2730 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3595 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3595 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Alias Index Exactness
+
+- Hardened raw account-alias index resolution DTO deserialization so `index`
+  must be present instead of defaulting an absent alias-index response to trusted
+  zero.
+- Added adversarial endpoint and raw DTO coverage for missing alias-index
+  values. Updated the C# README and roadmap alias readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountAliasIndex" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (18 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2718 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3583 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3583 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer Snapshot Counter Exactness
+
+- Hardened raw explorer duration, QR snapshot, health snapshot, and metrics
+  snapshot DTO deserialization so `ms`, `network_prefix`, `head_height`, and
+  metrics aggregate counters must be present instead of defaulting absent
+  counters to trusted zero values.
+- Added adversarial endpoint and raw DTO coverage for missing explorer snapshot
+  counters. Updated the C# README and roadmap explorer readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSupplemental|FullyQualifiedName~ExplorerDuration|FullyQualifiedName~ExplorerSnapshot|FullyQualifiedName~ExplorerHealth|FullyQualifiedName~ExplorerMetrics|FullyQualifiedName~ExplorerAccountQr" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (99 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2716 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3581 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3581 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# UAID Nested Counter Exactness
+
+- Hardened raw UAID portfolio/bindings dataspace, manifest record, and manifest
+  revocation DTO deserialization so `dataspace_id` and revocation `epoch`
+  counters must be present instead of defaulting absent counters to trusted zero
+  values.
+- Added adversarial endpoint and raw DTO coverage for missing nested UAID
+  counters. Updated the C# README and roadmap UAID readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~UaidPortfolio|FullyQualifiedName~UaidBindings|FullyQualifiedName~UaidManifest" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (174 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2699 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3564 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3564 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# UAID Portfolio Totals Exactness
+
+- Hardened raw UAID portfolio totals DTO deserialization so `accounts` and
+  `positions` counters must be present instead of defaulting absent counters to
+  trusted zero values.
+- Added adversarial standalone and nested UAID portfolio response coverage for
+  missing total counters. Updated the C# README and roadmap UAID readiness
+  notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~UaidPortfolio" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (70 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2687 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3552 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3552 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Auxiliary Page Envelope Exactness
+
+- Hardened raw identifier-policy, account-alias lookup, UAID manifest,
+  contract-instance, and VPN receipt-list DTO deserialization so required page
+  counters and item arrays remain absent until explicitly present in JSON
+  instead of defaulting missing totals, offsets, limits, or lists to trusted
+  zero/empty values.
+- Added adversarial missing-field coverage for identifier policy totals, alias
+  lookup totals, UAID manifest totals, contract instance `total`/`offset`/`limit`,
+  and VPN receipt-list `items`/`total`. Updated the C# README and roadmap page
+  envelope readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountAliasLookup|FullyQualifiedName~IdentifierPolicies|FullyQualifiedName~UaidManifest|FullyQualifiedName~ContractInstances|FullyQualifiedName~VpnResponses" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (209 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2683 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3548 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3548 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Account Query Page Total Exactness
+
+- Hardened raw account-query page DTO deserialization so account, asset-balance,
+  permission, and transaction-summary page `total` fields must be present
+  instead of defaulting absent totals to trusted zero values.
+- Added adversarial missing-total coverage for all four account-query page
+  families. Updated the C# README and roadmap account-query readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountsPage|FullyQualifiedName~AccountAssetBalancesPage|FullyQualifiedName~AccountTransactionsPage|FullyQualifiedName~AccountPermissionsPage" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (50 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2675 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3540 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3540 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer Summary Timestamp Exactness
+
+- Hardened explorer block, transaction, transaction-detail, and instruction
+  validators so summary `created_at` fields must be present and exact instead
+  of defaulting absent DTO strings to trusted empty values.
+- Added adversarial raw SSE, raw page/latest/detail, and write-time DTO coverage
+  for missing, padded, and control-character `created_at` values. Updated the
+  C# README and roadmap explorer readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (300 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2671 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3536 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3536 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Runtime Upgrade Counter Exactness
+
+- Hardened raw runtime upgrade-counter DTO deserialization so `proposed`,
+  `activated`, and `canceled` must be present instead of defaulting absent
+  fields to trusted zero values.
+- Added adversarial standalone and nested runtime-metrics raw DTO coverage for
+  missing required counter fields. Updated the C# README and roadmap runtime
+  metadata readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RuntimeMetadata|FullyQualifiedName~RuntimeUpgradeCounters" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (53 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2655 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3520 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3520 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer Page Shape Exactness
+
+- Hardened raw explorer block, transaction, and instruction page/latest DTO
+  deserialization so `pagination`, `items`, and latest `sampled_at` fields are
+  required instead of defaulting absent page envelopes or item arrays to
+  trusted zero/empty values. Empty latest item arrays remain valid.
+- Added adversarial missing-field coverage for block/transaction/instruction
+  page pagination and items plus latest transaction/instruction sampled
+  timestamps and item arrays. Updated the C# README and roadmap explorer
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (284 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2649 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3514 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3514 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer Projection Required Counters
+
+- Hardened raw explorer block, transaction, and instruction summary
+  deserialization so required unsigned projection counters are present instead
+  of defaulting absent block heights, transaction block numbers, instruction
+  block/index values, or block transaction counts to zero.
+- Added adversarial missing-field coverage for raw explorer SSE payloads,
+  block/transaction/instruction pages, and latest transaction/instruction
+  responses. Updated the C# README and roadmap explorer readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (274 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2639 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3504 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3504 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Contract Query Limit Preflight
+
+- Hardened Torii contract instance and contract state query builders so optional
+  `Limit` values must be positive when supplied. Omitted limits and
+  `Offset = 0` still preserve the existing first-page semantics.
+- Added adversarial no-dispatch coverage for zero contract instance and state
+  query limits. Updated the C# README and roadmap route-filter readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractInstances|FullyQualifiedName~ContractState" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (104 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2627 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3492 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3492 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Contract View Diagnostic Limit Exactness
+
+- Hardened contract-view VM diagnostic validation so required `gas_limit`,
+  `max_cycles`, and `stack_limit_bytes` values must be positive. Usage counters
+  such as `gas_remaining`, `gas_used`, `cycles`, and `stack_bytes_used` still
+  allow zero because zero usage is meaningful.
+- Added adversarial endpoint, raw error DTO, standalone raw diagnostic DTO, and
+  write-time serialization coverage for zero diagnostic capacity fields.
+  Updated the C# README and roadmap contract-view readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCallView|FullyQualifiedName~ContractViewDiagnostic|FullyQualifiedName~ContractViewError" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (73 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2625 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3490 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3490 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Faucet Scrypt Work-Factor Exactness
+
+- Hardened Torii account-faucet puzzle validation and the public
+  `ToriiAccountFaucetPow.ComputeDigest(...)` helper so `scrypt_log_n` must be
+  positive and less than 31. This prevents N=1 scrypt derivations from being
+  accepted as valid faucet work.
+- Added adversarial HTTP response, raw DTO, write-time serialization, and
+  direct digest-helper coverage for zero `scrypt_log_n`, while keeping the
+  explicit zero-difficulty no-PoW faucet path intact. Updated the C# README and
+  roadmap faucet readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountFaucet" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (71 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2615 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3480 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3480 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Faucet Puzzle Anchor-Age Exactness
+
+- Hardened Torii account-faucet puzzle validation so required
+  `max_anchor_age_blocks` must be positive. This keeps zero-age puzzle policies
+  from reaching PoW solving or raw DTO consumers while preserving existing
+  positive checks for anchor height and scrypt work factors.
+- Added adversarial HTTP response, raw DTO, and write-time serialization
+  coverage for zero `max_anchor_age_blocks`. Updated the C# README and roadmap
+  faucet readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountFaucet" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (68 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2610 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3475 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3475 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# VPN Operational Parameter Exactness
+
+- Hardened Torii VPN profile, quote, and session response validation so required
+  lease durations, profile DNS push intervals, and tunnel MTU values must be
+  positive. Counter-like traffic and fee fields remain non-negative because
+  zero is meaningful there.
+- Added adversarial endpoint, raw DTO, and write-time serialization coverage
+  for zero VPN lease/DNS/MTU fields. Updated the C# README and roadmap VPN
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Vpn" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (176 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2607 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3472 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3472 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Verifying-Key Proof-Size Exactness
+
+- Hardened Torii verifying-key register/update request normalization so
+  optional `max_proof_bytes` must be positive when supplied. This matches the
+  existing read-side verifier detail rule and prevents zero proof-size limits
+  from reaching HTTP dispatch.
+- Added adversarial register and update request coverage for zero
+  `max_proof_bytes`, with assertions that malformed requests never leave the
+  client. Updated the C# README and roadmap verifier readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VerifyingKey" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (285 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2590 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3455 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3455 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# SoraFS Denylist Catalog Version Exactness
+
+- Hardened Torii SoraFS denylist catalog response validation so the required
+  catalog `version` must be positive. Missing `version` values now fail closed
+  through the same zero-value path, while entry counts remain non-negative
+  because zero can be valid for an empty pack.
+- Added adversarial coverage for zero catalog versions through HTTP response
+  validation, raw DTO deserialization for negative and zero versions, and
+  write-time serialization rejection for non-positive versions. Updated the C#
+  README and roadmap SoraFS readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Denylist" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (56 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2590 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3455 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3455 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Identifier Receipt Timestamp Exactness
+
+- Hardened Torii identifier receipt timestamp parsing and post-deserialization
+  `ToriiClient` validation so legacy `resolved_at_ms`/`expires_at_ms`, nested
+  execution `executed_at_ms`/`expires_at_ms`, and nested opening
+  `opened_at_ms`/`expires_at_ms` values must be positive when present. Policy
+  totals and other count-like fields keep their existing non-negative semantics.
+- Added adversarial coverage for zero legacy receipt times, zero nested
+  execution/opening timestamps, and write-time rejection of non-positive
+  top-level receipt timestamps. Updated the C# README and roadmap identifier
+  receipt readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~ResolveIdentifier" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (249 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2585 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3450 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3450 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Account Transaction Timestamp Exactness
+
+- Hardened account transaction-summary DTO validation so returned
+  `timestamp_ms` values must be positive when present. Transaction page totals
+  remain non-negative because zero is meaningful for empty result sets.
+- Added adversarial account transaction-summary coverage for negative and zero
+  timestamps through HTTP response validation, raw DTO deserialization, and
+  write-time serialization. Updated the C# README and roadmap account-history
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountTransactionSummary|FullyQualifiedName~GetAccountTransactionsAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (28 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2581 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3432 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3432 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Alias Binding Timestamp Exactness
+
+- Hardened raw Torii asset/contract alias binding DTOs so required
+  `bound_at_ms` and optional `lease_expiry_ms`/`grace_until_ms` timestamps must
+  be positive when present. Missing required binding timestamps now fail closed
+  through the same zero-value path, while alias indexes and list totals remain
+  non-negative because zero is meaningful there.
+- Added adversarial alias-resolution and raw DTO coverage for negative, zero,
+  and missing binding timestamps plus write-time serialization rejection for
+  non-positive binding timestamps. Updated the C# README and roadmap alias
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Alias" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (216 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2577 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3428 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3428 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer Pagination Exactness
+
+- Hardened raw Torii explorer pagination DTOs so explicit `page` and
+  `per_page` metadata must be positive. Directory, inventory, and
+  block/transaction/instruction page responses now fail closed on zero
+  pagination counters before callers trust indexed explorer projections, while
+  omitted legacy ledger-page pagination still follows the existing default path.
+- Added adversarial raw DTO coverage for zero page and per-page counters across
+  account/domain directory pages, asset-definition/asset/NFT/RWA inventory
+  pages, and block/transaction/instruction ledger pages. Updated the C# README
+  and roadmap Torii readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RawExplorerDirectoryResponsesRejectMalformedPayloads|FullyQualifiedName~RawExplorerInventoryResponsesRejectMalformedPayloads|FullyQualifiedName~ExplorerRawPagesRejectMalformedItemsWithItemContext" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (49 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (2569 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3420 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3420 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Asset Quantity Instruction Exactness
+
+- Hardened asset transfer/mint/burn transaction instructions so `Quantity`
+  must be positive. The rule applies through `TransactionBuilder`,
+  `TransactionInstruction` factories, direct instruction construction, and
+  record `with` mutation before non-positive value-moving instructions can be
+  signed.
+- Added adversarial transaction-builder coverage for zero, fractional zero,
+  and negative quantities across all public construction paths, while leaving
+  the generic numeric codec capable of encoding signed canonical numerics for
+  non-quantity fields. Updated the C# README and roadmap transaction-builder
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (174 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3402 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3402 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Trigger Repetition Instruction Exactness
+
+- Hardened trigger repetition mint/burn transaction instructions so
+  `Repetitions` must be positive. The rule applies through
+  `TransactionBuilder`, `TransactionInstruction` factories, direct instruction
+  construction, and record `with` mutation before zero-repetition instructions
+  can be signed.
+- Added adversarial transaction-builder coverage for all public zero-repetition
+  construction paths. Updated the C# README and roadmap transaction-builder
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (169 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3397 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3397 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Signed Iterable Continue Gas-Budget Exactness
+
+- Hardened `SignedIterableQueryBuilder.Continue(...)` so an optional
+  `gasBudget` must be positive when supplied. Zero gas budgets now fail before
+  the continuation request mutates builder state or emits signed Norito query
+  bytes.
+- Added adversarial signed iterable coverage for `gasBudget: 0`, and updated
+  the C# README and roadmap signed-query builder readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SignedIterableQueryBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (18 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3396 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3396 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Torii VPN Timestamp Exactness
+
+- Hardened VPN quote/session/receipt response validation so required absolute
+  timestamps must be positive before raw DTO deserialization or in-memory DTO
+  serialization succeeds. Session expirations must be after connection time,
+  and receipt disconnection timestamps must not precede connection time.
+- Added adversarial Torii VPN coverage for zero quote expiration, zero
+  session/receipt connected or disconnected timestamps, reversed session
+  expiry, reversed receipt disconnection, nested receipt-list timestamp
+  failure, and write-time DTO rejection. Updated the C# README and roadmap VPN
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Vpn" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (159 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3395 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3395 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Canonical Request Auth Timestamp Exactness
+
+- Hardened canonical request signing so caller-supplied `timestampMs` values
+  must be positive Unix milliseconds before message construction, signing, or
+  header emission. Direct `CanonicalRequestHeaders` construction now applies
+  the same rule, so zero or negative auth timestamps cannot be serialized into
+  signed Torii headers.
+- Added adversarial canonical-auth coverage for zero and negative timestamps
+  across `BuildHeaders`, `BuildSignatureMessage`, and direct header
+  construction, plus the one-millisecond positive boundary. Updated the C#
+  README and roadmap canonical-auth readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (91 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3384 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3384 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Transaction Builder Creation-Time Exactness
+
+- Hardened `TransactionBuilder` so creation timestamps must be positive Unix
+  milliseconds. `SetCreationTimeMilliseconds(0)` now fails before mutating the
+  builder, and `SetCreationTime(DateTimeOffset)` rejects Unix epoch and
+  pre-epoch values before they can encode zero or wrap through an unsigned
+  conversion.
+- Added adversarial transaction-builder coverage for zero creation-time
+  milliseconds, Unix epoch, pre-epoch `DateTimeOffset`, and the one-millisecond
+  positive boundary. Updated the C# README and roadmap transaction-builder
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (168 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3381 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3381 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Torii Contract Call Creation-Time Exactness
+
+- Hardened `ToriiContractCallResponse` so `creation_time_ms` must be positive
+  during raw DTO deserialization and in-memory DTO serialization. Missing or
+  zero creation-time responses now fail before callers trust contract-call
+  signing/scaffold material.
+- Added adversarial raw response and DTO write coverage for zero
+  `creation_time_ms`, and updated the C# README contract/multisig creation-time
+  readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~ContractCall" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (81 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3379 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3379 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Torii Multisig Creation-Time Exactness
+
+- Hardened multisig propose/approve request preflight so supplied
+  `creation_time_ms` must be positive before HTTP dispatch. Omitted/null
+  creation time remains allowed, but zero no longer reaches Torii.
+- Hardened generic and contract-call multisig response DTO handling so
+  `creation_time_ms` must be positive when present on raw deserialization and
+  in-memory DTO serialization.
+- Added adversarial coverage for zero creation time across generic propose,
+  contract-call propose, contract-call approve, raw response decode, and DTO
+  serialization. Updated the C# README and roadmap multisig readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Multisig" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (111 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3377 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3377 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Offline Note Wallet Note Creation-Time Exactness
+
+- Hardened `OfflineNoteWalletNote` so persisted wallet records require
+  positive `created_at_ms` at construction and JSON decode. Placeholder
+  zero-time wallet notes now fail before a wallet accepts local persistence
+  state.
+- Added adversarial coverage for direct constructor input and a persisted JSON
+  wallet note whose `created_at_ms` field is encoded as zero. Updated the C#
+  README and roadmap wallet-note persistence contract.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (23 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNote" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3372 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3372 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Offline Note Payment Token Id Preimage Creation-Time Exactness
+
+- Hardened `OfflineNotePaymentTokenIdPreimage` so `created_at_ms` must be
+  positive at construction and during compact Norito decode. Payment-token-id
+  derivation no longer accepts a zero creation timestamp while the
+  payment-token envelope rejects the same value.
+- Added adversarial coverage for direct constructor input and a mutated
+  `OfflineNotePaymentTokenIdPreimage` archive whose `created_at_ms` field is
+  encoded as zero. Updated the C# README and roadmap Offline Note canonical
+  payload contract.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (8 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNote" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3372 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3372 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Offline Note Payment Token Creation-Time Exactness
+
+- Hardened `OfflineNotePaymentToken` so `created_at_ms` must be positive at
+  construction and during Norito decode. Zero creation timestamps now fail
+  before wallet code trusts a payment-token handoff envelope.
+- Added adversarial coverage for direct constructor input and a mutated
+  `OfflineNotePaymentTokenEnvelope` whose `created_at_ms` field is encoded as
+  zero. Updated the C# README and roadmap Offline Note payment-token contract.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNotePaymentTokenTests" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (6 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNote" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3372 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3372 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Anchored conflict-marker scan over the touched C#/docs files
+  - Lockfile/project metadata status scan
+  - Raw `reader.Skip()` scan over the managed SDK source/tests
+
+## 2026-06-27 C# SoraFS Wrapper DTO Strict Converters
+
+- Added strict converters for raw SoraFS chunker handles, storage classes, and
+  pin policies so direct `JsonSerializer.Deserialize(...)` callers get the same
+  fail-closed shape checks as Torii pin-registration preflight. The converters
+  reject null/non-object payloads, duplicate exact properties, case-drifted
+  field names, type-confused counters, duplicate keys inside ignored extension
+  JSON, non-exact chunker text, zero required counters, and unknown
+  storage-class values.
+- Read/write paths now canonicalize accepted storage classes to `Hot`, `Warm`,
+  or `Cold` and default omitted optional `multihash_code` / `retention_epoch`
+  counters to zero, matching the existing request normalizer instead of relying
+  on source-generated permissive binding.
+- Added adversarial SoraFS coverage for raw chunker/storage-class/pin-policy
+  reads and writes plus generic `GetAsync<ToriiSoraFsStorageClass>` rejection of
+  case-drifted response keys.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFs" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (237 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3372 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3372 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Anchored conflict-marker scan over the touched C#/docs files
+  - Lockfile/project metadata status scan
+  - Raw `reader.Skip()` scan over the managed SDK source/tests
+
+## 2026-06-27 C# SCCP Native EVM Manifest Duplicate-Key Gates
+
+- Hardened native EVM prover bundle, cross-SDK parity fixture, and native
+  self-test fixture JSON parsing so every nested object is checked for duplicate
+  keys before manifest maps or SDK result dictionaries are materialized. This
+  prevents `audit_hashes` or `sdk_results` last-key-wins overwrites from
+  reaching trusted SCCP prover evidence.
+- Reused the same SCCP duplicate-property guard for Beacon REST response JSON,
+  preserving the existing fail-closed behavior while keeping one module policy.
+- Added adversarial `SccpEthereumMainnetTests` coverage for duplicate
+  `audit_hashes` entries and duplicate `sdk_results.dotnet` entries in both
+  parity and self-test fixtures. Updated the C# README and native EVM roadmap
+  guardrails.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnet" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3328 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3328 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+  - Raw `reader.Skip()` scan over the managed SDK source/tests
+
+## 2026-06-27 C# VPN Ignored-Extension Duplicate-Key Gates
+
+- Hardened direct raw VPN tx instruction, profile, quote, session, receipt, and
+  receipt-list DTO deserialization so ignored/extension field values are parsed
+  through the recursive duplicate-property validator instead of
+  `Utf8JsonReader.Skip()`. Unknown nested JSON in direct VPN DTOs, quote
+  open-lease instructions, receipt settle instructions, and receipt-list items
+  can no longer hide duplicate keys from direct `JsonSerializer.Deserialize(...)`
+  callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across VPN profiles, quotes, nested open-lease instructions,
+  sessions, receipts, nested settle instructions, receipt-list envelopes, nested
+  receipt-list items, and standalone native tx instructions.
+- Updated the C# README and roadmap VPN readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Vpn" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (148 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiVpnJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3327 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3327 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# UAID Ignored-Extension Duplicate-Key Gates
+
+- Hardened direct raw UAID portfolio totals/asset/account/dataspace/response,
+  bindings dataspace/response, and manifest revocation/lifecycle/record/response
+  DTO deserialization so ignored/extension field values are parsed through the
+  recursive duplicate-property validator instead of `Utf8JsonReader.Skip()`.
+  Unknown nested JSON in direct UAID DTOs and nested portfolio assets, bindings
+  dataspaces, manifest records, lifecycles, and revocations can no longer hide
+  duplicate keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across all direct raw UAID DTO shapes plus nested portfolio
+  totals/assets, bindings dataspaces, manifest records, manifest lifecycles, and
+  manifest revocations.
+- Updated the C# README and roadmap UAID readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Uaid" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (175 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3318 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3318 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# SoraFS Ignored-Extension Duplicate-Key Gates
+
+- Hardened direct raw SoraFS CID lookup/file-entry, pin alias/register, and
+  denylist catalog/pack DTO deserialization so ignored/extension field values
+  are parsed through the recursive duplicate-property validator instead of
+  `Utf8JsonReader.Skip()`. Unknown nested JSON in direct SoraFS DTOs, nested
+  CID file entries, nested pin aliases, and nested denylist pack summaries can
+  no longer hide duplicate keys from direct `JsonSerializer.Deserialize(...)`
+  callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across direct file entries, CID lookup envelopes, nested CID
+  file entries, direct pin aliases, pin register envelopes, nested pin aliases,
+  denylist catalog envelopes, nested denylist pack summaries, direct denylist
+  pack summaries, and direct denylist pack responses.
+- Updated the C# README and roadmap SoraFS readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFs" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (193 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3301 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3301 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Contract Call/View Ignored-Extension Duplicate-Key Gates
+
+- Hardened direct raw contract call, contract-view success, contract-view error,
+  and VM diagnostic DTO deserialization so ignored/extension field values are
+  parsed through the recursive duplicate-property validator instead of
+  `Utf8JsonReader.Skip()`. Unknown nested JSON in call/view response envelopes,
+  error envelopes, and standalone or nested VM diagnostics can no longer hide
+  duplicate keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across contract call responses, view success responses, view
+  error responses, nested VM diagnostics, and standalone VM diagnostics.
+- Updated the C# README and roadmap contract call/view readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCall|FullyQualifiedName~ContractView" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (147 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3291 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3291 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Contract Deployment Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw contract deploy, deploy-and-activate, and activation
+  response deserialization so ignored/extension field values are parsed through
+  the recursive duplicate-property validator instead of `Utf8JsonReader.Skip()`.
+  Unknown nested JSON in deployment/activation response envelopes can no longer
+  hide duplicate keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across deploy, deploy-and-activate, and activation response
+  DTOs.
+- Updated the C# README and roadmap contract deployment readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractDeployment|FullyQualifiedName~DeployContract|FullyQualifiedName~DeployAndActivateContractInstance|FullyQualifiedName~ActivateContractInstance|FullyQualifiedName~RawDeploy|FullyQualifiedName~RawActivate" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (80 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3286 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3286 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Contract Instance/State Ignored-Extension Duplicate-Key Gates
+
+- Hardened direct raw contract instance inventory and contract state entry/
+  response DTO deserialization so ignored/extension field values are parsed
+  through the recursive duplicate-property validator instead of
+  `Utf8JsonReader.Skip()`. Unknown nested JSON in direct instance/state entries,
+  top-level inventory/state responses, and nested response items can no longer
+  hide duplicate keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across direct contract instances, contract instance response
+  envelopes, nested contract instance items, direct state entries, state response
+  envelopes, and nested state entries.
+- Updated the C# README and roadmap contract read-side readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractInstances|FullyQualifiedName~ContractState" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (102 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3283 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3283 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Onboarding Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw account onboarding, account faucet, and multisig account
+  onboarding response deserialization so ignored/extension field values are
+  parsed through the recursive duplicate-property validator instead of
+  `Utf8JsonReader.Skip()`. Unknown nested JSON in raw onboarding response
+  envelopes can no longer hide duplicate keys from direct
+  `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across account onboarding, account faucet, and multisig
+  account-onboarding response DTOs.
+- Updated the C# README and roadmap onboarding readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OnboardingTransactionHash|FullyQualifiedName~ToriiTransactionHashResponses|FullyQualifiedName~RegisterAccountAsync|FullyQualifiedName~RegisterMultisigAccountAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (58 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3277 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3277 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Alias Resolution Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw alias binding, alias resolution, and account alias-index
+  DTO deserialization so ignored/extension field values are parsed through the
+  recursive duplicate-property validator instead of `Utf8JsonReader.Skip()`.
+  Unknown nested JSON in direct asset/contract alias bindings, account/asset/
+  contract alias resolutions, nested asset/contract binding payloads, and
+  account alias-index responses can no longer hide duplicate keys from direct
+  `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across direct bindings, top-level resolutions, nested
+  resolution bindings, and account alias-index responses.
+- Updated the C# README and roadmap alias readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AliasResolution|FullyQualifiedName~AliasResolve|FullyQualifiedName~AliasBinding|FullyQualifiedName~AccountAliasIndex" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (83 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3274 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3274 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Account Query Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw account-query DTO deserialization so ignored/extension
+  field values are parsed through the recursive duplicate-property validator
+  instead of `Utf8JsonReader.Skip()`. Unknown nested JSON in account summaries,
+  account pages, asset balances, asset-balance pages, permission items,
+  permission pages, transaction summaries, and transaction pages can no longer
+  hide duplicate keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across direct item DTOs, top-level page DTOs, and nested page
+  item contexts for account, asset, permission, and transaction account-query
+  families.
+- Updated the C# README and roadmap account-query readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RawAccountSummary|FullyQualifiedName~RawAccountsPage|FullyQualifiedName~RawAccountAssetBalance|FullyQualifiedName~RawAccountPermission|FullyQualifiedName~RawAccountTransaction" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (86 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountsAsync|FullyQualifiedName~GetAccountAssetsAsync|FullyQualifiedName~GetAccountPermissionsAsync|FullyQualifiedName~GetAccountTransactionsAsync|FullyQualifiedName~RawAccountSummary|FullyQualifiedName~RawAccountsPage|FullyQualifiedName~RawAccountAssetBalance|FullyQualifiedName~RawAccountPermission|FullyQualifiedName~RawAccountTransaction" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (131 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3266 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3266 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Alias Lookup and Faucet Ignored-Extension Duplicate-Key Gates
+
+- Hardened direct raw account alias lookup item/response deserialization so
+  ignored/extension field values are parsed through the recursive
+  duplicate-property validator instead of `Utf8JsonReader.Skip()`. Unknown
+  nested JSON in direct lookup items, top-level lookup responses, and lookup
+  response list items can no longer hide duplicate keys from direct
+  `JsonSerializer.Deserialize(...)` callers.
+- Hardened direct raw account faucet puzzle deserialization the same way, so
+  ignored puzzle extension JSON can no longer carry duplicate keys while the
+  existing exact PoW algorithm, anchor hash, salt, numeric, and scrypt parameter
+  checks remain intact.
+- Added adversarial coverage for duplicate keys inside ignored `audit.nonce`
+  extension JSON across direct alias lookup items, lookup responses, nested
+  lookup items, and faucet puzzle envelopes.
+- Updated the C# README and roadmap alias lookup/faucet readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountAliasLookup|FullyQualifiedName~LookupAliasesByAccountAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (50 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AccountFaucetPuzzle|FullyQualifiedName~FaucetPow|FullyQualifiedName~GetAccountFaucetPuzzleAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (57 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountFaucetJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3254 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3254 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Multisig Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw generic and contract-call multisig response
+  deserialization so ignored/extension field values are parsed through the
+  recursive duplicate-property validator instead of `Utf8JsonReader.Skip()`.
+  Unknown nested JSON in the shared multisig response envelope can no longer
+  hide duplicate keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added focused adversarial coverage for duplicate keys inside ignored
+  `audit.nonce` extension JSON for both `ToriiMultisigResponse` and
+  `ToriiMultisigContractCallResponse`.
+- Updated the C# README and roadmap multisig response readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RawMultisigResponsesRejectMalformedPayloads|FullyQualifiedName~Multisig" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (106 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiMultisigJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3250 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3250 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Contract Code-Byte Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw `ToriiContractCodeBytesResponse` deserialization so
+  ignored/extension field values are parsed through the recursive
+  duplicate-property validator instead of `Utf8JsonReader.Skip()`. Unknown
+  nested JSON in the code-byte response envelope can no longer hide duplicate
+  keys from direct `JsonSerializer.Deserialize(...)` callers.
+- Added focused adversarial coverage for duplicate keys inside ignored
+  `audit.nonce` extension JSON while preserving the existing exact base64
+  validation behavior for `code_b64`.
+- Updated the C# README and roadmap contract code-byte readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCodeBytes" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (22 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3248 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3248 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Explorer Snapshot Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw explorer duration, account QR, health, and metrics DTO
+  deserialization so ignored/extension field values are parsed through the
+  recursive duplicate-property validator instead of `Utf8JsonReader.Skip()`.
+  Unknown nested JSON in those snapshot DTOs can no longer hide duplicate keys
+  from direct `JsonSerializer.Deserialize(...)` callers.
+- Added focused adversarial coverage for duplicate keys inside ignored
+  `audit.nonce` extension JSON in raw duration, account QR, health, and metrics
+  DTOs.
+- Updated the C# README and roadmap explorer snapshot readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RawExplorerDurationRejectsMalformedPayloads|FullyQualifiedName~RawExplorerSnapshotDtosRejectMalformedPayloads|FullyQualifiedName~GetExplorerAccountQrAsync|FullyQualifiedName~GetExplorerHealthAsync|FullyQualifiedName~GetExplorerMetricsAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (46 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ExplorerSnapshot|FullyQualifiedName~ExplorerSupplemental|FullyQualifiedName~ExplorerDuration|FullyQualifiedName~GetExplorerAccountQrAsync|FullyQualifiedName~GetExplorerAssetDefinitionEconometricsAsync|FullyQualifiedName~GetExplorerAssetDefinitionSnapshotAsync|FullyQualifiedName~GetExplorerHealthAsync|FullyQualifiedName~GetExplorerMetricsAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (81 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3247 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3247 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Node Capability Ignored-Extension Duplicate-Key Gate
+
+- Hardened direct raw node capability DTO deserialization so every ignored or
+  extension field in the capability tree is parsed through the recursive
+  duplicate-property validator instead of `Utf8JsonReader.Skip()`. Unknown
+  nested JSON below the top-level capability response, crypto, Sumeragi,
+  acceleration, curve, query, aggregate query, and projection capability DTOs
+  can no longer hide duplicate keys from direct
+  `JsonSerializer.Deserialize(...)` callers.
+- Added focused adversarial coverage for duplicate keys inside ignored
+  `audit.nonce` extension JSON at each raw capability DTO depth.
+- Updated the C# README and roadmap node capability readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~RawNodeCapabilitiesDtosRejectMalformedPayloads --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (55 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~NodeCapabilities|FullyQualifiedName~GetNodeCapabilitiesAsync" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (129 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3243 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3243 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Identifier DTO Ignored-Field Duplicate-Key Gate
+
+- Hardened direct raw identifier policy and receipt DTO deserialization so
+  ignored/extension field values are consumed through the same recursive
+  duplicate-property validator instead of `Utf8JsonReader.Skip()`. Unknown
+  nested JSON in `ToriiIdentifierPolicySummary`,
+  `ToriiIdentifierPoliciesResponse`, and `ToriiIdentifierResolveResponse` can
+  no longer hide duplicate keys from direct `JsonSerializer.Deserialize(...)`
+  callers.
+- Added focused adversarial coverage for duplicate keys inside ignored policy
+  summary extension JSON, ignored policy page extension JSON, and ignored
+  identifier receipt extension JSON.
+- Updated the C# README and roadmap identifier DTO readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~ToriiIdentifierReceiptTests --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (116 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3235 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3235 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Runtime Metadata Recursive Duplicate-Key Gate
+
+- Hardened raw runtime metadata DTO parsing so `ToriiRuntimeJson.ReadObject`
+  rejects duplicate JSON object keys recursively for every parsed property value
+  before storing it as a `JsonElement`. Ignored or extension-shaped nested
+  runtime metadata can no longer carry duplicate keys that would be accepted by
+  direct DTO deserialization outside `ToriiClient`'s HTTP pre-scan.
+- Added adversarial raw DTO coverage for duplicate keys inside an ignored
+  `runtime ABI active.audit` object and inside `runtime metrics
+  upgrade_events_total`, alongside the existing malformed counter and ABI hash
+  cases.
+- Updated the C# README and roadmap runtime metadata readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~RuntimeMetadataDtosRejectMalformedRawPayloads --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (21 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RuntimeMetadata|FullyQualifiedName~RuntimeUpgradeCounters|FullyQualifiedName~GetRuntimeEndpoints" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (48 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiRuntimeJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3232 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3232 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Torii Raw and Typed JSON Duplicate-Key Gate
+
+- Hardened `ToriiClient` raw JSON document parsing so
+  `GetJsonDocumentAsync(...)`, `PostJsonDocumentAsync(...)`,
+  `SubmitSignedQueryAsync(...)`, and pipeline transaction-status responses all
+  reject duplicate JSON object keys at any depth before callers can observe a
+  `JsonDocument` or parsed status object through last-key-wins property lookups.
+  `GetAsync(...)`/`PostAsync(...)` typed response deserialization now goes
+  through the same duplicate-key pre-scan before DTO materialization, while
+  preserving the semantic duplicate-property context for identifier resolve
+  receipts.
+- Added focused negative coverage for duplicate keys in raw GET responses, raw
+  POST responses, signed-query nested result values, and nested pipeline-status
+  envelopes, plus a default source-generated typed DTO response. Existing
+  verifying-key JSON document, pipeline-status, node-capability, explorer
+  supplemental, runtime, and identifier-receipt duplicate validation remains
+  green through the shared parser path.
+- Updated the C# README and roadmap raw/typed Torii response notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetJsonDocumentAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~PostJsonDocumentAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~SubmitSignedQueryAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~GetPipelineTransactionStatusAsyncRejectsDuplicateJsonResponseKeys" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetJsonDocumentAsync|FullyQualifiedName~PostJsonDocumentAsync|FullyQualifiedName~SubmitSignedQueryAsync|FullyQualifiedName~GetPipelineTransactionStatusAsync|FullyQualifiedName~VerifyingKey" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (337 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAsyncRejectsDuplicateJsonResponseKeysBeforeTypedDeserialization|FullyQualifiedName~GetJsonDocumentAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~PostJsonDocumentAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~SubmitSignedQueryAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~GetPipelineTransactionStatusAsyncRejectsDuplicateJsonResponseKeys|FullyQualifiedName~GetNodeCapabilitiesAsyncRejectsMalformedResponse|FullyQualifiedName~ExplorerSupplementalResponsesRejectMalformedResponse|FullyQualifiedName~GetRuntimeEndpoints" --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (110 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~ResolveIdentifierAsyncRejectsDuplicateReceiptPayloadProperties --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3230 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3230 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Ethereum Beacon REST Duplicate-Key Gate
+
+- Hardened `EthereumMainnetBeaconRestConsensusProvider` so every Beacon REST
+  response document rejects duplicate JSON keys at any depth before finalized
+  headers, block roots, execution payloads, checkpoints, genesis data, or
+  light-client finality updates are trusted for SCCP evidence.
+- Added adversarial coverage for duplicate root response keys, nested finality
+  update keys, and duplicate object keys inside array-held finality-branch data,
+  while keeping the existing valid Beacon REST evidence path green.
+- Updated the C# README and SCCP roadmap Beacon REST readiness notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~BeaconRestConsensusProvider --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (4 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (23 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --configuration Debug --nologo --logger "console;verbosity=minimal"`
+    (3225 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3225 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile/project metadata status scan
+
+## 2026-06-27 C# Raw Torii SSE Extension JSON Duplicate-Key Gate
+
+- Hardened raw `ToriiPipelineEvent`, `ToriiProofEvent`, and
+  `ToriiProofRemovedRecord` JSON deserialization so unknown extension JSON values
+  reject duplicate object keys at any depth before callers receive preserved
+  `AdditionalProperties` data or before ignored extension data is skipped.
+- Added adversarial coverage for duplicate keys inside pipeline extension objects,
+  proof extension objects, and ignored proof-removed-record metadata extension
+  objects while keeping non-duplicate extension-data preservation intact.
+- Updated the C# README and roadmap raw SSE DTO notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiPipelineEventRejectsMalformedRawPayloads|FullyQualifiedName~ToriiPipelineEventDeserializesRawPayloadWithExtensionData|FullyQualifiedName~ToriiProofEventRejectsMalformedRawPayloads|FullyQualifiedName~ToriiProofEventDeserializesRawPayloadWithExtensionData|FullyQualifiedName~ToriiProofRemovedRecordRejectsMalformedRawPayloads"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiSseEventJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3224 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3224 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Torii SSE Event-Filter Duplicate-Key Gate
+
+- Hardened production `VerifyingKey`/`Proof` SSE event-filter preflight so JSON
+  filter payloads reject duplicate object keys at any depth before backend, name,
+  or proof-hash validation can observe a collapsed `JsonNode` view.
+- Added adversarial coverage for duplicate top-level production filter keys,
+  duplicate `id_matcher.backend` selectors, duplicate proof hash matchers, and
+  duplicate keys inside nested unknown filter data. All cases fail before HTTP
+  dispatch while accepted production filter JSON is still sent without mutation.
+- Updated the C# README and roadmap SSE filter notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OpenEventSseAsyncRejectsDuplicateProductionEventFilterKeysBeforeRequest|FullyQualifiedName~OpenEventSseAsyncRejectsUnsupportedProductionBackendEventFiltersBeforeRequest|FullyQualifiedName~OpenEventSseAsyncRejectsMalformedVerifyingKeyEventNamesBeforeRequest|FullyQualifiedName~OpenEventSseAsyncRejectsNonExactProofHashEventFiltersBeforeRequest|FullyQualifiedName~OpenEventSseAsyncSendsExactProductionEventFiltersWithoutMutation"`
+    (5 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3221 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3221 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Torii SSE Duplicate-Key Data Gate
+
+- Hardened Torii SSE data parsing so raw `StreamEventsAsync(...)` no longer
+  exposes collapsed `JsonData` for duplicate-key frames, while typed
+  pipeline/proof and explorer SSE projections reparse `RawData` with recursive
+  duplicate-key rejection before DTO deserialization.
+- Added adversarial coverage for duplicate top-level pipeline `category` fields,
+  nested proof `removed[0].backend` fields, explorer block/transaction `hash`
+  fields, nested explorer instruction `box.json.kind` fields, and the raw SSE
+  event fallback that preserves `RawData` but leaves ambiguous `JsonData` unset.
+- Updated the C# README and roadmap SSE hardening notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~StreamEventsAsyncDoesNotExposeCollapsedDuplicateKeyJsonData|FullyQualifiedName~ExplorerSseStreamsRejectDuplicateJsonDataBeforeConverterCollapse|FullyQualifiedName~StreamPipelineEventsAsyncRejectsMalformedPipelinePayloads|FullyQualifiedName~StreamProofEventsAsyncRejectsMalformedProofPayloads"`
+    (34 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3220 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3220 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Torii Shared Opaque JSON Duplicate-Key Gate
+
+- Promoted the account-permission payload duplicate-key guard into the shared
+  Torii identifier JSON helper so opaque `JsonNode` fields reject duplicate
+  object keys at any depth before callers receive preserved JSON. The hardened
+  helper now covers account permission payloads, identifier policy decoded
+  parameter JSON, legacy and nested identifier resolve receipt payloads,
+  UAID manifest JSON, contract-view success `result`, and contract-state
+  `value_json`.
+- Added adversarial coverage for HTTP identifier resolve responses with duplicate
+  legacy `signature_payload` fields, nested receipt payload fields, and
+  attestation fields; raw identifier policy summaries with duplicate decoded
+  parameter properties; raw contract-view results with duplicate nested result
+  properties; and raw contract-state entries with duplicate nested `value_json`
+  properties; plus HTTP/raw UAID manifest responses with duplicate nested
+  manifest properties. Existing account-permission duplicate-payload vectors now
+  exercise the shared helper.
+- Updated the C# README and roadmap opaque Torii JSON notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~RawContractStateEntryRejectsMalformedPayloads|FullyQualifiedName~RawContractViewResponseRejectsMalformedPayloads|FullyQualifiedName~RawAccountPermission|FullyQualifiedName~GetAccountPermissionsAsync"`
+    (169 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetUaidManifestsAsync|FullyQualifiedName~RawUaidManifestDtos"`
+    (56 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3214 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3214 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Torii Account Permission Payload Duplicate-Key Gate
+
+- Hardened `ToriiAccountPermission` JSON deserialization so opaque permission
+  `payload` values reject duplicate object keys at any depth before callers
+  receive the preserved `JsonNode`. This closes the previous ambiguity where
+  `JsonNode.Parse(...)` could collapse duplicate fields inside arbitrary payload
+  JSON while the surrounding permission DTO stayed fail-closed.
+- Added adversarial `ToriiClientTests` coverage for direct permission DTO reads,
+  permission-page DTO reads, and HTTP `GetAccountPermissionsAsync(...)` response
+  handling. The new vectors cover shallow duplicate payload properties and nested
+  duplicates inside array-held payload objects, while preserving arbitrary
+  non-duplicate payload JSON.
+- Updated the C# README and roadmap account-permission JSON notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountPermissionsAsync|FullyQualifiedName~RawAccountPermission"`
+    (28 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3205 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3205 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Offline Cash Snapshot Identity Gate
+
+- Hardened `OfflineCashConfigurationSnapshot.RequireUsableForOfflineExchange(...)`
+  so offline exchange rejects malformed cached `chain_id`, `asset_definition_id`,
+  optional `artifact_set_id`, and optional `circuit_id` fields before wallet code
+  trusts a cached setup. The gate now also rejects future-created snapshots,
+  expiry-at-or-before-created timestamp pairs, zero cached ABI versions, and zero
+  required ABI values before the stale-bridge comparison.
+- Added focused adversarial `OfflineCashLifecycleTests` cases for padded,
+  whitespace-containing, control-character, non-ASCII, and blank cached identity
+  fields, timestamp-ordering failures, and zero ABI gates, while keeping existing
+  issuer-key, disabled, expired, and stale-ABI negatives intact. Updated the C#
+  README and roadmap Offline Cash notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineCashLifecycleTests" --nologo --logger "console;verbosity=minimal"`
+    (6 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineCashLifecycle.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineCashLifecycleTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3201 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3201 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Offline Note Handoff Layout Adversarial Coverage
+
+- Expanded the managed Offline Note receive-request and payment-token tests to
+  pin forged known Norito layout bits at public handoff boundaries. The new
+  vectors mutate otherwise valid compact envelopes to advertise packed sequence,
+  packed struct, or field-bitset layouts and prove the C# decoders reject them.
+- Added nested adversarial coverage for receive-request key-certificate archives
+  and payment-token audit bundles, so opaque embedded Norito bytes cannot smuggle
+  valid compact payloads under unimplemented layout adverts. Updated the C#
+  README and roadmap Offline Note notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests" --nologo --logger "console;verbosity=minimal"`
+    (11 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNote" --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3200 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3200 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Offline Note Norito Layout Flag Exactness
+
+- Hardened the managed Offline Note compact Norito archive decoders to accept
+  only the exact compact-length layout flag (`0x02`). Headers that claim packed
+  sequence, packed struct, or field-bitset layouts are now rejected instead of
+  letting valid compact payload bytes be trusted under an unimplemented layout
+  advert.
+- Added adversarial `OfflineNoteCanonicalPayloadTests` and
+  `OfflineNoteReceiptAckTests` cases for forged known layout bits while keeping
+  the existing wrong-schema, checksum, malformed compact-length, and text
+  ambiguity coverage intact. Updated the C# README and roadmap Offline Note
+  notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNote" --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3200 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3200 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker and trailing-whitespace scans over the touched C#/docs files
+  - Lockfile diff/status scans
+
+## 2026-06-27 C# Offline Note Wallet JSON Duplicate Rejection
+
+- Hardened `OfflineNoteWalletNoteJsonCodec.Decode(...)` to scan persisted JSON
+  before `JsonNode` materialization and reject duplicate properties at the root
+  or in nested objects, preventing ambiguous wallet-note state, origin, or
+  replay-prevention fields from being accepted by last-value-wins parsing.
+- Added adversarial `OfflineNoteWalletNoteTests` cases for duplicate root
+  `chain_id` and nested `origin.type` properties, and updated the C# README and
+  roadmap Offline Note notes.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (23 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3200 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3200 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Iterable Query Builder Adversarial Coverage
+
+- Expanded `SignedIterableQueryBuilderTests` so the managed iterable-query
+  signer now has explicit coverage for unset-request rejection, zero cursor
+  rejection, zero/over-limit pagination guards, nullable limit/fetch-size
+  clearing, explicit sort clearing, and selector reset wiping stale parameters
+  before signed Norito query bytes are produced.
+- Updated `csharp/README.md` and `roadmap.md` with the new Linux .NET evidence.
+  No protocol behavior changed; the remaining .NET release blocker is still
+  Windows-host certification of `connect_norito_bridge.dll`, loader paths, RID,
+  and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SignedIterableQueryBuilderTests" --nologo --logger "console;verbosity=minimal"`
+    (17 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include tests/Hyperledger.Iroha.Sdk.Tests/SignedIterableQueryBuilderTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3199 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3199 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 .NET Native Bridge Corridor Loader-Path Hardening
+
+- Hardened `scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` so
+  the Windows .NET evidence lane rejects inherited `PATH` values with leading,
+  trailing, interior, or semicolon-style empty path-list segments before native
+  bridge build, restore, or test execution. The runner now builds the .NET
+  restore/test loader path from the checked bridge `debug` directory instead of
+  interpolating `PATH` inline at each command.
+- Added fake-Windows adversarial coverage for the empty-`PATH` cases and pinned
+  the new runner guard in the release-readiness and strict bundle verifier
+  source inventories.
+- Fixed one local `ToriiClientTests` indentation issue surfaced by scoped
+  formatter verification. Windows native bridge certification still remains a
+  separate host gate until `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture are proven on a Windows machine.
+- Validation passed:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - Direct fake-Windows shell reproduction of the new empty-`PATH` guard
+    (failed before `cargo build`, restore, and test with the expected diagnostic)
+  - `bash scripts/check_sccp_production_corridor.sh --dry-run --phase dotnet-sdk`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "PrivacyNative|KagemushaRecursiveSpendNative" --nologo --logger "console;verbosity=minimal"`
+    (101 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractMetadataJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiVpnJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3193 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3193 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - Conflict-marker scan over touched C#/script/docs files
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+- Validation caveats:
+  - `python3 -m pytest ...` could not run because this environment has no
+    `pytest` module and no `pip` module to install script test dependencies.
+  - Whole-solution `dotnet format --verify-no-changes` still reports unrelated
+    existing whitespace issues in SCCP C# files outside this slice; the scoped
+    formatter verification for touched C# files passed.
+
+## 2026-06-27 C# Raw VPN Response DTO Exactness
+
+- Hardened raw VPN profile/session DTOs with strict JSON converters and made
+  VPN quote, receipt, and receipt-list converters self-validating on raw
+  deserialization and serialization. Raw VPN response parsing now rejects
+  top-level nulls, non-object envelopes, duplicate properties, type-confused
+  booleans, route/DNS/tunnel lists, unsigned counters, and bounded byte/ushort
+  fields, malformed helper-ticket and SPKI/key/hash/id hex material, null
+  instruction lists, and receipt-list item totals before callers trust tunnel
+  or settlement material.
+- Shared the same `ToriiVpnJson` validation path with `ToriiClient` response
+  validation so HTTP and direct raw DTO use report the same field-context
+  diagnostics.
+- Added adversarial `ToriiClientTests` coverage for raw VPN profile, quote,
+  session, receipt, receipt-list, and write-side malformed profile/session/list
+  DTOs.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "Vpn|VPN|RawVpn" --nologo --logger "console;verbosity=minimal"`
+    (139 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractMetadataJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiVpnJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3193 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3193 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractMetadataJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiVpnJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract Metadata/Code-View DTO Exactness
+
+- Hardened raw contract manifest/code-view metadata DTOs with strict JSON
+  converters shared by `ToriiClient` response validation. Raw contract metadata
+  parsing now rejects top-level nulls, non-object envelopes, duplicate manifest
+  and nested code-view properties, type-confused string/list/boolean/counter
+  fields, out-of-range syscall numbers, malformed rendered-source text, and
+  malformed nested verified-source provenance before callers trust contract
+  source/disassembly metadata.
+- Extended the same strict path to verified-source job responses so nested
+  `verified_source_ref` errors retain HTTP response field context while raw job
+  deserialization also rejects duplicate/type-confused provenance payloads.
+- Added adversarial `ToriiClientTests` coverage for raw contract manifests,
+  code-view access hints, entrypoints, params, analysis, memory, syscalls,
+  source references, verified-source jobs, and write-side malformed code-view
+  entrypoint/source-reference DTOs.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ContractMetadata|ContractCodeView|ContractCode|VerifiedSourceReference|RawContractMetadata" --nologo --logger "console;verbosity=minimal"`
+    (122 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractMetadataJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3169 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3169 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractMetadataJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Explorer Transaction Detail DTO Exactness
+
+- Hardened raw `ToriiExplorerTransactionDetail` and
+  `ToriiExplorerTransactionRejection` JSON deserialization and serialization
+  with strict converters shared by `ToriiClient` response validation. Raw
+  transaction detail parsing now rejects top-level nulls, non-object envelopes,
+  duplicate nested properties, malformed hashes, lowercase-only signatures,
+  rejection encodings with uppercase `0X` prefix aliases, malformed optional
+  nonce and TTL duration token types, and malformed rejection messages before
+  callers trust indexed transaction detail records.
+- Added adversarial raw explorer coverage for transaction detail/rejection:
+  odd-length signatures, string nonce, uppercase rejection encodings, string
+  TTL milliseconds, and write-side malformed rejection encoding rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ExplorerRawPages|RawExplorerTransactionRejection|transaction-detail|TransactionRejection" --nologo --logger "console;verbosity=minimal"`
+    (10 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3142 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3142 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Explorer Econometrics/Snapshot DTO Exactness
+
+- Hardened raw explorer asset-definition econometrics and holder snapshot DTOs
+  with strict converters shared by `ToriiClient` response validation. Raw
+  econometrics/snapshot parsing now rejects top-level nulls, non-object
+  envelopes, duplicate properties at nested window/holder/distribution/Lorenz
+  depths, type-confused unsigned counters, numeric strings, ratio fields, and
+  lists, malformed definition ids, null list items, noncanonical amount,
+  issuance, balance, and supply strings, out-of-range distribution ratios, and
+  null distributions before callers trust aggregated explorer projections.
+- Added adversarial raw supplemental coverage for econometrics and holder
+  snapshots: duplicate top-level properties, string counters, numeric
+  quantities where exact strings are required, string ratios, malformed
+  Nakamoto counters, string Lorenz ratios, and write-side out-of-range
+  distribution ratio rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ExplorerSupplemental|RawExplorerSnapshot|RawExplorerDistribution|Econometrics|Snapshot" --nologo --logger "console;verbosity=minimal"`
+    (82 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3137 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3137 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Explorer Directory/Inventory DTO Exactness
+
+- Hardened raw `ToriiExplorerPaginationMeta`, account/domain directory DTOs,
+  and asset-definition/asset/NFT/RWA inventory DTOs with strict converters
+  shared by `ToriiClient` response validation. Raw explorer directory and
+  inventory parsing now rejects top-level nulls, non-object envelopes,
+  duplicate properties at nested metadata/item/parent depths, type-confused
+  pagination counters, item counters, booleans, lists, and text fields,
+  malformed account/I105/domain/asset/NFT/RWA identifiers, noncanonical
+  quantity/value strings, malformed optional logo/status/reference fields, and
+  malformed RWA parent lists before callers trust indexed inventory.
+- Added adversarial raw explorer coverage for directory and inventory pages
+  and direct item DTOs: duplicate page/item/parent properties, scalar
+  pagination and item arrays, numeric strings in unsigned counters, numeric
+  values where exact strings are required, string booleans for RWA freeze
+  state, and write-side malformed account I105 and RWA quantity rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ExplorerDirectory|ExplorerInventory|RawExplorerDirectory|RawExplorerInventory" --nologo --logger "console;verbosity=minimal"`
+    (64 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3122 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3122 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw SoraFS Pin Register DTO Exactness
+
+- Hardened raw `ToriiSoraFsPinAlias` and
+  `ToriiSoraFsPinRegisterResponse` JSON deserialization and serialization
+  with strict converters shared with `ToriiClient` response validation. Raw
+  SoraFS pin response parsing now rejects top-level nulls, non-object
+  envelopes, duplicate properties, type-confused text/counter/object fields,
+  noncanonical returned manifest and successor hashes, malformed alias
+  namespace/name/proof base64 material, missing or negative epoch/length/fee
+  counters, malformed fee asset/treasury ids, and non-exact
+  `chunker_handle` values before callers trust pin registration receipts.
+- Added adversarial raw SoraFS pin coverage for direct alias and register
+  response DTOs: duplicate top-level properties, malformed alias text and
+  canonical base64, uppercase or `0x`-prefixed returned hashes, numeric string
+  counters, negative unsigned counters, null required fee counters, scalar
+  alias envelopes, nested alias proof failures, and write-side malformed
+  successor hash rejection. Existing HTTP response tests now assert the same
+  fail-closed JSON path for malformed returned digest and chunker handles.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "SoraFsPin|RegisterSoraFsPin|PinRegister" --nologo --logger "console;verbosity=minimal"`
+    (48 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3098 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3098 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Identifier Policy DTO Exactness
+
+- Hardened raw `ToriiIdentifierPolicySummary` null/write handling and raw
+  `ToriiIdentifierPoliciesResponse` JSON deserialization and serialization
+  with a strict page converter. Raw identifier policy parsing now rejects
+  top-level nulls, non-object envelopes, duplicate properties, type-confused
+  integer/boolean/list/string fields, malformed `kind#rule` policy ids,
+  non-exact owner/normalization/resolver/backend/encryption text, null or
+  non-array item lists, null or non-object items, negative totals, and
+  malformed `note` token types before callers trust identifier policy
+  listings.
+- Added adversarial raw identifier policy coverage for direct policy summaries
+  and page responses: duplicate top-level and nested properties, malformed
+  policy ids, null required text, string booleans, numeric strings, non-array
+  item lists, null items, numeric list items, arbitrary decoded parameter JSON
+  preservation in positives, and write-side malformed policy id and
+  negative-total rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "IdentifierPolicies|IdentifierPolicy" --nologo --logger "console;verbosity=minimal"`
+    (51 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3075 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3075 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Node Capability DTO Exactness
+
+- Hardened raw `ToriiNodeCapabilities`,
+  `ToriiNodeCryptoCapabilities`, `ToriiNodeSmCapabilities`,
+  `ToriiNodeSmAcceleration`, `ToriiNodeCurveCapabilities`,
+  `ToriiNodeQueryCapabilities`, `ToriiNodeAggregateQueryCapabilities`, and
+  `ToriiNodeProjectionCapabilities` JSON deserialization and serialization
+  with strict converters shared with `ToriiClient` response validation. Raw
+  node capability parsing now rejects top-level nulls, non-object envelopes,
+  duplicate properties, type-confused boolean/integer/list fields, malformed
+  signed-transaction schema hashes, non-`1` ABI versions, negative data-model
+  and registry versions, malformed crypto capability labels, SM2/default-hash
+  mismatches, inconsistent SM acceleration adverts, inconsistent curve
+  allowlist id/bitmap pairs, drifted query projection constants/feature flags,
+  malformed projection metadata key lists, and invalid latest-checkpoint
+  hash/height pairs before callers trust node capability metadata.
+- Added adversarial raw node capability coverage for direct top-level, crypto,
+  SM, acceleration, curve, query, aggregate-query, and projection DTO parsing:
+  duplicate properties, string booleans, numeric strings, non-array lists,
+  non-string list items, unsigned bitmap type confusion, and write-side
+  projection metadata ordering rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "NodeCapabilities|Capabilities" --nologo --logger "console;verbosity=minimal"`
+    (123 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3050 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3050 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiNodeCapabilitiesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw UAID Space-Directory DTO Exactness
+
+- Hardened raw `ToriiUaidPortfolioTotals`,
+  `ToriiUaidPortfolioAsset`, `ToriiUaidPortfolioAccount`,
+  `ToriiUaidPortfolioDataspace`, `ToriiUaidPortfolioResponse`,
+  `ToriiUaidBindingsDataspace`, `ToriiUaidBindingsResponse`,
+  `ToriiUaidManifestRevocation`, `ToriiUaidManifestLifecycle`,
+  `ToriiUaidManifestRecord`, and `ToriiUaidManifestsResponse` JSON
+  deserialization and serialization with strict converters shared with
+  `ToriiClient` response validation. Raw UAID parsing now rejects top-level
+  nulls, non-object envelopes, duplicate properties, type-confused UAID,
+  dataspace, list, lifecycle, counter, and quantity fields, noncanonical
+  `uaid:<64 lowercase hex chars>` literals, null nested lists/items, non-exact
+  manifest hashes, malformed nested account/dataspace/asset text, and negative
+  counters before callers trust space-directory inventory.
+- Added adversarial raw UAID coverage for portfolio totals/assets/accounts,
+  portfolio dataspaces and responses, bindings dataspaces and responses,
+  manifest revocations/lifecycles/records/responses, arbitrary manifest JSON
+  preservation, and write-side malformed quantity/account/hash rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "Uaid|UAID" --nologo --logger "console;verbosity=minimal"`
+    (156 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (3002 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (3002 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiUaidJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw SoraFS Read DTO Exactness
+
+- Hardened raw `ToriiSoraFsFileEntry`,
+  `ToriiSoraFsCidLookupResponse`, `ToriiSoraFsDenylistPackSummary`,
+  `ToriiSoraFsDenylistCatalogResponse`, and
+  `ToriiSoraFsDenylistPackResponse` JSON deserialization and serialization
+  with strict converters shared with `ToriiClient` response validation. Raw
+  SoraFS read parsing now rejects top-level nulls, non-object envelopes,
+  duplicate properties, type-confused CID/hash/path/counter/boolean fields,
+  malformed path components, non-exact content or manifest CIDs, malformed
+  manifest digest/id hex, null lists/items, and negative geometry or pack
+  counters before callers trust gateway listings or denylist policy metadata.
+- Added adversarial raw SoraFS coverage for direct file entries, CID lookup
+  responses, denylist pack summaries, catalog responses, and pack responses:
+  duplicate top-level and nested properties, non-array paths/lists, null file
+  and pack items, numeric string fields, malformed path traversal/separators,
+  uppercase/non-base32 CIDs, string booleans, negative counters, and write-side
+  malformed path and manifest CID rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "SoraFs|SoraFS|Denylist" --nologo --logger "console;verbosity=minimal"`
+    (160 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2916 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2916 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSoraFsJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Explorer Snapshot DTO Exactness
+
+- Hardened raw `ToriiExplorerAccountQrSnapshot`,
+  `ToriiExplorerHealthSnapshot`, `ToriiExplorerMetricsSnapshot`, and
+  `ToriiExplorerDuration` JSON deserialization and serialization with strict
+  converters shared with `ToriiClient` response validation. Raw explorer
+  snapshot parsing now rejects top-level nulls, non-object envelopes,
+  duplicate properties, type-confused text/counter/duration fields, malformed
+  account ids, QR dimensions/text, unsigned health/metrics counters, malformed
+  nested durations, and malformed timestamp text before callers trust rendered
+  QR or explorer status projections.
+- Added adversarial raw explorer snapshot coverage for duplicate top-level and
+  duration properties, negative/string unsigned counters, numeric strings in
+  text fields, non-object durations, malformed QR module counts, malformed SVG
+  and timestamp text, and write-side QR, health, and metrics rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ExplorerSupplemental|ExplorerDuration|ExplorerSnapshot|ExplorerAccountQr|ExplorerHealth|ExplorerMetrics|GetExplorerHealth|GetExplorerMetrics|GetExplorerAccountQr" --nologo --logger "console;verbosity=minimal"`
+    (64 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2874 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2874 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerSnapshotJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Account Query DTO Exactness
+
+- Hardened raw `ToriiAccountSummary`, `ToriiAccountsPage`,
+  `ToriiAssetBalance`, `ToriiAssetBalancesPage`,
+  `ToriiAccountPermission`, `ToriiAccountPermissionsPage`,
+  `ToriiTransactionSummary`, and `ToriiTransactionsPage` JSON
+  deserialization and serialization with strict converters shared with
+  `ToriiClient` response validation. Raw account query parsing now rejects
+  top-level nulls, non-object envelopes, duplicate properties, null or
+  non-array item lists, null items, type-confused text/counter/boolean fields,
+  malformed account/asset/scope/alias/permission/authority text,
+  noncanonical quantities, non-exact entrypoint hashes, and negative totals or
+  timestamps before callers trust account inventory or history.
+- Added adversarial raw account query coverage for direct item and page DTOs,
+  duplicate top-level and nested properties, numeric string fields, null
+  required text, non-array item lists, canonical numeric edge cases, malformed
+  hashes, string booleans, arbitrary permission payload preservation, and
+  write-side malformed id, quantity, permission name, hash, and total
+  rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "AccountSummary|AccountsPage|AccountAsset|AssetBalance|AccountPermission|AccountTransaction|TransactionsPage|GetAccounts|GetAccountAssets|GetAccountPermissions|GetAccountTransactions" --nologo --logger "console;verbosity=minimal"`
+    (115 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2846 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2846 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountQueryJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Alias Resolution DTO Exactness
+
+- Hardened raw `ToriiAccountAliasResolution`,
+  `ToriiAccountAliasIndexResolution`, `ToriiAssetAliasResolution`,
+  `ToriiAssetAliasBinding`, `ToriiContractAliasResolution`, and
+  `ToriiContractAliasBinding` JSON deserialization and serialization with
+  strict converters shared with `ToriiClient` response validation. Raw alias
+  resolution parsing now rejects top-level nulls, non-object envelopes,
+  duplicate properties, type-confused text/counter/binding fields, malformed
+  account/asset/contract alias metadata, non-exact source/status labels, and
+  negative index or lease/bound timestamp fields before callers trust resolved
+  alias targets.
+- Added adversarial raw alias resolution/index/binding coverage for duplicate
+  top-level and nested binding properties, numeric aliases and account ids,
+  null required target text, string/negative indexes, non-object nested
+  bindings, blank descriptions, malformed source labels, and write-side
+  malformed account id, binding status, and timestamp rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "AliasResolution|AliasResolve|ResolveAccountAliasIndex|RawAlias|AccountAliasIndex" --nologo --logger "console;verbosity=minimal"`
+    (75 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2775 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2775 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAliasResolutionJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Account Alias Lookup DTO Exactness
+
+- Hardened raw `ToriiAccountAliasLookupItem` and
+  `ToriiAccountAliasLookupResponse` JSON deserialization and serialization
+  with strict converters shared with `ToriiClient` response validation. Raw
+  account alias lookup parsing now rejects top-level nulls, non-object
+  envelopes, duplicate properties, type-confused item/list/counter fields,
+  null lookup lists/items, malformed aliases, account ids, dataspace/domain
+  text, source labels, and negative totals before callers can trust alias
+  metadata.
+- Added adversarial raw account alias lookup coverage for duplicate top-level
+  and nested properties, numeric aliases/account ids, null aliases/items,
+  malformed dataspace/domain text, string booleans, non-array item lists,
+  string/negative totals, and write-side malformed alias/total rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "AliasLookup|LookupAliasesByAccount" --nologo --logger "console;verbosity=minimal"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2736 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2736 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountAliasLookupJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Onboarding Transaction Response DTO Exactness
+
+- Hardened raw `ToriiAccountOnboardingResponse`,
+  `ToriiAccountFaucetResponse`, and
+  `ToriiMultisigAccountOnboardingResponse` JSON deserialization and
+  serialization with strict converters shared with `ToriiClient` response
+  validation. Raw parsing now rejects top-level nulls, non-object envelopes,
+  duplicate properties, type-confused returned text fields, and non-exact
+  non-empty `tx_hash_hex` values before callers can trust queued onboarding or
+  faucet transaction ids, while preserving existing empty/null transaction-hash
+  compatibility for already-existing/no-op responses.
+- Added adversarial raw onboarding/faucet/multisig-onboarding coverage for
+  duplicate `tx_hash_hex`, numeric hashes, padded hashes, uppercase hashes,
+  prefixed hashes, type-confused status/amount fields, null or empty accepted
+  hashes, and write-side malformed hash rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "Onboarding|AccountFaucet|ToriiTransactionHashResponses" --nologo --logger "console;verbosity=minimal"`
+    (117 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2712 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2712 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiOnboardingJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract Code-Byte DTO Exactness
+
+- Hardened raw `ToriiContractCodeBytesResponse` JSON deserialization and
+  serialization with a strict converter that rejects null, non-object,
+  duplicate, and type-confused `code_b64` envelopes before callers can observe
+  a DTO. Malformed base64 content continues to use the existing
+  `FormatException` behavior from `DecodeBytes()` so public code-byte callers
+  keep the same exception contract for invalid code material.
+- Added adversarial raw code-byte coverage for duplicate `code_b64`, numeric
+  `code_b64`, blank/padded/whitespace-containing/malformed base64, exact
+  successful decode, and write-side malformed base64 rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ContractCodeBytes" --nologo --logger "console;verbosity=minimal"`
+    (21 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2699 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2699 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCodeBytesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract State DTO Exactness
+
+- Hardened raw `ToriiContractStateEntry` and `ToriiContractStateResponse` JSON
+  deserialization and serialization with strict converters shared with
+  `ToriiClient` contract state validation. Raw state parsing now rejects
+  top-level nulls, non-object envelopes, duplicate properties, null or
+  non-array paths/entries, null entry items, type-confused booleans, strings,
+  counters, and arrays, missing or non-exact path/prefix/entry/decode-error
+  text, malformed unsigned offsets/limits/value lengths, stale `next_offset`,
+  over-limit item counts, not-found entries carrying value material,
+  noncanonical `value_b64`, and decoded-length mismatches before callers can
+  trust state material.
+- Added adversarial direct entry and response coverage for duplicate top-level
+  and nested properties, string-valued booleans, negative counters, null
+  paths/entries, non-array list fields, whitespace-polluted base64, length
+  mismatches, blank decode errors, stale pagination, and write-side length and
+  `next_offset` rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ContractState" --nologo --logger "console;verbosity=minimal"`
+    (58 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2688 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2688 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractStateJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract Instance Inventory DTO Exactness
+
+- Hardened raw `ToriiContractInstance` and `ToriiContractInstancesResponse`
+  JSON deserialization and serialization with strict converters shared with
+  `ToriiClient` contract instance inventory validation. Raw inventory parsing
+  now rejects top-level nulls, non-object envelopes, duplicate properties,
+  null or non-array instance lists, null instance items, type-confused
+  identifiers/hashes/counters, missing or non-exact namespace and contract ids,
+  malformed lowercase 32-byte code hashes, malformed unsigned pagination
+  counters, and inconsistent `total`/`offset`/`limit` combinations before
+  callers can trust instance listings.
+- Added adversarial direct item and response coverage for duplicate top-level
+  and nested properties, null/type-confused list and item fields, padded
+  namespace text, whitespace-containing contract ids, prefixed/uppercase hash
+  material, negative and string-valued counters, limit underflow, offset
+  overflow, total underflow, and write-side hash/pagination rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ContractInstance|ContractInstances" --nologo --logger "console;verbosity=minimal"`
+    (78 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2660 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2660 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractInstancesJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract Deployment DTO Exactness
+
+- Hardened raw `ToriiDeployContractResponse`,
+  `ToriiDeployAndActivateContractInstanceResponse`, and
+  `ToriiActivateContractInstanceResponse` JSON deserialization and
+  serialization with strict converters shared with `ToriiClient` deployment
+  response validation. Raw deployment parsing now rejects top-level nulls,
+  non-object envelopes, false `ok`, duplicate properties, type-confused
+  booleans/strings/unsigned deploy nonces, missing or non-exact returned
+  contract addresses, dataspaces, namespaces, contract ids, and malformed
+  lowercase 32-byte code/ABI hashes before callers can trust deployment
+  material.
+- Added adversarial raw deployment, deploy-and-activate, and activation DTO
+  coverage for duplicate `ok`, string-valued booleans, false envelopes,
+  null/type-confused identifier fields, padded identifiers, negative and
+  string-valued deploy nonces, uppercase/prefixed hash material, and write-side
+  malformed hash/contract-id/`ok` rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "DeployContract|DeployAndActivateContractInstance|ActivateContractInstance|ContractDeployment" --nologo --logger "console;verbosity=minimal"`
+    (77 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2635 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2635 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractDeploymentJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract View Error DTO Exactness
+
+- Hardened raw `ToriiContractViewErrorResponse` and
+  `ToriiContractViewVmDiagnostic` JSON deserialization and serialization with
+  strict converters shared with `ToriiClient` contract-view error validation.
+  Raw error parsing now rejects top-level nulls, non-object envelopes, true
+  `ok`, duplicate properties, type-confused booleans/strings/unsigned
+  counters, missing or non-exact dataspace and contract ids, padded contract
+  addresses, blank or padded entrypoints/errors, malformed lowercase 32-byte
+  code/ABI hashes, non-object diagnostics, non-exact diagnostic text, malformed
+  optional numeric fields, and impossible VM diagnostic gas/cycle/stack counter
+  combinations before callers can trust returned failure material.
+- Added adversarial raw contract-view error and VM diagnostic coverage for
+  duplicate top-level and nested properties, string-valued booleans, null token
+  fields, malformed identifiers, uppercase/prefixed hash material, blank/padded
+  error text, non-object diagnostics, negative counters, out-of-range opcode
+  values, type-confused predecode flags, counter-bound violations, and
+  write-side nested diagnostic rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ContractViewErrorResponse|ContractViewDiagnostic|ExecuteContractViewAsync|ContractCallViewResponsesRejectMalformedReturnedFields" --nologo --logger "console;verbosity=minimal"`
+    (68 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2605 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2605 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract View Success DTO Exactness
+
+- Hardened raw `ToriiContractViewResponse` JSON deserialization and
+  serialization with a strict converter shared with `ToriiClient` contract-view
+  success validation. Raw success parsing now rejects top-level nulls,
+  non-object envelopes, false `ok`, duplicate properties, type-confused
+  booleans/strings, missing or non-exact dataspace and contract ids, padded
+  contract addresses and entrypoints, malformed lowercase 32-byte code/ABI
+  hashes, and duplicate `result` fields while preserving the opaque result JSON
+  node for callers.
+- Added adversarial raw contract-view success coverage for duplicate `ok`,
+  `code_hash_hex`, and `result` properties, string-valued booleans, null token
+  fields, type-confused contract ids, padded identifiers, uppercase/prefixed
+  hash material, blank/padded entrypoints, direct result-node preservation, and
+  write-side entrypoint rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ContractViewResponse|ExecuteContractViewAsync|ContractCallViewResponsesRejectMalformedReturnedFields|RawContractViewResponse|RawContractCallResponse" --nologo --logger "console;verbosity=minimal"`
+    (69 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2567 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2567 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Contract Call Response DTO Exactness
+
+- Hardened raw `ToriiContractCallResponse` JSON deserialization and
+  serialization with a strict converter shared with `ToriiClient` contract-call
+  response validation. Raw response parsing now rejects top-level nulls,
+  non-object envelopes, false `ok`, duplicate properties, type-confused
+  booleans/strings, missing or non-exact dataspace and contract ids, padded
+  contract addresses and entrypoints, malformed lowercase 32-byte code/ABI and
+  transaction hashes, unsigned creation-time counters, and noncanonical
+  scaffold/signed-transaction/signing-message base64 before callers can trust
+  returned execution or signing material.
+- Added adversarial raw contract-call coverage for duplicate `ok` and
+  `code_hash_hex` properties, string-valued booleans, null required booleans,
+  missing/null/type-confused token fields, uppercase/prefixed hash material,
+  negative creation timestamps, padded transaction hashes, blank/whitespace
+  base64, canonical base64 drift, and write-side signing-material rejection.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "CallContractAsync|ContractCallViewResponsesRejectMalformedReturnedFields|RawContractCallResponse" --nologo --logger "console;verbosity=minimal"`
+    (68 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2549 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2549 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractCallJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Multisig Response DTO Exactness
+
+- Hardened raw `ToriiMultisigResponse` and
+  `ToriiMultisigContractCallResponse` JSON deserialization and serialization
+  with strict converters shared with `ToriiClient` multisig response
+  validation. Raw response parsing now rejects top-level nulls, non-object
+  envelopes, false `ok`, duplicate properties, type-confused fields, missing or
+  non-exact resolved multisig account ids, malformed lowercase 32-byte proposal
+  ids, instructions hashes, transaction hashes, unsigned creation-time
+  counters, and noncanonical `signing_message_b64` before callers can trust
+  returned signing material.
+- Tightened endpoint validation for generic and contract-call multisig
+  responses to reject padded, whitespace-containing, or control-character
+  `resolved_multisig_account_id` values in addition to the existing proposal,
+  instruction-hash, transaction-hash, and signing-message checks.
+- Added adversarial raw multisig coverage for null/non-object payloads,
+  duplicate `ok`/`proposal_id` properties, string-valued booleans, false `ok`,
+  missing/type-confused/padded resolved account ids, prefixed and uppercase hash
+  material, negative creation timestamps, blank or malformed base64, canonical
+  base64 drift, and write-side rejection for malformed signing material and
+  resolved account ids.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "Multisig" --nologo --logger "console;verbosity=minimal"`
+    (104 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiMultisigJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ToriiTransactionHashResponsesRejectNonExactHashes|MultisigResponsesRejectNonExactResolvedAccountIds|RawMultisigResponsesRejectMalformedPayloads|RawMultisigResponseWriteRejectsMalformedSigningMaterial|RawMultisigContractCallResponseWriteRejectsMalformedResolvedAccount" --nologo --logger "console;verbosity=minimal"`
+    (32 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2528 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2528 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiMultisigJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw VPN Native Instruction DTO Exactness
+
+- Hardened raw `ToriiVpnTxInstruction` JSON deserialization and serialization
+  with a strict converter shared with `ToriiClient` VPN response validation.
+  Raw native instruction parsing now rejects top-level nulls, non-object
+  envelopes, duplicate `wire_id`/`payload_hex` properties, non-string or
+  missing fields, padded/control-character wire ids, and non-exact lowercase
+  even-length instruction payload hex before callers can trust Torii-produced
+  tunnel or settlement instruction skeletons.
+- Added quote, receipt, and receipt-list container converters that pass
+  `open_lease_instruction`, `settle_lease_instruction`, and
+  `tx_instructions[index]` context into the shared native-instruction reader,
+  preserving endpoint error paths while still failing during deserialization.
+- Added adversarial raw VPN instruction coverage for null/non-object payloads,
+  duplicate properties, missing/type-confused fields, padded/control-character
+  wire ids, padded/embedded-whitespace/control-character payload hex, odd
+  lengths, uppercase hex, and prefixed hex. Write-side validation now rejects
+  malformed instruction payloads before JSON is emitted.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ToriiVpnTxInstruction|VpnEndpointsRejectNonExactResponseHex|CreateVpnQuoteAsyncPostsMeteringKeyAndDeserializesNativeInstruction|SubmitVpnReceiptAsyncPostsEvidenceAndDeserializesSettlementInstruction|ListVpnReceiptsAsyncDeserializesNativeSettlementItems|DeleteVpnSessionAsyncDeserializesDisconnectedReceipt" --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "Vpn" --nologo --logger "console;verbosity=minimal"`
+    (115 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiVpnJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2504 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2504 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiVpnJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Account Faucet Puzzle DTO Exactness
+
+- Hardened raw `ToriiAccountFaucetPuzzle` JSON deserialization with a strict
+  converter shared with `ToriiClient` faucet puzzle validation. Raw puzzle
+  parsing now rejects top-level nulls, duplicate properties, type-confused or
+  out-of-range numeric fields, non-exact PoW algorithm labels, non-positive
+  anchor heights, malformed lowercase 32-byte anchor hashes, malformed
+  lowercase even-length challenge salts, and unsafe scrypt parameters before
+  callers can solve or verify faucet PoW work.
+- Added adversarial raw puzzle coverage mirroring endpoint negatives plus
+  malformed envelopes for duplicate `algorithm`, string/type-confused numeric
+  fields, negative unsigned values, and byte overflow.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "GetAccountFaucetPuzzleAsyncDeserializesTypedResponse|GetAccountFaucetPuzzleAsyncRejectsMalformedResponse|AccountFaucetPuzzleRejectsMalformedRawPayload|AccountFaucetPuzzleRejectsMalformedRawEnvelope|FaucetPow" --nologo --logger "console;verbosity=minimal"`
+    (56 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountFaucetJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2487 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2487 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountFaucetJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Runtime Metadata DTO Exactness
+
+- Hardened raw `ToriiRuntimeAbiActive`, `ToriiRuntimeAbiHash`,
+  `ToriiRuntimeMetrics`, and `ToriiRuntimeUpgradeCounters` JSON
+  deserialization with strict converters shared with the high-level Torii
+  runtime validators. Raw DTO parsing now rejects top-level nulls, duplicate
+  properties, type-confused integer/string fields, non-`1` first-release ABI
+  versions, non-exact `V1` policy labels, malformed lowercase 32-byte ABI
+  hashes, negative counters, and inconsistent upgrade-event totals before
+  callers can trust runtime metadata JSON.
+- Preserved nested `upgrade_events_total.*` error context for endpoint callers
+  while validating the reusable `ToriiRuntimeUpgradeCounters` DTO directly.
+- Added adversarial raw runtime coverage for null envelopes, duplicate
+  properties, string-valued integer fields, ABI version drift, null and
+  non-object upgrade counters, negative counters, inconsistent totals, padded
+  or control-character policy labels, uppercase/prefixed ABI hashes, and direct
+  upgrade-counter DTO parsing.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "GetRuntimeEndpointsDeserializeTypedPayloads|RuntimeMetadataEndpointsRejectMalformedResponses|RuntimeMetadataDtosRejectMalformedRawPayloads|RuntimeUpgradeCountersRejectMalformedRawPayloads" --nologo --logger "console;verbosity=minimal"`
+    (46 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiRuntimeJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2458 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2458 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiRuntimeJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Explorer DTO Exactness
+
+- Hardened raw `ToriiExplorerBlock`, `ToriiExplorerTransaction`,
+  `ToriiExplorerInstruction`, `ToriiExplorerInstructionBox`, and
+  `ToriiExplorerInstructionJson` deserialization with strict converters shared
+  with the high-level Torii Explorer validators. Raw DTO parsing now rejects
+  top-level nulls, duplicate properties, malformed lowercase 32-byte hashes,
+  invalid unsigned counters, malformed authority/status text, malformed
+  instruction boxes, uppercase-`0X` instruction-box encodings, and prefixed
+  nested instruction JSON encodings before callers can trust indexed Explorer
+  payload JSON.
+- Added page/latest converters for Explorer block, transaction, and
+  instruction lists so raw item validation preserves `items[index]` error
+  context while still failing during deserialization.
+- Added adversarial raw Explorer coverage for malformed block hashes and
+  counters, transaction authority/hash/block/status/executable fields,
+  instruction authority/kind/transaction hash/status/block/index fields, null
+  boxes, malformed nested box/json encodings, duplicate properties, and raw page
+  item context.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "ExplorerResponsesRejectNonExactHashesAndEncodedFields|ExplorerSseStreamsRejectMalformedPayloads|ExplorerSseStreamsRejectMalformedJsonData|StreamExplorerBlocksAsync|StreamExplorerTransactionsAsync|StreamExplorerInstructionsAsync|ExplorerRawSseDtosRejectMalformedPayloads|ExplorerRawPagesRejectMalformedItemsWithItemContext" --nologo --logger "console;verbosity=minimal"`
+    (61 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2432 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2432 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiExplorerJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Torii SSE DTO Exactness
+
+- Hardened raw `ToriiPipelineEvent`, `ToriiProofEvent`, and
+  `ToriiProofRemovedRecord` JSON deserialization with strict converters shared
+  with the high-level stream validators. Raw DTO parsing now rejects top-level
+  nulls, duplicate properties, malformed category/event/backend text, uppercase
+  or prefixed 32-byte hashes, invalid unsigned counters, inconsistent proof
+  prune counts, and malformed nested removed-proof records before callers can
+  trust Torii SSE payload JSON.
+- Updated `StreamPipelineEventsAsync(...)` and `StreamProofEventsAsync(...)` to
+  prefilter category/event fields from the parsed JSON node before strict DTO
+  deserialization, preserving skip behavior for unrelated SSE frames while
+  keeping target pipeline/proof events fail-closed.
+- Added adversarial raw DTO coverage for null envelopes, duplicate properties,
+  malformed pipeline hashes and counters, malformed proof hashes, event/backend
+  whitespace, prune-count mismatches, nested removed-record nulls, and
+  extension-data preservation for unknown fields.
+- Updated the C# README and Windows roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "StreamPipelineEventsAsync|StreamProofEventsAsync|ToriiPipelineEvent|ToriiProofEvent|ToriiProofRemovedRecord" --nologo --logger "console;verbosity=minimal"`
+    (80 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiPipelineEvent.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiProofEvent.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiSseEventJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2401 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2401 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiPipelineEvent.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiProofEvent.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiSseEventJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Identifier Receipt Payload Exactness
+
+- Hardened raw `ToriiIdentifierResolveResponse` deserialization so object-shaped
+  legacy `signature_payload` values receive the same exactness checks as the
+  high-level Torii client. Raw DTO parsing now rejects malformed direct and
+  nested payload policy/account fields, execution/opening timestamp aliases,
+  opening signature hex aliases, and signed/proof attestation selector or proof
+  material before callers can trust receipt payload JSON.
+- Added adversarial raw receipt coverage for padded or malformed
+  `signature_payload.policy_id`, nested payload `policy_id`/`account_id`,
+  leading-zero and negative timestamp forms, uppercase-`0X` opening signatures,
+  mixed-case attestation kinds, signed/proof field confusion, missing proof
+  backend selectors, and malformed proof base64.
+- Updated the C# README and Windows identifier-receipt roadmap with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests" --nologo --logger "console;verbosity=minimal"`
+    (108 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2357 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2357 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Raw Identifier Receipt Signature Hex Exactness
+
+- Hardened raw `ToriiIdentifierResolveResponse` deserialization so legacy
+  `signature` and `signature_payload_hex`, nested signed-attestation
+  `signature`, and nested opening `signature` fields must be exact hex strings.
+  Lowercase `0x` prefixes remain accepted where present, while uppercase `0X`,
+  odd-length, and non-hex aliases fail during DTO deserialization instead of
+  reaching receipt verification or callers as trusted text.
+- Added adversarial raw receipt coverage for malformed top-level signature hex,
+  malformed `signature_payload_hex`, malformed nested signed-attestation
+  signatures, and malformed nested opening signatures. Existing uppercase
+  unprefixed receipt signatures remain compatible.
+- Updated the C# README and Windows identifier-receipt roadmap with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests" --nologo --logger "console;verbosity=minimal"`
+    (95 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2344 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2344 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii Response Hex Prefix Exactness
+
+- Hardened the shared C# Torii response `ValidateExactHex(...)` helper so
+  prefixed response hex strips only canonical lowercase `0x`. Uppercase `0X`
+  aliases now fail as malformed hex before identifier receipt signatures or
+  explorer instruction/rejection encodings are trusted.
+- Added adversarial Torii response coverage for `0X` top-level identifier
+  receipt signatures, `signature_payload_hex`, opening signatures, signed
+  attestation signatures, explorer transaction rejection encodings, and explorer
+  instruction-box encodings. Existing uppercase unprefixed receipt signatures
+  and lowercase `0x` explorer encodings remain compatible.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactHexReceiptFields|FullyQualifiedName~ToriiClientTests.ExplorerResponsesRejectNonExactHashesAndEncodedFields" --nologo --logger "console;verbosity=minimal"`
+    (26 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2332 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2332 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs csharp/src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Account Address Algorithm Label Case Exactness
+
+- Hardened C# account-address construction so signing-algorithm aliases are
+  matched with ordinal, case-sensitive lookup. Canonical lowercase labels such
+  as `ed25519`, `ml-dsa`, and `gost256a` remain accepted, while
+  uppercase/mixed-case aliases such as `ED25519`, `Ed25519`, `ML-DSA`, and
+  `Gost256A` are rejected before controller bytes or address payloads are
+  constructed.
+- Extended adversarial address fixture coverage for case-drifted signing labels
+  alongside the existing blank, padded, whitespace-containing, control-byte,
+  non-ASCII, and future-curve rejection vectors. The positive address vector
+  round trip remains unchanged.
+- Updated the C# README and Windows account-address certification roadmap with
+  this Linux .NET evidence. Windows native bridge certification remains a
+  separate release gate for `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AddressFixtureTests.CurveAlgorithmAliasesRejectConfusableOrControlLabels|FullyQualifiedName~AddressFixtureTests.PositiveVectorsRoundTrip" --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2326 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2326 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii Response Hex Lowercase Exactness
+
+- Hardened the shared C# Torii exact-sized and no-prefix even-length response
+  hex validators so trusted response fields must be lowercase. Uppercase-but
+  byte-equal aliases no longer pass for verifying-key detail hashes, VPN
+  SPKI/hash/id fields, SoraFS CID lookup manifest hashes, native-instruction
+  payload hex, faucet challenge salts, explorer transaction signatures, and
+  other DTOs using the same response validators.
+- Added adversarial response coverage for uppercase SoraFS
+  `manifest_digest_hex`, VPN `relay_tls_spki_sha256_hex`, and verifying-key
+  `record.public_inputs_schema_hash` values, plus uppercase VPN
+  `open_lease_instruction.payload_hex`, explorer transaction signatures, and
+  faucet `challenge_salt_hex` values. Request-side normalizers that
+  intentionally canonicalize accepted user-supplied hex remain unchanged.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.GetSoraFsCidLookupAsyncRejectsMalformedResponse|FullyQualifiedName~ToriiClientTests.VpnEndpointsRejectNonExactResponseHex|FullyQualifiedName~ToriiClientTests.GetVerifyingKeyAsyncRejectsMalformedResponse" --nologo --logger "console;verbosity=minimal"`
+    (65 passed; an initial VPN uppercase vector used a digit-only fixture and
+    was replaced with an alphabetic uppercase hash)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.VpnEndpointsRejectNonExactResponseHex|FullyQualifiedName~ToriiClientTests.ExplorerResponsesRejectNonExactHashesAndEncodedFields|FullyQualifiedName~ToriiClientTests.GetAccountFaucetPuzzleAsyncRejectsMalformedResponse" --nologo --logger "console;verbosity=minimal"`
+    (48 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2326 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2326 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SCCP Destination Binding Key Exactness
+
+- Hardened Ethereum mainnet, BSC mainnet, and BSC testnet SCCP destination
+  binding helpers so caller-supplied `expectedKey` values are compared exactly.
+  Padded or control-character-suffixed expected keys no longer pass by being
+  trimmed before comparison.
+- Added adversarial destination-binding coverage for leading-space,
+  trailing-space, and trailing-newline expected keys across all three EVM SCCP
+  binding families while preserving the accepted exact expected-key path.
+- Updated the C# README and SCCP roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests.MainnetGuardsAcceptEthereumAndRejectOtherRoutes|FullyQualifiedName~SccpBscMainnetTests.MainnetGuardsAcceptBscAndRejectOtherRoutes|FullyQualifiedName~SccpBscTestnetTests.TestnetGuardsAcceptBscAndRejectOtherRoutes" --nologo --logger "console;verbosity=minimal"`
+    (3 passed; an earlier `DestinationBinding` substring filter matched no
+    tests and was replaced with the exact guard-test names)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs src/Hyperledger.Iroha.Sdk/Sccp/BscTestnetSccp.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpBscTestnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2320 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2320 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscTestnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscTestnetTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Beacon REST Hex Quantity Overflow Guard
+
+- Hardened the C# Ethereum Beacon REST consensus provider so JSON-RPC-style
+  hex quantities are bounded to unsigned 64-bit values before block numbers,
+  beacon slots, or finality slots are trusted. Oversized hex values now fail as
+  controlled `ArgumentException`s instead of surfacing raw `OverflowException`
+  from a later `ulong.Parse`.
+- Added adversarial Beacon REST coverage for an oversized source block number
+  and an oversized finalized header slot while preserving the existing
+  leading-zero decimal rejection and inbound Ethereum mainnet drift checks.
+- Updated the C# README and SCCP roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests.BeaconRestConsensusProviderRejectsUnsafeFinality|FullyQualifiedName~SccpEthereumMainnetTests.InboundEvidenceUsesMainnetRpcAndRejectsDrift" --nologo --logger "console;verbosity=minimal"`
+    (2 passed; initial assertion expected the shorter slot label before the
+    provider's fully qualified `beaconFinality.beaconSlot` diagnostic)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2320 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2320 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Transaction Numeric Alias Rejection
+
+- Hardened `TransactionEncodingContext.EncodeNumeric(...)` so transaction
+  numeric literals reject noncanonical aliases before Norito bytes are encoded
+  or signed. Leading `+`, missing integer or fraction digits, leading integer
+  zeros, and negative zero now fail at the managed SDK boundary while canonical
+  signed and scaled decimal forms remain accepted.
+- Added adversarial transaction-builder coverage for those numeric aliases plus
+  positive coverage for canonical zero, signed, and scaled decimal literals.
+  Existing Swift parity transaction golden hashes still match after the parser
+  tightening.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests.TransactionEncodingContextRejectsNonExactNumerics|FullyQualifiedName~TransactionBuilderTests.TransactionEncodingContextAcceptsCanonicalNumerics|FullyQualifiedName~TransactionBuilderTests.BuildSignedProducesDeterministicGoldenOutputs" --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2320 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2320 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# I105 Numeric Discriminant Exactness
+
+- Hardened `AccountAddress` numeric `n` sentinel parsing so chain
+  discriminants are parsed as invariant, unsigned-u16, digits-only text.
+  Overflowing numeric sentinels now fail with the address-layer
+  `InvalidI105Discriminant` error instead of relying on the runtime default
+  parser overload.
+- Added adversarial address coverage for overflowing discriminants, signed and
+  fullwidth digit forms, and leading-zero aliases for both custom `n5` and
+  reserved `dev` discriminants.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AddressFixtureTests" --nologo --logger "console;verbosity=minimal"`
+    (8 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2306 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2306 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SSE Retry Metadata Canonicalization
+
+- Hardened `ToriiClient.StreamEventsAsync(...)` so `retry:` metadata must use
+  canonical nonnegative Int32 millisecond text before an SSE frame can be
+  yielded. Blank, padded, signed, leading-zero, fractional, and overflowing
+  retry values now fail instead of being silently ignored while the event data
+  is still trusted.
+- Added adversarial `ToriiClientTests` coverage for malformed retry metadata
+  while preserving the existing valid `retry: 1500` parsing path.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.StreamEventsAsyncRejectsMalformedRetryMetadata|FullyQualifiedName~ToriiClientTests.StreamEventsAsyncParsesCommentAndJsonFrames" --nologo --logger "console;verbosity=minimal"`
+    (8 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2304 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2304 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# EVM SCCP Chain-ID Quantity Overflow Hardening
+
+- Hardened Ethereum and BSC mainnet SCCP `eth_chainId` normalization so
+  canonical-looking but oversized JSON-RPC quantities fail as `ArgumentException`
+  instead of leaking `OverflowException`. The shared EVM JSON-RPC quantity
+  normalizers now parse bounded u64 values with explicit invariant
+  `NumberStyles.HexNumber`.
+- Added overflow chain-id vectors to the Ethereum and BSC inbound-evidence
+  mainnet RPC tests while preserving the existing wrong-chain, noncanonical
+  prefix, padded, decimal, and numeric JSON negatives.
+- Updated the C# README and SCCP roadmap with this Linux .NET evidence. Windows
+  native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests.InboundEvidenceUsesMainnetRpcAndRejectsDrift|FullyQualifiedName~SccpBscMainnetTests.InboundEvidenceUsesMainnetRpcAndRejectsDrift" --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2297 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2297 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Ethereum SCCP U64 Text Canonicalization
+
+- Hardened Ethereum mainnet SCCP integer parsing so direct beacon-finality maps
+  and Beacon REST responses reject leading-zero decimal strings for slot and
+  signature-slot fields instead of parsing them under an alternate canonical
+  value. Overflowing decimal and JSON-RPC quantity strings now fail as
+  `ArgumentException` instead of leaking `OverflowException`.
+- Added adversarial coverage inside the inbound-evidence and Beacon REST
+  finality tests for noncanonical direct `beaconSlot`, direct
+  `syncSignatureSlot`, Beacon header slots, Beacon block slots, finality-update
+  slots, finality-update signature slots, and overflowing direct slot strings.
+- Updated the C# README and SCCP roadmap with this Linux .NET evidence. Windows
+  native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests.InboundEvidenceUsesMainnetRpcAndRejectsDrift|FullyQualifiedName~SccpEthereumMainnetTests.BeaconRestConsensusProviderRejectsUnsafeFinality" --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2297 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2297 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii SSE Query Percent Escape Hardening
+
+- Hardened `ToriiClient.OpenEventSseAsync(...)` event-filter query preflight so
+  malformed percent escapes in query names or values fail before JSON filter
+  validation, canonical request signing, or HTTP dispatch.
+  Percent-decoded controls such as `%00`, `%1F`, and `%0A` are also rejected
+  before any SSE request is sent.
+- Added focused adversarial `ToriiClientTests` coverage for malformed `%`,
+  `%2`, `%GG`, bad encoded parameter names, and decoded control bytes while
+  preserving existing exact production event-filter behavior.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.OpenEventSseAsyncRejectsMalformedOrControlFilterQueryEscapesBeforeRequest" --nologo --logger "console;verbosity=minimal"`
+    (7 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2297 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2297 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Wallet-Note Amount Canonicalization
+
+- Hardened `OfflineNoteWalletNote` so persisted `amount` text must already be
+  canonical Offline Note numeric text at construction and JSON decode
+  boundaries. Nonnumeric values, signed positive aliases, leading-zero aliases,
+  empty fractional suffixes, missing integer prefixes, `-0`, and over-scale
+  decimals now fail instead of being stored or rewritten under a different
+  amount spelling.
+- Switched wallet-note numeric-string counter parsing to explicit
+  `NumberStyles.None` plus invariant culture after canonical digit checks, and
+  added an overflowing string counter negative.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (22 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2290 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2290 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Canonical Request Query Percent Escape Hardening
+
+- Hardened canonical query signing so malformed percent escapes such as `%`,
+  `%2`, and `%GG` fail before sorting or signing instead of being re-encoded as
+  literal percent text. Percent-decoded control bytes such as `%00`, `%1F`, and
+  `%0A` are rejected before signature material is built, while valid percent
+  escapes still normalize deterministically.
+- Added focused adversarial `CanonicalRequestTests` coverage for malformed
+  escapes, decoded control characters, and valid lowercase/space escape
+  normalization.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --nologo --logger "console;verbosity=minimal"`
+    (88 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2280 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2280 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `bash -lc '! rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs'`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Dataspace Scope Canonicalization
+
+- Hardened Offline Note canonical asset-id parsing so optional
+  `#dataspace:<id>` suffixes must use canonical unsigned decimal text before
+  asset ids are accepted into canonical payloads or receive-request handoff
+  payloads. Signed, empty, leading-zero, fractional, padded, and overflowing
+  dataspace suffixes now fail instead of being parsed and re-emitted under a
+  different canonical id.
+- Added focused adversarial coverage for direct canonical payload constructors
+  and `OfflineNoteReceiveRequest` construction, while preserving canonical
+  scoped ids such as `dataspace:7`.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNoteReceiveRequestTests" --nologo --logger "console;verbosity=minimal"`
+    (13 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2272 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2272 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "[ \t]+$" csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii Request Base64 Canonicalization
+
+- Hardened Torii request-side base64 normalization so contract deploy/call,
+  multisig signing material, SoraFS manifest payloads, and alias proof payloads
+  must already be canonical base64 text before HTTP dispatch. Noncanonical
+  pad-bit aliases such as `AR==` are now rejected instead of being silently
+  re-emitted as canonical payloads.
+- Added adversarial request coverage for noncanonical `CodeBase64`,
+  `ManifestBase64`, and alias `ProofBase64` fields alongside the existing
+  blank, whitespace, control-character, and malformed vectors.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.RegisterSoraFsPinManifestAsyncRejectsNonExactTextBeforeDispatch|FullyQualifiedName~ToriiClientTests.DeployContractAsyncRejectsMalformedRequestBeforeDispatch" --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (1510 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2272 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2272 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Text Base64url Canonicalization
+
+- Hardened the Offline Note payment-token, receive-request, and receipt-ACK
+  text envelope decoders so base64url payloads must roundtrip to canonical
+  unpadded text. Noncanonical pad-bit aliases now fail before the decoded
+  Norito archive can be trusted as an equivalent handoff payload.
+- Added adversarial text-envelope coverage that mutates valid encoded payloads
+  only in base64url pad-bit positions for
+  `OfflineNotePaymentTokenCodec.DecodeText`,
+  `OfflineNoteReceiveRequestCodec.DecodeText`, and
+  `OfflineNoteReceiptAckCodec.DecodeText`.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNoteReceiptAckTests" --nologo --logger "console;verbosity=minimal"`
+    (16 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2269 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2269 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "[ \t]+$" csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Wallet JSON Base64 Canonicalization
+
+- Hardened `OfflineNoteWalletNoteJsonCodec` strict base64 decoding so persisted
+  key-certificate, note-secret, and bearer-audit-trail fields must roundtrip to
+  canonical base64 text before wallet-note JSON is trusted. Noncanonical pad-bit
+  aliases such as `AR==` now fail instead of being accepted as equivalent byte
+  payloads.
+- Added adversarial coverage for noncanonical scalar
+  `key_certificate_norito_base64` and array
+  `bearer_audit_trail_norito_base64` values while preserving the existing
+  malformed, whitespace, length, and envelope negatives.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (12 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2269 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2269 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii Optional Base64 Canonicalization
+
+- Hardened `ToriiClient` optional base64 response validation so contract-call,
+  contract/multisig signing material, and pipeline rejection-content fields
+  must decode to non-empty bytes and roundtrip to canonical base64 text.
+  Noncanonical pad-bit aliases such as `AR==` now fail before callers trust
+  returned signing material or rejected-status content.
+- Added adversarial coverage for noncanonical `signing_message_b64` and
+  rejection-content base64 alongside the existing blank, padded, whitespace,
+  control-character, and malformed vectors.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.GetPipelineTransactionStatusAsyncRejectsNonExactRejectionContentResponse|FullyQualifiedName~ToriiClientTests.CallContractAsyncRejectsNonExactSigningMaterialResponse" --nologo --logger "console;verbosity=minimal"`
+    (15 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (1507 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2269 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2269 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Identifier Receipt Timestamp String Canonicalization
+
+- Hardened identifier receipt timestamp validation in `ToriiClient` and raw
+  `ToriiIdentifierResolveResponse` JSON conversion so numeric-string receipt
+  times must be canonical unsigned decimal text. Leading-zero aliases now fail
+  before receipt execution/opening timestamps can be trusted.
+- Added adversarial coverage for leading-zero `executed_at_ms`,
+  `opened_at_ms`, and `expires_at_ms` strings across client response validation
+  and raw DTO deserialization. Numeric JSON timestamp values remain accepted.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsync" --nologo --logger "console;verbosity=minimal"`
+    (194 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests|FullyQualifiedName~ToriiIdentifierReceiptTests" --nologo --logger "console;verbosity=minimal"`
+    (1588 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2267 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2267 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Identifier Receipt Proof Base64 Canonicalization
+
+- Hardened identifier receipt proof-attestation validation in
+  `ToriiClient` and raw `ToriiIdentifierResolveResponse` JSON conversion so
+  `proof_b64` must roundtrip to canonical base64 text. Noncanonical pad-bit
+  aliases such as `AR==` now fail before receipt payloads can be trusted.
+- Added adversarial coverage for nested receipt envelopes and raw
+  `signature_payload.attestation` shapes across both `ToriiClientTests` and
+  `ToriiIdentifierReceiptTests`.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsync" --nologo --logger "console;verbosity=minimal"`
+    (190 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests|FullyQualifiedName~ToriiIdentifierReceiptTests" --nologo --logger "console;verbosity=minimal"`
+    (1584 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2263 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2263 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SoraFS Content Relative Path Exactness
+
+- Hardened `ToriiClient.OpenSoraFsCidContentAsync(...)` and
+  `GetSoraFsCidContentAsync(...)` so optional content relative paths are no
+  longer trimmed or segment-collapsed before gateway dispatch. Non-empty
+  relative paths must now be exact relative paths; whitespace-only, padded,
+  empty-segment, `.`/`..`, backslash-separated, and control-character paths fail
+  before any HTTP request is built.
+- Added adversarial no-dispatch coverage across both raw and buffered SoraFS
+  content reads, while preserving the existing positive nested path with an
+  internal space (`assets/app main.js`).
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~SoraFsCidContent" --nologo --logger "console;verbosity=minimal"`
+    (10 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (1501 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2260 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2260 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Production SSE Event Filter Exactness
+
+- Hardened `ToriiClient.OpenEventSseAsync(...)` production `VerifyingKey` and
+  `Proof` JSON filter handling so recognized filter payloads must be exact
+  before subscription dispatch. Padded filter JSON now fails before parsing,
+  verifier-key selector names reject padding, embedded whitespace, control
+  characters, and `:` separators, and proof `hash_hex`/`proof_hash_hex`
+  matchers must be lowercase unprefixed 32-byte hex.
+- Converted the old event-filter name/proof-hash canonicalization checks into
+  adversarial no-dispatch negatives and added an exact-positive filter test
+  that proves valid production subscriptions are sent without mutation.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~OpenEventSseAsync" --nologo --logger "console;verbosity=minimal"`
+    (10 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (1500 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2259 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2259 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Wallet JSON Scalar Canonicalization
+
+- Hardened `OfflineNoteWalletNoteJsonCodec.Decode(...)` so persisted
+  `note_commitment_hex` must be lowercase unprefixed hex and numeric string
+  fields must use canonical unsigned decimal text when they are encoded as
+  strings. JSON numeric values remain accepted.
+- Added adversarial wallet-note JSON coverage for uppercase commitment hex,
+  zero-padded `version`, zero-padded `created_at_ms`, signed `updated_at_ms`,
+  zero-padded issuer-load `local_revision`, and zero-padded P2P
+  `output_index`.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (12 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2258 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2258 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Text Envelope Exactness
+
+- Hardened `OfflineNoteReceiveRequestCodec.DecodeText(...)`,
+  `OfflineNotePaymentTokenCodec.DecodeText(...)`, and
+  `OfflineNoteReceiptAckCodec.DecodeText(...)` so text handoff envelopes must
+  be exact: surrounding or embedded whitespace now fails before prefix and
+  base64url parsing instead of being trimmed away.
+- Converted the previous padded-text positive cases into adversarial negatives
+  and added embedded-whitespace text-envelope coverage for receive requests,
+  payment tokens, and receipt ACKs.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests" --nologo --logger "console;verbosity=minimal"`
+    (16 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2258 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2258 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Offline Note Persistence Invariant Exactness
+
+- Hardened `OfflineNoteReceiptAck` and `OfflineNoteWalletNote` local
+  exact-text validators so ACK handoff fields and persisted wallet-note
+  account/replay identifiers reject non-whitespace control characters before
+  they can cross handoff or persistence boundaries.
+- Hardened `OfflineNoteWalletNote` construction so unsupported enum values are
+  rejected immediately and `updated_at_ms` cannot predate `created_at_ms`.
+- Added adversarial coverage for ACK and wallet-note control-character fields,
+  unsupported wallet-note states, backward in-memory timestamps, and backward
+  persisted JSON timestamps.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (17 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2258 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2258 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk/Offline csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Query Capability Feature Flag Exactness
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` query capability
+  validation so `row_enrichment_fields` must match Rust's exact ordered
+  first-release enrichment list, `da_v1_enabled` must remain false, projection
+  feature flags (`checkpoint_plan_v1`, `checkpoint_publish_v1`,
+  `shard_catalog_v1`, `archive_export_v1`) must move as one consistent group,
+  and export resources must be empty when archive export is disabled.
+- Added adversarial coverage for row-enrichment ordering drift, DA-v1 enablement,
+  mismatched projection feature flags, and export resources advertised while
+  `archive_export_v1` is false.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (73 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2257 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2257 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Query Projection Capability Constant Exactness
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` query projection
+  validation so the C# client now pins Rust's first-release projection constants:
+  archive/schema version `1`, custom blob class id `1001`, DA codec
+  `application/x-iroha-query-shard+norito+zstd`, rowset codec
+  `application/x-iroha-query-shard-rowset+norito`, compression `zstd`, default
+  partition count `4096`, and the exact ordered metadata-key list.
+- Updated node-capability positive fixtures to mirror the Rust advert exactly
+  and added adversarial coverage for version/id drift, codec/compression drift,
+  partition-count drift, truncated metadata-key lists, and wrong metadata-key
+  entries.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (70 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2254 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2254 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SM Acceleration Capability Validation
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` response validation so
+  SM acceleration adverts must report scalar availability, use one of the exact
+  Rust-emitted policy labels (`auto`, `force-enable`, `force-disable`,
+  `scalar-only`), keep SM3/SM4 NEON availability paired, and avoid advertising
+  NEON when the policy is `scalar-only` or `force-disable`.
+- Added adversarial coverage for `scalar=false`, unsupported/alias policy text,
+  mismatched NEON flags, and NEON-enabled adverts under disabled scalar-only or
+  force-disable policies.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (64 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2248 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2248 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Node Query Capability Validation
+
+- Exposed typed `/v1/node/capabilities` query capability DTOs for aggregate and
+  projection metadata, including aggregate resource labels, row enrichment
+  fields, projection versions/codecs, metadata keys, export resources, and the
+  optional latest checkpoint marker.
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` so query capability
+  adverts reject null nested objects, disabled exact aggregate v1 markers,
+  malformed or duplicate capability labels, missing projection contracts,
+  non-positive projection versions/counts, malformed codec labels, negative
+  checkpoint heights, malformed checkpoint hashes, and checkpoint hashes without
+  matching checkpoint heights.
+- Added adversarial coverage for the query/projection capability advert while
+  preserving positive typed deserialization coverage for the new DTOs.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (59 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2243 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2243 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Node Schema Hash Capability Validation
+
+- Exposed `signed_transaction_schema_hash_hex` on the typed
+  `ToriiNodeCapabilities` DTO and hardened
+  `ToriiClient.GetNodeCapabilitiesAsync(...)` so the field must be exact
+  32-character lowercase hex before callers trust node wire-compatibility
+  metadata.
+- Added adversarial coverage for null, padded, uppercase, short, and non-hex
+  schema-hash values, plus positive typed deserialization coverage for the new
+  property.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (40 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2224 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2224 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SM Default Hash Capability Consistency
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` response validation so
+  node SM metadata must keep `allowed_signing` and `default_hash` semantically
+  consistent: `sm2` requires `sm3-256`, and `sm3-256` requires `sm2`.
+- Added adversarial coverage for both mismatch directions plus positive
+  coverage for a consistent SM2 capability response.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2219 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2219 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SM Signing Capability Exactness
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` response validation so
+  `crypto.sm.allowed_signing` must contain exact unique labels and must include
+  `ed25519`, matching the Rust configuration requirement for control-plane
+  operations.
+- Added adversarial coverage for an empty signing list, duplicate signing
+  labels, and a syntactically valid list that omits the required Ed25519
+  control-plane algorithm.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (32 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2216 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2216 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Curve Capability Bitmap Exactness
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` response validation so
+  `allowed_curve_bitmap` must not set bits for curve ids missing from
+  `allowed_curve_ids`; zero bitmap padding remains tolerated, but nonzero
+  claims must be represented in the id list.
+- Added adversarial coverage for an extra same-word bitmap bit and a nonzero
+  trailing bitmap word that would otherwise advertise unlisted curves.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (29 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2213 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2213 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Curve Capability Bitmap Consistency
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` response validation so
+  `allowed_curve_ids` must be unique and every advertised curve id must have a
+  matching `allowed_curve_bitmap` bit before callers trust crypto capability
+  metadata.
+- Added adversarial coverage for duplicate curve ids, bitmap entries that omit
+  advertised curve ids, and curve ids outside the bitmap range.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (27 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2211 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2211 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Runtime Upgrade Counter Consistency
+
+- Hardened `ToriiClient.GetRuntimeMetricsAsync(...)` response validation so
+  activated plus canceled runtime upgrade counters must be less than or equal to
+  total proposed upgrades before callers trust runtime metrics.
+- Added adversarial coverage for lowered `proposed`, over-limit `activated`, and
+  over-limit `canceled` counters while preserving the existing negative-counter
+  checks.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RuntimeMetadataEndpointsRejectMalformedResponses|FullyQualifiedName~GetRuntimeEndpointsDeserializeTypedPayloads" --nologo --logger "console;verbosity=minimal"`
+    (20 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2208 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2208 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Node Crypto Capability Label Exactness
+
+- Hardened `ToriiClient.GetNodeCapabilitiesAsync(...)` response validation so
+  SM default hash labels, allowed signing labels, and acceleration policy labels
+  must be exact tokens before callers trust node capability metadata.
+- Added adversarial coverage rejecting blank, padded, internal-whitespace, and
+  control-character capability labels while preserving exact non-empty
+  validation for `sm2_distid_default` domain-separation material.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync" --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2205 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2205 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Runtime ABI Version Exactness
+
+- Hardened node capabilities, active runtime ABI, and runtime metrics response
+  validation so `abi_version` must be the exact first-release value `1`; negative
+  values still fail with the existing non-negative diagnostic.
+- Added adversarial coverage rejecting `0` and future-version `2` ABI versions
+  across `/v1/node/capabilities`, `/v1/runtime/abi/active`, and
+  `/v1/runtime/metrics`.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetNodeCapabilitiesAsync|FullyQualifiedName~RuntimeMetadataEndpointsRejectMalformedResponses|FullyQualifiedName~GetRuntimeEndpointsDeserializeTypedPayloads" --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2200 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2200 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Runtime ABI Policy Exactness
+
+- Hardened `ToriiClient.GetRuntimeAbiHashAsync(...)` response validation so the
+  returned runtime ABI `policy` must be the exact first-release `V1` label before
+  callers trust returned ABI hash material.
+- Added adversarial runtime metadata coverage for null, blank, padded,
+  whitespace-containing, control-character, and unsupported policy labels.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~RuntimeMetadataEndpointsRejectMalformedResponses|FullyQualifiedName~GetRuntimeMetadataEndpointsDeserializeAndValidate|FullyQualifiedName~ContractMetadataResponsesRejectNonExactHashes" --nologo --logger "console;verbosity=minimal"`
+    (29 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2194 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2194 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Verified-Source Job Response Exactness
+
+- Hardened `ToriiClient.SubmitContractVerifiedSourceJobAsync(...)` and
+  `GetContractVerifiedSourceJobAsync(...)` response validation so returned
+  `job_id`, `status`, `submitted_at`, optional `completed_at`, and optional
+  message text must be exact before callers trust source-verification status.
+- Kept existing hash/provenance validation and added fail-closed coverage for
+  null, blank, padded, whitespace-containing, and control-character job envelope
+  fields across submit and read paths.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractVerifiedSourceJob|FullyQualifiedName~ContractVerifiedSourceReferencesRejectNonExactText|FullyQualifiedName~ContractMetadataResponsesRejectNonExactHashes|FullyQualifiedName~SubmitContractVerifiedSourceJobAsync|FullyQualifiedName~GetContractVerifiedSourceJobAsync" --nologo --logger "console;verbosity=minimal"`
+    (45 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2188 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2188 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Contract Code-View Shape Exactness
+
+- Hardened `ToriiClient.GetContractCodeViewAsync(...)` and
+  `GetExplorerInstructionContractViewAsync(...)` response validation so
+  code-view permissions, access hints, entrypoints, analysis/syscall lists,
+  warnings, and rendered-source metadata must be exact before callers trust
+  source/disassembly views.
+- Added fail-closed checks for null nested lists/items, malformed entrypoint
+  names/kinds/parameters, malformed access-hint keys, malformed syscall names,
+  non-exact warning text, and blank rendered source.
+- Added adversarial `ToriiClientTests` coverage for direct contract code-view
+  reads and the explorer instruction contract-view surface.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCodeView|FullyQualifiedName~ContractVerifiedSourceReferencesRejectNonExactText|FullyQualifiedName~ContractMetadataResponsesRejectNonExactHashes|FullyQualifiedName~GetContractCodeViewAsync" --nologo --logger "console;verbosity=minimal"`
+    (45 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2180 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2180 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract State Selector Shape Exactness
+
+- Hardened `ToriiClient.GetContractStateAsync(...)` response validation so
+  returned `path`, `paths`, `prefix`, entry paths, and optional decode-error
+  text must be exact before callers trust state material.
+- Added fail-closed state shape checks for null state entries, row counts that
+  exceed `limit`, stale `next_offset`, not-found entries carrying value
+  material, and `value_len` without `value_b64`.
+- Kept exact value-byte validation and added adversarial coverage for malformed
+  selectors, null entries, malformed decode errors, not-found value material,
+  stale pagination, over-limit row counts, non-exact `value_b64`, and decoded
+  length mismatches.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetContractStateAsync" --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2156 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2156 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Call/View Response Exactness
+
+- Hardened `ToriiClient.CallContractAsync(...)` response validation so returned
+  dataspace, contract id, optional contract address, and optional entrypoint
+  text must be exact before callers trust returned call material.
+- Hardened contract-view success and validation-error responses so returned
+  dataspace, contract id, optional contract address, entrypoint, error text,
+  code/ABI hashes, and VM diagnostic text must be exact.
+- Added VM diagnostic consistency checks for gas remaining/used, cycles, and
+  stack bytes so usage counters cannot exceed their declared limits.
+- Added adversarial `ToriiClientTests` coverage for null, blank, padded,
+  whitespace-containing, control-character returned call/view identifiers,
+  blank error/diagnostic text, and impossible diagnostic gas/cycle/stack
+  counters.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractCallViewResponses|FullyQualifiedName~ContractMetadataResponsesRejectNonExactHashes|FullyQualifiedName~ExecuteContractViewAsync|FullyQualifiedName~CallContractAsync" --nologo --logger "console;verbosity=minimal"`
+    (71 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2145 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2145 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Instance Inventory Exactness
+
+- Hardened `ToriiClient.GetContractInstancesAsync(...)` response validation so
+  returned instance pages must carry exact non-empty namespace text and exact
+  non-empty contract ids before callers trust the inventory.
+- Added fail-closed page-counter checks so returned instance item count cannot
+  exceed `limit`, `offset` cannot exceed `total`, and `offset + item_count`
+  cannot exceed `total`.
+- Added adversarial `ToriiClientTests` coverage for null, blank, padded,
+  whitespace-containing, control-character namespace/contract ids and
+  inconsistent `total`/`offset`/`limit` counters.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetContractInstancesAsync|FullyQualifiedName~ContractMetadataHashResponse|FullyQualifiedName~ContractMetadata" --nologo --logger "console;verbosity=minimal"`
+    (38 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2123 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2123 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Deployment Response Identifier Exactness
+
+- Hardened `ToriiClient.DeployContractAsync(...)` response validation so Torii
+  deploy responses must return exact non-empty `contract_address` and
+  `dataspace` text before callers trust deployment material.
+- Hardened `DeployAndActivateContractInstanceAsync(...)` response validation so
+  returned `namespace` and `contract_id` text must be exact before callers trust
+  the returned code/ABI hashes.
+- Added adversarial `ToriiClientTests` coverage for null, blank, padded,
+  whitespace-containing, and control-character deployment response identifiers
+  across both deploy response shapes.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractDeploymentAsync|FullyQualifiedName~DeployContractAsync|FullyQualifiedName~DeployAndActivateContractInstanceAsync|FullyQualifiedName~ActivateContractInstanceAsync" --nologo --logger "console;verbosity=minimal"`
+    (46 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2110 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2110 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Typed SSE Raw Data Fail-Closed
+
+- Hardened typed C# Torii SSE projections so
+  `StreamPipelineEventsAsync(...)`, `StreamProofEventsAsync(...)`, and the
+  typed explorer block/transaction/instruction streams reject data frames whose
+  raw SSE `data:` payload is malformed JSON, whitespace-only, or JSON `null`.
+- Kept the low-level `StreamEventsAsync(...)` helper raw-friendly while making
+  typed projections fail closed before DTO deserialization or projection
+  validation can silently skip bad data.
+- Added adversarial `ToriiClientTests` coverage for malformed, JSON-null, and
+  whitespace-only SSE data frames across pipeline, proof, explorer block,
+  explorer transaction, and explorer instruction streams.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~StreamPipelineEventsAsync|FullyQualifiedName~StreamProofEventsAsync|FullyQualifiedName~ExplorerSseStreams" --nologo --logger "console;verbosity=minimal"`
+    (48 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2099 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2099 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Typed SSE Event Exactness
+
+- Hardened `ToriiClient.StreamPipelineEventsAsync(...)` and
+  `StreamProofEventsAsync(...)` so typed SSE helpers validate projected Torii
+  payloads after SSE parsing and before yielding typed pipeline or proof events.
+- Pipeline SSE payloads now require the exact `Pipeline` category, exact
+  non-empty event/status/kind/details/SSE metadata text where present, and
+  exact 32-byte hex transaction, state-root, and block hashes where present.
+- Proof SSE payloads now require the exact `Data` category, `Proof...` event
+  labels, exact backend/verifying-key/prune-origin text, exact 32-byte proof,
+  call, envelope, and verifying-key commitment hashes where present, consistent
+  prune counters, and exact removed-proof records.
+- Added adversarial `ToriiClientTests` coverage for blank, padded,
+  whitespace-containing, control-character, short, prefixed, non-hex,
+  count-mismatched, null, and type-confused pipeline/proof SSE fields plus
+  malformed SSE `Last-Event-ID` metadata.
+- Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~StreamPipelineEventsAsync|FullyQualifiedName~StreamProofEventsAsync" --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2084 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2084 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Pipeline Status Response Exactness
+
+- Hardened `ToriiClient.GetPipelineTransactionStatusAsync(...)` response
+  parsing so Torii status payloads must be object envelopes, must carry exact
+  non-empty status kind text, and must reject malformed/null status shapes
+  before callers receive a `PipelineTransactionStatus`.
+- Added response exactness checks for returned pipeline transaction hashes,
+  optional block heights, scope, `resolved_from`, and rejection-content shape,
+  preserving unknown future status labels as `PipelineTransactionState.Unknown`
+  only when the label is exact token text.
+- Added adversarial `ToriiClientTests` coverage for non-object envelopes, null
+  and non-object `content`, missing/null/type-confused status values, missing or
+  malformed object status `kind`, status labels with whitespace, type-confused
+  rejection content, negative status/content heights, non-string and malformed
+  returned hashes, non-string or whitespace-containing scopes, and
+  control-character `resolved_from` fields.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetPipelineTransactionStatusAsync" --nologo --logger "console;verbosity=minimal"`
+    (43 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2056 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2056 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SoraFS Content Header Exactness
+
+- Hardened `GetSoraFsCidContentAsync(...)` so the buffered content helper still
+  returns optional content metadata when Torii omits `sora-content-cid`, but
+  rejects duplicated or noncanonical SoraFS content CID headers before returning
+  SDK-owned response metadata.
+- Tightened the shared C# SoraFS CID validator so whitespace-containing CID text
+  fails explicitly before the lowercase multibase base32 check.
+- Added adversarial `ToriiClientTests` coverage for absent content-CID metadata,
+  blank, uppercase, whitespace-containing, control-character, non-CID, and
+  duplicated `sora-content-cid` headers while leaving
+  `OpenSoraFsCidContentAsync(...)` as the intentionally raw stream helper.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFsCidContent" --nologo --logger "console;verbosity=minimal"`
+    (9 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFs" --nologo --logger "console;verbosity=minimal"`
+    (114 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2037 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2037 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Verifying-Key Write Response Exactness
+
+- Hardened `RegisterVerifyingKeyAsync(...)` and
+  `UpdateVerifyingKeyAsync(...)` so their raw `JsonDocument` helpers still
+  return caller-owned JSON but first require a response object with
+  `accepted: true`.
+- Added adversarial `ToriiClientTests` coverage for non-object responses,
+  missing `accepted`, null `accepted`, explicit `accepted: false`, and string
+  or numeric impostors across both verifying-key register and update helpers.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetVerifyingKeyAsync|FullyQualifiedName~VerifyingKey" --nologo --logger "console;verbosity=minimal"`
+    (285 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2030 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2030 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Verifying-Key Read Response Exactness
+
+- Hardened `GetVerifyingKeyAsync(...)` so the raw `JsonDocument` helper still
+  returns caller-owned JSON but first validates the Torii verifying-key detail
+  response envelope, id and record backend/name fields, record backend
+  consistency, required positive counters, hash fields, optional metadata/CID
+  text, activation/withdraw height ordering, canonical status text, and inline
+  key backend/base64 material.
+- Added adversarial `ToriiClientTests` coverage for null/non-object envelopes,
+  padded backend text, malformed verifying-key names, record/backend mismatch,
+  zero version or `vk_len`, malformed circuit/curve/hash/CID/gas-schedule
+  fields, negative heights, invalid height ranges, noncanonical status casing,
+  non-object inline keys, backend mismatches, padded base64, and empty decoded
+  inline key bytes while preserving the raw JSON return shape for valid
+  responses.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetVerifyingKeyAsync|FullyQualifiedName~VerifyingKey" --nologo --logger "console;verbosity=minimal"`
+    (273 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (2018 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (2018 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Explorer Supplemental Response Exactness
+
+- Hardened `GetExplorerAccountQrAsync(...)`,
+  `GetExplorerAssetDefinitionEconometricsAsync(...)`,
+  `GetExplorerAssetDefinitionSnapshotAsync(...)`,
+  `GetExplorerHealthAsync(...)`, and `GetExplorerMetricsAsync(...)` so the
+  remaining typed Torii explorer GET responses validate deserialized data
+  before returning it. The only remaining direct `Task` GET route in
+  `ToriiClient` is the intentionally raw `GetVerifyingKeyAsync(...)`
+  `JsonDocument` helper.
+- Added adversarial `ToriiClientTests` coverage for malformed QR account
+  identifiers, QR dimensions and text, malformed econometrics definition ids,
+  null econometrics lists/items, malformed econometrics window keys and numeric
+  strings, malformed holder snapshot definition ids, null holder/distribution
+  lists/items, noncanonical holder balances and total supply, null
+  distributions, out-of-range distribution/Lorenz ratios, and malformed
+  health/metrics timestamp fields.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetExplorerAccountQrAsync|FullyQualifiedName~GetExplorerAssetDefinitionEconometricsAsync|FullyQualifiedName~GetExplorerAssetDefinitionSnapshotAsync|FullyQualifiedName~GetExplorerHealthAsync|FullyQualifiedName~GetExplorerMetricsAsync|FullyQualifiedName~ExplorerSupplementalResponsesRejectMalformedResponse" --nologo --logger "console;verbosity=minimal"`
+    (38 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1995 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1995 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `rg -n "return GetAsync<|public Task<.*Get.*Async\\(" csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs`
+    (only the raw `Task<JsonDocument> GetVerifyingKeyAsync(...)` route remains)
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Explorer Inventory Response Exactness
+
+- Hardened `GetExplorerAssetDefinitionsAsync(...)`,
+  `GetExplorerAssetDefinitionAsync(...)`, `GetExplorerAssetsAsync(...)`,
+  `GetExplorerAssetAsync(...)`, `GetExplorerNftsAsync(...)`,
+  `GetExplorerNftAsync(...)`, `GetExplorerRwasAsync(...)`, and
+  `GetExplorerRwaAsync(...)` so Torii explorer inventory responses reject null
+  pagination/list/item shapes, malformed asset-definition/asset/NFT/RWA ids,
+  malformed owner/status/reference text, noncanonical quantity/value strings,
+  and malformed RWA parent lists before callers trust indexed inventory.
+- Added adversarial `ToriiClientTests` coverage for null pagination/list/item
+  responses, blank/padded/internal-whitespace/control-character text fields,
+  optional logo/status fields, signed or redundantly padded numeric strings,
+  trailing-zero decimal quantity text, null RWA parent lists/items, malformed
+  parent RWA ids, and malformed parent quantities while preserving route/query
+  encoding behavior.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetExplorerAssetDefinitionsAsync|FullyQualifiedName~GetExplorerAssetDefinitionAsync|FullyQualifiedName~GetExplorerAssetsAsync|FullyQualifiedName~GetExplorerAssetAsync|FullyQualifiedName~GetExplorerNftsAsync|FullyQualifiedName~GetExplorerNftAsync|FullyQualifiedName~GetExplorerRwasAsync|FullyQualifiedName~GetExplorerRwaAsync|FullyQualifiedName~ExplorerInventoryResponsesRejectMalformedResponse" --nologo --logger "console;verbosity=minimal"`
+    (39 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1962 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1962 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Account and Explorer Directory Response Exactness
+
+- Hardened `GetAccountsAsync(...)`, `GetExplorerAccountsAsync(...)`,
+  `GetExplorerAccountAsync(...)`, `GetExplorerDomainsAsync(...)`, and
+  `GetExplorerDomainAsync(...)` so Torii account and explorer directory
+  responses reject null pagination/list/item shapes, malformed account ids,
+  malformed I105 account-address text, malformed domain/logo/owner text, and
+  negative account totals before callers trust account or domain inventory.
+- Added adversarial `ToriiClientTests` coverage for null account/explorer
+  directory response collections, null items, blank/padded/internal-whitespace/
+  control-character identifier fields, malformed optional logo text, malformed
+  owner text, and negative account totals while preserving route/query
+  encoding behavior.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountsAsync|FullyQualifiedName~GetExplorerAccountsAsync|FullyQualifiedName~GetExplorerAccountAsync|FullyQualifiedName~GetExplorerDomainsAsync|FullyQualifiedName~GetExplorerDomainAsync|FullyQualifiedName~ExplorerDirectoryResponsesRejectMalformedResponse" --nologo --logger "console;verbosity=minimal"`
+    (22 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1931 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1931 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Alias Response Exactness
+
+- Hardened account alias lookup, account alias index resolution, account alias
+  resolution, asset alias resolution, and contract alias resolution helpers so
+  optional successful responses reject malformed aliases, account/asset/contract
+  ids, source/status fields, null lookup lists/items, and negative index or
+  alias-binding timestamp fields before callers trust alias metadata.
+- Added adversarial `ToriiClientTests` coverage for blank, padded,
+  internal-whitespace, and control-character alias fields, null lookup
+  lists/items, negative totals/indexes/binding timestamps, malformed binding
+  statuses, and malformed account/asset/contract identifiers while preserving
+  the 404-to-null behavior and request preflight checks.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Alias"`
+    (124 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1914 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1914 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# UAID Portfolio and Bindings Response Exactness
+
+- Hardened `GetUaidPortfolioAsync(...)` and `GetUaidBindingsAsync(...)` so
+  UAID portfolio/bindings responses reject noncanonical response UAIDs, null
+  nested dataspaces/accounts/assets, malformed nested account/dataspace/asset
+  text, noncanonical nonnegative portfolio quantities, and negative totals or
+  dataspace ids before callers trust space-directory inventory.
+- Added adversarial `ToriiClientTests` coverage for uppercase response UAIDs,
+  null totals/lists/items, negative counters, padded aliases/account ids,
+  blank labels/asset ids, control-character asset definitions, and malformed
+  quantities while preserving route canonicalization and asset-id query
+  preflight behavior.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Uaid"`
+    (70 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1890 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1890 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Account Asset and Permission Response Exactness
+
+- Hardened `GetAccountAssetsAsync(...)` and
+  `GetAccountPermissionsAsync(...)` so account asset-balance and permission
+  pages reject null list/items, malformed asset/account/scope/alias text,
+  malformed permission names, noncanonical nonnegative quantity text, and
+  negative totals before callers trust account pages.
+- Added adversarial `ToriiClientTests` coverage for null pages/items, blank,
+  padded, and control-character text fields, malformed permission names,
+  signed/redundantly padded/trailing-zero/overscaled quantities, and negative
+  totals while preserving route/query encoding behavior.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountAssetsAsync|FullyQualifiedName~GetAccountPermissionsAsync"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1866 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1866 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Node Runtime Metadata Response Exactness
+
+- Hardened `GetNodeCapabilitiesAsync(...)`, `GetRuntimeAbiActiveAsync(...)`,
+  and `GetRuntimeMetricsAsync(...)` so node/runtime metadata responses reject
+  null nested capability objects, malformed capability labels/lists, and
+  negative ABI/data-model versions or runtime upgrade counters before callers
+  trust metadata.
+- Added adversarial `ToriiClientTests` coverage for negative versions/counters,
+  null `crypto`/SM/curve/acceleration/counter objects, null list fields,
+  blank or padded capability labels, control-character SM defaults, and
+  negative curve ids while preserving the typed happy-path payloads.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~NodeCapabilities|FullyQualifiedName~RuntimeMetadata|FullyQualifiedName~RuntimeEndpoints"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1844 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1844 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SoraFS Denylist Response Exactness
+
+- Hardened `GetSoraFsDenylistCatalogAsync(...)` and
+  `GetSoraFsDenylistPackAsync(...)` so SoraFS denylist catalog/pack responses
+  reject null pack/list fields, malformed pack metadata text, non-exact
+  lowercase multibase manifest CID text, and negative catalog versions or entry
+  counts before callers trust denylist policy metadata.
+- Added adversarial `ToriiClientTests` coverage for negative versions/counts,
+  padded/control-character text fields, null opt-out/extra/pack lists, null
+  pack items, blank pack ids/source paths, uppercase/invalid/control-character
+  manifest CIDs, and malformed source paths while preserving internal spaces in
+  valid pack ids.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFsDenylist"`
+    (23 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1822 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1822 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# UAID Manifest Response Exactness
+
+- Hardened `ToriiClient.GetUaidManifestsAsync(...)` so space-directory
+  manifest inventory responses reject noncanonical response UAIDs, null
+  manifest records/lifecycle/account lists, non-exact 32-byte `manifest_hash`
+  values, malformed nested text, and negative totals, dataspace ids, lifecycle
+  epochs, or revocation epochs before callers trust UAID manifest inventory.
+- Replaced the permissive `"deadbeef"` manifest hash fixture with a fixed
+  32-byte hash and added adversarial `ToriiClientTests` coverage for uppercase
+  and bare response UAIDs, padded fields, null lists/items, short/prefixed/
+  whitespace/control-character/non-hex manifest hashes, empty status text, and
+  negative nested counters.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Uaid"`
+    (46 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1801 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1801 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Multisig Response Hash Exactness
+
+- Hardened native multisig and contract-call multisig response validators so
+  optional `proposal_id` and `instructions_hash` fields must be exact 32-byte
+  hex strings before callers trust returned proposal or signing material.
+- Replaced permissive `"aa55"` success fixtures with fixed 32-byte proposal
+  and instructions hash values, and added adversarial `ToriiClientTests`
+  coverage for short, prefixed, padded, embedded-whitespace,
+  control-character, and non-hex response fields across native proposal and
+  contract-call propose/approve paths.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Multisig"`
+    (80 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1781 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1781 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Account Transaction Summary Response Exactness
+
+- Hardened `ToriiClient.GetAccountTransactionsAsync(...)` so account history
+  responses reject null transaction list items, non-exact 32-byte
+  `entrypoint_hash` values, malformed authority text, and negative
+  `timestamp_ms`/`total` counters before callers trust account transaction
+  summaries.
+- Added adversarial `ToriiClientTests` coverage for null list/items, short,
+  prefixed, padded, embedded-whitespace, control-character, and non-hex
+  entrypoint hashes, malformed authority text, and negative counters while
+  preserving the route/query behavior for server-side `asset_id` filtering.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetAccountTransactionsAsync"`
+    (13 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1767 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1767 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Verified Source Provenance Exactness
+
+- Hardened contract code-view, explorer instruction contract-view, and
+  verified-source job responses so nested `verified_source_ref` provenance
+  rejects malformed language, source name, submitted-at text, manifest-id hex,
+  and payload-digest hex before callers trust source provenance.
+- Added adversarial `ToriiClientTests` coverage for padded, embedded-whitespace,
+  control-character, empty, prefixed, non-hex, and short nested provenance
+  fields across code-view and verified-source submit/status response paths.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractMetadataResponsesRejectNonExactHashes|FullyQualifiedName~ContractVerifiedSourceReferencesRejectNonExactText|FullyQualifiedName~GetContractCodeViewAsync|FullyQualifiedName~GetExplorerInstructionContractViewAsync|FullyQualifiedName~ContractVerifiedSource"`
+    (39 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1755 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1755 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Explorer Response Exactness
+
+- Hardened `ToriiClient` explorer block, transaction, and instruction REST
+  reads plus typed explorer SSE projections so responses reject non-exact
+  block/transaction hashes, instruction and rejection encodings, transaction
+  signatures, null list/stream items, and malformed instruction boxes before
+  callers trust indexed ledger projections.
+- Added adversarial `ToriiClientTests` coverage for padded, embedded-whitespace,
+  control-character, prefixed, short, odd-length, non-hex, null, and malformed
+  explorer REST/SSE response fields while preserving route/query input behavior.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Explorer"`
+    (47 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1748 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1748 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# SoraFS CID Lookup Response Exactness
+
+- Hardened `ToriiClient.GetSoraFsCidLookupAsync(...)` so SoraFS CID lookup
+  responses reject malformed content CID text, non-exact 32-byte manifest
+  digest/id hex, malformed or null file path lists, and negative file geometry
+  before callers trust gateway listings.
+- Added adversarial `ToriiClientTests` coverage for blank, padded, uppercase,
+  control-character, non-base32, short, prefixed, non-hex, null, traversal-like,
+  slash-containing, empty-list, and negative response fields.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SoraFs"`
+    (86 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1733 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1733 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Faucet Puzzle Response Exactness
+
+- Hardened `ToriiClient.GetAccountFaucetPuzzleAsync(...)` so Torii faucet
+  puzzle responses reject non-exact PoW algorithm labels, non-positive anchor
+  heights, non-exact 32-byte anchor hashes, malformed optional salt hex, and
+  unsafe scrypt parameters before callers solve or submit faucet work.
+- Added adversarial `ToriiClientTests` coverage for padded, embedded-whitespace,
+  control-character, unsupported, prefixed, short, empty, odd-length, non-hex,
+  zero, and over-limit puzzle response fields.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Faucet" --nologo --logger "console;verbosity=minimal"`
+    (40 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1706 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1706 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Runtime Hash Response Exactness
+
+- Hardened typed Torii contract/runtime response handling so contract manifest
+  reads, contract instance lists, contract code-view reads, explorer
+  instruction contract-view reads, contract-call responses, read-only
+  contract-view success/error responses, verified-source job submit/status
+  responses, and `/v1/runtime/abi/hash` reject non-exact returned code, ABI,
+  actual-code, and runtime ABI hash fields before callers trust control-plane
+  DTOs.
+- Added adversarial `ToriiClientTests` coverage for padded, embedded-whitespace,
+  control-character, prefixed, short, empty, and non-hex returned hash fields
+  across the affected helper families. Updated legacy shortcut fixtures to use
+  production-shaped 32-byte hash values.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ContractMetadataResponsesRejectNonExactHashes|FullyQualifiedName~GetContractCodeAsync|FullyQualifiedName~GetContractInstancesAsync|FullyQualifiedName~GetContractCodeViewAsync|FullyQualifiedName~GetExplorerInstructionContractViewAsync|FullyQualifiedName~CallContractAsync|FullyQualifiedName~ExecuteContractViewAsync|FullyQualifiedName~ContractVerifiedSource|FullyQualifiedName~GetRuntimeEndpoints" --nologo --logger "console;verbosity=minimal"`
+    (74 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1687 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1687 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii VPN Response Exactness
+
+- Hardened typed VPN response handling so `/v1/vpn/profile`, quote creation,
+  session create/read, receipt submit/list, and session delete responses reject
+  non-exact SPKI/key/hash/id and native-instruction hex fields before callers
+  trust tunnel or settlement material. Route/request preflight behavior remains
+  unchanged.
+- Added adversarial `ToriiClientTests` coverage for padded, short, prefixed,
+  whitespace-containing, empty, and non-hex VPN response fields across profile,
+  quote, session, receipt, receipt-list, and delete flows. Updated legacy C#
+  VPN session/receipt fixtures to use production-shaped 32-byte hex session ids.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Vpn" --nologo --logger "console;verbosity=minimal"`
+    (96 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1674 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1674 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii Transaction Hash Response Exactness
+
+- Hardened onboarding, faucet claim, contract-call, generic multisig, and
+  contract-call multisig response handling so non-empty `tx_hash_hex` and
+  `executed_tx_hash_hex` fields must be exact 32-byte hex before callers trust
+  queued or executed transaction ids. Empty/no-op hashes remain accepted for
+  existing Torii outcomes that intentionally report no new transaction.
+- Added adversarial `ToriiClientTests` coverage for padded, embedded-whitespace,
+  control-character, prefixed, short, and non-hex transaction-hash response
+  fields across the affected helper families. Updated happy-path queued
+  onboarding and faucet fixtures to use real 32-byte transaction hashes.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiTransactionHashResponsesRejectNonExactHashes|FullyQualifiedName~RegisterAccountAsyncPostsJsonAndDeserializesQueuedResponse|FullyQualifiedName~ClaimAccountFaucetAsyncPostsPowFieldsAndDeserializesQueuedResponse|FullyQualifiedName~ClaimAccountFaucetAsyncWithAccountIdSolvesPuzzleBeforePosting|FullyQualifiedName~RegisterMultisigAccountAsyncPostsMembersAndAcceptsExistsResponse" --nologo --logger "console;verbosity=minimal"`
+    (12 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1661 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1661 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Pipeline Rejection Content Exactness
+
+- Hardened `ToriiClient.GetPipelineTransactionStatusAsync(...)` response
+  parsing so rejected status `content` must be exact non-empty base64 before
+  callers receive `PipelineTransactionStatus.RejectionContentBase64`.
+- Added adversarial `ToriiClientTests` coverage for exact rejection content and
+  blank, padded, embedded-whitespace, non-breaking-space, control-character, and
+  malformed rejection-content base64 responses.
+- Updated the C# README and Windows certification roadmap pipeline row with
+  this Linux .NET evidence. Windows native bridge certification remains a
+  separate release gate for `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetPipelineTransactionStatusAsync" --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1653 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1653 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract State Response Exactness
+
+- Hardened `ToriiClient.GetContractStateAsync(...)` response handling so each
+  returned `value_b64` field must be exact canonical base64 before callers
+  receive contract state material. Canonical empty base64 remains accepted for
+  zero-byte state values.
+- Added response validation that rejects padded, embedded-whitespace,
+  non-breaking-space, control-character, malformed, and non-canonical base64,
+  and rejects `value_len` values that do not match the decoded `value_b64`
+  length.
+- Added adversarial `ToriiClientTests` coverage for exact non-empty and empty
+  state values plus malformed state value responses, and updated the C# README
+  and Windows certification roadmap read/admin row with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetContractStateAsync" --nologo --logger "console;verbosity=minimal"`
+    (19 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1645 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1645 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Code Bytes Response Exactness
+
+- Hardened `ToriiContractCodeBytesResponse.DecodeBytes()` and
+  `ToriiClient.GetContractCodeBytesResponseAsync(...)` so returned `code_b64`
+  must be exact, non-empty canonical base64 before callers receive or decode
+  contract code material.
+- Added adversarial `ToriiClientTests` coverage for blank, padded,
+  embedded-whitespace, non-breaking-space, control-character, malformed, and
+  invalid base64 code-byte responses.
+- Updated the C# README and Windows certification roadmap read/admin row with
+  this Linux .NET evidence. Windows native bridge certification remains a
+  separate release gate for `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~GetContractCodeBytesAsync" --nologo --logger "console;verbosity=minimal"`
+    (10 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1636 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1636 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Deploy Response Exactness
+
+- Hardened `ToriiClient.DeployContractAsync(...)`,
+  `DeployAndActivateContractInstanceAsync(...)`, and
+  `ActivateContractInstanceAsync(...)` response handling so false `ok`
+  envelopes fail before callers trust deployment or activation results.
+- Deployment responses now also reject non-exact `code_hash_hex` and
+  `abi_hash_hex` material: blank, padded, embedded-whitespace,
+  control-character, prefixed, short, or non-hex values fail during response
+  validation.
+- Added adversarial `ToriiClientTests` coverage across deploy,
+  deploy-and-activate, and activate response envelopes, and updated the C#
+  README plus Windows certification roadmap with the Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~DeployContractAsync|FullyQualifiedName~DeployAndActivateContractInstanceAsync|FullyQualifiedName~ActivateContractInstanceAsync|FullyQualifiedName~ContractDeploymentAsync" --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1627 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1627 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract-Call Multisig Response Exactness
+
+- Hardened `ToriiClient.ProposeMultisigContractCallAsync(...)` and
+  `ApproveMultisigContractCallAsync(...)` response handling so false `ok`
+  envelopes and non-exact `signing_message_b64` fields fail before callers
+  trust returned multisig signing material.
+- Added adversarial `ToriiClientTests` coverage for blank, padded,
+  embedded-whitespace, non-breaking-space, control-character, and malformed
+  base64 multisig contract-call response fields across both propose and approve
+  operations.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~MultisigContractCall"`
+    (30 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1616 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1616 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Contract Call Response Material Exactness
+
+- Hardened `ToriiClient.CallContractAsync(...)` response handling so false
+  `ok` envelopes and non-exact `transaction_scaffold_b64`,
+  `signed_transaction_b64`, or `signing_message_b64` fields fail before callers
+  trust returned signing/scaffold material.
+- Added adversarial `ToriiClientTests` coverage for blank, padded,
+  embedded-whitespace, non-breaking-space, control-character, and malformed
+  base64 contract-call response fields.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.CallContractAsync"`
+    (24 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1608 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1608 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Torii Bearer Token Exactness
+
+- Hardened `ToriiClient` request setup so a configured
+  `ToriiClientOptions.BearerToken` rejects blank, padded, embedded-whitespace,
+  non-breaking-space, and control-character values before HTTP dispatch or
+  canonical request signing. `null` remains the explicit no-bearer-token state.
+- Added adversarial `ToriiClientTests` coverage proving malformed bearer token
+  options do not reach the recording HTTP handler.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactBearerTokensBeforeDispatchAndCanonicalSigning"`
+    (7 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1601 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1601 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Low-Level Torii Query Exactness
+
+- Hardened `ToriiClient` low-level request setup so optional raw query strings
+  reject embedded ordinary whitespace, non-breaking spaces, and tabs before URI
+  construction, HTTP dispatch, or canonical request signing. Callers must
+  percent-encode or `+`-encode spaces in query values.
+- Extended `ToriiClientTests.SendAsyncRejectsNonExactQueriesBeforeDispatchAndCanonicalSigning`
+  with internal whitespace, NBSP, and tab vectors that prove malformed raw query
+  text does not reach the recording HTTP handler.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExactQueriesBeforeDispatchAndCanonicalSigning"`
+    (9 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1594 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1594 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# I105 Address Literal Exactness
+
+- Hardened `AccountAddress.Parse(...)` so padded I105 account-address literals
+  reject before canonical decoding instead of silently trimming caller input.
+- Added fixture-backed `AddressFixtureTests` coverage for ordinary-space, tab,
+  newline, and non-breaking-space padding around otherwise valid I105 address
+  literals.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AddressFixtureTests"`
+    (6 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1591 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1591 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Identifier Receipt Hex Exactness
+
+- Hardened identifier resolve receipt validation so top-level
+  `signature`/`signature_payload_hex`, opening signatures, and attestation
+  signatures reject embedded whitespace, non-breaking-space, and control
+  characters before generic malformed-hex classification.
+- Added adversarial `ToriiClientTests` coverage for internal ordinary-space,
+  NBSP, and control-character receipt hex fields across top-level, opening, and
+  attestation response shapes.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejects"`
+    (102 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1590 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1590 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Multisig Signing Message Response Exactness
+
+- Hardened `ToriiClient.ProposeMultisigAsync(...)` response validation so
+  optional `signing_message_b64` rejects blank, padded, embedded-whitespace,
+  non-breaking-space, control-character, and malformed base64 values before
+  callers trust returned signing material.
+- Removed the now-unused trim-only `NormalizeOptionalValue(...)` helper from
+  `ToriiClient`, leaving the multisig response path on exact validation instead
+  of silent trimming.
+- Added adversarial `ToriiClientTests` coverage for non-exact multisig
+  `signing_message_b64` response values while preserving the existing empty and
+  malformed success-response checks.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ProposeMultisigAsync"`
+    (23 passed)
+  - `/home/mtakemiya/.dotnet/dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1583 passed)
+  - `/home/mtakemiya/.dotnet/dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1583 unit tests and 2 integration tests passed)
+  - `/home/mtakemiya/.dotnet/dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/README.md status.md roadmap.md csharp/src/Hyperledger.Iroha.Sdk csharp/tests/Hyperledger.Iroha.Sdk.Tests`
+  - `git diff --name-only -- '*lock*' ':(glob)**/Cargo.lock' ':(glob)**/packages.lock.json'`
+
+## 2026-06-27 C# Identifier Resolve Encrypted Input Exactness
+
+- Hardened `ToriiClient.ResolveIdentifierAsync(...)` request normalization so
+  optional `encrypted_input` rejects blank, padded, embedded-whitespace,
+  non-breaking-space, and control-character values before HTTP dispatch.
+- Extended the shared identifier exact-text helper with embedded-whitespace and
+  control-character rejection while preserving the existing policy-id component
+  checks.
+- Added adversarial `ToriiClientTests` coverage proving malformed encrypted
+  input does not reach the recording HTTP handler.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExact" --nologo --logger "console;verbosity=minimal"`
+    (77 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1578 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1578 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# SoraFS Pin Response Exactness
+
+- Hardened `ToriiClient.RegisterSoraFsPinManifestAsync(...)` response
+  normalization so `chunker_handle` rejects blank, padded, embedded-whitespace,
+  non-breaking-space, and control-character values instead of silently trimming
+  Torii response text before returning a trusted DTO.
+- Removed the remaining `NormalizeRequiredValue(...)` trim-only response path
+  from `ToriiClient`; the SoraFS pin response now uses the same exact-string
+  helper as request-side production boundaries.
+- Added adversarial `ToriiClientTests` coverage for malformed SoraFS
+  `chunker_handle` response values while preserving request dispatch evidence.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.RegisterSoraFsPinManifestAsync" --nologo --logger "console;verbosity=minimal"`
+    (23 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1572 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1572 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Verifier Backend Label Whitespace Exactness
+
+- Hardened `VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(...)`
+  so production verifier backend labels reject embedded whitespace with a
+  dedicated whitespace diagnostic before unsupported-backend classification.
+- Preserved catalog alias behavior for descriptive non-production aliases while
+  keeping `IsProductionVerifyBackendLabel(...)` fail-closed on whitespace labels.
+- Added adversarial `VerifyingKeyBackendTagTests` coverage for ordinary-space,
+  tab, and non-breaking-space backend labels.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~VerifyingKeyBackendTagTests" --nologo --logger "console;verbosity=minimal"`
+    (222 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1566 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1566 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Account Address Algorithm Exactness
+
+- Hardened `AccountAddress.FromPublicKey(...)` so explicit signing-algorithm
+  labels reject embedded whitespace in addition to blank and padded values
+  before alias lookup and public-key address construction.
+- Added fixture-backed `AddressFixtureTests` coverage for ordinary-space, tab,
+  and non-breaking-space algorithm labels while leaving non-whitespace
+  confusables on the unsupported-algorithm path.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~AddressFixtureTests" --nologo --logger "console;verbosity=minimal"`
+    (5 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Address/AccountAddress.cs tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1563 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1563 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Offline Note Text Boundary Exactness
+
+- Hardened shared Offline Note exact-text helpers so canonical payloads,
+  receive requests, payment tokens, receipt ACKs, and wallet-note persistence
+  reject embedded whitespace in addition to blank, padded, invalid UTF-8, and
+  control-character values before Norito/text/JSON handoff data is trusted.
+- Added adversarial Offline Note coverage for embedded whitespace at constructor
+  and decode boundaries across chain ids, payment request ids, account ids,
+  asset-definition ids, asset ids, amount text, ACK recipients, and persisted
+  wallet replay-prevention ids.
+- Updated the C# README and Windows certification roadmap with this Linux .NET
+  evidence. Windows native bridge certification remains a separate release gate
+  for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1563 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1563 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Torii Identifier Receipt Validator Exactness
+
+- Aligned `ToriiClient` identifier policy-summary and resolve-response
+  validators with the hardened receipt JSON converters so exact policy-id
+  components, resolver public keys, attestation selectors/backends, payload
+  identifiers, execution/opening metadata, and numeric-string timestamps reject
+  embedded whitespace in addition to blank, padded, malformed, and
+  control-character values before callers trust Torii JSON.
+- Preserved component-level `kind#rule` diagnostics by splitting policy ids
+  before enforcing embedded-whitespace checks on `.kind` and `.rule`.
+- Added adversarial `ToriiClientTests` coverage for embedded ordinary spaces
+  and non-breaking spaces across identifier resolve requests, policy summaries,
+  top-level and nested receipt policy ids, signed/proof attestation fields, and
+  nested receipt payload/execution/opening fields.
+- Updated the Windows certification roadmap with this Linux .NET evidence.
+  Windows native bridge certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.GetIdentifierPoliciesAsyncRejectsNonExactPolicySummaryFields|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactPolicyIdBeforeDispatch|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactAttestationSelectors|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactNestedReceiptPayloadFields" --nologo --logger "console;verbosity=minimal"`
+    (82 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1563 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1563 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Torii Request-Part Whitespace Exactness
+
+- Hardened low-level `ToriiClient.SendAsync(...)` request setup so required
+  method/path request parts reject embedded whitespace in addition to empty,
+  padded, and control-character values before URI construction, HTTP dispatch,
+  or canonical request signing.
+- Added adversarial `ToriiClientTests` coverage for ordinary-space and
+  non-breaking-space path segments that previously reached request setup.
+- Updated the C# README with this Linux .NET evidence. Windows native bridge
+  certification remains a separate release gate for
+  `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests.SendAsyncRejectsNonExact" --nologo --logger "console;verbosity=minimal"`
+    (23 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1549 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1549 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Transaction Boundary Whitespace Exactness
+
+- Hardened `TransactionBuilder` and `TransactionEncodingContext` exact-string
+  preflights so chain ids, account ids, asset/domain/NFT/trigger labels,
+  metadata keys, numeric strings, optional strings, and fixed-byte/hash literals
+  reject embedded whitespace in addition to blank, padded, and
+  control-character values before Norito transaction bytes are encoded or signed.
+- Kept JSON metadata values free-form; the stricter checks apply only to
+  boundary identifiers and literals that shape the signed transaction payload.
+- Added adversarial `TransactionBuilderTests` coverage for embedded ordinary
+  spaces and non-breaking spaces across constructors, metadata replacement,
+  common encoder helpers, account-authority encoding, fixed bytes, hashes, and
+  representative instruction payloads.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --nologo --logger "console;verbosity=minimal"`
+    (152 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1547 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1547 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Canonical Request Auth Whitespace Exactness
+
+- Hardened canonical Torii request signing so account ids, HTTP methods, paths,
+  caller-provided nonces, signature headers, and canonical credentials reject
+  embedded whitespace in addition to blank, padded, and control-character values
+  before signing or header construction.
+- Left canonical query normalization unchanged: query values may still contain
+  spaces, which are percent-encoded deterministically in the canonical query
+  string.
+- Added adversarial `CanonicalRequestTests` coverage for embedded ordinary
+  spaces and non-breaking spaces across `BuildHeaders`, `BuildMessage`,
+  `BuildSignatureMessage`, `CanonicalRequestHeaders`, and
+  `CanonicalRequestCredentials`.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests" --nologo --logger "console;verbosity=minimal"`
+    (80 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1528 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1528 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Identifier Receipt Whitespace Exactness
+
+- Hardened Torii identifier policy and resolve receipt JSON parsing so exact
+  receipt strings reject embedded whitespace in addition to blank, padded, and
+  control-character values before callers trust policy, payload, attestation,
+  proof, execution, opening, or timestamp fields.
+- Preserved component-level `kind#rule` policy-id diagnostics by splitting policy
+  ids before applying the stricter exact-string check to each component.
+- Added adversarial `ToriiIdentifierReceiptTests` coverage for internal
+  whitespace in legacy receipt fields, nested payload/execution/opening fields,
+  signed/proof attestation fields, proof base64, numeric-string timestamps, and
+  identifier policy summaries.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~ToriiClientTests.GetIdentifierPoliciesAsyncRejectsNonExactPolicySummaryFields|FullyQualifiedName~ToriiClientTests.ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId" --nologo --logger "console;verbosity=minimal"`
+    (95 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1516 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1516 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Signed Query Builder Exactness
+
+- Hardened `SignedQueryBuilder` and `SignedIterableQueryBuilder` so signed
+  authority, selector/filter, continuation cursor id, and sort-key text reject
+  any whitespace or control characters before Norito encoding or signing.
+- Preserved deliberate proof-hash canonicalization for accepted 32-byte hash
+  inputs, including casing and optional `0x` prefixes, after exact text
+  preflight.
+- Added adversarial builder tests for embedded spaces, tabs, non-breaking
+  spaces, padded values, control characters, optional alias filters, proof
+  hashes, DA pin/SoraFS selectors, iterable selectors, cursor ids, and sort
+  keys.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests" --nologo --logger "console;verbosity=minimal"`
+    (36 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Queries/SignedQueryBuilder.cs src/Hyperledger.Iroha.Sdk/Queries/SignedIterableQueryBuilder.cs tests/Hyperledger.Iroha.Sdk.Tests/SignedQueryBuilderTests.cs tests/Hyperledger.Iroha.Sdk.Tests/SignedIterableQueryBuilderTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1473 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1473 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Pipeline Status Exactness
+
+- Hardened `ToriiClient.GetPipelineTransactionStatusAsync(...)` so transaction
+  hash and scope inputs reject padded, whitespace-containing, and
+  control-character values before query construction or HTTP dispatch. Accepted
+  32-byte hash casing and `0x` prefixes still canonicalize to lower-case hex,
+  and `null`/empty scope still defaults to `auto`.
+- Response parsing now uses the same exact hash preflight for returned pipeline
+  hashes, so malformed Torii payloads are rejected before callers trust the
+  status object.
+- Added adversarial `ToriiClientTests` coverage for malformed pipeline hashes,
+  malformed scopes, canonical query construction, and malformed response hashes.
+  Request-side malformed cases prove the recording HTTP handler is not reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Pipeline" --nologo --logger "console;verbosity=minimal"`
+    (17 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (793 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1467 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1467 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# UAID Route and Portfolio Exactness
+
+- Hardened managed Torii UAID portfolio, bindings, and manifest reads so UAID
+  route literals reject padded, whitespace-containing, and control-character
+  input before path construction or HTTP dispatch. Accepted bare 64-hex and
+  `uaid:`-prefixed literals still canonicalize to lower-case `uaid:<hex>`.
+- Hardened the UAID portfolio `asset_id` filter so supplied values must be
+  exact before query construction. Account onboarding now shares the same
+  non-trimming UAID preflight.
+- Added adversarial `ToriiClientTests` coverage for malformed UAID read route
+  literals, UAID portfolio asset filters, and padded/control-character
+  onboarding UAID fields. Each malformed read case proves the recording HTTP
+  handler is not reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Uaid" --nologo --logger "console;verbosity=minimal"`
+    (26 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Onboarding" --nologo --logger "console;verbosity=minimal"`
+    (32 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (778 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1452 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1452 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# SoraFS Pin Registration Exactness
+
+- Hardened managed Torii SoraFS pin registration so authority, private-key,
+  chunker namespace/name/semver, storage-class type, alias namespace/name/proof,
+  manifest payload, manifest/chunk digests, and successor digest reject
+  non-exact whitespace/control-character input before JSON serialization or
+  HTTP dispatch.
+- Preserved deliberate SoraFS canonicalization only after exact text preflight:
+  accepted 32-byte digest casing/prefixes and storage-class labels still
+  normalize to Torii's wire shape, while padded fields no longer silently trim
+  into accepted requests.
+- Added adversarial `ToriiClientTests` coverage for malformed SoraFS pin
+  registration request fields. Each malformed case proves the recording HTTP
+  handler is not reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~SoraFs" --nologo --logger "console;verbosity=minimal"`
+    (52 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (753 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1427 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1427 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Verifying-Key Registry Exactness
+
+- Hardened managed Torii verifying-key registry reads and writes so backend/name
+  route text and authority, private-key, circuit, gas-schedule, curve, metadata
+  CID, verifying-key CID, commitment, and status request fields reject
+  non-exact whitespace/control-character input before JSON serialization or
+  HTTP dispatch.
+- Preserved deliberate registry canonicalization only after exact text preflight:
+  accepted 32-byte hex casing/prefixes and status labels still normalize to the
+  Torii wire shape, while padded fields no longer silently trim into accepted
+  requests.
+- Added adversarial `ToriiClientTests` coverage for malformed register/update
+  request fields. Each malformed case proves the recording HTTP handler is not
+  reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~VerifyingKey" --nologo --logger "console;verbosity=minimal"`
+    (28 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (740 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1414 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1414 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# VPN/SoraFS Route Identifier Exactness
+
+- Hardened managed Torii VPN session read/delete routes and SoraFS CID lookup,
+  denylist-pack, and content gateway routes so route identifiers reject null,
+  blank, surrounding-whitespace, and control-character values before URI
+  construction or HTTP dispatch.
+- Kept valid internal SoraFS route text intact: denylist pack ids such as
+  `global core` and nested content paths such as `assets/app main.js` still
+  escape as path text instead of being rejected or silently normalized.
+- Added adversarial `ToriiClientTests` coverage for malformed VPN/SoraFS route
+  identifiers. Each malformed case proves the recording HTTP handler is not
+  reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~VpnAndSoraFsRouteReads" --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Vpn" --nologo --logger "console;verbosity=minimal"`
+    (83 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~SoraFs" --nologo --logger "console;verbosity=minimal"`
+    (39 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (718 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1392 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1392 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Alias Lookup/Resolve Exactness
+
+- Hardened managed Torii alias lookup and resolve helpers so account ids,
+  account aliases, asset aliases, contract aliases, dataspace filters, and
+  domain filters reject blank, padded, internal-whitespace, and
+  control-character values before JSON serialization or HTTP dispatch.
+- Added adversarial `ToriiClientTests` coverage for account alias lookup request
+  fields and account/asset/contract alias resolution. Each malformed case proves
+  the recording HTTP handler is not reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Alias" --nologo --logger "console;verbosity=minimal"`
+    (40 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (688 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1362 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1362 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer/Account Query Filter Exactness
+
+- Hardened typed explorer/account query filter construction so optional
+  identifier and selector filters reject blank, padded, internal-whitespace, and
+  control-character values before query construction or HTTP dispatch. This
+  covers account asset `asset`/`scope`, account transaction `asset_id`, explorer
+  domain/owner/asset filters, transaction authority/asset filters, and
+  instruction authority/account/transaction/kind/asset filters.
+- Replaced padded filter happy paths with exact values and added a shared
+  adversarial matrix proving malformed filter values do not reach the recording
+  HTTP handler.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~ExactQueryFilters" --nologo --logger "console;verbosity=minimal"`
+    (110 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Explorer" --nologo --logger "console;verbosity=minimal"`
+    (32 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Account" --nologo --logger "console;verbosity=minimal"`
+    (66 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (657 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1331 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1331 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Explorer/Account Route Segment Exactness
+
+- Hardened managed Torii path segment encoding so route identifiers reject null,
+  blank, surrounding-whitespace, and control-character values before URI
+  construction or HTTP dispatch. Internal path text is preserved and escaped, so
+  existing valid SoraFS pack ids such as `global core` still round-trip as an
+  exact path segment rather than being rejected.
+- Updated direct explorer/account read routes to validate with their public
+  parameter names. The covered routes include explorer account QR/detail,
+  domain, asset-definition metadata/econometrics/snapshot, asset, NFT, RWA,
+  block, transaction, instruction, instruction contract-view, and account
+  asset/transaction/permission reads.
+- Replaced padded identifier happy paths with exact values and added a shared
+  adversarial matrix proving malformed route identifiers do not reach the
+  recording HTTP handler.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~ExactRouteSegmentReads" --nologo --logger "console;verbosity=minimal"`
+    (80 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~GetSoraFsDenylistPackAsync" --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (547 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1221 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1221 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Contract Read/Admin Exactness
+
+- Hardened managed contract read/admin helpers so code-hash routes now require
+  exact 32-byte hex before path construction. This covers contract manifest
+  reads, code-byte reads, code-view reads, and verified-source job status reads.
+- Hardened contract instance and state query builders so namespace ids, job ids,
+  instance filters, hash prefixes, state paths, and decode selectors reject
+  blank, padded, whitespace-containing, control-character, and malformed hex
+  values before HTTP dispatch instead of silently trimming them into Torii
+  requests.
+- Updated `ToriiClientTests` happy paths to use exact current identifiers and
+  added adversarial pre-dispatch coverage for malformed code hashes, namespace
+  ids, verified-source job ids, instance filters, state path lists, decode
+  selectors, and invalid path/prefix mode combinations.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Contract" --nologo --logger "console;verbosity=minimal"`
+    (140 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (467 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1141 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1141 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Raw Torii Submission Exactness
+
+- Hardened low-level `ToriiClient.SendAsync(...)` request setup so optional
+  query strings and `Accept` header values must be exact when supplied: blank,
+  whitespace-only, padded, and control-character values now fail before URI
+  construction, canonical request signing, or HTTP dispatch.
+- Hardened raw Torii submission helpers so `SubmitSignedQueryAsync(...)` and
+  `SubmitTransactionAsync(...)` reject empty Norito byte payloads before binary
+  content is created, and `OpenEventSseAsync(...)` rejects malformed
+  `Last-Event-ID` resume ids before dispatch.
+- Added `ToriiClientTests` adversarial coverage for the low-level query,
+  `Accept`, `Last-Event-ID`, signed-query payload, and transaction payload
+  boundaries. Each malformed case proves the recording HTTP handler is not
+  reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~SendAsync" --nologo --logger "console;verbosity=minimal"`
+    (24 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~SubmitSignedQueryAsync" --nologo --logger "console;verbosity=minimal"`
+    (3 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~OpenEventSseAsync" --nologo --logger "console;verbosity=minimal"`
+    (9 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~SubmitTransactionAsync" --nologo --logger "console;verbosity=minimal"`
+    (2 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (418 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1092 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1092 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Contract Write Request Exactness
+
+- Hardened the managed contract write helpers so malformed deploy, legacy
+  instance activate/deploy, contract-call, contract-view, multisig
+  propose/approve, and verified-source requests fail before serialization or
+  HTTP dispatch. The preflight now covers exact aliases/targets/selectors,
+  signer material, public-key/signature pairing, exact base64 frames, 32-byte
+  hash fields, non-empty instruction batches, positive gas limits, and
+  verified-source language/source shape.
+- Updated `ToriiDeployContractRequest` to serialize Torii's current
+  `contract_alias` request field. The retired `Dataspace` property remains as
+  an obsolete source-compatible placeholder but is ignored by JSON
+  serialization.
+- Added `ToriiClientTests` adversarial coverage proving malformed contract and
+  multisig write DTOs do not reach the recording HTTP handler. The happy-path
+  deploy test now asserts the request contains `contract_alias` and does not
+  emit the retired `dataspace` field.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Contract" --nologo --logger "console;verbosity=minimal"`
+    (91 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Multisig" --nologo --logger "console;verbosity=minimal"`
+    (53 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (401 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (1075 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (1075 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# VPN Request Exactness
+
+- Hardened `ToriiClient.CreateVpnQuoteAsync(...)`,
+  `CreateVpnSessionAsync(...)`, and `SubmitVpnReceiptAsync(...)` so malformed
+  VPN write DTOs fail before JSON serialization or HTTP dispatch. The managed
+  client now canonicalizes accepted hex to lowercase, rejects padded,
+  whitespace-containing, control-character, prefixed, wrong-length, and non-hex
+  quote/session/receipt fields, and keeps Torii-compatible empty exit-class and
+  empty receipt lease-id fallbacks.
+- Added `ToriiClientTests` adversarial coverage for quote metering keys,
+  session quote/payment/metering bindings, receipt/voucher hex payloads, and
+  explicit lease ids. Each malformed case proves the recording HTTP handler is
+  not reached.
+- Updated the C# README and Windows certification roadmap row with this Linux
+  .NET evidence. Windows native bridge certification remains a separate release
+  gate for `connect_norito_bridge.dll`, loader paths, RID, and architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Vpn" --nologo --logger "console;verbosity=minimal"`
+    (53 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (317 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (991 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (991 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Account Onboarding Exact UAID Contract
+
+- Updated `ToriiAccountOnboardingRequest` and `ToriiClient.RegisterAccountAsync(...)`
+  for the current explicit-UAID onboarding contract: callers must provide
+  exactly one of `account_id` or `public_key_hex`, an explicit UAID with the
+  canonical low bit set, and optional digest-only `identity_commitment_hex`.
+  Raw `identity` metadata is rejected before serialization.
+- Hardened `RegisterMultisigAccountAsync(...)` so malformed aliases, empty or
+  non-exact member account ids, missing/mismatched member weights, zero weights,
+  impossible signer thresholds, and zero TTLs fail before HTTP dispatch.
+- Added `ToriiClientTests` adversarial coverage proving malformed single-account
+  and multisig onboarding requests do not reach the recording HTTP handler.
+  The valid single-account test now posts canonical `identity_commitment_hex`
+  and normalized `uaid` fields instead of the retired raw identity shortcut.
+- Updated the C# README and the Windows certification roadmap row with this
+  Linux .NET evidence. Windows native bridge certification remains a separate
+  release gate for `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Onboarding" --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (272 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (946 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (946 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Account Faucet PoW Exactness
+
+- Hardened the managed `ToriiAccountFaucetPow` challenge, verify, and solve
+  paths so account ids, anchor hash hex, challenge salt hex, nonce hex, and the
+  puzzle algorithm selector are exact before hashing or scrypt work. The helper
+  no longer trims padded account ids or hex preimages into a different PoW
+  challenge.
+- Hardened `ToriiClient.ClaimAccountFaucetAsync(...)` so direct faucet claim
+  requests reject malformed account ids, one-sided PoW anchor/nonce fields,
+  zero anchor heights, malformed nonce hex, and over-32-byte nonces before HTTP
+  dispatch.
+- Added `ToriiClientTests` adversarial coverage for whitespace/control
+  account ids, anchor/salt/nonce hex, unsupported algorithm selectors,
+  one-sided claim PoW fields, zero anchors, odd/non-hex nonce strings, and
+  oversized claim nonces. The malformed direct-claim cases prove the recording
+  HTTP handler is not reached.
+- Updated the C# README and the Windows certification roadmap row with this
+  Linux .NET evidence. Windows native bridge certification remains a separate
+  release gate for `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests&FullyQualifiedName~Faucet" --nologo --logger "console;verbosity=minimal"`
+    (21 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiAccountFaucetPow.cs src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (242 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (916 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (916 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Privacy Native Proof Request Selector Exactness
+
+- Hardened `PrivacyProofRequestV1(...)` / `privacyProofRequestV1(...)` request
+  construction so `algorithmId`, `entrypoint`, and `vkRef` must be exact
+  non-empty selector strings with no whitespace, no control characters, and a
+  1024-byte UTF-8 cap before any native bridge dispatch or ABI loading.
+- Added `PrivacyNativeTests` adversarial coverage for empty, whitespace-only,
+  non-breaking-space padded, internal-whitespace, control-character, oversized,
+  and null selector text, proving malformed selector input cannot reach the
+  native request builder callback.
+- Updated the C# README and the Windows certification roadmap row with this
+  Linux .NET evidence. Windows native bridge certification remains a separate
+  release gate for `connect_norito_bridge.dll`, loader paths, RID, and
+  architecture.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~PrivacyNativeTests" --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format csharp/Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (902 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (902 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Torii Request Setup Exactness
+
+- Hardened `ToriiClient.SendAsync(...)` request setup so non-exact request
+  methods and paths are rejected before URI construction, HTTP dispatch, or
+  canonical request header generation. This closes the path where public Torii
+  callers could pass padded, NBSP-padded, blank, or control-character route
+  paths and have them normalized into a request URI before signing.
+- Added `ToriiClientTests` adversarial coverage proving non-exact paths and
+  constructible blank HTTP methods do not reach the recording HTTP handler when
+  canonical request credentials are configured.
+- Updated the roadmap canonical request auth row with the Torii request setup
+  evidence. Windows host certification remains separate for the native-bridge
+  release lane.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (228 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (900 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (900 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Transaction Builder Adversarial Matrix Expansion
+
+- Expanded `TransactionBuilderTests` so managed transaction encoding now has
+  adversarial non-exact field coverage across transfer, mint, burn,
+  asset/domain/account/asset-definition/NFT/trigger metadata set/remove
+  factories, trigger repetition and execution factories, account destinations,
+  metadata keys, numeric quantities, NFT/trigger labels, asset-definition ids,
+  and fixed-byte/hash literal helpers.
+- The new vectors pin the existing fail-closed behavior before transaction
+  bytes are encoded or signed, covering padded, NBSP-padded, control-character,
+  malformed hex, odd-length, and wrong-length literals where relevant. No
+  production encoder changes were needed for this pass.
+- Updated the roadmap C# transaction-builder row with the broader Linux .NET
+  evidence. Windows host certification remains separate for the native-bridge
+  release lane.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~TransactionBuilderTests" --nologo --logger "console;verbosity=minimal"`
+    (133 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (888 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (888 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Identifier Receipt Converter Hardening
+
+- Hardened raw `ToriiIdentifierResolveResponse` JSON deserialization so nested
+  identifier receipt envelopes now reject non-exact control-character text,
+  malformed signed/proof attestation selectors, signed/proof field mixing,
+  missing or invalid proof-attestation `proof_b64`, incomplete nested
+  payload/attestation halves, mixed legacy-plus-nested envelopes, and malformed
+  nested opening timestamps before callers can observe a partially trusted DTO.
+- Extended `ToriiIdentifierReceiptTests` with direct converter adversarial
+  vectors for nested signed and proof receipts, missing nested halves, legacy
+  field mixing, control-character attestation kinds, malformed proof base64,
+  empty proof bytes, and execution/opening timestamp exactness. This mirrors the
+  existing `ToriiClient` response validation at the DTO parsing boundary.
+- Updated the roadmap C# identifier receipt rows to distinguish local
+  converter-level closure from the remaining Windows C# certification pass.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests" --nologo --logger "console;verbosity=minimal"`
+    (37 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~ToriiClientTests" --nologo --logger "console;verbosity=minimal"`
+    (253 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (850 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (850 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Offline Note Receive Request Handoff Codec
+
+- Added `OfflineNoteReceiveRequest` and `OfflineNoteReceiveRequestCodec` to the
+  C# SDK for the shared
+  `iroha_data_model::offline::model::OfflineNoteReceiveRequestEnvelope`
+  Norito/text handoff payload, with compact Norito layout and
+  `wallet-offline-bearer-cash-receive:` base64url text encoding.
+- The managed constructor and decoder bind exact `chain_id`,
+  `payment_request_id`, canonical I105 `account_id`, canonical
+  `asset_definition_id`/`asset_id`, canonical numeric amount text, embedded
+  key-certificate account ownership, and a 32-byte Iroha prehash output
+  commitment before wallet code trusts a receive request.
+- Negative coverage rejects wrong schemas/layouts/checksums, malformed compact
+  fields, padded or control-character metadata, non-canonical account/asset
+  ids, asset-definition/account mismatches, key-certificate account mismatch,
+  malformed key-certificate archives, non-canonical amounts, malformed output
+  commitments, trailing bytes, and ambiguous base64url text payloads.
+- Documented the C# receive-request handoff API in `csharp/README.md` and
+  updated the roadmap Offline Note C# row with the receive-request coverage.
+  Native proof execution remains owned by the native bridge work.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteReceiveRequestTests" --nologo --logger "console;verbosity=minimal"`
+    (5 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiveRequest.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiveRequestTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNoteReceiveRequestTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (35 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (832 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (832 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-27 C# Offline Note Payment Token Handoff Codec
+
+- Added `OfflineNotePaymentToken` and `OfflineNotePaymentTokenCodec` to the C#
+  SDK for the shared
+  `iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope`
+  Norito/text handoff payload, with envelope version `2`, compact Norito
+  layout, and `wallet-offline-bearer-cash-payment:` base64url text encoding.
+- The managed token model keeps audit bundles as opaque Norito bytes while
+  decoding their structure enough to reject wrong schemas/layouts, malformed
+  compact fields, token-id/audit mismatches, empty or mismatched audit vectors,
+  output commitment/claim ordering drift, unsupported recursive proof metadata,
+  empty proof bytes, malformed bearer-audit-trail elements, and trails that do
+  not end with the token audit bundle.
+- Added `OfflineNoteReceiptAck.FromPaymentToken(...)`,
+  `MatchesPaymentToken(...)`, and `RequireMatchesPaymentToken(...)` so C# ACKs
+  can only bind to a payment token when chain id, payment request id, token id,
+  and recipient output membership all match exactly.
+- Documented the C# payment-token handoff API in `csharp/README.md` and updated
+  the roadmap Offline Note C# row with the new token/audit/ACK negative
+  coverage. Native proof execution remains owned by the native bridge work.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNotePaymentTokenTests" --nologo --logger "console;verbosity=minimal"`
+    (6 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNotePaymentToken.cs src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNotePaymentTokenTests.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests|FullyQualifiedName~OfflineNotePaymentTokenTests|FullyQualifiedName~OfflineNoteReceiptAckTests|FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (30 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (827 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (827 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-26 C# Offline Note Canonical Payload Codecs
+
+- Added `OfflineNoteKeyCertificatePayload`, `OfflineNoteIssuedClaim`,
+  `OfflineNoteRedeemPublicInputs`, `OfflineNoteAuditPublicInputs`,
+  `OfflineNoteCommitmentPreimage`, `OfflineNoteInputNullifierPreimage`,
+  `OfflineNotePaymentTokenIdPreimage`, and
+  `OfflineNoteCanonicalPayloadCodec` to the C# SDK for the shared compact
+  Norito key-certificate-payload, issued-claim, redeem-public-inputs,
+  audit-public-inputs, note-commitment-preimage, input-nullifier-preimage, and
+  payment-token-id-preimage archives.
+- The managed models enforce exact Offline Note derivation domains, canonical
+  I105 account ids, canonical base58/BLAKE3 asset-definition ids, canonical
+  numeric amount text, 32-byte Iroha prehashes, 32-byte random note
+  secrets/token nonces, one-use key-certificate core rules, non-empty protocol
+  vectors, audit input count matching, one-to-one audit output
+  claim/commitment ordering, and wrapped-archive derivation of note
+  commitments, input nullifiers, and payment token ids before wallet code trusts
+  public inputs.
+- The decoders reject wrong schemas, non-compact archive layouts, checksum
+  failures, malformed compact lengths, invalid UTF-8 strings, padded/forged
+  domains, child trailing bytes, unsupported account-controller tags, invalid
+  option/bool tags, unsupported commitment-origin tags, empty vectors,
+  malformed hashes, over-scale amounts, short secrets/nonces, nested chain-id
+  trailing bytes, and audit output mismatches.
+- Documented the C# canonical payload API in `csharp/README.md` and moved the
+  roadmap C# Offline Note V1/V2 canonical payload row from "confirm/add" to
+  covered for the seven domain-bearing payload/preimage types. Native proof
+  internals remain owned by the native bridge work.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteCanonicalPayloadTests" --nologo --logger "console;verbosity=minimal"`
+    (8 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteCanonicalPayloads.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteCanonicalPayloadTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (821 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test csharp/Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (821 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-26 C# Offline Note Wallet-Note Persistence Codec
+
+- Added `OfflineNoteWalletNote`, `OfflineNoteCommitmentOrigin`, and
+  `OfflineNoteWalletNoteJsonCodec` to the C# SDK as an opaque wallet-note
+  persistence surface using the same JSON field names as the
+  Swift/Kotlin/Android secure stores.
+- The C# record keeps key-certificate and audit bundles as opaque Norito bytes,
+  exposes structured issuer-load/P2P-output origins and wallet-note states, and
+  defensively copies note commitment, note secret, key-certificate, and audit
+  bytes.
+- Constructor and decode paths reject padded or blank persisted `chain_id`,
+  `account_id`, and optional `spent_payment_request_id`, invalid UTF-8 JSON,
+  malformed base64/hex payloads, non-32-byte note commitments or secrets,
+  unknown states/origins, and oversized P2P output indices before wallet code
+  trusts account-scope or replay-prevention metadata.
+- Documented the C# wallet-note persistence API in `csharp/README.md` and
+  moved the roadmap wallet-note row from "confirm/add" to covered. Native proof
+  internals remain separate from this opaque persistence surface.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteWalletNoteTests" --nologo --logger "console;verbosity=minimal"`
+    (11 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (813 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (813 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-26 C# Offline Note Receipt ACK Codec
+
+- Added `OfflineNoteReceiptAck` and `OfflineNoteReceiptAckCodec` to the C# SDK
+  for the legacy
+  `iroha_data_model::offline::model::OfflineNoteReceiptAckEnvelope` handoff
+  payload, with compact Norito encoding and
+  `wallet-offline-bearer-cash-ack:` base64url text encoding.
+- The managed constructor and decoder now reject blank or whitespace-padded
+  `chain_id`, `payment_request_id`, and `recipient_account_id`, non-32-byte
+  `token_id`, zero `accepted_at_ms`, wrong Norito schema/layout/checksum,
+  malformed compact lengths, invalid UTF-8 strings, trailing field bytes, and
+  padded or ambiguous text payloads before wallet code trusts a receipt ACK.
+- Documented the C# receipt ACK API in `csharp/README.md` and moved the roadmap
+  receipt ACK readiness item from "confirm/add" to covered.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~OfflineNoteReceiptAckTests" --nologo --logger "console;verbosity=minimal"`
+    (5 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteReceiptAck.cs tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteReceiptAckTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (813 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (813 unit tests and 2 integration tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+
+## 2026-06-26 C# Redeem Lineage, Top-Up Anchor, and Request Hardening
+
+- Added source-level C# recursive-spend redeem preflight support for the
+  defaulted trailing `lineage_verifier_records: Vec<VerifyingKeyRecord>` field
+  while preserving the legacy single `lineage_verifier_record` path.
+- The new C# overloads reject dangling semantic records, missing records for
+  lineage witnesses with Reserved-lineage previous proofs, negative and
+  over-limit plural record counts, and absent-witness/reserved-previous marker
+  mismatches before native bridge dispatch.
+- Updated the C# ABI-6 archive fixture assertions for the defaulted plural
+  field and regenerated redeem request/instruction hashes, and documented the
+  plural-record overloads in the C# SDK README.
+- Added source-level C# ABI-7 archive fixture assertions for the current
+  `255x1` profile so the append bundle, verify request/result, redeem request,
+  and redeem instruction byte lengths and SHA-256 hashes are recomputed from
+  the decoded fixture bytes.
+- Promoted the source-level C# preferred offline spend selector to the same
+  compact-first policy as the other SDKs: `recursive_compact_v1` wins when the
+  ABI-7 compact-token native surface is available, then
+  `recursive_spend_v1`, then `checked_prefold_v1`.
+- Updated the production-readiness and SDK-parity guards, plus their JavaScript
+  meta-tests, so C# compact-first selector drift is now part of the same
+  negative-control surface as Rust, JavaScript, Python, Swift, Kotlin/JVM, and
+  Android Java.
+- Added the C# README to the SDK native-material alias boundary: generic
+  proof-state, recursive/lineage proof-state, aggregation transcript,
+  fixed-window table material, verifier-witness batch, transition-profile
+  binding, append-opening preflight, recursive verifier scalar projection, and
+  previous/resulting accumulator aliases are documented as native-owned
+  material, not C# request fields. The SDK parity guard and JavaScript
+  meta-test now mutate C# alongside the other SDK READMEs for this negative
+  control.
+- Added a source-level C# managed lineage-witness decoder guard for
+  `previousRecursiveProofs` count prefixes above the compact-token hop limit,
+  plus a raw count-prefix-only adversarial vector. The SDK-wide count-prefix
+  negative control now mutates the C# decoder and test vector alongside
+  JavaScript, Python, Swift, Kotlin/JVM, and Android Java.
+- Added a source-level C# record-bundle preflight for
+  `KagemushaVerifiedFoldRecordBundle` inputs. The compact-token prover,
+  Pallas open-envelope builder, recursive aggregation prover, and recursive
+  compact-token prover now reject raw `recordBundle.steps` count prefixes above
+  the compact-token hop limit before native bridge dispatch, and the SDK-wide
+  record-bundle negative control mutates C# with the other SDKs.
+- Added source-level C# Pallas open-envelope semantic preflight for
+  caller-supplied current-hop archives in the recursive aggregation and
+  recursive compact-token native-wrapper entrypoints. The wrapper now checks the
+  OpenVerifyEnvelope vector schema, record-bundle hop-count equality, raw
+  `params.g`/`params.h` and proof `l`/`r` count-prefix mismatches before element
+  parsing, transcript-label bounds, and required metadata option shape
+  (missing, stale fixed-array payloads, trailing bytes, unknown tags, and
+  declared-length overruns) before native bridge dispatch.
+- Added a C# synthetic Pallas vector regression and a dedicated
+  `--negative-control-csharp-pallas-open-envelope-preflight` SDK parity guard,
+  wired into the PR workflow and JavaScript guard meta-test.
+- Added source-level C# typed recursive-spend init/append request encoders:
+  `EncodeInitRequest(...)`, `EncodeInitRequestWithLineageMaterials(...)`,
+  `EncodeAppendRequest(...)`, and
+  `EncodeAppendRequestWithLineageMaterials(...)`. The managed constructors now
+  emit compact Norito request archives while rejecting wrong-profile lineage
+  key artifacts, current-hop Pallas count/schema drift, missing or dangling
+  previous-lineage verifier records, missing or dangling Reserved-lineage
+  append previous-proof opening archives, malformed previous-proof opening
+  archives, and aggregation-output lineage-key material before native bridge
+  dispatch.
+- Added generated-Pallas C# init/append helper overloads:
+  `EncodeInitRequestWithGeneratedPallas(...)` and
+  `EncodeAppendRequestWithGeneratedPallas(...)`. The helpers validate raw or
+  typed lineage key material, previous-lineage verifier-record selection, and
+  output-circuit admission before invoking the current-hop or previous-proof
+  Pallas builders, so malformed record bundles and builder failures cannot mask
+  lineage-admission diagnostics.
+- Added source-level C# init/append request codec adversarial vectors and a
+  dedicated `--negative-control-csharp-init-append-request-codecs` SDK parity
+  guard, wired into the PR workflow and JavaScript guard meta-test.
+- Added C# bundle-summary decoding for
+  `bundle.accumulator.topup_anchor_nullifiers`. `DecodeBundleSummary(...)` now
+  exposes defensive-copy `TopupAnchorNullifiers` metadata and rejects empty,
+  over-limit, zero, duplicate, descending, current-note-commitment reuse,
+  current-note-spend-nullifier reuse, and raw over-limit count-prefix-only
+  top-up anchor payloads before recursive-proof parsing or trailing
+  accumulator fields can mask the field-scoped diagnostic.
+- Added C# redeem change-output reserved-collision preflight:
+  `ValidateRedeemChangeOutputNotReserved(...)` plus bundle-summary
+  `Redeem(...)` overloads reject a change commitment that reuses the current
+  note commitment, current note spend nullifier, or any top-up anchor nullifier
+  before native bridge dispatch.
+- Added C# transition-profile summary decoding for ABI-6 init/append archives.
+  `DecodeTransitionProfileSummary(...)` exposes defensive-copy previous top-up
+  anchor and current-hop output commitment metadata, rejects init profiles that
+  carry previous anchors, and rejects append profiles with missing, zero,
+  duplicate, descending, output-reused, or current-note-reused previous top-up
+  anchors before native bridge dispatch.
+- Extended the SDK parity guard and JavaScript meta-test with C# markers for
+  top-up anchor nullifier invariants, transition-profile previous-anchor
+  invariants, accumulator-before-proof precedence, and redeem change-output
+  reserved-collision coverage. The
+  `--negative-control-sdk-topup-anchor-nullifier-invariants` and
+  `--negative-control-sdk-redeem-change-output-reserved-collisions` branches now
+  mutate C# alongside the other SDKs.
+- Windows host certification remains outstanding for the external
+  `connect_norito_bridge.dll` loader/RID evidence row; this Linux pass does not
+  clear that Windows-only release blocker.
+- Validation passed:
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests.RecursiveSpendNativePreferredModePrefersRecursiveCompactWhenAvailable" --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests.RecursiveSpendSharedAbi7FixturePinsCurrentProfileHashes" --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests.RecursiveSpendLineageWitnessDecoderRejectsTrailingFields" --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests.RecursiveSpendRecordBundlePreflightRejectsOverLimitStepCountBeforeLoadingNativeBridge" --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests.RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge" --nologo --logger "console;verbosity=minimal"`
+    (1 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests" --nologo --logger "console;verbosity=minimal"`
+    (66 passed after adding transition-profile summary/preflight vectors)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --nologo --logger "console;verbosity=minimal"`
+    (797 passed)
+  - `PATH="$HOME/.dotnet:$PATH" KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN="$HOME/.dotnet/dotnet" ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (built `connect_norito_bridge` for Linux, native bridge SHA-256
+    `8ecda02659d13bdb18bf34e5bec8f6c4874189b6733996fa5e5f1fbeb4527dad`,
+    744 passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-restore --nologo --logger "console;verbosity=minimal"`
+    (797 unit tests and 2 integration smoke tests passed)
+  - `PATH="$HOME/.dotnet:$PATH" dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --nologo`
+  - `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --include src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs --verify-no-changes --no-restore --verbosity minimal`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-open-envelope-preflight`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-init-append-request-codecs`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-count-prefix-prechecks`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-record-bundle-fold-step-count-prechecks`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-topup-anchor-nullifier-invariants`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-reserved-collisions`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-native-material-aliases`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-preferred-mode-fallback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default-cross-sdk`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo`
+  - `npm test --prefix javascript/iroha_js -- test/kagemushaFfiContractParity.test.js`
+    (76 passed; initial package-relative path correction was needed after the
+    native addon build succeeded)
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (1 matched test passed, 75 skipped)
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected|Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (2 matched tests passed, 74 skipped)
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock csharp/Cargo.lock` produced no output
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh csharp/README.md csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+    produced no output
+- Validation note: `PATH="$HOME/.dotnet:$PATH" dotnet format Hyperledger.Iroha.Sdk.sln --verify-no-changes --no-restore --verbosity minimal`
+  still reports whitespace drift in pre-existing SCCP files outside this
+  recursive-spend change (`SccpMessageProofBundles.cs` and
+  `SccpBscMainnetTests.cs`); those unrelated files were left untouched.
+
+## 2026-06-26 Readiness Section Guard Pinning
 
 - Extended the recursive Kagemusha policy guard so the production-readiness
   section-consistency invariant and its adversarial tests are pinned by the
@@ -853,7 +11664,7 @@ Last updated: 2026-06-27
   JavaScript source, JavaScript package dist, Python, Swift, Kotlin/JVM, and
   Android Java. Extended the SDK parity guard, workflow inventory, and
   JavaScript parity meta-test with
-  `--negative-control-non-csharp-record-bundle-fold-step-count-prechecks`.
+  `--negative-control-sdk-record-bundle-fold-step-count-prechecks`.
   The earlier lineage-witness count-prefix parity check is now scoped to its
   own decoder so it cannot be satisfied by the new fold-step guard.
 - Updated `roadmap.md` with the matching Windows C# TODO. C# source and
@@ -871,8 +11682,8 @@ Last updated: 2026-06-27
   - Android Java `KagemushaRecursiveSpendProverTest` via direct `javac`/`java -ea`
     harness
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
-  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-record-bundle-fold-step-count-prechecks`
-  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-record-bundle-fold-step-count-prechecks`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-count-prefix-prechecks`
   - `ci/check_kagemusha_recursive_spend_policy.sh`
   - `ci/check_kagemusha_production_readiness.sh`
   - `git diff --check`
@@ -889,7 +11700,7 @@ Last updated: 2026-06-27
   JavaScript source, JavaScript package dist, Python, Swift, Kotlin/JVM, and
   Android Java. Extended the SDK parity guard, workflow inventory, and
   JavaScript parity meta-test with
-  `--negative-control-non-csharp-lineage-witness-count-prefix-prechecks`.
+  `--negative-control-sdk-lineage-witness-count-prefix-prechecks`.
 - Updated `roadmap.md` with the matching Windows C# TODO. C# source and
   `Cargo.lock` remain untouched.
 - Validation passed:
@@ -905,7 +11716,7 @@ Last updated: 2026-06-27
   - Android Java `KagemushaRecursiveSpendProverTest` via direct `javac`/`java -ea`
     harness
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
-  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-count-prefix-prechecks`
   - `ci/check_kagemusha_recursive_spend_policy.sh`
   - `ci/check_kagemusha_production_readiness.sh`
   - `git diff --check`

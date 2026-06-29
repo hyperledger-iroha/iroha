@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pr_csharp.yml"
+      - "ci/check_csharp_sdk_package_consumer.sh"
       - "csharp/**"
       - "fixtures/account/address_vectors.json"
   workflow_dispatch:
@@ -25,10 +26,13 @@ jobs:
         run: dotnet restore Hyperledger.Iroha.Sdk.sln
 
       - name: Build
-        run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore
+        run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
 
       - name: Test
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
 
       - name: Pack
-        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build
+        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+
+      - name: Package consumer smoke
+        run: ../ci/check_csharp_sdk_package_consumer.sh

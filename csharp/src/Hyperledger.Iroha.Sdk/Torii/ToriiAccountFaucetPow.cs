@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
+using Hyperledger.Iroha.Address;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -46,6 +47,9 @@ public static class ToriiAccountFaucetPow
 {
     public const string Algorithm = "scrypt-leading-zero-bits-v1";
 
+    internal const long MaxScryptRomixMemoryBytes = 64L * 1024 * 1024;
+    internal const uint MaxScryptParallelization = 16;
+
     private static readonly byte[] DomainSeparator = Encoding.ASCII.GetBytes("iroha:accounts:faucet:pow:v2");
 
     public static byte[] ComputeChallenge(
@@ -54,21 +58,17 @@ public static class ToriiAccountFaucetPow
         string anchorBlockHashHex,
         string? challengeSaltHex = null)
     {
-        if (string.IsNullOrWhiteSpace(accountId))
-        {
-            throw new ArgumentException("Account id cannot be null or whitespace.", nameof(accountId));
-        }
-
+        var exactAccountId = RequireExactAccountId(accountId, nameof(accountId));
         if (anchorHeight == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(anchorHeight), "Anchor height must be positive.");
         }
 
-        var anchorHash = Convert.FromHexString(NormalizeHex(anchorBlockHashHex, nameof(anchorBlockHashHex)));
-        var challengeSalt = string.IsNullOrWhiteSpace(challengeSaltHex)
+        var anchorHash = Convert.FromHexString(RequireExactHex(anchorBlockHashHex, nameof(anchorBlockHashHex)));
+        var challengeSalt = challengeSaltHex is null
             ? Array.Empty<byte>()
-            : Convert.FromHexString(NormalizeHex(challengeSaltHex, nameof(challengeSaltHex)));
-        var accountBytes = Encoding.UTF8.GetBytes(accountId.Trim());
+            : Convert.FromHexString(RequireExactHex(challengeSaltHex, nameof(challengeSaltHex)));
+        var accountBytes = Encoding.UTF8.GetBytes(exactAccountId);
         var payload = new byte[DomainSeparator.Length + accountBytes.Length + sizeof(ulong) + anchorHash.Length + challengeSalt.Length];
         var offset = 0;
 
@@ -111,13 +111,7 @@ public static class ToriiAccountFaucetPow
             throw new ArgumentException("Challenge cannot be empty.", nameof(challenge));
         }
 
-        var n = CheckedWorkFactor(scryptLogN);
-        var r = checked((int)scryptR);
-        var p = checked((int)scryptP);
-        if (r <= 0 || p <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(scryptR), "Scrypt parameters must be positive.");
-        }
+        var (n, r, p) = CheckedScryptParameters(scryptLogN, scryptR, scryptP);
 
         return ManagedScrypt.DeriveKey(nonceBytes, challenge, n, r, p, dkLen: 32);
     }
@@ -147,7 +141,7 @@ public static class ToriiAccountFaucetPow
         out int leadingZeroBits)
     {
         ArgumentNullException.ThrowIfNull(puzzle);
-        var normalizedNonce = NormalizeHex(nonceHex, nameof(nonceHex));
+        var normalizedNonce = RequireExactHex(nonceHex, nameof(nonceHex));
         var nonceBytes = Convert.FromHexString(normalizedNonce);
         var challenge = ComputeChallenge(accountId, puzzle);
         var digest = ComputeDigest(nonceBytes, challenge, puzzle.ScryptLogN, puzzle.ScryptR, puzzle.ScryptP);
@@ -162,15 +156,10 @@ public static class ToriiAccountFaucetPow
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(puzzle);
-        if (!string.Equals(puzzle.Algorithm, Algorithm, StringComparison.Ordinal))
-        {
-            throw new NotSupportedException($"Unsupported faucet PoW algorithm `{puzzle.Algorithm}`.");
-        }
-
-        if (string.IsNullOrWhiteSpace(accountId))
-        {
-            throw new ArgumentException("Account id cannot be null or whitespace.", nameof(accountId));
-        }
+        RequireSupportedAlgorithm(
+            puzzle.Algorithm,
+            $"{nameof(puzzle)}.{nameof(ToriiAccountFaucetPuzzle.Algorithm)}");
+        var exactAccountId = RequireExactAccountId(accountId, nameof(accountId));
 
         options ??= new ToriiAccountFaucetSolveOptions();
         if (options.MaxAttempts <= 0)
@@ -183,19 +172,26 @@ public static class ToriiAccountFaucetPow
             throw new ArgumentOutOfRangeException(nameof(options.NonceByteCount), "NonceByteCount must be between 1 and 32.");
         }
 
+        var maxAttemptOffset = (ulong)(options.MaxAttempts - 1);
+        if (options.StartNonce > ulong.MaxValue - maxAttemptOffset)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.MaxAttempts),
+                "MaxAttempts must not advance the nonce past UInt64.MaxValue from StartNonce.");
+        }
+
         if (puzzle.DifficultyBits == 0)
         {
             return new ToriiAccountFaucetSolution
             {
-                AccountId = accountId.Trim(),
+                AccountId = exactAccountId,
                 AnchorHeight = puzzle.AnchorHeight,
                 DifficultyBits = puzzle.DifficultyBits,
                 Attempts = 0,
             };
         }
 
-        var normalizedAccountId = accountId.Trim();
-        var challenge = ComputeChallenge(normalizedAccountId, puzzle);
+        var challenge = ComputeChallenge(exactAccountId, puzzle);
         var nonceBytes = new byte[options.NonceByteCount];
 
         for (var attempt = 0; attempt < options.MaxAttempts; attempt++)
@@ -213,7 +209,7 @@ public static class ToriiAccountFaucetPow
 
             return new ToriiAccountFaucetSolution
             {
-                AccountId = normalizedAccountId,
+                AccountId = exactAccountId,
                 AnchorHeight = puzzle.AnchorHeight,
                 NonceHex = Convert.ToHexString(nonceBytes).ToLowerInvariant(),
                 DigestHex = Convert.ToHexString(digest).ToLowerInvariant(),
@@ -235,24 +231,137 @@ public static class ToriiAccountFaucetPow
         nonceBuffer[^destination.Length..].CopyTo(destination);
     }
 
-    private static int CheckedWorkFactor(byte logN)
+    private static int CheckedWorkFactor(byte scryptLogN)
     {
-        if (logN >= 31)
+        if (scryptLogN == 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(logN), "Scrypt logN must be less than 31.");
+            throw new ArgumentOutOfRangeException(nameof(scryptLogN), "Scrypt logN must be positive.");
         }
 
-        return 1 << logN;
+        if (scryptLogN >= 31)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scryptLogN), "Scrypt logN must be less than 31.");
+        }
+
+        return 1 << scryptLogN;
     }
 
-    private static string NormalizeHex(string? value, string paramName)
+    internal static (int N, int R, int P) CheckedScryptParameters(
+        byte scryptLogN,
+        uint scryptR,
+        uint scryptP)
+    {
+        var n = CheckedWorkFactor(scryptLogN);
+        if (scryptR == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scryptR), "Scrypt r must be positive.");
+        }
+        if (scryptR > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scryptR), "Scrypt r is too large.");
+        }
+        if (scryptP == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scryptP), "Scrypt p must be positive.");
+        }
+        if (scryptP > MaxScryptParallelization)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(scryptP),
+                $"Scrypt p must be at most {MaxScryptParallelization}.");
+        }
+        if (scryptP > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scryptP), "Scrypt p is too large.");
+        }
+
+        var r = (int)scryptR;
+        var p = (int)scryptP;
+        var romixMemoryBytes = checked(128L * r * n);
+        if (romixMemoryBytes > MaxScryptRomixMemoryBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(scryptLogN),
+                $"Scrypt N and r require at most {MaxScryptRomixMemoryBytes} bytes of ROMix memory.");
+        }
+
+        return (n, r, p);
+    }
+
+    internal static string RequireExactAccountId(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Account id cannot be null or whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Account id must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Account id must not contain control characters.", paramName);
+        }
+
+        try
+        {
+            return AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant)
+                .ToI105(AccountAddress.DefaultChainDiscriminant);
+        }
+        catch (AccountAddressException exception)
+        {
+            throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
+        }
+    }
+
+    internal static string RequireExactHex(string? value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new ArgumentException("Hex value cannot be null or whitespace.", paramName);
         }
 
-        return value.Trim();
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Hex value must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Hex value must not contain control characters.", paramName);
+        }
+
+        if ((value.Length & 1) != 0 || !value.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException("Hex value must contain an even number of hexadecimal characters.", paramName);
+        }
+
+        return value;
+    }
+
+    private static void RequireSupportedAlgorithm(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Faucet PoW algorithm cannot be null or whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Faucet PoW algorithm must not contain whitespace.", paramName);
+        }
+
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Faucet PoW algorithm must not contain control characters.", paramName);
+        }
+
+        if (!string.Equals(value, Algorithm, StringComparison.Ordinal))
+        {
+            throw new NotSupportedException($"Unsupported faucet PoW algorithm `{value}`.");
+        }
     }
 
     private static class ManagedScrypt

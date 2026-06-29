@@ -6913,6 +6913,10 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         'name == "CARGO_TARGET_DIR"',
         "def _dotnet_phase_block_bridge_path_matches_target_dir(",
         'bridge_path == f"{target_dir}/debug/connect_norito_bridge.dll"',
+        "path_list_has_empty_segment()",
+        "validate_nonempty_path_list()",
+        "no empty path-list segments before native bridge loader setup",
+        'dotnet_loader_path="$bridge_library_dir"',
         "test_release_readiness_report_rejects_dotnet_bridge_target_dir_drift",
         "test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades",
         "test_sccp_production_corridor_dotnet_phase_rejects_multiline_version",
@@ -6921,10 +6925,12 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "test_sccp_production_corridor_dotnet_phase_rejects_duplicate_rid",
         "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
-        "test_sccp_production_corridor_dotnet_phase_rejects_missing_os_architecture",
+        "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_when_os_architecture_absent",
+        "test_sccp_production_corridor_dotnet_phase_rejects_missing_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture",
+        "test_sccp_production_corridor_dotnet_phase_rejects_empty_inherited_path_segments",
         "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_path",
         "missing-os-name",
         "duplicate-os-name",
@@ -6942,12 +6948,16 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "colon-injected-os-platform",
         "colon-injected-rid",
         "colon-injected-architecture",
+        "leading-empty",
+        "trailing-empty",
+        "interior-empty",
+        "semicolon-empty",
         "exactly one canonical SDK version line",
         "exactly one OS Name and one OS Platform",
         "dotnet_info_field_value",
         "substr(line, length(label) + 2)",
         "exactly one canonical Windows RID from dotnet --info",
-        "exactly one OS Architecture from dotnet --info",
+        "exactly one canonical architecture source from dotnet --info",
         "found: X64",
         "direct .NET TRX TestResults path must remain the only accepted path",
         "nested .NET TRX TestResults paths must remain rejected",
@@ -11176,6 +11186,79 @@ def test_release_readiness_phase_command_matchers_accept_corridor_dry_run() -> N
             ), f"{phase} dry-run command did not satisfy {fragment}"
 
 
+def test_release_readiness_phase_command_matchers_accept_dotnet_artifacts_path() -> None:
+    """The .NET SCCP matcher must accept Windows-local artifacts output."""
+
+    report = load_report_module()
+    command = (
+        "+ dotnet test "
+        "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+        "--artifacts-path C:/Users/runner/AppData/Local/Temp/iroha-dotnet-artifacts "
+        "--filter FullyQualifiedName~Sccp "
+        "-p:ProduceReferenceAssembly=false "
+        "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx"
+    )
+
+    for fragment in (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+        "FullyQualifiedName~Sccp",
+        "sccp-dotnet-sdk.trx",
+    ):
+        assert fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        assert report._phase_command_matches_required_fragment(
+            "dotnet-sdk",
+            command,
+            fragment,
+        ), f".NET artifacts-path command did not satisfy {fragment}"
+
+
+def test_release_readiness_phase_command_matchers_reject_bad_dotnet_artifacts_path() -> None:
+    """Malformed .NET artifacts-path commands must not satisfy readiness."""
+
+    report = load_report_module()
+    required_fragment = (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
+        "Hyperledger.Iroha.Sdk.Tests.csproj"
+    )
+    cases = (
+        (
+            "missing-artifacts-path-value",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=false "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+        ),
+        (
+            "wrong-produce-reference-assembly",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path C:/tmp/iroha-dotnet-artifacts "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=true "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+        ),
+        (
+            "trailing-extra-argument",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path C:/tmp/iroha-dotnet-artifacts "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=false "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx --list-tests",
+        ),
+    )
+
+    assert required_fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+    for case_id, command in cases:
+        assert not report._phase_command_matches_required_fragment(
+            "dotnet-sdk",
+            command,
+            required_fragment,
+        ), f".NET accepted malformed artifacts-path command: {case_id}"
+
+
 def test_release_readiness_phase_command_matchers_reject_echoed_fragments() -> None:
     """Required phase fragments cannot be satisfied by traced echo commands."""
 
@@ -12995,11 +13078,13 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
 ) -> None:
     """A public readiness note must not pass without evidence and corridor proof."""
 
+    evidence_payload = "# intentionally no all-lanes evidence records\n"
     evidence = tmp_path / "empty.toml"
-    evidence.write_text("", encoding="utf-8")
+    evidence.write_text(evidence_payload, encoding="utf-8")
 
     completed = subprocess.run(
-        ["python3", str(SCRIPT), str(evidence)],
+        ["python3", str(SCRIPT), evidence.relative_to(tmp_path).as_posix()],
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -13009,7 +13094,7 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
     assert "# SCCP Release Readiness Report" in completed.stdout
     assert "Status: NOT READY" in completed.stdout
     assert "| Path | Bytes | SHA-256 |" in completed.stdout
-    assert hashlib.sha256(b"").hexdigest() in completed.stdout
+    assert hashlib.sha256(evidence_payload.encode("utf-8")).hexdigest() in completed.stdout
     assert "## Release Checklist" in completed.stdout
     assert "## User Prover Submission Surfaces" in completed.stdout
     assert "`ton` | `ton-contract-v1`" in completed.stdout
@@ -13034,8 +13119,9 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
 def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) -> None:
     """JSON output must separate evidence blockers from validation corridor status."""
 
+    evidence_payload = "# intentionally no all-lanes evidence records\n"
     evidence = tmp_path / "empty.toml"
-    evidence.write_text("", encoding="utf-8")
+    evidence.write_text(evidence_payload, encoding="utf-8")
 
     completed = subprocess.run(
         [
@@ -13045,9 +13131,10 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
             "json",
             "--phase-result",
             "all=passed",
-            str(evidence),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -13063,9 +13150,9 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     assert payload["corridor"]["require_phase_evidence"] is False
     assert payload["input_artifacts"] == [
         {
-            "path": str(evidence),
-            "bytes": 0,
-            "sha256": hashlib.sha256(b"").hexdigest(),
+            "path": evidence.relative_to(tmp_path).as_posix(),
+            "bytes": len(evidence_payload.encode("utf-8")),
+            "sha256": hashlib.sha256(evidence_payload.encode("utf-8")).hexdigest(),
         }
     ]
     assert "cryptographic_evidence" not in payload
@@ -13653,12 +13740,13 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"all={corridor_log}",
+            f"all={corridor_log.relative_to(tmp_path).as_posix()}",
             "--native-evm-prover-bundle",
-            str(native_bundle),
-            str(evidence),
+            native_bundle.relative_to(tmp_path).as_posix(),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -13674,7 +13762,10 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
         hashlib.sha256(corridor_payload.encode("utf-8")).hexdigest()
         in completed.stdout
     )
-    assert f"| `rust-sccp` | passed | `{corridor_log}` |" in completed.stdout
+    assert (
+        f"| `rust-sccp` | passed | `{corridor_log.relative_to(tmp_path).as_posix()}` |"
+        in completed.stdout
+    )
     assert "## Release Checklist" in completed.stdout
     assert "## Cryptographic Evidence" in completed.stdout
     assert "## Native Prover Bundle" in completed.stdout
@@ -13735,10 +13826,11 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
             "--phase-result",
             "all=passed",
             "--native-evm-prover-bundle",
-            str(native_bundle),
-            str(evidence),
+            native_bundle.relative_to(tmp_path).as_posix(),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -17479,7 +17571,7 @@ def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking
     ) in blockers
     assert (
         f"readiness report corridor evidence_artifacts.{first_phase} bytes must "
-        "be an integer"
+        "be a positive integer"
     ) in blockers
     assert (
         f"readiness report corridor evidence_artifacts.{first_phase} sha256 must "
@@ -21810,12 +21902,13 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
             "--phase-result",
             "all=passed",
             "--phase-evidence-dir",
-            str(phase_artifacts),
+            phase_artifacts.relative_to(tmp_path).as_posix(),
             "--native-evm-prover-bundle",
-            str(native_bundle),
-            str(evidence),
+            native_bundle.relative_to(tmp_path).as_posix(),
+            evidence.relative_to(tmp_path).as_posix(),
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -21823,7 +21916,10 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
 
     assert completed.returncode == 0
     assert "Status: READY" in completed.stdout
-    assert f"| `js-sdk` | passed | `{js_log}` |" in completed.stdout
+    assert (
+        f"| `js-sdk` | passed | `{js_log.relative_to(tmp_path).as_posix()}` |"
+        in completed.stdout
+    )
     assert "## Blocking Items\n\n- None" in completed.stdout
 
 
@@ -31034,7 +31130,7 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "mutableReceiptProofNode[0] = 0x7c;",
             'Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]))',
             "callbackRequest.PublicSignalWords[0] = \"0x\" + new string('f', 64);",
-            "Assert.NotEqual(ExpectedPublicSignalWords[0], prover.Request.PublicSignalWords[0]);",
+            "Assert.Equal(expectedRequest.PublicSignalWords, prover.Request.PublicSignalWords);",
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",

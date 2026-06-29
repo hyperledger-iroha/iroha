@@ -879,6 +879,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-metadata-option-shape
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-sequence-count-prechecks
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-open-envelope-preflight
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-init-append-request-codecs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-pallas-transcript-label-byte-limit
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-pallas-transcript-label-byte-limit
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-pallas-transcript-label-byte-limit
@@ -909,8 +911,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-redeem-aliases
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-lineage-record-preflight
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-trailing-field-vectors
-          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks
-          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-record-bundle-fold-step-count-prechecks
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-count-prefix-prechecks
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-record-bundle-fold-step-count-prechecks
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-current-note-amount-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-circuit-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-backend-vectors
@@ -1153,6 +1155,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-info-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-override-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-artifacts-path-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-recursive-spend-fixtures-project
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-sha-case-script

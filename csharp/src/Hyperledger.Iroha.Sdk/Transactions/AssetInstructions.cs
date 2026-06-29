@@ -6,6 +6,25 @@ namespace Hyperledger.Iroha.Transactions;
 public sealed record class TransferAssetInstruction(string AssetDefinitionId, string Quantity, string DestinationAccountId)
     : TransactionInstruction
 {
+    private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+        DestinationAccountId,
+        nameof(DestinationAccountId));
+    private string quantity = AssetQuantityValidation.RequirePositiveQuantity(Quantity, nameof(Quantity));
+
+    public string DestinationAccountId
+    {
+        get => destinationAccountId;
+        init => destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            value,
+            nameof(DestinationAccountId));
+    }
+
+    public string Quantity
+    {
+        get => quantity;
+        init => quantity = AssetQuantityValidation.RequirePositiveQuantity(value, nameof(Quantity));
+    }
+
     internal override string WireId => "iroha.transfer";
 
     internal override string TypeName => "iroha_data_model::isi::transfer::TransferBox";
@@ -25,6 +44,18 @@ public sealed record class TransferDomainInstruction(string DomainId, string Des
     : TransactionInstruction
 {
     private const uint DomainVariant = 0;
+
+    private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+        DestinationAccountId,
+        nameof(DestinationAccountId));
+
+    public string DestinationAccountId
+    {
+        get => destinationAccountId;
+        init => destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            value,
+            nameof(DestinationAccountId));
+    }
 
     internal override string WireId => "iroha.transfer";
 
@@ -46,6 +77,18 @@ public sealed record class TransferAssetDefinitionInstruction(string AssetDefini
 {
     private const uint AssetDefinitionVariant = 1;
 
+    private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+        DestinationAccountId,
+        nameof(DestinationAccountId));
+
+    public string DestinationAccountId
+    {
+        get => destinationAccountId;
+        init => destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            value,
+            nameof(DestinationAccountId));
+    }
+
     internal override string WireId => "iroha.transfer";
 
     internal override string TypeName => "iroha_data_model::isi::transfer::TransferBox";
@@ -66,6 +109,18 @@ public sealed record class TransferNftInstruction(string NftId, string Destinati
 {
     private const uint NftVariant = 3;
 
+    private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+        DestinationAccountId,
+        nameof(DestinationAccountId));
+
+    public string DestinationAccountId
+    {
+        get => destinationAccountId;
+        init => destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            value,
+            nameof(DestinationAccountId));
+    }
+
     internal override string WireId => "iroha.transfer";
 
     internal override string TypeName => "iroha_data_model::isi::transfer::TransferBox";
@@ -84,6 +139,25 @@ public sealed record class TransferNftInstruction(string NftId, string Destinati
 public sealed record class MintAssetInstruction(string AssetDefinitionId, string Quantity, string DestinationAccountId)
     : TransactionInstruction
 {
+    private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+        DestinationAccountId,
+        nameof(DestinationAccountId));
+    private string quantity = AssetQuantityValidation.RequirePositiveQuantity(Quantity, nameof(Quantity));
+
+    public string DestinationAccountId
+    {
+        get => destinationAccountId;
+        init => destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            value,
+            nameof(DestinationAccountId));
+    }
+
+    public string Quantity
+    {
+        get => quantity;
+        init => quantity = AssetQuantityValidation.RequirePositiveQuantity(value, nameof(Quantity));
+    }
+
     internal override string WireId => "iroha.mint";
 
     internal override string TypeName => "iroha_data_model::isi::mint_burn::MintBox";
@@ -101,6 +175,25 @@ public sealed record class MintAssetInstruction(string AssetDefinitionId, string
 public sealed record class BurnAssetInstruction(string AssetDefinitionId, string Quantity, string DestinationAccountId)
     : TransactionInstruction
 {
+    private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+        DestinationAccountId,
+        nameof(DestinationAccountId));
+    private string quantity = AssetQuantityValidation.RequirePositiveQuantity(Quantity, nameof(Quantity));
+
+    public string DestinationAccountId
+    {
+        get => destinationAccountId;
+        init => destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
+            value,
+            nameof(DestinationAccountId));
+    }
+
+    public string Quantity
+    {
+        get => quantity;
+        init => quantity = AssetQuantityValidation.RequirePositiveQuantity(value, nameof(Quantity));
+    }
+
     internal override string WireId => "iroha.burn";
 
     internal override string TypeName => "iroha_data_model::isi::mint_burn::BurnBox";
@@ -115,6 +208,59 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
     }
 }
 
+internal static class AssetQuantityValidation
+{
+    internal static string RequirePositiveQuantity(string? quantity, string paramName)
+    {
+        if (quantity is null)
+        {
+            throw new ArgumentException("Asset quantity must not be null.", paramName);
+        }
+
+        if (quantity.Length > 0 && quantity[0] == '-')
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Asset quantity must be positive.");
+        }
+
+        if (IsZeroNumericLiteral(quantity))
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Asset quantity must be positive.");
+        }
+
+        return quantity;
+    }
+
+    private static bool IsZeroNumericLiteral(string quantity)
+    {
+        var sawDigit = false;
+        foreach (var character in quantity)
+        {
+            if (character == '.')
+            {
+                continue;
+            }
+
+            if (character is < '0' or > '9')
+            {
+                return false;
+            }
+
+            sawDigit = true;
+            if (character != '0')
+            {
+                return false;
+            }
+        }
+
+        return sawDigit;
+    }
+}
+
+internal static class InstructionJsonPayload
+{
+    internal static JsonNode? Clone(JsonNode? value) => value?.DeepClone();
+}
+
 public sealed record class SetAssetKeyValueInstruction(
     string AssetDefinitionId,
     string AccountId,
@@ -123,6 +269,23 @@ public sealed record class SetAssetKeyValueInstruction(
     : TransactionInstruction
 {
     private const string InstructionTypeName = "iroha_data_model::isi::transparent::SetAssetKeyValue";
+
+    private string accountId = TransactionEncodingContext.CanonicalizeAccountId(
+        AccountId,
+        nameof(AccountId));
+    private JsonNode? jsonValue = InstructionJsonPayload.Clone(Value);
+
+    public string AccountId
+    {
+        get => accountId;
+        init => accountId = TransactionEncodingContext.CanonicalizeAccountId(value, nameof(AccountId));
+    }
+
+    public JsonNode? Value
+    {
+        get => InstructionJsonPayload.Clone(jsonValue);
+        init => jsonValue = InstructionJsonPayload.Clone(value);
+    }
 
     internal override string WireId => InstructionTypeName;
 
@@ -133,7 +296,7 @@ public sealed record class SetAssetKeyValueInstruction(
         var writer = new OfflineNoritoWriter();
         writer.WriteField(context.EncodeAssetId(AssetDefinitionId, AccountId));
         writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(Value));
+        writer.WriteField(context.EncodeJson(jsonValue));
         return writer.ToArray();
     }
 }
@@ -142,6 +305,16 @@ public sealed record class RemoveAssetKeyValueInstruction(string AssetDefinition
     : TransactionInstruction
 {
     private const string InstructionTypeName = "iroha_data_model::isi::transparent::RemoveAssetKeyValue";
+
+    private string accountId = TransactionEncodingContext.CanonicalizeAccountId(
+        AccountId,
+        nameof(AccountId));
+
+    public string AccountId
+    {
+        get => accountId;
+        init => accountId = TransactionEncodingContext.CanonicalizeAccountId(value, nameof(AccountId));
+    }
 
     internal override string WireId => InstructionTypeName;
 
@@ -163,6 +336,23 @@ public sealed record class SetAccountKeyValueInstruction(string AccountId, strin
     private const string InstructionTypeName = "iroha_data_model::isi::SetKeyValueBox";
     private const uint AccountVariant = 1;
 
+    private string accountId = TransactionEncodingContext.CanonicalizeAccountId(
+        AccountId,
+        nameof(AccountId));
+    private JsonNode? jsonValue = InstructionJsonPayload.Clone(Value);
+
+    public string AccountId
+    {
+        get => accountId;
+        init => accountId = TransactionEncodingContext.CanonicalizeAccountId(value, nameof(AccountId));
+    }
+
+    public JsonNode? Value
+    {
+        get => InstructionJsonPayload.Clone(jsonValue);
+        init => jsonValue = InstructionJsonPayload.Clone(value);
+    }
+
     internal override string WireId => InstructionWireId;
 
     internal override string TypeName => InstructionTypeName;
@@ -173,7 +363,7 @@ public sealed record class SetAccountKeyValueInstruction(string AccountId, strin
         writer.WriteUInt32LittleEndian(AccountVariant);
         writer.WriteField(context.EncodeAccountId(AccountId));
         writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(Value));
+        writer.WriteField(context.EncodeJson(jsonValue));
         return writer.ToArray();
     }
 }
@@ -184,6 +374,13 @@ public sealed record class SetDomainKeyValueInstruction(string DomainId, string 
     private const string InstructionWireId = "iroha.set_key_value";
     private const string InstructionTypeName = "iroha_data_model::isi::SetKeyValueBox";
     private const uint DomainVariant = 0;
+    private JsonNode? jsonValue = InstructionJsonPayload.Clone(Value);
+
+    public JsonNode? Value
+    {
+        get => InstructionJsonPayload.Clone(jsonValue);
+        init => jsonValue = InstructionJsonPayload.Clone(value);
+    }
 
     internal override string WireId => InstructionWireId;
 
@@ -195,7 +392,7 @@ public sealed record class SetDomainKeyValueInstruction(string DomainId, string 
         writer.WriteUInt32LittleEndian(DomainVariant);
         writer.WriteField(context.EncodeName(DomainId));
         writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(Value));
+        writer.WriteField(context.EncodeJson(jsonValue));
         return writer.ToArray();
     }
 }
@@ -206,6 +403,16 @@ public sealed record class RemoveAccountKeyValueInstruction(string AccountId, st
     private const string InstructionWireId = "iroha.remove_key_value";
     private const string InstructionTypeName = "iroha_data_model::isi::RemoveKeyValueBox";
     private const uint AccountVariant = 1;
+
+    private string accountId = TransactionEncodingContext.CanonicalizeAccountId(
+        AccountId,
+        nameof(AccountId));
+
+    public string AccountId
+    {
+        get => accountId;
+        init => accountId = TransactionEncodingContext.CanonicalizeAccountId(value, nameof(AccountId));
+    }
 
     internal override string WireId => InstructionWireId;
 
@@ -248,6 +455,13 @@ public sealed record class SetAssetDefinitionKeyValueInstruction(string AssetDef
     private const string InstructionWireId = "iroha.set_key_value";
     private const string InstructionTypeName = "iroha_data_model::isi::SetKeyValueBox";
     private const uint AssetDefinitionVariant = 2;
+    private JsonNode? jsonValue = InstructionJsonPayload.Clone(Value);
+
+    public JsonNode? Value
+    {
+        get => InstructionJsonPayload.Clone(jsonValue);
+        init => jsonValue = InstructionJsonPayload.Clone(value);
+    }
 
     internal override string WireId => InstructionWireId;
 
@@ -259,7 +473,7 @@ public sealed record class SetAssetDefinitionKeyValueInstruction(string AssetDef
         writer.WriteUInt32LittleEndian(AssetDefinitionVariant);
         writer.WriteField(context.EncodeAssetDefinitionId(AssetDefinitionId));
         writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(Value));
+        writer.WriteField(context.EncodeJson(jsonValue));
         return writer.ToArray();
     }
 }
@@ -291,6 +505,13 @@ public sealed record class SetNftKeyValueInstruction(string NftId, string Key, J
     private const string InstructionWireId = "iroha.set_key_value";
     private const string InstructionTypeName = "iroha_data_model::isi::SetKeyValueBox";
     private const uint NftVariant = 3;
+    private JsonNode? jsonValue = InstructionJsonPayload.Clone(Value);
+
+    public JsonNode? Value
+    {
+        get => InstructionJsonPayload.Clone(jsonValue);
+        init => jsonValue = InstructionJsonPayload.Clone(value);
+    }
 
     internal override string WireId => InstructionWireId;
 
@@ -302,7 +523,7 @@ public sealed record class SetNftKeyValueInstruction(string NftId, string Key, J
         writer.WriteUInt32LittleEndian(NftVariant);
         writer.WriteField(context.EncodeNftId(NftId));
         writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(Value));
+        writer.WriteField(context.EncodeJson(jsonValue));
         return writer.ToArray();
     }
 }
@@ -334,6 +555,13 @@ public sealed record class SetTriggerKeyValueInstruction(string TriggerId, strin
     private const string InstructionWireId = "iroha.set_key_value";
     private const string InstructionTypeName = "iroha_data_model::isi::SetKeyValueBox";
     private const uint TriggerVariant = 4;
+    private JsonNode? jsonValue = InstructionJsonPayload.Clone(Value);
+
+    public JsonNode? Value
+    {
+        get => InstructionJsonPayload.Clone(jsonValue);
+        init => jsonValue = InstructionJsonPayload.Clone(value);
+    }
 
     internal override string WireId => InstructionWireId;
 
@@ -345,7 +573,7 @@ public sealed record class SetTriggerKeyValueInstruction(string TriggerId, strin
         writer.WriteUInt32LittleEndian(TriggerVariant);
         writer.WriteField(context.EncodeTriggerId(TriggerId));
         writer.WriteField(context.EncodeName(Key));
-        writer.WriteField(context.EncodeJson(Value));
+        writer.WriteField(context.EncodeJson(jsonValue));
         return writer.ToArray();
     }
 }
@@ -375,6 +603,13 @@ public sealed record class MintTriggerRepetitionsInstruction(uint Repetitions, s
     : TransactionInstruction
 {
     private const uint TriggerRepetitionsVariant = 1;
+    private uint repetitions = RequirePositiveRepetitions(Repetitions, nameof(Repetitions));
+
+    public uint Repetitions
+    {
+        get => repetitions;
+        init => repetitions = RequirePositiveRepetitions(value, nameof(Repetitions));
+    }
 
     internal override string WireId => "iroha.mint";
 
@@ -388,12 +623,29 @@ public sealed record class MintTriggerRepetitionsInstruction(uint Repetitions, s
         writer.WriteField(context.EncodeTriggerId(TriggerId));
         return writer.ToArray();
     }
+
+    private static uint RequirePositiveRepetitions(uint repetitions, string paramName)
+    {
+        if (repetitions == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Trigger repetitions must be positive.");
+        }
+
+        return repetitions;
+    }
 }
 
 public sealed record class BurnTriggerRepetitionsInstruction(uint Repetitions, string TriggerId)
     : TransactionInstruction
 {
     private const uint TriggerRepetitionsVariant = 1;
+    private uint repetitions = RequirePositiveRepetitions(Repetitions, nameof(Repetitions));
+
+    public uint Repetitions
+    {
+        get => repetitions;
+        init => repetitions = RequirePositiveRepetitions(value, nameof(Repetitions));
+    }
 
     internal override string WireId => "iroha.burn";
 
@@ -407,11 +659,29 @@ public sealed record class BurnTriggerRepetitionsInstruction(uint Repetitions, s
         writer.WriteField(context.EncodeTriggerId(TriggerId));
         return writer.ToArray();
     }
+
+    private static uint RequirePositiveRepetitions(uint repetitions, string paramName)
+    {
+        if (repetitions == 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "Trigger repetitions must be positive.");
+        }
+
+        return repetitions;
+    }
 }
 
 public sealed record class ExecuteTriggerInstruction(string TriggerId, JsonNode? Args)
     : TransactionInstruction
 {
+    private JsonNode? args = InstructionJsonPayload.Clone(Args);
+
+    public JsonNode? Args
+    {
+        get => InstructionJsonPayload.Clone(args);
+        init => args = InstructionJsonPayload.Clone(value);
+    }
+
     internal override string WireId => "iroha.execute_trigger";
 
     internal override string TypeName => "iroha_data_model::isi::transparent::ExecuteTrigger";
@@ -420,7 +690,7 @@ public sealed record class ExecuteTriggerInstruction(string TriggerId, JsonNode?
     {
         var writer = new OfflineNoritoWriter();
         writer.WriteField(context.EncodeTriggerId(TriggerId));
-        writer.WriteField(context.EncodeJson(Args));
+        writer.WriteField(context.EncodeJson(args));
         return writer.ToArray();
     }
 }

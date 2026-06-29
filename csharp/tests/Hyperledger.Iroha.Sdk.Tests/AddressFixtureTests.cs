@@ -74,6 +74,114 @@ public sealed class AddressFixtureTests
     }
 
     [Fact]
+    public void PaddedI105LiteralsFailBeforeCanonicalParsing()
+    {
+        var literal = Fixture.Value.Cases.Positive[0].Encodings.I105.String;
+        foreach (var padded in new[]
+        {
+            " " + literal,
+            literal + " ",
+            "\t" + literal,
+            literal + "\n",
+            "\u00A0" + literal,
+            literal + "\u00A0",
+        })
+        {
+            var exception = Assert.Throws<AccountAddressException>(() =>
+                AccountAddress.Parse(padded, AccountAddress.DefaultChainDiscriminant));
+
+            Assert.Equal(AccountAddressErrorCode.UnsupportedAddressFormat, exception.Code);
+            Assert.Contains("surrounding whitespace", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void NumericI105SentinelRejectsOverflowAndNonAsciiDigitForms()
+    {
+        var literal = AccountAddress
+            .FromPublicKey(Enumerable.Repeat((byte)0x22, 32).ToArray())
+            .ToI105(5);
+        Assert.StartsWith("n5", literal, StringComparison.Ordinal);
+
+        var overflow = $"n65536{literal["n5".Length..]}";
+        var overflowException = Assert.Throws<AccountAddressException>(() =>
+            AccountAddress.Parse(overflow));
+
+        Assert.Equal(AccountAddressErrorCode.InvalidI105Discriminant, overflowException.Code);
+        Assert.Contains("unsigned 16-bit integer", overflowException.Message, StringComparison.Ordinal);
+
+        foreach (var nonAsciiOrSigned in new[]
+        {
+            $"n+5{literal["n5".Length..]}",
+            $"n５{literal["n5".Length..]}",
+        })
+        {
+            var exception = Assert.Throws<AccountAddressException>(() =>
+                AccountAddress.Parse(nonAsciiOrSigned));
+
+            Assert.Equal(AccountAddressErrorCode.MissingI105Sentinel, exception.Code);
+        }
+    }
+
+    [Fact]
+    public void NumericI105SentinelRejectsLeadingZeroAliases()
+    {
+        var customLiteral = AccountAddress
+            .FromPublicKey(Enumerable.Repeat((byte)0x33, 32).ToArray())
+            .ToI105(5);
+        var devLiteral = AccountAddress
+            .FromPublicKey(Enumerable.Repeat((byte)0x44, 32).ToArray())
+            .ToI105(AccountAddress.DevChainDiscriminant);
+
+        foreach (var noncanonical in new[]
+        {
+            $"n0005{customLiteral["n5".Length..]}",
+            $"n0{devLiteral["dev".Length..]}",
+        })
+        {
+            var exception = Assert.Throws<AccountAddressException>(() =>
+                AccountAddress.Parse(noncanonical));
+
+            Assert.Equal(AccountAddressErrorCode.UnsupportedAddressFormat, exception.Code);
+            Assert.Contains("canonical I105 form", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void AccountAddressSnapshotsInputAndReturnedByteArrays()
+    {
+        var publicKey = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
+        var expectedPublicKeyHex = Convert.ToHexString(publicKey);
+        var address = AccountAddress.FromPublicKey(publicKey);
+        var expectedCanonicalBytes = address.CanonicalBytes();
+        var expectedControllerBytes = address.ControllerBytes();
+        var expectedLiteral = address.ToI105();
+
+        publicKey[0] = 0xFF;
+        var returnedPublicKey = address.PublicKey;
+        returnedPublicKey[1] = 0xEE;
+        var returnedCanonicalBytes = address.CanonicalBytes();
+        returnedCanonicalBytes[0] = 0xFF;
+        var returnedControllerBytes = address.ControllerBytes();
+        returnedControllerBytes[0] = 0xFF;
+
+        Assert.Equal(expectedPublicKeyHex, Convert.ToHexString(address.PublicKey));
+        Assert.Equal(expectedCanonicalBytes, address.CanonicalBytes());
+        Assert.Equal(expectedControllerBytes, address.ControllerBytes());
+        Assert.Equal(expectedLiteral, address.ToI105());
+        Assert.NotSame(returnedPublicKey, address.PublicKey);
+        Assert.NotSame(returnedCanonicalBytes, address.CanonicalBytes());
+        Assert.NotSame(returnedControllerBytes, address.ControllerBytes());
+
+        var canonicalSource = address.CanonicalBytes();
+        var parsed = AccountAddress.FromCanonicalBytes(canonicalSource);
+        canonicalSource[0] = 0xFF;
+
+        Assert.Equal(expectedLiteral, parsed.ToI105());
+        Assert.Equal(expectedCanonicalBytes, parsed.CanonicalBytes());
+    }
+
+    [Fact]
     public void CurveAlgorithmAliasesRejectConfusableOrControlLabels()
     {
         var publicKey = Enumerable.Repeat((byte)0x11, 32).ToArray();
@@ -89,8 +197,14 @@ public sealed class AddressFixtureTests
             ("ed25519\n", "surrounding whitespace"),
             ("\u00A0ed25519", "surrounding whitespace"),
             ("ed25519\u00A0", "surrounding whitespace"),
+            ("ED25519", "ED25519"),
+            ("Ed25519", "Ed25519"),
+            ("ML-DSA", "ML-DSA"),
+            ("Gost256A", "Gost256A"),
             ("future-curve", "future-curve"),
-            ("ed\t25519", "ed\t25519"),
+            ("ed 25519", "must not contain whitespace"),
+            ("ed\t25519", "must not contain whitespace"),
+            ("ed\u00A025519", "must not contain whitespace"),
             ("ed\u000025519", "unsupported signing algorithm"),
             ("ed\u001F25519", "unsupported signing algorithm"),
             ("ed\u007F25519", "unsupported signing algorithm"),
