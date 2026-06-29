@@ -9349,9 +9349,14 @@ impl Actor {
 
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {
-            let genesis_timestamp = NonZeroUsize::new(1)
-                .and_then(|index| self.kura.get_block(index))
-                .map(|genesis_block| genesis_block.header().creation_time());
+            let genesis_timestamp = NonZeroUsize::new(1).and_then(|index| {
+                if self.kura.is_hash_only_block_height(index) {
+                    return None;
+                }
+                self.kura
+                    .get_block(index)
+                    .map(|genesis_block| genesis_block.header().creation_time())
+            });
 
             if let Some(timestamp) = genesis_timestamp {
                 let curr_time = self.time_source.get_unix_time();
@@ -9364,7 +9369,9 @@ impl Actor {
                         .try_into()
                         .expect("Timestamp should fit into u64"),
                 );
-            } else {
+            } else if !self.kura.is_hash_only_block_height(
+                NonZeroUsize::new(1).expect("genesis height is non-zero"),
+            ) {
                 iroha_logger::error!("Failed to get genesis block from Kura.");
             }
         }

@@ -1647,6 +1647,7 @@ impl Actor {
         let view = inflight.pending.view;
         let commit_id = inflight.id;
         super::status::record_commit_inflight_finish(commit_id);
+        self.subsystems.commit.remember_retired_result_id(commit_id);
         if self
             .pending
             .pending_processing
@@ -1725,6 +1726,15 @@ impl Actor {
                             continue;
                         }
                         None => {
+                            if self.subsystems.commit.take_retired_result_id(id) {
+                                debug!(
+                                    result_id = id,
+                                    "commit result arrived after committed-state catch-up retirement; dropping stale worker result"
+                                );
+                                summary.record(timings);
+                                summary.progress = true;
+                                continue;
+                            }
                             warn!(
                                 result_id = id,
                                 "commit result received without inflight; ignoring"

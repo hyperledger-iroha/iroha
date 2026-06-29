@@ -21676,12 +21676,19 @@ function normalizeMultisigProposeRequest(input) {
     "validation_fee_instruction_index",
     "validationFeeInstructionIndex",
   );
+  const validationFeeTransferEntryIndex = pickOverride(
+    record,
+    "validation_fee_transfer_entry_index",
+    "validationFeeTransferEntryIndex",
+  );
   const hasPolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasPolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
   const hasInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
+  const hasTransferEntryIndex =
+    validationFeeTransferEntryIndex !== undefined && validationFeeTransferEntryIndex !== null;
   if (hasPolicyVersion !== hasPolicyHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -21694,6 +21701,20 @@ function normalizeMultisigProposeRequest(input) {
       ValidationErrorCode.INVALID_OBJECT,
       "proposeMultisig request validation fee instruction index requires policy metadata",
       "proposeMultisig.request.validation_fee_instruction_index",
+    );
+  }
+  if (!hasPolicyVersion && hasTransferEntryIndex) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request validation fee transfer entry index requires policy metadata",
+      "proposeMultisig.request.validation_fee_transfer_entry_index",
+    );
+  }
+  if (hasTransferEntryIndex && !hasInstructionIndex) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request validation fee transfer entry index requires instruction index",
+      "proposeMultisig.request.validation_fee_transfer_entry_index",
     );
   }
   if (hasPolicyVersion) {
@@ -21713,6 +21734,15 @@ function normalizeMultisigProposeRequest(input) {
         ToriiClient._normalizeUnsignedInteger(
           validationFeeInstructionIndex,
           "proposeMultisig request.validation_fee_instruction_index",
+          { allowZero: true },
+        ),
+      );
+    }
+    if (hasTransferEntryIndex) {
+      payload.validation_fee_transfer_entry_index = String(
+        ToriiClient._normalizeUnsignedInteger(
+          validationFeeTransferEntryIndex,
+          "proposeMultisig request.validation_fee_transfer_entry_index",
           { allowZero: true },
         ),
       );

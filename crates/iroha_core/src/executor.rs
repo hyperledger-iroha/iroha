@@ -83,6 +83,8 @@ const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
+const SPONSORED_NATIVE_BATCH_CONTEXT_METADATA_KEY: &str = "native_batch_context";
+const CBSI_RETAIL_REGISTRATION_READY_BATCH_CONTEXT: &str = "retail_register_ready_batch";
 const FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST: u64 = 31_000_000;
 const FIXTURE_DOMAIN_LIMITS_PARAMETER_ID: &str = "DomainLimits";
 const FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES: &str = "CanControlDomainLives";
@@ -1078,11 +1080,118 @@ fn ensure_sponsored_contract_executable(
     }
 }
 
+fn sponsored_native_batch_context(metadata: &Metadata) -> Option<String> {
+    metadata_string(metadata, SPONSORED_NATIVE_BATCH_CONTEXT_METADATA_KEY)
+}
+
+fn sponsored_registration_native_batch_context(metadata: &Metadata) -> bool {
+    sponsored_native_batch_context(metadata)
+        .is_some_and(|context| context == CBSI_RETAIL_REGISTRATION_READY_BATCH_CONTEXT)
+}
+
+fn is_register_account_instruction(instruction: &InstructionBox) -> bool {
+    let any = instruction.as_any();
+    any.downcast_ref::<Register<Account>>().is_some()
+        || any
+            .downcast_ref::<RegisterBox>()
+            .is_some_and(|register| matches!(register, RegisterBox::Account(_)))
+}
+
+fn is_acquire_account_alias_lease_instruction(instruction: &InstructionBox) -> bool {
+    instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>()
+        .is_some()
+}
+
+fn is_set_account_alias_binding_instruction(instruction: &InstructionBox) -> bool {
+    instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>()
+        .is_some()
+}
+
+fn is_publish_space_directory_manifest_instruction(instruction: &InstructionBox) -> bool {
+    instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>()
+        .is_some()
+}
+
+fn sponsored_retail_registration_native_batch_allowed(instructions: &[InstructionBox]) -> bool {
+    if !(3..=5).contains(&instructions.len()) {
+        return false;
+    }
+    if !is_register_account_instruction(&instructions[0])
+        || !is_register_account_instruction(&instructions[1])
+        || !is_publish_space_directory_manifest_instruction(
+            instructions
+                .last()
+                .expect("length checked before accessing last instruction"),
+        )
+    {
+        return false;
+    }
+
+    match &instructions[2..instructions.len() - 1] {
+        [] => true,
+        [binding] => is_set_account_alias_binding_instruction(binding),
+        [lease, binding] => {
+            is_acquire_account_alias_lease_instruction(lease)
+                && is_set_account_alias_binding_instruction(binding)
+        }
+        _ => false,
+    }
+}
+
+fn ensure_sponsored_retail_registration_native_batch(
+    metadata: &Metadata,
+    instructions: &[InstructionBox],
+) -> Result<(), NexusFeeAdmissionError> {
+    if !sponsored_registration_native_batch_context(metadata) {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "sponsored native instruction batch is not an allowlisted registration operation"
+                .to_owned(),
+        ));
+    }
+    if !sponsored_retail_registration_native_batch_allowed(instructions) {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "sponsored retail registration native batch has an invalid instruction shape"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_multisig_fee_admission_wrapper(instructions: &[InstructionBox]) -> bool {
+    match instructions {
+        [instruction] => matches!(
+            MultisigInstructionBox::try_from(instruction),
+            Ok(MultisigInstructionBox::Propose(_)) | Ok(MultisigInstructionBox::Approve(_))
+        ),
+        [propose_instruction, approve_instruction] => {
+            matches!(
+                MultisigInstructionBox::try_from(propose_instruction),
+                Ok(MultisigInstructionBox::Propose(_))
+            ) && matches!(
+                MultisigInstructionBox::try_from(approve_instruction),
+                Ok(MultisigInstructionBox::Approve(_))
+            )
+        }
+        _ => false,
+    }
+}
+
 fn ensure_sponsored_multisig_proposal_instructions(
     world: &impl WorldReadOnly,
     fees: &NexusFees,
+    metadata: &Metadata,
     instructions: &[InstructionBox],
 ) -> Result<(), NexusFeeAdmissionError> {
+    if sponsored_registration_native_batch_context(metadata) {
+        return ensure_sponsored_retail_registration_native_batch(metadata, instructions);
+    }
+
     let [register_trigger_instruction, execute_trigger_instruction] = instructions else {
         return Err(NexusFeeAdmissionError::Rejected(
             "sponsored multisig proposal must wrap exactly one allowlisted contract call trigger"
@@ -1150,12 +1259,22 @@ fn ensure_sponsored_fee_operation(
             ensure_sponsored_contract_call_metadata(world, fees, transaction.metadata(), call)
         }
         Executable::Instructions(instructions) => {
+            if sponsored_registration_native_batch_context(transaction.metadata())
+                && !is_multisig_fee_admission_wrapper(instructions.as_ref())
+            {
+                return ensure_sponsored_retail_registration_native_batch(
+                    transaction.metadata(),
+                    instructions.as_ref(),
+                );
+            }
+
             match instructions.as_ref() {
                 [instruction] => match MultisigInstructionBox::try_from(instruction) {
                     Ok(MultisigInstructionBox::Propose(propose)) => {
                         ensure_sponsored_multisig_proposal_instructions(
                             world,
                             fees,
+                            transaction.metadata(),
                             &propose.instructions,
                         )
                     }
@@ -1181,6 +1300,7 @@ fn ensure_sponsored_fee_operation(
                         ensure_sponsored_multisig_proposal_instructions(
                             world,
                             fees,
+                            transaction.metadata(),
                             &proposal.instructions,
                         )
                     }
@@ -1222,6 +1342,7 @@ fn ensure_sponsored_fee_operation(
                     ensure_sponsored_multisig_proposal_instructions(
                         world,
                         fees,
+                        transaction.metadata(),
                         &propose.instructions,
                     )
                 }
@@ -8010,6 +8131,29 @@ mod tests {
         );
     }
 
+    fn retail_registration_native_batch_instructions() -> Vec<InstructionBox> {
+        let (registered_id, _) = gen_account_in("wonderland");
+        let (guardian_id, _) = gen_account_in("wonderland");
+        let manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::default(),
+            uaid: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+                b"executor::retail-registration-native-batch",
+            )),
+            dataspace: DataSpaceId::UNIVERSAL,
+            issued_ms: 1,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+
+        vec![
+            Register::account(Account::new(registered_id)).into(),
+            Register::account(Account::new(guardian_id)).into(),
+            iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest { manifest }
+                .into(),
+        ]
+    }
+
     fn multisig_contract_trigger_instructions(
         fixture: &SponsoredFeeAdmissionFixture,
         entrypoint: &str,
@@ -8743,6 +8887,50 @@ mod tests {
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 0);
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_accepts_marked_retail_registration_native_batch() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let fixture = sponsored_fee_admission_fixture(false);
+        let mut metadata = Metadata::default();
+        replace_metadata_string(&mut metadata, "fee_sponsor", fixture.sponsor_id.to_string());
+        replace_metadata_string(
+            &mut metadata,
+            SPONSORED_NATIVE_BATCH_CONTEXT_METADATA_KEY,
+            CBSI_RETAIL_REGISTRATION_READY_BATCH_CONTEXT,
+        );
+        let tx = sign_sponsored_fixture_transaction(
+            &fixture,
+            Executable::Instructions(retail_registration_native_batch_instructions().into()),
+            metadata,
+        );
+
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("marked retail registration native batch should be sponsored");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_malformed_marked_retail_registration_native_batch() {
+        let fixture = sponsored_fee_admission_fixture(false);
+        let mut metadata = Metadata::default();
+        replace_metadata_string(&mut metadata, "fee_sponsor", fixture.sponsor_id.to_string());
+        replace_metadata_string(
+            &mut metadata,
+            SPONSORED_NATIVE_BATCH_CONTEXT_METADATA_KEY,
+            CBSI_RETAIL_REGISTRATION_READY_BATCH_CONTEXT,
+        );
+        expect_sponsored_admission_rejection(
+            &fixture,
+            Executable::Instructions(Vec::<InstructionBox>::new().into()),
+            metadata,
+            "invalid instruction shape",
+        );
     }
 
     #[test]

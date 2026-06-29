@@ -179,6 +179,17 @@ enum Command {
         #[arg(long)]
         route_id: String,
     },
+    /// Build a TAIRA testnet TRON->SORA XOR diagnostic SCCP message bundle.
+    BuildTairaTronXorDiagnosticMessageBundle {
+        #[arg(long)]
+        nonce: u64,
+        #[arg(long, default_value_t = 7)]
+        amount: u128,
+        #[arg(long, default_value = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8")]
+        sender: String,
+        #[arg(long)]
+        recipient: String,
+    },
 }
 
 fn print_tx_stdin_json(bytes: &[u8]) {
@@ -327,6 +338,54 @@ fn ivm_execution_vk_id(name: &str) -> VerifyingKeyId {
     VerifyingKeyId::new(iroha_core::zk::ZK_BACKEND_HALO2_IPA, name)
 }
 
+fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<VerifyingKeyId>> {
+    let list = client.get_zk_vk_list_json()?;
+    let Some(items) = list.as_array() else {
+        return Ok(None);
+    };
+
+    for item in items {
+        let id = item.get("id").and_then(norito::json::Value::as_object);
+        let record = item.get("record").and_then(norito::json::Value::as_object);
+        let Some(id) = id else {
+            continue;
+        };
+        let Some(record) = record else {
+            continue;
+        };
+        let backend = id
+            .get("backend")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_default();
+        let name = id
+            .get("name")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_default();
+        let status = record
+            .get("status")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_default();
+        let circuit_id = record
+            .get("circuit_id")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_default();
+        let gas_schedule_id = record
+            .get("gas_schedule_id")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_default();
+        if backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
+            && !name.is_empty()
+            && status == "Active"
+            && circuit_id == iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID
+            && !gas_schedule_id.is_empty()
+        {
+            return Ok(Some(VerifyingKeyId::new(backend, name)));
+        }
+    }
+
+    Ok(None)
+}
+
 fn sign_governance_transaction(
     transaction: TransactionBuilder,
     config: &Config,
@@ -350,6 +409,12 @@ fn ensure_ivm_execution_vk(
         Err(err) if err.to_string().contains("HTTP status: 404") => {}
         Err(err) => return Err(err).wrap_err("failed to query existing IVM execution VK"),
     }
+    if let Some(existing) = existing_compatible_ivm_execution_vk(client)
+        .wrap_err("failed to list existing IVM execution VKs")?
+    {
+        eprintln!("ivm_execution_vk_existing={}", existing.name);
+        return Ok(existing);
+    }
 
     let record = iroha_core::zk::halo2_ipa_ivm_execution_vk_record("core", 1)
         .map_err(|err| eyre!("failed to build ivm-execution-v1 VK record: {err}"))?;
@@ -371,8 +436,15 @@ fn ensure_ivm_execution_vk(
             let message = err.to_string();
             if message.contains("Repeated instruction")
                 || message.contains("Repetition of `Register` for id `VerifyingKey")
+                || message.contains("verifying key circuit/version already registered")
             {
-                eprintln!("ivm_execution_vk_existing={}", id.name);
+                if let Some(existing) = existing_compatible_ivm_execution_vk(client).wrap_err(
+                    "failed to list existing IVM execution VK after duplicate rejection",
+                )? {
+                    eprintln!("ivm_execution_vk_existing={}", existing.name);
+                    return Ok(existing);
+                }
+                eprintln!("ivm_execution_vk_duplicate={}", id.name);
                 return Ok(id);
             }
             return Err(err).wrap_err("failed to submit IVM execution VK registration");
@@ -607,6 +679,85 @@ fn record_sccp_transfer_payload_bytes(
     Ok((message_id, payload_bytes))
 }
 
+fn build_taira_tron_xor_diagnostic_message_bundle(
+    nonce: u64,
+    amount: u128,
+    sender: String,
+    recipient: String,
+) -> Result<()> {
+    let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+        version: 1,
+        source_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+        dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+        nonce,
+        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        asset_id: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
+        amount,
+        sender_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+        sender: sender.into_bytes(),
+        recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        recipient: recipient.into_bytes(),
+        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        route_id: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
+            .as_bytes()
+            .to_vec(),
+    });
+    if !verify_sccp_payload_structure(&payload) {
+        return Err(eyre!(
+            "TAIRA/TRON XOR diagnostic SCCP payload failed structural verification"
+        ));
+    }
+    let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+    let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
+    let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+    let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof,
+        payload,
+        finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
+    };
+    iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
+        .ok_or_else(|| eyre!("failed to build TAIRA/TRON XOR diagnostic transparent proof"))?;
+
+    let mut selected = norito::json::Map::new();
+    selected.insert("kind".to_owned(), "transfer".into());
+    selected.insert(
+        "message_id_hex".to_owned(),
+        hex::encode(bundle.commitment.message_id).into(),
+    );
+    selected.insert(
+        "route_id".to_owned(),
+        iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
+    );
+    selected.insert(
+        "source_domain".to_owned(),
+        iroha_sccp::SCCP_DOMAIN_TRON.into(),
+    );
+    selected.insert(
+        "target_domain".to_owned(),
+        iroha_sccp::SCCP_DOMAIN_SORA.into(),
+    );
+
+    let mut output = norito::json::Map::new();
+    output.insert(
+        "message_id".to_owned(),
+        hex::encode(bundle.commitment.message_id).into(),
+    );
+    output.insert(
+        "route".to_owned(),
+        iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
+    );
+    output.insert("bundle".to_owned(), norito::json::to_value(&bundle)?);
+    output.insert(
+        "selected_recent_item".to_owned(),
+        norito::json::Value::Object(selected),
+    );
+    print_json_value(&norito::json::Value::Object(output))
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -771,6 +922,12 @@ fn main() -> Result<()> {
             route_id_codec,
             route_id,
         )?,
+        Command::BuildTairaTronXorDiagnosticMessageBundle {
+            nonce,
+            amount,
+            sender,
+            recipient,
+        } => build_taira_tron_xor_diagnostic_message_bundle(nonce, amount, sender, recipient)?,
     }
     Ok(())
 }

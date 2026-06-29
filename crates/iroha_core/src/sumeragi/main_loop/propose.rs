@@ -1750,6 +1750,7 @@ impl Actor {
             })
         else {
             let mut body_repair_requested = false;
+            let mut passive_catchup_requested = false;
             let mut stale_vote_locked_recovery_requested = false;
             if let Some((owner_age, frontier_commit_qc_observed, competing_quorum_locked)) =
                 owner_slot_evidence
@@ -1764,6 +1765,50 @@ impl Actor {
                     || commit_inflight_live;
                 body_repair_requested = protected_owner
                     && self.request_frontier_owner_body_repair(owner_hash, height, owner_view, now);
+                let owner_body_repair_active = body_repair_requested
+                    || self.frontier_slot.as_ref().is_some_and(|slot| {
+                        slot.height == height
+                            && slot.view == owner_view
+                            && slot.block_hash == owner_hash
+                            && slot.exact_fetch_armed
+                            && slot.body_missing()
+                    });
+                let owner_body_repair_lagged = owner_age
+                    >= self
+                        .frontier_slot_lag_window()
+                        .max(Duration::from_millis(1));
+                if protected_owner
+                    && pending_queue_len > 0
+                    && owner_body_repair_active
+                    && owner_body_repair_lagged
+                    && !self.frontier_block_materialized_locally(owner_hash)
+                {
+                    let _ = self.handoff_contiguous_frontier_to_passive_catchup(
+                        height,
+                        now,
+                        "stale_frontier_owner_body_repair",
+                    );
+                    passive_catchup_requested = self.request_range_pull_from_anchor(
+                        height,
+                        "stale_frontier_owner_body_repair",
+                        now,
+                    );
+                    if passive_catchup_requested {
+                        info!(
+                            height,
+                            view,
+                            owner_view,
+                            owner = %owner_hash,
+                            owner_age_ms = owner_age.as_millis(),
+                            frontier_lag_window_ms = self.frontier_slot_lag_window().as_millis(),
+                            queue_len = pending_queue_len,
+                            frontier_commit_qc_observed,
+                            competing_quorum_locked,
+                            new_view_qc_supersedes_owner,
+                            "escalated stale frontier owner body repair to passive catch-up"
+                        );
+                    }
+                }
                 let stale_vote_locked_owner = protected_owner
                     && owner_age >= hard_yield_age
                     && (local_vote_consensus_locked
@@ -1871,6 +1916,7 @@ impl Actor {
                     local_commit_vote_blocks_fresh_branch,
                     commit_inflight_live,
                     body_repair_requested,
+                    passive_catchup_requested,
                     stale_vote_locked_recovery_requested,
                     new_view_qc_supersedes_owner,
                     frontier_commit_qc_observed = owner_slot_evidence
@@ -2354,10 +2400,19 @@ impl Actor {
             return false;
         }
 
-        let repair_window = self
+        let commit_qc_repair_window = self
             .known_block_commit_qc_recovery_view_change_window()
             .max(self.quorum_timeout(self.runtime_da_enabled()))
             .max(Duration::from_millis(1));
+        let missing_qc_liveness_active =
+            self.frontier_missing_qc_liveness_active(proposal_height, proposal_view);
+        let repair_window = if missing_qc_liveness_active {
+            super::reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown())
+                .min(commit_qc_repair_window)
+                .max(Duration::from_millis(1))
+        } else {
+            commit_qc_repair_window
+        };
         let stale_branch_terminal = self
             .pending
             .pending_blocks
@@ -2387,9 +2442,33 @@ impl Actor {
                             .max(now.saturating_duration_since(pending.inserted_at))
                             >= repair_window)
             });
-        (stale_branch_terminal
-            || self.frontier_missing_qc_liveness_active(proposal_height, proposal_view))
+        (stale_branch_terminal || missing_qc_liveness_active)
             && pending_allows_stale_branch_rotation
+    }
+
+    fn stale_local_commit_vote_allows_frontier_owner_clear_for_proposal_assembly(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        owner_hash: HashOf<BlockHeader>,
+        owner_view: u64,
+        now: Instant,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> bool {
+        self.local_same_height_vote(proposal_height, self.epoch_for_height(proposal_height))
+            .as_ref()
+            .is_some_and(|existing_vote| {
+                existing_vote.block_hash == owner_hash
+                    && existing_vote.view == owner_view
+                    && self
+                        .stale_local_commit_vote_allows_proposal_assembly_after_missing_qc_repair(
+                            proposal_height,
+                            proposal_view,
+                            existing_vote,
+                            now,
+                            highest_qc,
+                        )
+            })
     }
 
     pub(super) fn local_same_height_vote_is_committed_parent_marker(
@@ -4798,8 +4877,7 @@ impl Actor {
             && target_height == self.committed_height_snapshot().saturating_add(1)
             && target_view > 0;
         let cooldown = if frontier_recovery_new_view {
-            self.rebroadcast_cooldown()
-                .min(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            self.frontier_recovery_new_view_rebroadcast_cooldown()
         } else {
             self.rebroadcast_cooldown()
         };
@@ -5495,15 +5573,25 @@ impl Actor {
                 quorum: required,
                 highest_qc: qc,
             });
-            warn!(
-                height = tracked_height,
-                view = tracked_view,
-                committed_height,
-                qc_height = qc.height,
-                qc_view = qc.view,
-                queue_len = pending_queue_len,
-                "using committed-QC frontier candidate without NEW_VIEW quorum under resilience liveness pressure"
-            );
+            if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                ProposalDeferWarningKind::CommittedQcNoNewViewFallback,
+                tracked_height,
+                tracked_view,
+                qc.subject_block_hash,
+                now,
+                Duration::from_secs(2),
+            ) {
+                warn!(
+                    height = tracked_height,
+                    view = tracked_view,
+                    committed_height,
+                    qc_height = qc.height,
+                    qc_view = qc.view,
+                    queue_len = pending_queue_len,
+                    suppressed_since_last,
+                    "using committed-QC frontier candidate without NEW_VIEW quorum under resilience liveness pressure"
+                );
+            }
         }
 
         if candidate.is_none()
@@ -6057,6 +6145,15 @@ impl Actor {
                             .seed_frontier_recovery_for_quorum_timeout_without_local_pending(
                                 height, view_idx, now,
                             );
+                        let recovery_advance = self.advance_frontier_recovery(
+                            "quorum_timeout",
+                            height,
+                            view_idx,
+                            false,
+                            true,
+                            true,
+                            now,
+                        );
                         debug!(
                             height,
                             view = view_idx,
@@ -6066,7 +6163,8 @@ impl Actor {
                             base_quorum_timeout_ms = quorum_timeout.as_millis(),
                             timeout_streak,
                             seeded_frontier_owner = seeded,
-                            "cached proposal slot quorum-timeout suppressed while same-slot frontier recovery remains active"
+                            ?recovery_advance,
+                            "cached proposal slot quorum-timeout routed through same-slot frontier recovery"
                         );
                     } else if contiguous_frontier {
                         warn!(
@@ -6366,6 +6464,10 @@ impl Actor {
             .frontier_slot_live_local_owner_for_round(height, view_idx)
             .filter(|(_, owner_view)| *owner_view < view_idx)
         {
+            let stale_local_commit_vote_allows_owner_clear = self
+                .stale_local_commit_vote_allows_frontier_owner_clear_for_proposal_assembly(
+                    height, view_idx, owner_hash, owner_view, now, highest_qc,
+                );
             if self.maybe_yield_stale_frontier_owner_for_fresh_proposal(
                 height,
                 view_idx,
@@ -6381,6 +6483,25 @@ impl Actor {
                     owner_view,
                     queue_len = pending_queue_len,
                     "stale same-height frontier owner yielded; continuing fresh proposal assembly"
+                );
+            } else if stale_local_commit_vote_allows_owner_clear {
+                let dropped = self
+                    .drop_stale_pending_block_for_fresh_proposal(owner_hash, height, owner_view);
+                if self.frontier_slot.as_ref().is_some_and(|slot| {
+                    slot.height == height
+                        && slot.view == owner_view
+                        && slot.block_hash == owner_hash
+                }) {
+                    self.frontier_slot = None;
+                }
+                info!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    queue_len = pending_queue_len,
+                    dropped_tx_count = dropped.map(|(tx_count, _, _, _)| tx_count),
+                    "cleared stale same-height frontier owner for fresh proposal assembly after missing-QC repair"
                 );
             } else if pending_queue_len > 0 {
                 let progressed = self.maybe_progress_existing_slot_proposal(

@@ -9808,7 +9808,7 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
                     field: "public_amount",
                 });
             }
-            Some(change_output) if self.public_amount >= current_amount => {
+            Some(_) if self.public_amount >= current_amount => {
                 return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
                     field: "public_amount",
                 });

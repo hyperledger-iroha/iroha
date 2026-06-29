@@ -273,6 +273,7 @@ public final class NoritoCodecAdapterTests {
             .setValidationFeePolicyVersion(7L)
             .setValidationFeePolicyHash("AB".repeat(32))
             .setValidationFeeInstructionIndex(1L)
+            .setValidationFeeTransferEntryIndex(2L)
             .build();
 
     final byte[] encoded = NoritoJavaCodecAdapter.encodeMultisigProposeRequest(request);
@@ -351,6 +352,18 @@ public final class NoritoCodecAdapterTests {
                 NoritoAdapters.stringAdapter(),
                 "request.validation_fee_instruction_index"))
         : "validation fee instruction index mismatch";
+    final byte[] transferEntryIndexPayload =
+        decodeOptionPayload(
+                readField(decoder, "request.validation_fee_transfer_entry_index"),
+                "request.validation_fee_transfer_entry_index")
+            .orElseThrow(
+                () -> new IllegalStateException("validation fee transfer entry index missing"));
+    assert "2".equals(
+            decodeFieldPayload(
+                transferEntryIndexPayload,
+                NoritoAdapters.stringAdapter(),
+                "request.validation_fee_transfer_entry_index"))
+        : "validation fee transfer entry index mismatch";
     assert decoder.remaining() == 0 : "multisig propose request has trailing bytes";
   }
 
@@ -391,9 +404,41 @@ public final class NoritoCodecAdapterTests {
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
+                    .setValidationFeeTransferEntryIndex(2L)
+                    .build()));
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .setValidationFeeTransferEntryIndex(2L)
+                    .build()));
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
                     .setValidationFeePolicyVersion(1L)
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .setValidationFeeInstructionIndex(-1L)
+                    .build()));
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+                MultisigProposeRequest.builder()
+                    .setMultisigAccountAlias("cbdc@banka")
+                    .setSignerAccountId(signerAccountId)
+                    .addInstructionBytes(new byte[] {1})
+                    .setValidationFeePolicyVersion(1L)
+                    .setValidationFeePolicyHash("ab".repeat(32))
+                    .setValidationFeeInstructionIndex(1L)
+                    .setValidationFeeTransferEntryIndex(-2L)
                     .build()));
   }
 

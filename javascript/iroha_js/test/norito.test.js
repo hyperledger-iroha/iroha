@@ -366,6 +366,7 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     validation_fee_policy_version: "7",
     validation_fee_policy_hash: "ab".repeat(32),
     validation_fee_instruction_index: "1",
+    validation_fee_transfer_entry_index: "2",
     instructions: [instruction],
   };
   const nativeBody = Buffer.from(noritoEncodeMultisigProposeRequest(request));
@@ -448,7 +449,6 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     "MultisigProposeDto.validation_fee_instruction_index",
     outerUsesCompactLengths,
   );
-  assert.equal(feeInstructionIndex.offset, outer.payload.length);
   assert.equal(feeInstructionIndex.payload[0], 1);
   const feeInstructionIndexValue = readNoritoFieldPayload(
     feeInstructionIndex.payload,
@@ -465,6 +465,29 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
   assert.equal(feeInstructionIndexString.payload.toString("utf8"), "1");
   assert.equal(feeInstructionIndexString.offset, feeInstructionIndexValue.payload.length);
   assert.equal(feeInstructionIndexValue.offset, feeInstructionIndex.payload.length);
+  const feeTransferEntryIndex = readNoritoFieldPayload(
+    outer.payload,
+    feeInstructionIndex.offset,
+    "MultisigProposeDto.validation_fee_transfer_entry_index",
+    outerUsesCompactLengths,
+  );
+  assert.equal(feeTransferEntryIndex.offset, outer.payload.length);
+  assert.equal(feeTransferEntryIndex.payload[0], 1);
+  const feeTransferEntryIndexValue = readNoritoFieldPayload(
+    feeTransferEntryIndex.payload,
+    1,
+    "MultisigProposeDto.validation_fee_transfer_entry_index.value",
+    outerUsesCompactLengths,
+  );
+  const feeTransferEntryIndexString = readNoritoFieldPayload(
+    feeTransferEntryIndexValue.payload,
+    0,
+    "MultisigProposeDto.validation_fee_transfer_entry_index.value.string",
+    outerUsesCompactLengths,
+  );
+  assert.equal(feeTransferEntryIndexString.payload.toString("utf8"), "2");
+  assert.equal(feeTransferEntryIndexString.offset, feeTransferEntryIndexValue.payload.length);
+  assert.equal(feeTransferEntryIndexValue.offset, feeTransferEntryIndex.payload.length);
 });
 
 test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {
@@ -496,6 +519,14 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
     () =>
       noritoEncodeMultisigProposeRequest({
         ...request,
+        validation_fee_transfer_entry_index: "2",
+      }),
+    /requires validation fee policy metadata/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
         validation_fee_policy_version: "7",
       }),
     /must be provided together/,
@@ -515,7 +546,28 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
         ...request,
         validation_fee_policy_version: "7",
         validation_fee_policy_hash: "ab".repeat(32),
+        validation_fee_transfer_entry_index: "2",
+      }),
+    /requires validation_fee_instruction_index/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_policy_version: "7",
+        validation_fee_policy_hash: "ab".repeat(32),
         validation_fee_instruction_index: "-1",
+      }),
+    /must be a bigint, integer number, or decimal string/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_policy_version: "7",
+        validation_fee_policy_hash: "ab".repeat(32),
+        validation_fee_instruction_index: "1",
+        validation_fee_transfer_entry_index: "-2",
       }),
     /must be a bigint, integer number, or decimal string/,
   );
