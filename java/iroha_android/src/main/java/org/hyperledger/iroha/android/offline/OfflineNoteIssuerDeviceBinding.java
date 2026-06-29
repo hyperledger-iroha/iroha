@@ -1,11 +1,16 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 /** Device-binding material required by the Torii Offline Note issuer endpoints. */
 public final class OfflineNoteIssuerDeviceBinding {
+  private static final List<String> RETIRED_ASSERTION_PUBLIC_KEY_ALIAS_FIELDS =
+      Arrays.asList("device_public_key", "app_attest_public_key_base64");
+
   private final String deviceId;
   private final String offlinePublicKey;
   private final Map<String, Object> deviceBinding;
@@ -16,7 +21,8 @@ public final class OfflineNoteIssuerDeviceBinding {
       final Map<String, Object> deviceBinding) {
     this.deviceId = requireNonBlank(deviceId, "deviceId");
     this.offlinePublicKey = requireNonBlank(offlinePublicKey, "offlinePublicKey");
-    this.deviceBinding = deepCopyObject(Objects.requireNonNull(deviceBinding, "deviceBinding"));
+    rejectRetiredDeviceBindingAliases(Objects.requireNonNull(deviceBinding, "deviceBinding"));
+    this.deviceBinding = deepCopyObject(deviceBinding);
     final Object bindingDeviceId = this.deviceBinding.get("device_id");
     if (bindingDeviceId instanceof String value && !value.equals(this.deviceId)) {
       throw new IllegalArgumentException("device_binding.device_id must match deviceId");
@@ -46,6 +52,15 @@ public final class OfflineNoteIssuerDeviceBinding {
 
   public Map<String, Object> deviceBinding() {
     return deepCopyObject(deviceBinding);
+  }
+
+  private static void rejectRetiredDeviceBindingAliases(final Map<String, Object> deviceBinding) {
+    for (final String retiredKey : RETIRED_ASSERTION_PUBLIC_KEY_ALIAS_FIELDS) {
+      if (deviceBinding.containsKey(retiredKey)) {
+        throw new IllegalArgumentException(
+            "device_binding." + retiredKey + " is retired; use assertion_public_key");
+      }
+    }
   }
 
   static Map<String, Object> deepCopyObject(final Map<String, Object> source) {

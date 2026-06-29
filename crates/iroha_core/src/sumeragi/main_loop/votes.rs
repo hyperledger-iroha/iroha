@@ -3152,6 +3152,7 @@ impl Actor {
                 vote.block_hash,
                 signer_peer,
             ) {
+                let now = Instant::now();
                 let certified_commit_supersedes = self
                     .certified_commit_hash_supersedes_same_height_vote_conflict(
                         vote.phase,
@@ -3163,13 +3164,21 @@ impl Actor {
                 let new_view_qc_supersedes = self
                     .proposal_or_new_view_highest_qc_for_slot(vote.height, vote.view)
                     .is_some_and(|highest_qc| {
-                        self.new_view_qc_supersedes_same_height_vote_conflict(
+                        self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                             vote.height,
                             vote.view,
                             highest_qc,
                             existing.block_hash,
                             existing.view,
-                        )
+                            existing.phase,
+                        ) || self
+                            .new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
+                                vote.height,
+                                vote.view,
+                                highest_qc,
+                                &existing,
+                                now,
+                            )
                     });
                 if new_view_qc_supersedes || certified_commit_supersedes {
                     info!(

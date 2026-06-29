@@ -16,6 +16,7 @@ set -euo pipefail
 #   IROHA_LOCALNET_MEMORY_BUDGET_PROFILE Override [ivm].memory_budget_profile in generated peer configs.
 #   IROHA_LOCALNET_MAX_STACK_BYTES Add/update a compute resource profile with this max_stack_bytes value.
 #   IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS Override [sumeragi.persistence].commit_inflight_timeout_ms in generated peer configs.
+#   IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY Override [kura].blocks_in_memory in generated peer configs.
 
 usage() {
   cat <<'EOF'
@@ -37,6 +38,7 @@ Options:
   --queue-capacity <N>       Override transaction queue capacity in peer configs
   --queue-capacity-per-user <N> Override per-user transaction queue capacity (defaults to --queue-capacity when set)
   --queue-ttl-ms <MS>        Override queue transaction_time_to_live_ms (ms)
+  --kura-blocks-in-memory <N> Override number of decoded Kura blocks retained by each peer
   --logger-level <LEVEL>     Override logger.level in peer configs (e.g., warn)
   --logger-filter <SPEC>     Override logger.filter in peer configs
   --base-api-port <PORT>     Base Torii API port (default: 29080)
@@ -127,6 +129,7 @@ LOCALNET_GAS_TO_STACK_MULTIPLIER="${IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER:-}"
 LOCALNET_MEMORY_BUDGET_PROFILE="${IROHA_LOCALNET_MEMORY_BUDGET_PROFILE:-}"
 LOCALNET_MAX_STACK_BYTES="${IROHA_LOCALNET_MAX_STACK_BYTES:-${LOCALNET_GUEST_STACK_BYTES:-}}"
 LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS="${IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS:-}"
+KURA_BLOCKS_IN_MEMORY="${IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -176,6 +179,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --queue-ttl-ms)
       QUEUE_TTL_MS="$2"
+      shift 2
+      ;;
+    --kura-blocks-in-memory)
+      require_option_value "--kura-blocks-in-memory" "${2-}"
+      KURA_BLOCKS_IN_MEMORY="$2"
       shift 2
       ;;
     --logger-level)
@@ -273,6 +281,21 @@ done
 
 if [[ -n "$QUEUE_CAPACITY" && -z "$QUEUE_CAPACITY_PER_USER" ]]; then
   QUEUE_CAPACITY_PER_USER="$QUEUE_CAPACITY"
+fi
+
+if [[ -z "$KURA_BLOCKS_IN_MEMORY" ]]; then
+  case "$PERF_PROFILE" in
+    10k-*)
+      # 10k localnets can commit thousands of rejected transaction results per block.
+      # Keep only a small decoded hot cache; durable block bodies remain in Kura.
+      KURA_BLOCKS_IN_MEMORY=32
+      ;;
+  esac
+fi
+
+if [[ -n "$KURA_BLOCKS_IN_MEMORY" && ! "$KURA_BLOCKS_IN_MEMORY" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --kura-blocks-in-memory value: $KURA_BLOCKS_IN_MEMORY (expected positive integer)" >&2
+  exit 2
 fi
 
 BUILD_LINE_LOWER="$(printf '%s' "$BUILD_LINE" | tr '[:upper:]' '[:lower:]')"
@@ -475,12 +498,17 @@ fi
 
 echo "Building Iroha tools ($PROFILE)..."
 cd "$IROHA_DIR"
+build_tool_bins() {
+  "${cargo_runner[@]}" build "$@" -p iroha_kagami --bin kagami
+  "${cargo_runner[@]}" build "$@" -p irohad --bin irohad
+  "${cargo_runner[@]}" build "$@" -p iroha_cli --bin iroha
+}
 if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
   echo "Skipping Iroha tool build; using existing binaries."
 elif [[ "$PROFILE" == "release" ]]; then
-  "${cargo_runner[@]}" build --release --bin kagami --bin irohad --bin iroha
+  build_tool_bins --release
 else
-  "${cargo_runner[@]}" build --bin kagami --bin irohad --bin iroha
+  build_tool_bins
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
@@ -630,6 +658,54 @@ if [[ -n "$QUEUE_CAPACITY" || -n "$QUEUE_CAPACITY_PER_USER" || -n "$QUEUE_TTL_MS
       END {
         flush_queue()
         flush_torii()
+      }
+    ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+  done
+fi
+
+if [[ -n "$KURA_BLOCKS_IN_MEMORY" ]]; then
+  echo "Applying kura.blocks_in_memory=${KURA_BLOCKS_IN_MEMORY} in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    awk -v blocks="$KURA_BLOCKS_IN_MEMORY" '
+      function flush_kura() {
+        if (!in_kura) return
+        if (!seen_blocks) print "blocks_in_memory = " blocks
+      }
+      BEGIN {
+        in_kura = 0
+        saw_kura = 0
+        seen_blocks = 0
+      }
+      /^[[:space:]]*\[kura\][[:space:]]*$/ {
+        flush_kura()
+        in_kura = 1
+        saw_kura = 1
+        seen_blocks = 0
+        print
+        next
+      }
+      /^[[:space:]]*\[/ {
+        flush_kura()
+        in_kura = 0
+        print
+        next
+      }
+      {
+        if (in_kura && $1 == "blocks_in_memory") {
+          print "blocks_in_memory = " blocks
+          seen_blocks = 1
+          next
+        }
+        print
+      }
+      END {
+        flush_kura()
+        if (!saw_kura) {
+          print ""
+          print "[kura]"
+          print "blocks_in_memory = " blocks
+        }
       }
     ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
   done

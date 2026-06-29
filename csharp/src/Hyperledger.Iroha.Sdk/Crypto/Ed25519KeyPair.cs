@@ -20,9 +20,19 @@ public sealed class Ed25519KeyPair
 
     public static Ed25519KeyPair FromSeed(ReadOnlySpan<byte> privateKeySeed)
     {
+        Ed25519Signer.RequirePrivateKeySeedLength(privateKeySeed, nameof(privateKeySeed));
+
         var seed = privateKeySeed.ToArray();
-        var publicKey = Ed25519Signer.GetPublicKey(seed);
-        return new Ed25519KeyPair(seed, publicKey);
+        try
+        {
+            var publicKey = Ed25519Signer.GetPublicKey(seed);
+            return new Ed25519KeyPair(seed, publicKey);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(seed);
+            throw;
+        }
     }
 
     public static Ed25519KeyPair Generate()

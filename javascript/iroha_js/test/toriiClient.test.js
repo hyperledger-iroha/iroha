@@ -21771,6 +21771,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     validationFeePolicyVersion: 7,
     validationFeePolicyHash: "AB".repeat(32),
     validationFeeInstructionIndex: 1,
+    validationFeeTransferEntryIndex: 2,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
@@ -21793,6 +21794,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       validationFeePolicyVersion: 7,
       validationFeePolicyHash: "AB".repeat(32),
       validationFeeInstructionIndex: 1,
+      validationFeeTransferEntryIndex: 2,
     }),
     {
       multisig_account_alias: "cbdc@banka",
@@ -21802,6 +21804,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       validation_fee_policy_version: "7",
       validation_fee_policy_hash: "ab".repeat(32),
       validation_fee_instruction_index: "1",
+      validation_fee_transfer_entry_index: "2",
     },
   );
 });
@@ -21883,6 +21886,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     () =>
       client.proposeMultisig({
         ...request,
+        validationFeeTransferEntryIndex: 2,
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeTransferEntryIndex: 2,
+      }),
+    /requires instruction index/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
         validationFeePolicyVersion: 7,
       }),
     /provided together/,
@@ -21894,6 +21915,17 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
         validationFeePolicyVersion: 7,
         validationFeePolicyHash: "ab".repeat(32),
         validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: 1,
+        validationFeeTransferEntryIndex: -2,
       }),
     /non-negative integer/,
   );
@@ -21914,6 +21946,20 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     /requires policy metadata/,
   );
   assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeeTransferEntryIndex: 2 }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeTransferEntryIndex: 2,
+      }),
+    /requires instruction index/,
+  );
+  assert.throws(
     () => buildMultisigProposeRequest({ ...request, validationFeePolicyVersion: 7 }),
     /provided together/,
   );
@@ -21924,6 +21970,17 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
         validationFeePolicyVersion: 7,
         validationFeePolicyHash: "ab".repeat(32),
         validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: 1,
+        validationFeeTransferEntryIndex: -2,
       }),
     /non-negative integer/,
   );

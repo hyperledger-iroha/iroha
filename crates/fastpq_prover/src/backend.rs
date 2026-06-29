@@ -1,11 +1,12 @@
 use core::convert::TryFrom;
 #[cfg(windows)]
 use std::env;
+#[cfg(unix)]
+use std::fs;
 #[cfg(windows)]
 use std::path::PathBuf;
 use std::{
     collections::BTreeSet,
-    fs,
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
@@ -549,11 +550,6 @@ fn has_icd_entries(dir: &str) -> bool {
                 })
         })
         .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn has_icd_entries(_dir: &str) -> bool {
-    false
 }
 
 fn command_success(program: &str, args: &[&str]) -> bool {

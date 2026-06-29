@@ -133,7 +133,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
-    public var appAttestKeyId: String
+    public var attestationKeyId: String
     public let assetDefinitionId: String
     public let existingLineageId: String?
     public let lineageState: ToriiOfflineCashState?
@@ -148,7 +148,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
-        appAttestKeyId: String,
+        attestationKeyId: String,
         assetDefinitionId: String,
         existingLineageId: String?,
         lineageState: ToriiOfflineCashState? = nil,
@@ -162,7 +162,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
-        self.appAttestKeyId = appAttestKeyId
+        self.attestationKeyId = attestationKeyId
         self.assetDefinitionId = assetDefinitionId
         self.existingLineageId = existingLineageId
         self.lineageState = lineageState
@@ -190,9 +190,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
             forKey: .keyCertificateBindings
         ) ?? [deviceBinding]
         deviceProof = try container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
-        appAttestKeyId = try container.decodeIfPresent(String.self, forKey: .attestationKeyId)
-            ?? container.decodeIfPresent(String.self, forKey: .appAttestKeyId)
-            ?? deviceBinding.attestationKeyId
+        attestationKeyId = try container.decode(String.self, forKey: .attestationKeyId)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -201,8 +199,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         try container.encode(accountId, forKey: .accountId)
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
-        try container.encode(appAttestKeyId, forKey: .appAttestKeyId)
-        try container.encode(appAttestKeyId, forKey: .attestationKeyId)
+        try container.encode(attestationKeyId, forKey: .attestationKeyId)
         try container.encode(assetDefinitionId, forKey: .assetDefinitionId)
         try container.encodeIfPresent(existingLineageId, forKey: .existingLineageId)
         try container.encodeIfPresent(lineageState, forKey: .lineageState)
@@ -219,7 +216,6 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
         case attestationKeyId = "attestation_key_id"
-        case appAttestKeyId = "app_attest_key_id"
         case assetDefinitionId = "asset_definition_id"
         case existingLineageId = "existing_lineage_id"
         case lineageState = "lineage_state"

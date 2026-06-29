@@ -14,7 +14,6 @@ from sorafs_evidence_paths import (  # noqa: E402
     EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_PARENT_INSPECTION_DIAGNOSTIC,
-    EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC,
@@ -23,7 +22,6 @@ from sorafs_evidence_paths import (  # noqa: E402
     EVIDENCE_FILE_INSPECTION_DIAGNOSTIC,
     EVIDENCE_FILE_MISSING_DIAGNOSTIC,
     EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC,
-    EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC,
     EVIDENCE_FILE_PATH_DIAGNOSTIC,
     EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC,
     EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC,
@@ -190,7 +188,9 @@ def test_explicit_evidence_symlink_fails_closed(tmp_path: Path) -> None:
     assert str(symlink) not in errors[0]
 
 
-def test_explicit_evidence_parent_symlink_fails_closed(tmp_path: Path) -> None:
+def test_explicit_evidence_parent_symlink_directory_is_accepted(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "target"
     parent = tmp_path / "evidence-root"
     target.mkdir()
@@ -201,9 +201,8 @@ def test_explicit_evidence_parent_symlink_fails_closed(tmp_path: Path) -> None:
     errors: list[str] = []
     files = discover_evidence_files([], [evidence], errors)
 
-    assert files == []
-    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
-    assert str(parent) not in errors[0]
+    assert files == [evidence]
+    assert errors == []
 
 
 def test_discovered_json_directory_fails_closed_without_hiding_files(
@@ -280,20 +279,22 @@ def test_evidence_directory_symlink_fails_closed(tmp_path: Path) -> None:
     assert str(symlink) not in errors[0]
 
 
-def test_evidence_directory_parent_symlink_fails_closed(tmp_path: Path) -> None:
+def test_evidence_directory_parent_symlink_directory_is_accepted(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "target"
     parent = tmp_path / "evidence-root"
     target.mkdir()
     (target / "evidence").mkdir()
+    (target / "evidence" / "evidence.json").write_text("{}", encoding="utf-8")
     parent.symlink_to(target, target_is_directory=True)
     evidence_dir = parent / "evidence"
 
     errors: list[str] = []
     files = discover_evidence_files([evidence_dir], [], errors)
 
-    assert files == []
-    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
-    assert str(parent) not in errors[0]
+    assert files == [evidence_dir / "evidence.json"]
+    assert errors == []
 
 
 def test_non_path_evidence_directory_fails_closed_without_traceback() -> None:
@@ -558,14 +559,14 @@ def test_evidence_file_parent_inspection_failure_fails_closed(
     evidence_file = parent / "evidence.json"
     parent.mkdir()
     evidence_file.write_text("{}", encoding="utf-8")
-    original_is_symlink = Path.is_symlink
+    original_exists = Path.exists
 
-    def is_symlink(path: Path) -> bool:
+    def exists(path: Path) -> bool:
         if path == parent:
             raise RuntimeError("evidence parent stat denied")
-        return original_is_symlink(path)
+        return original_exists(path)
 
-    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+    monkeypatch.setattr(Path, "exists", exists)
 
     errors: list[str] = []
     files = discover_evidence_files([], [evidence_file], errors)
@@ -740,21 +741,23 @@ def test_scan_evidence_directory_json_rejects_symlink_directory(
     assert str(symlink) not in errors[0]
 
 
-def test_scan_evidence_directory_json_rejects_parent_symlink_directory(
+def test_scan_evidence_directory_json_accepts_parent_symlink_directory(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
     symlink_root = tmp_path / "evidence-root"
     target = target_root / "evidence"
     target.mkdir(parents=True)
+    (target / "evidence.json").write_text("{}", encoding="utf-8")
     symlink_root.symlink_to(target_root, target_is_directory=True)
 
     evidence_dir = symlink_root / "evidence"
     errors: list[str] = []
-    assert scan_evidence_directory_json(evidence_dir, errors) == []
+    assert scan_evidence_directory_json(evidence_dir, errors) == [
+        evidence_dir / "evidence.json"
+    ]
 
-    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
-    assert str(symlink_root) not in errors[0]
+    assert errors == []
 
 
 def test_reserved_output_conflict_scan_inspection_failure_fails_closed(
@@ -826,13 +829,14 @@ def test_reserved_output_conflict_evidence_directory_symlink_fails_closed(
     assert str(symlink) not in errors[0]
 
 
-def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed(
+def test_reserved_output_conflict_evidence_directory_parent_symlink_is_accepted(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
     parent = tmp_path / "evidence-root"
     target.mkdir()
     (target / "evidence").mkdir()
+    (target / "evidence" / "evidence.json").write_text("{}", encoding="utf-8")
     parent.symlink_to(target, target_is_directory=True)
     evidence_dir = parent / "evidence"
 
@@ -845,8 +849,7 @@ def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed
         reserved_label="--summary-out",
     )
 
-    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
-    assert str(parent) not in errors[0]
+    assert errors == []
 
 
 def test_reserved_output_conflict_explicit_evidence_directory_fails_closed(
@@ -889,7 +892,7 @@ def test_reserved_output_conflict_explicit_evidence_symlink_fails_closed(
     assert str(symlink) not in errors[0]
 
 
-def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
+def test_reserved_output_conflict_explicit_evidence_parent_symlink_is_accepted(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -908,8 +911,7 @@ def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
-    assert str(parent) not in errors[0]
+    assert errors == []
 
 
 def test_reserved_output_conflict_discovered_json_directory_fails_closed(
@@ -1010,7 +1012,7 @@ def test_reserved_output_path_identities_rejects_symlink(tmp_path: Path) -> None
     assert errors == [f"--summary-out `{reserved}` must not be a symlink"]
 
 
-def test_reserved_output_path_identities_rejects_parent_symlink(
+def test_reserved_output_path_identities_accepts_parent_symlink_directory(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -1026,8 +1028,8 @@ def test_reserved_output_path_identities_rejects_parent_symlink(
         label="--summary-out",
     )
 
-    assert identities == {}
-    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+    assert identities == {reserved.resolve(): reserved}
+    assert errors == []
 
 
 def test_reserved_output_path_identities_symlink_inspection_failure(
@@ -1102,13 +1104,13 @@ def test_reserved_output_conflict_scan_stops_after_duplicate_reserved_outputs(
     ]
 
 
-def test_reserved_output_conflict_scan_stops_after_reserved_output_parent_symlink(
+def test_reserved_output_conflict_scan_accepts_reserved_output_parent_symlink(
     tmp_path: Path,
 ) -> None:
-    evidence = tmp_path / "evidence.json"
     target = tmp_path / "target"
     parent = tmp_path / "summary-root"
     target.mkdir()
+    evidence = target / "summary.json"
     evidence.write_text("{}", encoding="utf-8")
     parent.symlink_to(target, target_is_directory=True)
     reserved = parent / "summary.json"
@@ -1122,7 +1124,7 @@ def test_reserved_output_conflict_scan_stops_after_reserved_output_parent_symlin
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC]
 
 
 def test_reserved_output_helpers_reject_malformed_error_container(
@@ -1253,7 +1255,7 @@ def test_is_explicit_evidence_path_rejects_symlink_candidate(
     assert str(symlink) not in errors[0]
 
 
-def test_is_explicit_evidence_path_rejects_parent_symlink_candidate(
+def test_is_explicit_evidence_path_accepts_parent_symlink_candidate(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
@@ -1265,10 +1267,9 @@ def test_is_explicit_evidence_path_rejects_parent_symlink_candidate(
 
     candidate = symlink_root / "evidence.json"
     errors: list[str] = []
-    assert is_explicit_evidence_path(candidate, {target.resolve()}, errors) is False
+    assert is_explicit_evidence_path(candidate, {target.resolve()}, errors) is True
 
-    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
-    assert str(symlink_root) not in errors[0]
+    assert errors == []
 
 
 def test_is_explicit_evidence_path_skips_empty_identity_set_without_resolving(

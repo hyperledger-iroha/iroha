@@ -32,8 +32,8 @@ public final class OfflineToriiException extends RuntimeException {
       final String responseBody) {
     super(message, cause);
     this.statusCode = statusCode;
-    this.rejectCode = rejectCode == null || rejectCode.isBlank() ? null : rejectCode;
-    this.responseBody = responseBody == null || responseBody.isBlank() ? null : responseBody;
+    this.rejectCode = rejectCode == null || rejectCode.trim().isEmpty() ? null : rejectCode;
+    this.responseBody = responseBody == null || responseBody.trim().isEmpty() ? null : responseBody;
   }
 
   public java.util.Optional<Integer> statusCode() {

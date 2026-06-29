@@ -336,12 +336,18 @@ class OfflineNoteTest {
     @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
-            "recursive_spend_v1",
-            KagemushaRecursiveSpendProver.preferredMode(true).wireName,
+            KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
+            KagemushaRecursiveSpendProver.preferredMode(
+                recursiveCompactAvailable = false,
+                recursiveSpendAvailable = true,
+            ),
         )
         assertEquals(
-            "checked_prefold_v1",
-            KagemushaRecursiveSpendProver.preferredMode(false).wireName,
+            null,
+            KagemushaRecursiveSpendProver.preferredMode(
+                recursiveCompactAvailable = false,
+                recursiveSpendAvailable = false,
+            ),
         )
         assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
@@ -1406,12 +1412,12 @@ class OfflineNoteTest {
     }
 
     @Test
-    fun qrTextCodecRejectsLegacyVersionedPrefix() {
+    fun qrTextCodecRejectsRetiredVersionedPrefix() {
         val payload = ByteArray(64) { index -> (index * 31 + 7).toByte() }
-        val legacy = "iroha:qr-old:" + Base64.getEncoder().encodeToString(payload)
+        val retiredPrefix = "iroha:qr-old:" + Base64.getEncoder().encodeToString(payload)
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineQrStream.TextCodec.decode(legacy, OfflineQrStream.FrameEncoding.BASE64)
+            OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64)
         }
     }
 
@@ -2764,7 +2770,7 @@ class OfflineNoteTest {
             string(derivation, "source_note_commitment"),
             issuerClient.lastIssueRequest?.noteCommitmentHex(),
         )
-        assertEquals(OfflineNoteWalletNoteState.SPENDABLE, note.state)
+        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, note.state)
     }
 
     @Test
@@ -2870,7 +2876,7 @@ class OfflineNoteTest {
     @Test
     fun toriiIssuerClientBodySignsRefillAndRetiresNoteIssue() {
         val fixture = loadFixture()
-        val certificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
+        val certificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
         val accountId = string(certificateJson, "account_id")
         val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
         val offlinePublicKey = "a5".repeat(32)
@@ -2898,6 +2904,14 @@ class OfflineNoteTest {
             },
             executor = executor,
             baseUri = URI.create("https://torii.example"),
+            defaultHeaders = mapOf(
+                "X-Iroha-Account" to "retired-account",
+                "x-iroha-signature" to "retired-signature",
+                "X-IROHA-TIMESTAMP-MS" to "123",
+                "X-Iroha-Nonce" to "retired-nonce",
+                "X-Iroha-Witness" to "retired-witness",
+                "X-Client-Trace" to "trace-1",
+            ),
             clock = java.util.function.LongSupplier { nowMs },
             nonceGenerator = SequenceIdGenerator(
                 "operation-refill-1",
@@ -2933,6 +2947,7 @@ class OfflineNoteTest {
         for (request in executor.requests) {
             assertFalse(request.headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
         }
+        assertEquals<List<String>?>(listOf("trace-1"), executor.requests[0].headers["X-Client-Trace"])
 
         val refillBody = executor.requestBody(0)
         assertEquals(accountId, string(refillBody, "account_id"))
@@ -2956,9 +2971,33 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
+        val offlinePublicKey = "a5".repeat(32)
+        for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64")) {
+            val bindingJson = linkedMapOf<String, Any?>(
+                "device_id" to "device-1",
+                "attestation_key_id" to "attestation-key-1",
+                "offline_public_key" to offlinePublicKey,
+                retiredKey to base64(ByteArray(65) { 2 }),
+            )
+            val failure = assertFailsWith<IllegalArgumentException> {
+                OfflineNoteIssuerDeviceBinding(
+                    deviceId = "device-1",
+                    offlinePublicKey = offlinePublicKey,
+                    deviceBinding = bindingJson,
+                )
+            }
+            assertEquals(
+                "device_binding.$retiredKey is retired; use assertion_public_key",
+                failure.message,
+            )
+        }
+    }
+
+    @Test
     fun toriiIssuerClientRejectsMalformedCertificateUsageLimits() {
         val fixture = loadFixture()
-        val baseCertificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
+        val baseCertificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
         val accountId = string(baseCertificateJson, "account_id")
         val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
         val offlinePublicKey = "a5".repeat(32)
@@ -3014,6 +3053,34 @@ class OfflineNoteTest {
         for (invalidVersion in listOf<Any?>(0L, 2L, 4_294_967_297L, "1")) {
             val certificateJson = LinkedHashMap(baseCertificateJson)
             certificateJson["version"] = invalidVersion
+            assertRejected(certificateJson)
+        }
+        for (invalidScheme in listOf("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")) {
+            val certificateJson = LinkedHashMap(baseCertificateJson)
+            certificateJson["assertion_scheme"] = invalidScheme
+            assertRejected(certificateJson)
+        }
+        for (invalidAlgorithm in listOf("ecdsa-p256-sha256", "ed25519")) {
+            val certificateJson = LinkedHashMap(baseCertificateJson)
+            certificateJson["assertion_key_algorithm"] = invalidAlgorithm
+            assertRejected(certificateJson)
+        }
+        for (invalidPlatform in listOf("android", "android-keymint ", "Android-keymint", "ios-appattest-android")) {
+            val certificateJson = LinkedHashMap(baseCertificateJson)
+            certificateJson["platform"] = invalidPlatform
+            certificateJson["assertion_scheme"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
+            certificateJson["assertion_key_algorithm"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+            certificateJson["assertion_usage_count_limit"] = 1
+            assertRejected(certificateJson)
+        }
+        for ((field, invalidValue) in listOf(
+            "public_key" to hex(ByteArray(33) { 1 }),
+            "assertion_public_key" to base64(ByteArray(65) { 0xff.toByte() }).replace('/', '_'),
+            "issuer_signature_base64" to " ${base64(ByteArray(64) { 3 })}",
+            "issuer_signature_base64" to base64(ByteArray(64) { 3 }).replace("=", ""),
+        )) {
+            val certificateJson = LinkedHashMap(baseCertificateJson)
+            certificateJson[field] = invalidValue
             assertRejected(certificateJson)
         }
     }
@@ -3587,6 +3654,277 @@ class OfflineNoteTest {
 
         submitter.completeAccepted()
         assertEquals(OfflineNoteWalletNoteState.REDEEM_PENDING, redeeming.get(1, TimeUnit.SECONDS).state)
+    }
+
+    @Test
+    fun walletLoadStoresIssuePending() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val issue = obj(chain, "issue")
+        val senderCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val loadContext = OfflineNoteLoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val store = InMemoryOfflineNoteStore()
+        val wallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(issue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            ownerCertificateSigner = TestOwnerCertificateSigner(),
+            issuerClient = RecordingIssuerClient(loadContext),
+            store = store,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_000L },
+        )
+
+        val note = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")).get()
+
+        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, note.state)
+        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, store.findNote(note.noteCommitment())?.state)
+    }
+
+    @Test
+    fun issuePendingNoteCannotBePaid() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainRedeem = obj(chain, "redeem")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val recipientSigner = TestOwnerCertificateSigner()
+        val senderStore = InMemoryOfflineNoteStore()
+        val pendingNote = issuerSourceWalletNote(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainIssue, "amount"),
+            issuerCertificate = testIssuer.issuerCertificate(senderSigner.accountId),
+            noteSecret = ByteArray(32) { 0x11.toByte() },
+            operationSuffix = "issue-pending-pay",
+            createdAtMs = 1_700_000_000_000L,
+        ).withState(OfflineNoteWalletNoteState.ISSUE_PENDING, 1_700_000_000_000L)
+        senderStore.upsert(pendingNote)
+        val senderWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderSigner.accountId)),
+            ownerCertificateSigner = senderSigner,
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            clock = { 1_700_000_002_000L },
+        )
+        val recipientSigner2 = TestOwnerCertificateSigner()
+        val recipientWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = recipientSigner2.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(recipientSigner2.accountId)),
+            ownerCertificateSigner = recipientSigner2,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(listOf(ByteArray(32) { 0x37.toByte() })),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_002_100L },
+        )
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainRedeem, "amount"),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            senderWallet.pay(receiveRequest)
+        }
+    }
+
+    @Test
+    fun issuePendingNoteCannotBeRedeemed() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val store = InMemoryOfflineNoteStore()
+        val pendingNote = issuerSourceWalletNote(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainIssue, "amount"),
+            issuerCertificate = testIssuer.issuerCertificate(senderSigner.accountId),
+            noteSecret = ByteArray(32) { 0x12.toByte() },
+            operationSuffix = "issue-pending-redeem",
+            createdAtMs = 1_700_000_000_000L,
+        ).withState(OfflineNoteWalletNoteState.ISSUE_PENDING, 1_700_000_000_000L)
+        store.upsert(pendingNote)
+        val wallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderSigner.accountId)),
+            ownerCertificateSigner = senderSigner,
+            store = store,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            clock = { 1_700_000_002_000L },
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            wallet.redeem(pendingNote).get()
+        }
+    }
+
+    @Test
+    fun syncPromotesCommittedIssuePendingToSpendable() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val store = InMemoryOfflineNoteStore()
+        val pendingNote = issuerSourceWalletNote(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainIssue, "amount"),
+            issuerCertificate = testIssuer.issuerCertificate(senderSigner.accountId),
+            noteSecret = ByteArray(32) { 0x13.toByte() },
+            operationSuffix = "issue-pending-committed",
+            createdAtMs = 1_700_000_000_000L,
+        ).withState(OfflineNoteWalletNoteState.ISSUE_PENDING, 1_700_000_000_000L)
+        store.upsert(pendingNote)
+        val resolutions = linkedMapOf(pendingNote.noteCommitmentHex() to OfflineNoteWalletNoteState.SPENDABLE)
+        val wallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderSigner.accountId)),
+            ownerCertificateSigner = senderSigner,
+            store = store,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            syncResolver = RecordingSyncResolver(resolutions),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            clock = { 1_700_000_002_000L },
+        )
+
+        wallet.sync().get()
+
+        assertEquals(OfflineNoteWalletNoteState.SPENDABLE, store.findNote(pendingNote.noteCommitment())?.state)
+    }
+
+    @Test
+    fun syncCancelsRejectedIssuePending() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val store = InMemoryOfflineNoteStore()
+        val pendingNote = issuerSourceWalletNote(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainIssue, "amount"),
+            issuerCertificate = testIssuer.issuerCertificate(senderSigner.accountId),
+            noteSecret = ByteArray(32) { 0x14.toByte() },
+            operationSuffix = "issue-pending-rejected",
+            createdAtMs = 1_700_000_000_000L,
+        ).withState(OfflineNoteWalletNoteState.ISSUE_PENDING, 1_700_000_000_000L)
+        store.upsert(pendingNote)
+        val resolutions = linkedMapOf(pendingNote.noteCommitmentHex() to OfflineNoteWalletNoteState.CANCELLED)
+        val wallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderSigner.accountId)),
+            ownerCertificateSigner = senderSigner,
+            store = store,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            syncResolver = RecordingSyncResolver(resolutions),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            clock = { 1_700_000_002_000L },
+        )
+
+        wallet.sync().get()
+
+        assertEquals(OfflineNoteWalletNoteState.CANCELLED, store.findNote(pendingNote.noteCommitment())?.state)
+    }
+
+    @Test
+    fun syncLeavesIssuePendingWithoutOutcome() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val store = InMemoryOfflineNoteStore()
+        val pendingNote = issuerSourceWalletNote(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainIssue, "amount"),
+            issuerCertificate = testIssuer.issuerCertificate(senderSigner.accountId),
+            noteSecret = ByteArray(32) { 0x15.toByte() },
+            operationSuffix = "issue-pending-no-outcome",
+            createdAtMs = 1_700_000_000_000L,
+        ).withState(OfflineNoteWalletNoteState.ISSUE_PENDING, 1_700_000_000_000L)
+        store.upsert(pendingNote)
+        val wallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderSigner.accountId)),
+            ownerCertificateSigner = senderSigner,
+            store = store,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            syncResolver = RecordingSyncResolver(emptyMap()),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            clock = { 1_700_000_002_000L },
+        )
+
+        wallet.sync().get()
+
+        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, store.findNote(pendingNote.noteCommitment())?.state)
     }
 
     @Test
@@ -4319,6 +4657,25 @@ class OfflineNoteTest {
             oneUse = bool(json, "one_use"),
             issuerSignature = base64Bytes(string(json, "issuer_signature_base64")),
         )
+
+    private fun currentIssuerCertificateJson(json: Map<String, Any?>): LinkedHashMap<String, Any?> {
+        val copy = LinkedHashMap(json)
+        when (string(copy, "platform")) {
+            OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> {
+                copy["assertion_scheme"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
+                copy["assertion_key_algorithm"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+            }
+            OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> {
+                copy["assertion_scheme"] = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
+                copy["assertion_key_algorithm"] = OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
+            }
+            else -> {
+                copy["assertion_scheme"] = "unsupported-platform"
+                copy["assertion_key_algorithm"] = "unsupported-platform"
+            }
+        }
+        return copy
+    }
 
     private fun certificateVerifier(fixture: Map<String, Any?>): Ed25519OfflineNoteCertificateVerifier =
         Ed25519OfflineNoteCertificateVerifier(

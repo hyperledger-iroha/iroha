@@ -83,10 +83,10 @@ test("offline qr stream text codec round-trips", () => {
   assert.deepEqual(decoded, payload);
 });
 
-test("offline qr stream text codec rejects legacy versioned prefix", () => {
+test("offline qr stream text codec rejects retired versioned prefix", () => {
   const payload = buildPayload(128);
-  const legacy = `iroha:qr-old:${payload.toString("base64")}`;
-  assert.throws(() => decodeQrFrameText(legacy, OfflineQrStreamFrameEncoding.base64), /prefix/i);
+  const retiredPrefix = `iroha:qr-old:${payload.toString("base64")}`;
+  assert.throws(() => decodeQrFrameText(retiredPrefix, OfflineQrStreamFrameEncoding.base64), /prefix/i);
 });
 
 test("offline qr stream scan loop ingests frames", async () => {

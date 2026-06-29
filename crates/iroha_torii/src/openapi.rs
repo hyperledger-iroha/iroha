@@ -700,22 +700,22 @@ fn offline_paths() -> Map {
         (
             "/v1/offline/v2/keys/refill",
             "Refill Offline V2 issuer keys.",
-            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/issue",
             "Retired Offline V2 note issue route.",
-            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
         ),
         (
             "/v1/offline/v2/audit",
             "Retired Offline V2 audit route.",
-            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -9858,7 +9858,7 @@ fn openapi_schemas() -> Map {
                 },
                 "fees": {
                     "type": "object",
-                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities", "sponsored_contract_operation_allowlist"],
+                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities"],
                     "additionalProperties": false,
                     "properties": {
                         "fee_asset_id": { "type": "string" },
@@ -9878,22 +9878,6 @@ fn openapi_schemas() -> Map {
                         "successful_claim_fee_exempt_authorities": {
                             "type": "array",
                             "items": { "type": "string" }
-                        },
-                        "sponsored_contract_operation_allowlist": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "required": ["entrypoints"],
-                                "additionalProperties": false,
-                                "properties": {
-                                    "contract_alias": { "type": ["string", "null"] },
-                                    "contract_address": { "type": ["string", "null"] },
-                                    "entrypoints": {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                }
-                            }
                         }
                     }
                 }

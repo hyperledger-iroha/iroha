@@ -4,6 +4,7 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -20,7 +21,7 @@ public final class KeyAttestation {
 
   private KeyAttestation(final Builder builder) {
     this.alias = builder.alias;
-    this.certificateChain = List.copyOf(builder.certificateChain);
+    this.certificateChain = Collections.unmodifiableList(new ArrayList<>(builder.certificateChain));
   }
 
   public String alias() {

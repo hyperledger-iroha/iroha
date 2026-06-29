@@ -1325,6 +1325,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             scheduler_stack_bytes:
                 iroha_config::parameters::defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: iroha_config::parameters::defaults::concurrency::PROVER_STACK_BYTES,
+            sumeragi_stack_bytes:
+                iroha_config::parameters::defaults::concurrency::SUMERAGI_STACK_BYTES,
             guest_stack_bytes: iroha_config::parameters::defaults::concurrency::GUEST_STACK_BYTES,
             gas_to_stack_multiplier:
                 iroha_config::parameters::defaults::concurrency::GAS_TO_STACK_MULTIPLIER,

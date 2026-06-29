@@ -395,11 +395,8 @@ data class VerifySpendResult(
     val chainAdmissible: Boolean,
     val chainAdmissionReason: String,
     val witnesslessRedeemSupported: Boolean = false,
-    val lineageWitnessRequired: Boolean = false,
-) {
-    val lineageWitnessRequiredForRedeem: Boolean
-        get() = lineageWitnessRequired
-}
+    val lineageWitnessRequiredForRedeem: Boolean = false,
+)
 
 /** Typed request for `KagemushaRecursiveSpendRedeemRequestV1`. */
 class RedeemSpendRequest @JvmOverloads constructor(
@@ -1022,7 +1019,7 @@ object KagemushaRecursiveSpendRequestCodecs {
         val chainAdmissionReason = readField(decoder) { readString(it) }
         val witnesslessRedeemSupported =
             if (decoder.remaining() == 0) false else readField(decoder) { it.readBool() }
-        val lineageWitnessRequired =
+        val lineageWitnessRequiredForRedeem =
             if (decoder.remaining() == 0) false else readField(decoder) { it.readBool() }
         require(decoder.remaining() == 0) { "Trailing bytes after verify result" }
         return VerifySpendResult(
@@ -1033,7 +1030,7 @@ object KagemushaRecursiveSpendRequestCodecs {
             chainAdmissible = chainAdmissible,
             chainAdmissionReason = chainAdmissionReason,
             witnesslessRedeemSupported = witnesslessRedeemSupported,
-            lineageWitnessRequired = lineageWitnessRequired,
+            lineageWitnessRequiredForRedeem = lineageWitnessRequiredForRedeem,
         )
     }
 
@@ -1302,12 +1299,7 @@ object KagemushaRecursiveSpendRequestCodecs {
             writeField(encoder) {
                 val normalized =
                     KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(value.outputProofCircuitId)
-                val wire = if (normalized == KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
-                    ""
-                } else {
-                    normalized
-                }
-                writeString(it, wire)
+                writeString(it, normalized)
             }
             writeField(encoder) {
                 writeOptionRaw(

@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.android.offline;
 
-import java.util.List;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.Executable;
@@ -74,7 +74,9 @@ public final class KagemushaInstructionArchives {
         .setChainId(requireNonBlankUnpadded(chainId, "chainId"))
         .setAuthority(requireNonBlankUnpadded(authority, "authority"))
         .setCreationTimeMs(creationTimeMs)
-        .setExecutable(Executable.instructions(List.of(instructionBox(instructionType, instructionArchive))))
+        .setExecutable(
+            Executable.instructions(
+                Collections.singletonList(instructionBox(instructionType, instructionArchive))))
         .setTimeToLiveMs(timeToLiveMs)
         .setNonce(nonce)
         .setMetadata(metadata)

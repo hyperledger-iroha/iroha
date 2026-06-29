@@ -785,6 +785,12 @@ fn validation_fee_coordinate(
 ) -> Result<Option<FeeInstructionCoordinate>, ValidationFeeAdmissionError> {
     let Some(instruction_index_value) = metadata.get(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
     else {
+        if metadata
+            .get(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
+            .is_some()
+        {
+            return Err(ValidationFeeAdmissionError::MalformedFeeInstructionMetadata);
+        }
         return Ok(None);
     };
     let instruction_index = instruction_index_value
@@ -1429,6 +1435,33 @@ mod tests {
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate)
+        );
+    }
+
+    #[test]
+    fn dangling_fee_batch_entry_coordinate_is_rejected() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let mut metadata = metadata_for(&policy);
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY).expect("metadata key"),
+            Json::new(0u64),
+        );
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata,
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::MalformedFeeInstructionMetadata)
         );
     }
 

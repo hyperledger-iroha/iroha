@@ -226,6 +226,10 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           encoder,
           OPTIONAL_STRING_ADAPTER,
           optionalValidationFeeInstructionIndex(value.validationFeeInstructionIndex()));
+      encodeSizedField(
+          encoder,
+          OPTIONAL_STRING_ADAPTER,
+          optionalValidationFeeTransferEntryIndex(value.validationFeeTransferEntryIndex()));
     }
 
     @Override
@@ -554,6 +558,16 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return Optional.of(value.toString());
   }
 
+  private static Optional<String> optionalValidationFeeTransferEntryIndex(final Long value) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    if (value.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeeTransferEntryIndex must be non-negative");
+    }
+    return Optional.of(value.toString());
+  }
+
   private static String normalizeValidationFeePolicyHash(final String value) {
     final String normalized =
         requireNonBlank(value, "validationFeePolicyHash").toLowerCase(Locale.ROOT);
@@ -603,6 +617,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     final boolean hasPolicyVersion = request.validationFeePolicyVersion() != null;
     final boolean hasPolicyHash = request.validationFeePolicyHash() != null;
     final boolean hasInstructionIndex = request.validationFeeInstructionIndex() != null;
+    final boolean hasTransferEntryIndex = request.validationFeeTransferEntryIndex() != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
@@ -611,9 +626,18 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException(
           "validationFeeInstructionIndex requires validation fee policy metadata");
     }
+    if (!hasPolicyVersion && hasTransferEntryIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeTransferEntryIndex requires validation fee policy metadata");
+    }
+    if (hasTransferEntryIndex && !hasInstructionIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeTransferEntryIndex requires validationFeeInstructionIndex");
+    }
     optionalValidationFeePolicyVersion(request.validationFeePolicyVersion());
     optionalValidationFeePolicyHash(request.validationFeePolicyHash());
     optionalValidationFeeInstructionIndex(request.validationFeeInstructionIndex());
+    optionalValidationFeeTransferEntryIndex(request.validationFeeTransferEntryIndex());
   }
 
   private static InstructionBox tryDecodeWireInstruction(

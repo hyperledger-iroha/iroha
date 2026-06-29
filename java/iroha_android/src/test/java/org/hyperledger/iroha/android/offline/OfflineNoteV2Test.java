@@ -23,11 +23,11 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class OfflineNoteV2Test {
-  private static final String ISSUE_INSTRUCTION_ALIAS_SCHEMA =
+  private static final String RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA =
       "iroha_data_model::isi::offline::IssueOfflineNoteV2";
-  private static final String REDEEM_INSTRUCTION_ALIAS_SCHEMA =
+  private static final String RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA =
       "iroha_data_model::isi::offline::RedeemOfflineNoteV2";
-  private static final String AUDIT_INSTRUCTION_ALIAS_SCHEMA =
+  private static final String RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA =
       "iroha_data_model::isi::offline::AuditOfflineNoteV2";
 
   private OfflineNoteV2Test() {}
@@ -40,7 +40,7 @@ public final class OfflineNoteV2Test {
     offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads();
     offlineNoteV2InstructionWrappersRejectProofMismatches();
     offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes();
-    offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes();
+    offlineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes();
     offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
@@ -343,44 +343,43 @@ public final class OfflineNoteV2Test {
         "decoded redeem instruction");
   }
 
-  private static void offlineNoteV2InstructionDecodersReadLegacyAliasEnvelopeBytes()
+  private static void offlineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNoteV2.IssueV2 issue = issue(fixture);
     final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
     final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
     final byte[] issueAliasWirePayload =
-        encodeInstructionWrapper(ISSUE_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeIssue(issue));
+        encodeInstructionWrapper(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeIssue(issue));
     final byte[] auditAliasWirePayload =
-        encodeInstructionWrapper(AUDIT_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeAudit(audit));
+        encodeInstructionWrapper(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeAudit(audit));
     final byte[] redeemAliasWirePayload =
-        encodeInstructionWrapper(REDEEM_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeRedeem(redeem));
+        encodeInstructionWrapper(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, OfflineNoteV2.encodeRedeem(redeem));
 
-    assertEquals(
-        base64(issue.noritoEncoded()),
-        base64(OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload).noritoEncoded()),
-        "decoded direct legacy alias issue instruction payload");
-    assertEquals(
-        base64(issue.noritoEncoded()),
-        base64(
+    assertThrows(
+        () -> OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload),
+        "retired issue instruction alias should throw");
+    assertThrows(
+        () -> OfflineNoteV2.decodeAuditInstruction(auditAliasWirePayload),
+        "retired audit instruction alias should throw");
+    assertThrows(
+        () -> OfflineNoteV2.decodeRedeemInstruction(redeemAliasWirePayload),
+        "retired redeem instruction alias should throw");
+    assertThrows(
+        () ->
             OfflineNoteV2.decodeIssueInstruction(
-                    rawInstructionPair(ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload))
-                .noritoEncoded()),
-        "decoded legacy alias issue instruction envelope");
-    assertEquals(
-        base64(audit.noritoEncoded()),
-        base64(
+                rawInstructionPair(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload)),
+        "retired issue instruction alias envelope should throw");
+    assertThrows(
+        () ->
             OfflineNoteV2.decodeAuditInstruction(
-                    rawInstructionPair(AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload))
-                .noritoEncoded()),
-        "decoded legacy alias audit instruction envelope");
-    assertEquals(
-        base64(redeem.noritoEncoded()),
-        base64(
+                rawInstructionPair(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload)),
+        "retired audit instruction alias envelope should throw");
+    assertThrows(
+        () ->
             OfflineNoteV2.decodeRedeemInstruction(
-                    rawInstructionPair(REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload))
-                .noritoEncoded()),
-        "decoded legacy alias redeem instruction envelope");
+                rawInstructionPair(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload)),
+        "retired redeem instruction alias envelope should throw");
   }
 
   private static void offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes()
@@ -388,8 +387,14 @@ public final class OfflineNoteV2Test {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNoteV2.IssueV2 issue = issue(fixture);
     final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final OfflineNoteV2.DeviceAttestationRegistrationV2 registration =
+        attestationRegistration(fixture);
     final byte[] issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue));
     final byte[] redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem));
+    final byte[] retiredRegisterWrapperPayload =
+        encodeInstructionWrapper(
+            OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            OfflineNoteV2.encodeDeviceAttestationRegistration(registration));
     final byte[] issuePair =
         rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload);
 
@@ -417,6 +422,17 @@ public final class OfflineNoteV2Test {
             OfflineNoteV2.decodeAuditInstruction(
                 rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload)),
         "wrong audit instruction model schema should throw");
+    assertThrows(
+        () ->
+            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(retiredRegisterWrapperPayload),
+        "retired register device attestation generic wrapper should throw");
+    assertThrows(
+        () ->
+            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(
+                rawInstructionPair(
+                    OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                    retiredRegisterWrapperPayload)),
+        "retired register device attestation generic wrapper envelope should throw");
   }
 
   private static void publicInputHashesMatchRustVectors() throws Exception {
@@ -688,6 +704,37 @@ public final class OfflineNoteV2Test {
         () ->
             new OfflineNoteV2.KeyCertificatePayloadV2(
                 OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                "ios-app-attest",
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                "apple-app-attest-v1",
+                "ecdsa-p256-sha256",
+                assertionPublicKey,
+                null,
+                true),
+        "retired iOS certificate payload profile should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificateV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+                "ios-app-attest",
+                string(cert, "key_id"),
+                string(cert, "device_id"),
+                string(cert, "account_id"),
+                publicKey,
+                "apple-app-attest-v1",
+                "ecdsa-p256-sha256",
+                assertionPublicKey,
+                null,
+                true,
+                issuerSignature),
+        "retired iOS certificate profile should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificatePayloadV2(
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -947,7 +994,7 @@ public final class OfflineNoteV2Test {
                 "android-keymint-ecdsa-p256-usage-limit",
                 OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 Integer.valueOf(1)),
-        "Android device attestation legacy scheme should throw");
+        "Android device attestation retired scheme should throw");
     assertThrows(
         () ->
             attestationRegistrationWithProfileAndKeyId(
@@ -1939,7 +1986,7 @@ public final class OfflineNoteV2Test {
     while (cursor != null) {
       final Path candidate = cursor.resolve("fixtures/offline/interop_contract_v2.json");
       if (Files.exists(candidate)) {
-        final String json = Files.readString(candidate);
+        final String json = new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8);
         return (Map<String, Object>) JsonParser.parse(json);
       }
       cursor = cursor.getParent();

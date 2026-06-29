@@ -27,7 +27,9 @@ public final class TransactionStatusException extends RuntimeException {
     this.hashHex = Objects.requireNonNull(hashHex, "hashHex");
     this.status = Objects.requireNonNull(status, "status");
     this.rejectionReason =
-        rejectionReason == null || rejectionReason.isBlank() ? null : rejectionReason.trim();
+        rejectionReason == null || rejectionReason.trim().isEmpty()
+            ? null
+            : rejectionReason.trim();
     this.payload = payload;
   }
 
@@ -54,7 +56,7 @@ public final class TransactionStatusException extends RuntimeException {
             .append(hashHex)
             .append(" reported failure status ")
             .append(status);
-    if (rejectionReason != null && !rejectionReason.isBlank()) {
+    if (rejectionReason != null && !rejectionReason.trim().isEmpty()) {
       message.append(" (reason=").append(rejectionReason.trim()).append(")");
     }
     return message.toString();

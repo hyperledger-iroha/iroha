@@ -563,12 +563,12 @@ ABI6_LIMIT_FIELDS = frozenset(EXPECTED_ABI6_LIMIT_VALUES)
 ABI6_MODE_FIELDS = frozenset(
     (
         "preferred_when_recursive_available",
-        "fallback_when_recursive_unavailable",
+        "preferred_when_recursive_unavailable",
     )
 )
 EXPECTED_ABI6_MODES = {
     "preferred_when_recursive_available": "recursive_spend_v1",
-    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+    "preferred_when_recursive_unavailable": None,
 }
 ABI6_ARCHIVE_FIXTURE_REF_FIELDS = frozenset(("path", "schema"))
 ABI6_PROOF_CIRCUIT_ID_FIELDS = frozenset(
@@ -1294,7 +1294,7 @@ def validate_repo_root_path(root: Path) -> list[dict[str, Any]]:
 
 
 def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:
-    """Return CLI device-lab root values, preserving the legacy default."""
+    """Return CLI device-lab root values, preserving the configured default."""
 
     raw = getattr(args, "device_lab_root", None)
     if raw is None:
@@ -2123,8 +2123,8 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
                 "preferred_when_recursive_available": modes.get(
                     "preferred_when_recursive_available"
                 ),
-                "fallback_when_recursive_unavailable": modes.get(
-                    "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable": modes.get(
+                    "preferred_when_recursive_unavailable"
                 ),
             }
             if modes.get("preferred_when_recursive_available") != "recursive_spend_v1":
@@ -2134,11 +2134,11 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
                         "ABI-6 manifest must prefer recursive_spend_v1",
                     )
                 )
-            if modes.get("fallback_when_recursive_unavailable") != "checked_prefold_v1":
+            if modes.get("preferred_when_recursive_unavailable") is not None:
                 blockers.append(
                     blocker(
-                        "abi6_manifest_fallback_mode",
-                        "ABI-6 manifest must fall back to checked_prefold_v1",
+                        "abi6_manifest_recursive_unavailable_mode",
+                        "ABI-6 manifest must expose no preferred mode when recursive support is unavailable",
                     )
                 )
             if not _json_exactly_matches(modes, EXPECTED_ABI6_MODES):

@@ -511,6 +511,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   validationFeePolicyVersion?: number | string | bigint | null;
   validationFeePolicyHash?: string | null;
   validationFeeInstructionIndex?: number | string | bigint | null;
+  validationFeeTransferEntryIndex?: number | string | bigint | null;
   privateKey?: string | BinaryLike | null;
   privateKeyHex?: string | null;
   privateKeyMultihash?: string | null;
@@ -526,6 +527,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   validation_fee_policy_version?: number | string | bigint | null;
   validation_fee_policy_hash?: string | null;
   validation_fee_instruction_index?: number | string | bigint | null;
+  validation_fee_transfer_entry_index?: number | string | bigint | null;
   private_key?: string | BinaryLike | null;
   private_key_hex?: string | null;
   private_key_multihash?: string | null;
@@ -545,6 +547,7 @@ export interface MultisigProposePayload {
   validation_fee_policy_version?: string;
   validation_fee_policy_hash?: string;
   validation_fee_instruction_index?: string;
+  validation_fee_transfer_entry_index?: string;
   private_key?: string | BinaryLike;
 }
 
@@ -1056,6 +1059,10 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   commitment_root?: string;
   sourceEventDigest?: string;
   source_event_digest?: string;
+  sourceBridgeEmitterAddress?: string | BinaryLike | number[];
+  source_bridge_emitter_address?: string | BinaryLike | number[];
+  sourceBridgeEmitterCodeHash?: string | BinaryLike | number[];
+  source_bridge_emitter_code_hash?: string | BinaryLike | number[];
   receipt?: Record<string, unknown>;
   block?: Record<string, unknown>;
   blockReceipts?: readonly Record<string, unknown>[];
@@ -1072,6 +1079,60 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   finality_block_hash?: string;
   blockHash?: string;
   block_hash?: string;
+  sourceVerifierMaterial?: Record<string, unknown>;
+  source_verifier_material?: Record<string, unknown>;
+  bscSourceVerifierMaterial?: Record<string, unknown>;
+  bsc_source_verifier_material?: Record<string, unknown>;
+  sccpSourceVerifierMaterial?: Record<string, unknown>;
+  sccp_source_verifier_material?: Record<string, unknown>;
+  sourceAdapterEngineDeployment?: Record<string, unknown>;
+  source_adapter_engine_deployment?: Record<string, unknown>;
+  sourceAdapterDeployment?: Record<string, unknown>;
+  source_adapter_deployment?: Record<string, unknown>;
+  bscSourceAdapterEngineDeployment?: Record<string, unknown>;
+  bsc_source_adapter_engine_deployment?: Record<string, unknown>;
+  bscSourceAdapterDeployment?: Record<string, unknown>;
+  bsc_source_adapter_deployment?: Record<string, unknown>;
+  sourceTrustAnchorHash?: string;
+  source_trust_anchor_hash?: string;
+  sourceBridgeNetworkId?: string;
+  source_bridge_network_id?: string;
+  sourceBridgeOwnerAddress?: string | BinaryLike | number[];
+  source_bridge_owner_address?: string | BinaryLike | number[];
+  sourceBridgeConfigHash?: string;
+  source_bridge_config_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+  deploymentReceiptHash?: string;
+  deployment_receipt_hash?: string;
+  sourceValidatorPrivateKeys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  source_validator_private_keys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  validatorPrivateKeys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  validator_private_keys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  sourceValidatorPowers?: readonly (string | number | bigint)[];
+  source_validator_powers?: readonly (string | number | bigint)[];
+  validatorPowers?: readonly (string | number | bigint)[];
+  validator_powers?: readonly (string | number | bigint)[];
 }
 
 export interface BscPlaceholderSourceChainProofEnvelopeResult {
@@ -1084,6 +1145,7 @@ export interface BscPlaceholderSourceChainProofEnvelopeResult {
   readonly finalityHeight: string;
   readonly finalityBlockHash: string;
   readonly receiptsRoot: string;
+  readonly validatorSetHash: string;
   readonly receiptRootIndex: string;
   readonly syntheticRootMarker: boolean;
 }
@@ -7259,6 +7321,9 @@ export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(
   receiptRoot: string,
 ): Uint8Array;
+export function buildBscSourceChainProofEnvelope(
+  input: BscPlaceholderSourceChainProofEnvelopeInput,
+): BscPlaceholderSourceChainProofEnvelopeResult;
 export function buildBscPlaceholderSourceChainProofEnvelope(
   input: BscPlaceholderSourceChainProofEnvelopeInput,
 ): BscPlaceholderSourceChainProofEnvelopeResult;
@@ -19311,7 +19376,6 @@ export function deriveConfidentialNullifierV2(input: {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
@@ -19354,8 +19418,7 @@ export class KagemushaRecursiveSpendRequestCodecError extends Error {
 }
 export type KagemushaOfflineSpendMode =
   | "recursive_compact_v1"
-  | "recursive_spend_v1"
-  | "checked_prefold_v1";
+  | "recursive_spend_v1";
 export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
   | 2
   | 4
@@ -19379,14 +19442,15 @@ export interface KagemushaRecursiveSpendLineageKeyArtifacts {
   readonly isInitArtifact: boolean;
   readonly isAppendArtifact: boolean;
 }
+export function preferredKagemushaOfflineSpendMode(): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable?: boolean,
-  recursiveCompactAvailable?: boolean,
-): KagemushaOfflineSpendMode;
+  recursiveCompactAvailable: boolean,
+  recursiveSpendAvailable: boolean,
+): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable: boolean,
   recursiveSpendAvailable: boolean,
-): KagemushaOfflineSpendMode;
+): KagemushaOfflineSpendMode | null;
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
   hopCount: number,
@@ -19615,8 +19679,6 @@ export interface KagemushaRecursiveSpendVerifyResult {
   readonly chain_admission_reason: string;
   readonly witnesslessRedeemSupported: boolean;
   readonly witnessless_redeem_supported: boolean;
-  readonly lineageWitnessRequired: boolean;
-  readonly lineage_witness_required: boolean;
   readonly lineageWitnessRequiredForRedeem: boolean;
   readonly lineage_witness_required_for_redeem: boolean;
 }
@@ -19763,6 +19825,8 @@ export interface MultisigProposeNoritoRequest {
   validationFeePolicyHash?: string | null;
   validation_fee_instruction_index?: string | null;
   validationFeeInstructionIndex?: string | null;
+  validation_fee_transfer_entry_index?: string | null;
+  validationFeeTransferEntryIndex?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(

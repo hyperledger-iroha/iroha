@@ -15,6 +15,7 @@ internal static class SccpMessageProofBundles
     private const string SourceEventDigestPrefixV1 = "sccp:source:event:v1";
     private const int MaxSourceMerkleBranchNodes = 64;
     private const byte NoritoCompactLenFlag = 0x02;
+    private const int MaxNoritoHeaderPaddingBytes = 64;
     private const int DomainSora = 0;
     private const int DomainEthereum = 1;
     private const int DomainBsc = 2;
@@ -39,6 +40,8 @@ internal static class SccpMessageProofBundles
     private const string TokenAddPrefixV1 = "sccp:token:add:v1";
     private const string TokenPausePrefixV1 = "sccp:token:pause:v1";
     private const string TokenResumePrefixV1 = "sccp:token:resume:v1";
+
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     private static readonly int[] KeccakRhoOffsets =
     [
@@ -397,111 +400,111 @@ internal static class SccpMessageProofBundles
         switch (discriminant)
         {
             case 0:
-            {
-                var targetDomain = ReadDomain("target_domain");
-                var sourceDomain = ReadDomain("home_domain");
-                ReadU64("nonce");
-                ReadCodecValue(ReadCodec("asset_id_codec"), "asset_id");
-                _ = ReadU8At(body, cursor, $"{label}.decimals");
-                cursor += 1;
-                RequireExactEnd(cursor, body, label);
-                return Summary("AssetRegister", sourceDomain, targetDomain, AssetRegisterPrefixV1);
-            }
+                {
+                    var targetDomain = ReadDomain("target_domain");
+                    var sourceDomain = ReadDomain("home_domain");
+                    ReadU64("nonce");
+                    ReadCodecValue(ReadCodec("asset_id_codec"), "asset_id");
+                    _ = ReadU8At(body, cursor, $"{label}.decimals");
+                    cursor += 1;
+                    RequireExactEnd(cursor, body, label);
+                    return Summary("AssetRegister", sourceDomain, targetDomain, AssetRegisterPrefixV1);
+                }
             case 1:
-            {
-                var sourceDomain = ReadDomain("source_domain");
-                var targetDomain = ReadDomain("target_domain");
-                if (sourceDomain == targetDomain)
                 {
-                    throw new ArgumentException($"{label}.target_domain must differ from source_domain");
-                }
+                    var sourceDomain = ReadDomain("source_domain");
+                    var targetDomain = ReadDomain("target_domain");
+                    if (sourceDomain == targetDomain)
+                    {
+                        throw new ArgumentException($"{label}.target_domain must differ from source_domain");
+                    }
 
-                ReadU64("nonce");
-                ReadCodecValue(ReadCodec("asset_id_codec"), "asset_id");
-                ReadCodecValue(ReadCodec("route_id_codec"), "route_id");
-                RequireExactEnd(cursor, body, label);
-                return Summary("RouteActivate", sourceDomain, targetDomain, RouteActivatePrefixV1);
-            }
+                    ReadU64("nonce");
+                    ReadCodecValue(ReadCodec("asset_id_codec"), "asset_id");
+                    ReadCodecValue(ReadCodec("route_id_codec"), "route_id");
+                    RequireExactEnd(cursor, body, label);
+                    return Summary("RouteActivate", sourceDomain, targetDomain, RouteActivatePrefixV1);
+                }
             case 2:
-            {
-                var sourceDomain = ReadDomain("source_domain");
-                var targetDomain = ReadDomain("dest_domain");
-                if (sourceDomain == targetDomain)
                 {
-                    throw new ArgumentException($"{label}.dest_domain must differ from source_domain");
-                }
+                    var sourceDomain = ReadDomain("source_domain");
+                    var targetDomain = ReadDomain("dest_domain");
+                    if (sourceDomain == targetDomain)
+                    {
+                        throw new ArgumentException($"{label}.dest_domain must differ from source_domain");
+                    }
 
-                ReadU64("nonce");
-                _ = ReadDomain("asset_home_domain");
-                ReadCodecValue(ReadCodec("asset_id_codec"), "asset_id");
-                var amount = ReadU128LeAt(body, cursor, $"{label}.amount");
-                cursor += 16;
-                if (amount <= BigInteger.Zero)
-                {
-                    throw new ArgumentException($"{label}.amount must be greater than zero");
-                }
+                    ReadU64("nonce");
+                    _ = ReadDomain("asset_home_domain");
+                    ReadCodecValue(ReadCodec("asset_id_codec"), "asset_id");
+                    var amount = ReadU128LeAt(body, cursor, $"{label}.amount");
+                    cursor += 16;
+                    if (amount <= BigInteger.Zero)
+                    {
+                        throw new ArgumentException($"{label}.amount must be greater than zero");
+                    }
 
-                var senderCodec = ReadCodec("sender_codec");
-                if (senderCodec != CounterpartyAccountCodec(sourceDomain))
-                {
-                    throw new ArgumentException($"{label}.sender_codec must match source_domain");
-                }
+                    var senderCodec = ReadCodec("sender_codec");
+                    if (senderCodec != CounterpartyAccountCodec(sourceDomain))
+                    {
+                        throw new ArgumentException($"{label}.sender_codec must match source_domain");
+                    }
 
-                ReadCodecValue(senderCodec, "sender");
-                var recipientCodec = ReadCodec("recipient_codec");
-                if (recipientCodec != CounterpartyAccountCodec(targetDomain))
-                {
-                    throw new ArgumentException($"{label}.recipient_codec must match dest_domain");
-                }
+                    ReadCodecValue(senderCodec, "sender");
+                    var recipientCodec = ReadCodec("recipient_codec");
+                    if (recipientCodec != CounterpartyAccountCodec(targetDomain))
+                    {
+                        throw new ArgumentException($"{label}.recipient_codec must match dest_domain");
+                    }
 
-                ReadCodecValue(recipientCodec, "recipient");
-                ReadCodecValue(ReadCodec("route_id_codec"), "route_id");
-                RequireExactEnd(cursor, body, label);
-                return Summary("Transfer", sourceDomain, targetDomain, TransferPrefixV1);
-            }
+                    ReadCodecValue(recipientCodec, "recipient");
+                    ReadCodecValue(ReadCodec("route_id_codec"), "route_id");
+                    RequireExactEnd(cursor, body, label);
+                    return Summary("Transfer", sourceDomain, targetDomain, TransferPrefixV1);
+                }
             case 3:
-            {
-                var targetDomain = ReadDomain("target_domain");
-                ReadU64("nonce");
-                var assetId = ReadFixed(body, ref cursor, 32, $"{label}.sora_asset_id");
-                if (IsAllZero(assetId))
                 {
-                    throw new ArgumentException($"{label}.sora_asset_id must be non-zero");
-                }
+                    var targetDomain = ReadDomain("target_domain");
+                    ReadU64("nonce");
+                    var assetId = ReadFixed(body, ref cursor, 32, $"{label}.sora_asset_id");
+                    if (IsAllZero(assetId))
+                    {
+                        throw new ArgumentException($"{label}.sora_asset_id must be non-zero");
+                    }
 
-                _ = ReadU8At(body, cursor, $"{label}.decimals");
-                cursor += 1;
-                var name = ReadFixed(body, ref cursor, 32, $"{label}.name");
-                if (!FixedAsciiFieldIsNonEmpty(name))
-                {
-                    throw new ArgumentException($"{label}.name must be non-empty");
-                }
+                    _ = ReadU8At(body, cursor, $"{label}.decimals");
+                    cursor += 1;
+                    var name = ReadFixed(body, ref cursor, 32, $"{label}.name");
+                    if (!FixedAsciiFieldIsNonEmpty(name))
+                    {
+                        throw new ArgumentException($"{label}.name must be canonical non-empty ASCII");
+                    }
 
-                var symbol = ReadFixed(body, ref cursor, 32, $"{label}.symbol");
-                if (!FixedAsciiFieldIsNonEmpty(symbol))
-                {
-                    throw new ArgumentException($"{label}.symbol must be non-empty");
-                }
+                    var symbol = ReadFixed(body, ref cursor, 32, $"{label}.symbol");
+                    if (!FixedAsciiFieldIsNonEmpty(symbol))
+                    {
+                        throw new ArgumentException($"{label}.symbol must be canonical non-empty ASCII");
+                    }
 
-                RequireExactEnd(cursor, body, label);
-                return Summary("TokenAdd", DomainSora, targetDomain, TokenAddPrefixV1);
-            }
+                    RequireExactEnd(cursor, body, label);
+                    return Summary("TokenAdd", DomainSora, targetDomain, TokenAddPrefixV1);
+                }
             case 4:
             case 5:
-            {
-                var targetDomain = ReadDomain("target_domain");
-                ReadU64("nonce");
-                var assetId = ReadFixed(body, ref cursor, 32, $"{label}.sora_asset_id");
-                if (IsAllZero(assetId))
                 {
-                    throw new ArgumentException($"{label}.sora_asset_id must be non-zero");
-                }
+                    var targetDomain = ReadDomain("target_domain");
+                    ReadU64("nonce");
+                    var assetId = ReadFixed(body, ref cursor, 32, $"{label}.sora_asset_id");
+                    if (IsAllZero(assetId))
+                    {
+                        throw new ArgumentException($"{label}.sora_asset_id must be non-zero");
+                    }
 
-                RequireExactEnd(cursor, body, label);
-                return discriminant == 4
-                    ? Summary("TokenPause", DomainSora, targetDomain, TokenPausePrefixV1)
-                    : Summary("TokenResume", DomainSora, targetDomain, TokenResumePrefixV1);
-            }
+                    RequireExactEnd(cursor, body, label);
+                    return discriminant == 4
+                        ? Summary("TokenPause", DomainSora, targetDomain, TokenPausePrefixV1)
+                        : Summary("TokenResume", DomainSora, targetDomain, TokenResumePrefixV1);
+                }
             default:
                 throw new ArgumentException($"{label} contains unsupported SCCP payload kind");
         }
@@ -688,13 +691,14 @@ internal static class SccpMessageProofBundles
 
     private static string DecodeCanonicalUtf8Bytes(byte[] raw, string label)
     {
-        var text = Encoding.UTF8.GetString(raw);
-        if (!Encoding.UTF8.GetBytes(text).SequenceEqual(raw))
+        try
         {
-            throw new ArgumentException($"{label} must be canonical UTF-8");
+            return StrictUtf8.GetString(raw);
         }
-
-        return text;
+        catch (DecoderFallbackException exception)
+        {
+            throw new ArgumentException($"{label} must be canonical UTF-8", exception);
+        }
     }
 
     private static void ValidateCanonicalEvmHexAddress(string text, string label)
@@ -835,7 +839,20 @@ internal static class SccpMessageProofBundles
     {
         var end = Array.IndexOf(raw, (byte)0);
         var limit = end < 0 ? raw.Length : end;
-        return raw.AsSpan(0, limit).IndexOfAnyExcept((byte)0) >= 0;
+        if (limit == 0)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < limit; index++)
+        {
+            if (raw[index] is < 0x20 or > 0x7e)
+            {
+                return false;
+            }
+        }
+
+        return end < 0 || raw.AsSpan(end).IndexOfAnyExcept((byte)0) < 0;
     }
 
     private static byte[] DecodeBase58Fixed(string value, string field, int byteLength)
@@ -1013,8 +1030,10 @@ internal static class SccpMessageProofBundles
         }
 
         var payloadStart = raw.Length - (int)payloadLength;
+        var paddingLength = payloadStart - NoritoHeader.EncodedLength;
         if (payloadStart < NoritoHeader.EncodedLength
-            || raw.AsSpan(NoritoHeader.EncodedLength, payloadStart - NoritoHeader.EncodedLength)
+            || paddingLength > MaxNoritoHeaderPaddingBytes
+            || raw.AsSpan(NoritoHeader.EncodedLength, paddingLength)
                 .IndexOfAnyExcept((byte)0) >= 0)
         {
             throw new ArgumentException($"{label} payload length is invalid");
@@ -1054,13 +1073,14 @@ internal static class SccpMessageProofBundles
     {
         var length = ReadNoritoLength(reader, label, CompactLenActive(reader));
         var raw = ReadNoritoBytes(reader, length, label);
-        var value = Encoding.UTF8.GetString(raw);
-        if (!Encoding.UTF8.GetBytes(value).SequenceEqual(raw))
+        try
         {
-            throw new ArgumentException($"{label} must be canonical UTF-8");
+            return StrictUtf8.GetString(raw);
         }
-
-        return value;
+        catch (DecoderFallbackException exception)
+        {
+            throw new ArgumentException($"{label} must be canonical UTF-8", exception);
+        }
     }
 
     private static byte[] ReadNoritoRawByteVec(NoritoReader reader, string label)
@@ -1139,13 +1159,26 @@ internal static class SccpMessageProofBundles
         }
 
         var shift = 0;
+        var startOffset = reader.Offset;
         ulong value = 0;
-        while (shift < 64)
+        for (var index = 0; index < 10; index++)
         {
             var current = ReadNoritoU8(reader, $"{label}.length");
-            value |= (ulong)(current & 0x7f) << shift;
+            var currentValue = current & 0x7f;
+            if (shift >= 63 && currentValue > 1)
+            {
+                throw new ArgumentException($"{label}.length is invalid");
+            }
+
+            value |= (ulong)currentValue << shift;
             if ((current & 0x80) == 0)
             {
+                var encodedLength = reader.Offset - startOffset;
+                if (encodedLength > 1 && value < (1UL << (7 * (encodedLength - 1))))
+                {
+                    throw new ArgumentException($"{label}.length is invalid");
+                }
+
                 if (value > int.MaxValue)
                 {
                     throw new ArgumentException($"{label} is too large");

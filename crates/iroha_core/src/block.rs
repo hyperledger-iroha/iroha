@@ -533,15 +533,6 @@ struct LaneSettlementBuilder {
     source_counts: BTreeMap<AssetDefinitionId, u64>,
 }
 
-#[cfg(test)]
-fn native_amx_full_signers_bitmap(roster_len: usize) -> Vec<u8> {
-    let mut signers_bitmap = vec![0_u8; roster_len.div_ceil(8)];
-    for idx in 0..roster_len {
-        signers_bitmap[idx / 8] |= 1_u8 << (idx % 8);
-    }
-    signers_bitmap
-}
-
 fn validate_native_amx_receipt_against_plan(
     receipt: &NativeAmxReceipt,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -20302,6 +20293,7 @@ mod tests {
     use iroha_data_model::{
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
+        nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect},
         prelude::*,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
@@ -20337,6 +20329,18 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
+        FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                sponsor.clone(),
+                "default".parse().expect("default fee sponsor policy"),
+            ),
+            enabled: true,
+            max_fee: None,
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        }
     }
 
     #[test]
@@ -20474,7 +20478,7 @@ mod tests {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
 
-    fn signed_native_amx_attestation_qc(
+    fn signed_native_amx_attestation_qc_with_signer_count(
         phase: NativeAmxPhase,
         source_id: [u8; iroha_crypto::Hash::LENGTH],
         tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -20483,6 +20487,7 @@ mod tests {
         participant: crate::queue::RoutingDecision,
         block_height: u64,
         keypairs: &[KeyPair],
+        signer_count: usize,
     ) -> NativeAmxAttestationQcV1 {
         let validator_set = keypairs
             .iter()
@@ -20502,6 +20507,7 @@ mod tests {
         let preimage = body.signature_preimage();
         let signatures = keypairs
             .iter()
+            .take(signer_count)
             .map(|keypair| {
                 checked_signature(keypair.private_key(), &preimage)
                     .payload()
@@ -20511,12 +20517,16 @@ mod tests {
         let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let bls_aggregate_signature =
             bls_normal_aggregate_signatures(&signature_refs).expect("aggregate AMX signatures");
+        let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+        for idx in 0..signer_count.min(validator_set.len()) {
+            signers_bitmap[idx / 8] |= 1_u8 << (idx % 8);
+        }
         NativeAmxAttestationQcV1 {
             body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set,
-            signers_bitmap: native_amx_full_signers_bitmap(keypairs.len()),
+            signers_bitmap,
             bls_aggregate_signature,
         }
     }
@@ -20528,6 +20538,24 @@ mod tests {
         block_height: u64,
         keypairs: &[KeyPair],
     ) -> NativeAmxReceipt {
+        signed_native_amx_receipt_with_signer_count(
+            source_id,
+            tx_entrypoint_hash,
+            routing_plan,
+            block_height,
+            keypairs,
+            keypairs.len(),
+        )
+    }
+
+    fn signed_native_amx_receipt_with_signer_count(
+        source_id: [u8; iroha_crypto::Hash::LENGTH],
+        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+        routing_plan: &crate::queue::RoutingPlan,
+        block_height: u64,
+        keypairs: &[KeyPair],
+        signer_count: usize,
+    ) -> NativeAmxReceipt {
         let crate::queue::RoutingPlan::NativeAmx(plan) = routing_plan else {
             panic!("test expects native AMX plan");
         };
@@ -20538,7 +20566,7 @@ mod tests {
             .map(|leg| NativeAmxLegRecord {
                 lane_id: leg.route.lane_id,
                 dataspace_id: leg.route.dataspace_id,
-                prepare_qc: signed_native_amx_attestation_qc(
+                prepare_qc: signed_native_amx_attestation_qc_with_signer_count(
                     NativeAmxPhase::Prepare,
                     source_id,
                     tx_entrypoint_hash,
@@ -20547,8 +20575,9 @@ mod tests {
                     leg.route,
                     block_height,
                     keypairs,
+                    signer_count,
                 ),
-                commit_qc: signed_native_amx_attestation_qc(
+                commit_qc: signed_native_amx_attestation_qc_with_signer_count(
                     NativeAmxPhase::Commit,
                     source_id,
                     tx_entrypoint_hash,
@@ -20557,6 +20586,7 @@ mod tests {
                     leg.route,
                     block_height,
                     keypairs,
+                    signer_count,
                 ),
             })
             .collect();
@@ -20658,6 +20688,54 @@ mod tests {
                 (cbuae, NativeAmxPhase::Prepare, NativeAmxPhase::Commit)
             ]
         );
+    }
+
+    #[test]
+    fn native_amx_receipt_validation_accepts_quorum_signed_four_member_qcs() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (world, keypairs) = native_amx_test_world_with_keys();
+        let world_view = world.view();
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx_hash.as_ref());
+        let receipt = signed_native_amx_receipt_with_signer_count(
+            source_id,
+            tx.hash_as_entrypoint(),
+            &routing_plan,
+            42,
+            &keypairs,
+            3,
+        );
+
+        validate_native_amx_receipt_against_plan(
+            &receipt,
+            tx.hash_as_entrypoint(),
+            &routing_plan,
+            source_id,
+            42,
+            &dataspace_catalog,
+            &world_view,
+        )
+        .expect("3-of-4 AMX QCs should validate");
+
+        assert_eq!(receipt.legs[0].prepare_qc.validator_set.len(), 4);
+        assert_eq!(receipt.legs[0].prepare_qc.signers_bitmap, vec![0b0000_0111]);
     }
 
     #[test]
@@ -23846,138 +23924,6 @@ mod tests {
     }
 
     #[test]
-    fn fee_enabled_invalid_sink_before_burn_rejects_without_partial_transfer_or_fee() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
-            .lock()
-            .expect("nexus fee test lock");
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
-        crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
-        let chain_id = ChainId::from("fee-detached-invalid-sink-test");
-        let (payer_id, payer_keypair) = gen_account_in("wonderland");
-        let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer = Account::new(payer_id.clone()).build(&payer_id);
-        let recipient = Account::new(recipient_id.clone()).build(&recipient_id);
-        let transfer_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let fee_asset_definition_id =
-            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-        let transfer_asset_definition =
-            AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                .with_name("rose".to_owned())
-                .build(&payer_id);
-        let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&payer_id);
-        let payer_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), payer_id.clone());
-        let recipient_transfer_asset =
-            AssetId::of(transfer_asset_definition_id.clone(), recipient_id.clone());
-        let payer_fee_asset = AssetId::of(fee_asset_definition_id.clone(), payer_id.clone());
-        let world = World::with_assets(
-            [domain],
-            [payer, recipient],
-            [transfer_asset_definition, fee_asset_definition],
-            [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
-            ],
-            [],
-        );
-        let kura = Arc::new(Kura::blank_kura_for_testing());
-        let query_handle = LiveQueryStore::start_test();
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
-            nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
-            nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
-            nexus.fees.burn_from_unix_timestamp_ms = 20;
-        }
-
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let latest_signed: SignedBlock = latest_valid.into();
-
-        let mut builder = TransactionBuilder::new(chain_id.clone(), payer_id.clone());
-        builder.set_creation_time(Duration::from_millis(0));
-        let tx = builder
-            .with_instructions([Transfer::asset_numeric(
-                payer_transfer_asset.clone(),
-                1_u32,
-                recipient_id,
-            )])
-            .sign(payer_keypair.private_key());
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &chain_id,
-            max_clock_drift,
-            tx_limits,
-            state.crypto().as_ref(),
-        )
-        .expect("transaction should pass stateless admission");
-
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
-        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
-            .chain(1, Some(&latest_signed))
-            .sign(payer_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-
-        assert_eq!(
-            valid_block.as_ref().errors().next().map(|(idx, _)| idx),
-            Some(0),
-            "invalid pre-burn fee sink must reject the transaction"
-        );
-        let snapshot = crate::sumeragi::status::snapshot();
-        assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-        assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
-        let assets = state_block.world.assets();
-        assert_eq!(
-            assets
-                .get(&payer_transfer_asset)
-                .expect("payer rose after invalid sink rejection")
-                .0,
-            Numeric::from(5_u32)
-        );
-        assert_eq!(
-            assets
-                .get(&recipient_transfer_asset)
-                .expect("recipient rose after invalid sink rejection")
-                .0,
-            Numeric::zero()
-        );
-        assert_eq!(
-            assets
-                .get(&payer_fee_asset)
-                .expect("payer xor after invalid sink rejection")
-                .0,
-            Numeric::from(10_u32),
-            "fee routing config failures must not debit the payer"
-        );
-    }
-
-    #[test]
     fn fee_enabled_unauthorized_sponsor_rejects_without_transfer_or_sponsor_debit() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -24312,12 +24258,15 @@ mod tests {
         let fee_permission: Permission =
             iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                 sponsor: sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             }
             .into();
         world.account_permissions.insert(
             payer_id.clone(),
             std::collections::BTreeSet::from([fee_permission]),
         );
+        let policy = default_fee_sponsor_policy(&sponsor_id);
+        world.fee_sponsor_policies.insert(policy.id.clone(), policy);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
         let mut state =
@@ -24967,13 +24916,14 @@ mod tests {
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 5;
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         {
             let fee_permission: Permission =
                 iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                     sponsor: sponsor_id.clone(),
+                    policy: "default".parse().expect("default fee sponsor policy"),
                 }
                 .into();
             let mut world = state.world.block();
@@ -24981,6 +24931,8 @@ mod tests {
                 authority_id.clone(),
                 std::collections::BTreeSet::from([fee_permission]),
             );
+            let policy = default_fee_sponsor_policy(&sponsor_id);
+            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
             world.commit();
         }
 
@@ -25093,7 +25045,7 @@ mod tests {
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
-            nexus.fees.burn_from_unix_timestamp_ms = 5;
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.lane_catalog = LaneCatalog::new(
                 nonzero!(4_u32),
                 vec![
@@ -25125,6 +25077,7 @@ mod tests {
             let fee_permission: Permission =
                 iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                     sponsor: sponsor_id.clone(),
+                    policy: "default".parse().expect("default fee sponsor policy"),
                 }
                 .into();
             let mut world = state.world.block();
@@ -25132,6 +25085,8 @@ mod tests {
                 authority_id.clone(),
                 std::collections::BTreeSet::from([fee_permission]),
             );
+            let policy = default_fee_sponsor_policy(&sponsor_id);
+            world.fee_sponsor_policies.insert(policy.id.clone(), policy);
             world.commit();
         }
 

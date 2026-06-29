@@ -99,7 +99,7 @@ use iroha_data_model::{
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
-        SetKeyValue, Transfer, TransferBox, Unregister, UnregisterBox,
+        SetKeyValue, SetParameter, Transfer, TransferBox, Unregister, UnregisterBox,
         bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -136,6 +136,7 @@ use iroha_data_model::{
     },
     nft::{NewNft, Nft, NftId},
     oracle::KeyedHash,
+    parameter::{CustomParameter, Parameter},
     peer::{Peer, PeerId},
     permission::Permission,
     proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
@@ -168,6 +169,28 @@ use iroha_primitives::{
         GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
         derive_gateway_hosts_with_profile,
     },
+};
+use iroha_sccp::{
+    NexusSccpMessageProofV1, SccpSourceAdapterEngineDeploymentV1, SccpSourceConsensusProofV1,
+    SccpSourceVerifierMaterialV1,
+    build_sccp_source_adapter_verification_proof_with_material_and_deployment,
+    build_sccp_source_verifier_evidence_with_material_and_deployment, canonical_sccp_payload_bytes,
+    decode_sccp_source_chain_proof_envelope, decode_sccp_source_consensus_proof,
+    merkle_root_from_commitment, payload_hash, sccp_message_id, sccp_message_kind,
+    sccp_message_source_domain, sccp_message_target_domain,
+    sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment,
+    sccp_source_adapter_engine_deployment_hash,
+    sccp_source_adapter_ready_with_material_and_deployment_for_domain,
+    sccp_source_chain_proof_adapter_deployment_match_diagnostics,
+    sccp_source_chain_proof_adapter_verifier_commitment, sccp_source_chain_proof_envelope_hash,
+    sccp_source_chain_proof_matches_adapter_deployment,
+    sccp_source_chain_proof_source_event_binds_to_bundle_with_material,
+    sccp_source_verifier_evidence_hash, taira_bsc_xor_transfer_source_event_digest_with_material,
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
+    verify_message_bundle_structure_with_source_verifier_material_and_deployment,
+    verify_sccp_payload_structure,
+    verify_sccp_source_chain_proof_binding_with_material_and_deployment,
+    verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment,
 };
 use kaigi_zk::{
     KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
@@ -649,6 +672,362 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
 pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
+}
+
+fn sccp_json_value_from_payload(raw: &str, context: &str) -> napi::Result<json::Value> {
+    json::from_json(raw).map_err(|err| norito_to_napi(format!("{context}: {err}")))
+}
+
+fn strip_sccp_message_bundle_json_aliases(value: &mut json::Value) {
+    if let json::Value::Object(fields) = value {
+        fields.remove("finalityProof");
+    }
+}
+
+fn sccp_message_bundle_value(mut value: json::Value) -> json::Value {
+    if let json::Value::Object(fields) = &mut value {
+        let maybe_nested = fields
+            .remove("messageBundle")
+            .or_else(|| fields.remove("message_bundle"));
+        if let Some(mut nested) = maybe_nested {
+            strip_sccp_message_bundle_json_aliases(&mut nested);
+            return nested;
+        }
+    }
+    strip_sccp_message_bundle_json_aliases(&mut value);
+    value
+}
+
+fn normalize_sccp_source_material_empty_defaults(value: &mut json::Value) {
+    const ZERO_HEX32: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+    let json::Value::Object(fields) = value else {
+        return;
+    };
+
+    for (key, field_value) in fields {
+        let json::Value::String(raw) = field_value else {
+            continue;
+        };
+        if !raw.is_empty() {
+            continue;
+        }
+
+        if key.ends_with("_hash") || key.ends_with("_network_id") {
+            *raw = ZERO_HEX32.to_owned();
+        } else if key.ends_with("_address") {
+            *raw = "0x".to_owned();
+        }
+    }
+}
+
+fn parse_sccp_message_bundle_json(raw: &str) -> napi::Result<NexusSccpMessageProofV1> {
+    let value = sccp_message_bundle_value(sccp_json_value_from_payload(
+        raw,
+        "parse SCCP message bundle JSON",
+    )?);
+    json::from_value(value)
+        .map_err(|err| norito_to_napi(format!("decode SCCP message bundle: {err}")))
+}
+
+fn parse_sccp_source_verifier_material_json(
+    raw: &str,
+) -> napi::Result<SccpSourceVerifierMaterialV1> {
+    let mut value = sccp_json_value_from_payload(raw, "parse SCCP source verifier material JSON")?;
+    normalize_sccp_source_material_empty_defaults(&mut value);
+    json::from_value(value)
+        .map_err(|err| norito_to_napi(format!("decode SCCP source verifier material: {err}")))
+}
+
+fn parse_sccp_source_adapter_deployment_json(
+    raw: &str,
+) -> napi::Result<SccpSourceAdapterEngineDeploymentV1> {
+    let mut value = sccp_json_value_from_payload(raw, "parse SCCP source adapter deployment JSON")?;
+    normalize_sccp_source_material_empty_defaults(&mut value);
+    json::from_value(value)
+        .map_err(|err| norito_to_napi(format!("decode SCCP source adapter deployment: {err}")))
+}
+
+fn hex_0x_lower(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn hex_0x_lower_opt(bytes: Option<[u8; 32]>) -> String {
+    bytes
+        .map(|value| hex_0x_lower(&value))
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+/// Rebuild a BSC-source SCCP message bundle with deployment-bound source proof material.
+#[napi(js_name = "sccpRebuildMessageBundleSourceProofWithDeployment")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sccp_rebuild_message_bundle_source_proof_with_deployment(
+    message_bundle_json: String,
+    source_material_json: String,
+    source_deployment_json: String,
+) -> napi::Result<String> {
+    let mut bundle = parse_sccp_message_bundle_json(&message_bundle_json)?;
+    let material = parse_sccp_source_verifier_material_json(&source_material_json)?;
+    let deployment = parse_sccp_source_adapter_deployment_json(&source_deployment_json)?;
+
+    let mut source_proof = decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
+        .ok_or_else(|| norito_to_napi("decode SCCP source-chain proof envelope"))?;
+    if source_proof.source_domain != material.source_domain
+        || source_proof.source_domain != deployment.source_domain
+        || source_proof.target_domain != deployment.target_domain
+        || source_proof.source_domain == source_proof.target_domain
+        || source_proof.target_domain != 0
+    {
+        return Err(norito_to_napi(format!(
+            "SCCP source proof domains do not match supplied deployment material: \
+             proof_source_domain={} material_source_domain={} deployment_source_domain={} \
+             proof_target_domain={} deployment_target_domain={}",
+            source_proof.source_domain,
+            material.source_domain,
+            deployment.source_domain,
+            source_proof.target_domain,
+            deployment.target_domain,
+        )));
+    }
+    let consensus = decode_sccp_source_consensus_proof(&source_proof.consensus_proof)
+        .ok_or_else(|| norito_to_napi("decode SCCP source consensus proof"))?;
+    let verifier_evidence = build_sccp_source_verifier_evidence_with_material_and_deployment(
+        &source_proof,
+        &consensus.adapter_proof,
+        consensus.adapter_transcript_hash,
+        &material,
+        &deployment,
+    )
+    .ok_or_else(|| norito_to_napi("build deployment-bound SCCP source verifier evidence"))?;
+    let adapter_verification_proof =
+        build_sccp_source_adapter_verification_proof_with_material_and_deployment(
+            &source_proof,
+            &consensus.adapter_proof,
+            consensus.adapter_transcript_hash,
+            &material,
+            &deployment,
+        )
+        .ok_or_else(|| {
+            norito_to_napi("build deployment-bound SCCP source adapter verification proof")
+        })?;
+    let verifier_evidence_hash = sccp_source_verifier_evidence_hash(&verifier_evidence);
+    let evidence_source_deployment_hash = verifier_evidence.source_adapter_deployment_hash;
+    let evidence_source_deployment_receipt_hash =
+        verifier_evidence.source_adapter_deployment_receipt_hash;
+    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
+    let rebuilt_consensus = SccpSourceConsensusProofV1 {
+        verifier_evidence,
+        adapter_verification_proof,
+        ..consensus
+    };
+    source_proof.consensus_proof = norito::to_bytes(&rebuilt_consensus)
+        .map_err(|err| norito_to_napi(format!("encode SCCP source consensus proof: {err}")))?;
+    bundle.finality_proof = norito::to_bytes(&source_proof)
+        .map_err(|err| norito_to_napi(format!("encode SCCP source-chain proof envelope: {err}")))?;
+
+    if !verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+        &bundle,
+        &material,
+        &deployment,
+    ) {
+        let proof_adapter_vk_hash =
+            sccp_source_chain_proof_adapter_verifier_commitment(&source_proof);
+        let payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
+        let expected_message_id = sccp_message_id(&bundle.payload);
+        let expected_payload_hash = payload_hash(&payload_bytes);
+        let expected_commitment_root =
+            merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+        let expected_kind = sccp_message_kind(&bundle.payload);
+        let source_domain = sccp_message_source_domain(&bundle.payload);
+        let target_domain = sccp_message_target_domain(&bundle.payload);
+        let payload_structure = verify_sccp_payload_structure(&bundle.payload);
+        let route_event_digest =
+            taira_bsc_xor_transfer_source_event_digest_with_material(&bundle, &material);
+        let source_event_binds = sccp_source_chain_proof_source_event_binds_to_bundle_with_material(
+            &source_proof,
+            &bundle,
+            &material,
+        );
+        let source_proof_binding =
+            verify_sccp_source_chain_proof_binding_with_material_and_deployment(
+                &source_proof,
+                &bundle,
+                source_domain,
+                target_domain,
+                &material,
+                &deployment,
+            );
+        let public_inputs_ready =
+            sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .is_some();
+        return Err(norito_to_napi(format!(
+            "rebuilt SCCP message bundle does not verify against supplied deployment material: \
+             proof_structure={} matches_deployment={} adapter_ready={} \
+             payload_structure={} public_inputs_ready={} \
+             route_event_digest={} source_event_binds={} source_proof_binding={} \
+             bundle_source_domain={} bundle_target_domain={} \
+             commitment_kind={:?} expected_kind={:?} kind_matches={} \
+             commitment_target_domain={} expected_target_domain={} target_matches={} \
+             proof_source_domain={} proof_target_domain={} deployment_target_domain={} \
+             proof_message_id={} bundle_message_id={} proof_payload_hash={} bundle_payload_hash={} \
+             expected_message_id={} message_id_matches={} expected_payload_hash={} payload_hash_matches={} \
+             proof_commitment_root={} bundle_commitment_root={} \
+             expected_commitment_root={} commitment_root_matches={} \
+             proof_adapter_vk_hash={} deployment_adapter_vk_hash={} \
+             evidence_deployment_hash={} expected_deployment_hash={} \
+             evidence_deployment_receipt_hash={} deployment_receipt_hash={} \
+             verifier_evidence_hash={} match_diagnostics=\"{}\"",
+            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                &source_proof,
+                &material,
+                &deployment,
+            ),
+            sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment),
+            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                source_proof.source_domain,
+                &material,
+                &deployment,
+            ),
+            payload_structure,
+            public_inputs_ready,
+            hex_0x_lower_opt(route_event_digest),
+            source_event_binds,
+            source_proof_binding,
+            source_domain,
+            target_domain,
+            bundle.commitment.kind,
+            expected_kind,
+            bundle.commitment.kind == expected_kind,
+            bundle.commitment.target_domain,
+            target_domain,
+            bundle.commitment.target_domain == target_domain,
+            source_proof.source_domain,
+            source_proof.target_domain,
+            deployment.target_domain,
+            hex_0x_lower(&source_proof.message_id),
+            hex_0x_lower(&bundle.commitment.message_id),
+            hex_0x_lower(&source_proof.payload_hash),
+            hex_0x_lower(&bundle.commitment.payload_hash),
+            hex_0x_lower(&expected_message_id),
+            bundle.commitment.message_id == expected_message_id,
+            hex_0x_lower(&expected_payload_hash),
+            bundle.commitment.payload_hash == expected_payload_hash,
+            hex_0x_lower(&source_proof.commitment_root),
+            hex_0x_lower(&bundle.commitment_root),
+            hex_0x_lower(&expected_commitment_root),
+            bundle.commitment_root == expected_commitment_root,
+            hex_0x_lower_opt(proof_adapter_vk_hash),
+            hex_0x_lower(&deployment.adapter_verifier_vk_hash),
+            hex_0x_lower(&evidence_source_deployment_hash),
+            hex_0x_lower(&source_deployment_hash),
+            hex_0x_lower(&evidence_source_deployment_receipt_hash),
+            hex_0x_lower(&deployment.deployment_receipt_hash),
+            hex_0x_lower(&verifier_evidence_hash),
+            sccp_source_chain_proof_adapter_deployment_match_diagnostics(
+                &source_proof,
+                &deployment
+            ),
+        )));
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        &bundle,
+        &material,
+        &deployment,
+    )
+    .ok_or_else(|| {
+        let proof_adapter_vk_hash =
+            sccp_source_chain_proof_adapter_verifier_commitment(&source_proof);
+        norito_to_napi(format!(
+            "rebuilt SCCP message bundle failed production source-chain verification: \
+             structure={} target_sora={} matches_deployment={} adapter_ready={} \
+             proof_source_domain={} proof_target_domain={} deployment_target_domain={} \
+             proof_adapter_vk_hash={} deployment_adapter_vk_hash={} \
+             evidence_deployment_hash={} expected_deployment_hash={} \
+             evidence_deployment_receipt_hash={} deployment_receipt_hash={} \
+             verifier_evidence_hash={} match_diagnostics=\"{}\"",
+            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                &source_proof,
+                &material,
+                &deployment,
+            ),
+            source_proof.target_domain == 0,
+            sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment),
+            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                source_proof.source_domain,
+                &material,
+                &deployment,
+            ),
+            source_proof.source_domain,
+            source_proof.target_domain,
+            deployment.target_domain,
+            hex_0x_lower_opt(proof_adapter_vk_hash),
+            hex_0x_lower(&deployment.adapter_verifier_vk_hash),
+            hex_0x_lower(&evidence_source_deployment_hash),
+            hex_0x_lower(&source_deployment_hash),
+            hex_0x_lower(&evidence_source_deployment_receipt_hash),
+            hex_0x_lower(&deployment.deployment_receipt_hash),
+            hex_0x_lower(&verifier_evidence_hash),
+            sccp_source_chain_proof_adapter_deployment_match_diagnostics(
+                &source_proof,
+                &deployment
+            ),
+        ))
+    })?;
+
+    let source_proof_hash = sccp_source_chain_proof_envelope_hash(&source_proof);
+    let message_bundle_value = json::to_value(&bundle).map_err(norito_to_napi)?;
+    let mut root = Map::new();
+    root.insert(
+        "schema".to_owned(),
+        Value::String("sccp-message-bundle-source-deployment-binding/v1".to_owned()),
+    );
+    root.insert("messageBundle".to_owned(), message_bundle_value.clone());
+    root.insert("message_bundle".to_owned(), message_bundle_value);
+    root.insert(
+        "sourceProofHex".to_owned(),
+        Value::String(hex_0x_lower(&bundle.finality_proof)),
+    );
+    root.insert(
+        "source_proof_hex".to_owned(),
+        Value::String(hex_0x_lower(&bundle.finality_proof)),
+    );
+    root.insert(
+        "sourceProofHash".to_owned(),
+        Value::String(hex_0x_lower(&source_proof_hash)),
+    );
+    root.insert(
+        "source_proof_hash".to_owned(),
+        Value::String(hex_0x_lower(&source_proof_hash)),
+    );
+    root.insert(
+        "sourceAdapterDeploymentHash".to_owned(),
+        Value::String(hex_0x_lower(&source_deployment_hash)),
+    );
+    root.insert(
+        "source_adapter_deployment_hash".to_owned(),
+        Value::String(hex_0x_lower(&source_deployment_hash)),
+    );
+    root.insert(
+        "sourceAdapterDeploymentReceiptHash".to_owned(),
+        Value::String(hex_0x_lower(&deployment.deployment_receipt_hash)),
+    );
+    root.insert(
+        "source_adapter_deployment_receipt_hash".to_owned(),
+        Value::String(hex_0x_lower(&deployment.deployment_receipt_hash)),
+    );
+    root.insert(
+        "sourceVerifierEvidenceHash".to_owned(),
+        Value::String(hex_0x_lower(&verifier_evidence_hash)),
+    );
+    root.insert(
+        "source_verifier_evidence_hash".to_owned(),
+        Value::String(hex_0x_lower(&verifier_evidence_hash)),
+    );
+    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
 }
 
 fn parse_zk_ace_verifier_key_id(value: Option<String>) -> napi::Result<VerifyingKeyId> {
@@ -8035,6 +8414,14 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     json::from_value(remove_value).map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(instruction));
             }
+            if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
+                let parameter = json::from_value::<Parameter>(parameter_value.clone())
+                    .or_else(|_| {
+                        json::from_value::<CustomParameter>(parameter_value).map(Parameter::Custom)
+                    })
+                    .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(SetParameter::new(parameter)));
+            }
 
             if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
                 if let Some(domain_value) = register_map.remove("Domain") {
@@ -10611,6 +10998,11 @@ fn try_decode_signed_transaction_adaptive_with_flags(
 }
 
 fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
+    if let Ok(tx) =
+        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(bytes)
+    {
+        return Ok(tx);
+    }
     let Some((&version, payload)) = bytes.split_first() else {
         return Err("empty payload".to_owned());
     };
@@ -10808,9 +11200,8 @@ pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffe
 pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Buffer> {
     ensure_packed_struct_disabled();
     let tx = decode_signed_transaction(bytes.as_ref())?;
-    let mut encoded = Vec::with_capacity(bytes.len() + 1);
-    encoded.push(1);
-    encoded.extend(norito::codec::encode_adaptive(&tx));
+    let encoded =
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
     Ok(Buffer::from(encoded))
 }
 
@@ -20265,39 +20656,40 @@ mod tests {
         request
             .previous_recursive_proof_open_envelopes_archive
             .clear();
-        let legacy_profile_archive =
-            kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+        let evidence_only_profile_archive = kagemusha_recursive_spend_transition_profile_append(
+            Uint8Array::from(
                 norito::to_bytes(&request)
-                    .expect("encode JS host legacy append transition-profile request"),
-            ))
-            .expect("JS host legacy append transition profile without previous proof openings");
-        let legacy_profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
-            norito::decode_from_bytes(legacy_profile_archive.as_ref())
-                .expect("decode JS host legacy append transition profile");
+                    .expect("encode JS host evidence-only append transition-profile request"),
+            ),
+        )
+        .expect("JS host evidence-only append transition profile without previous proof openings");
+        let evidence_only_profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(evidence_only_profile_archive.as_ref())
+                .expect("decode JS host evidence-only append transition profile");
         assert_eq!(
-            legacy_profile.append_opening_preflight_digest, None,
-            "JS host legacy append profiles must not synthesize append opening preflight bytes"
+            evidence_only_profile.append_opening_preflight_digest, None,
+            "JS host evidence-only append profiles must not synthesize append opening preflight bytes"
         );
         assert_eq!(
-            legacy_profile.append_opening_preflight, None,
-            "JS host legacy append profiles must not synthesize append opening preflight contracts"
+            evidence_only_profile.append_opening_preflight, None,
+            "JS host evidence-only append profiles must not synthesize append opening preflight contracts"
         );
         assert_eq!(
-            legacy_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
-            "JS host legacy append profiles must not bind absent previous proof opening bytes"
+            evidence_only_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
+            "JS host evidence-only append profiles must not bind absent previous proof opening bytes"
         );
         let profile_digest =
             iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
                 &profile,
             )
             .expect("JS host append opening profile digest");
-        let legacy_profile_digest =
+        let evidence_only_profile_digest =
             iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
-                &legacy_profile,
+                &evidence_only_profile,
             )
-            .expect("JS host legacy append profile digest");
+            .expect("JS host evidence-only append profile digest");
         assert_ne!(
-            profile_digest, legacy_profile_digest,
+            profile_digest, evidence_only_profile_digest,
             "JS host append opening preflight must change the profile digest"
         );
     }

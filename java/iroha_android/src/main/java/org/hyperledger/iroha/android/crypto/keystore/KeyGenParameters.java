@@ -109,7 +109,7 @@ public final class KeyGenParameters {
     }
 
     public Builder setAlgorithm(final String algorithm) {
-      if (algorithm != null && !algorithm.isBlank()) {
+      if (algorithm != null && !algorithm.trim().isEmpty()) {
         this.algorithm = SigningAlgorithm.fromAlgorithmName(algorithm).providerName();
       }
       return this;

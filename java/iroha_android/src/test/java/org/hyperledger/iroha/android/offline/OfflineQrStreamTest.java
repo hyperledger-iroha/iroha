@@ -11,7 +11,7 @@ public final class OfflineQrStreamTest {
     recoversMissingChunk();
     rejectsBadChecksum();
     textCodecRoundTrip();
-    textCodecRejectsLegacyVersionedPrefix();
+    textCodecRejectsRetiredVersionedPrefix();
     sakuraStormPlaybackSkinMatchesPreset();
     sakuraStormScanSessionPresetRecoversDroppedFrame();
     System.out.println("[IrohaAndroid] OfflineQrStreamTest passed.");
@@ -92,13 +92,13 @@ public final class OfflineQrStreamTest {
     assertArrayEquals(payload, decoded, "text codec payload mismatch");
   }
 
-  private static void textCodecRejectsLegacyVersionedPrefix() {
+  private static void textCodecRejectsRetiredVersionedPrefix() {
     final byte[] payload = makePayload(128);
-    final String legacy =
+    final String retiredPrefix =
         "iroha:qr-old:" + java.util.Base64.getEncoder().encodeToString(payload);
     boolean threw = false;
     try {
-      OfflineQrStream.TextCodec.decode(legacy, OfflineQrStream.FrameEncoding.BASE64);
+      OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64);
     } catch (IllegalArgumentException error) {
       threw = true;
     }

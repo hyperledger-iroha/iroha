@@ -5247,20 +5247,22 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
       })),
     },
   );
-  assert.doesNotThrow(() =>
-    verifyEthereumMainnetNativeEvmProverArtifacts(
-      {
-        nativeProverBundle: flaggedBundle,
-        proofArtifactBytes: flaggedArtifactBytes,
-        provingKeyBytes,
-        verifierKeyBytes,
-        crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
-        nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes,
-        sdk: "javascript",
-        implementationBytes,
-      },
-      { destinationBinding: input.destinationBinding },
-    ),
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: flaggedBundle,
+          proofArtifactBytes: flaggedArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
+          nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /proofArtifactBytes contains forbidden prover dependency marker: wasm/u,
   );
   const remoteSelfTestFixtureBytes = sampleNativeEvmProverSelfTestFixtureBytes(
     bundle,

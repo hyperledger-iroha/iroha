@@ -11,7 +11,10 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-/** QR/Norito handoff codec for Offline Note payment tokens. */
+/**
+ * Archived classic Offline Note payment-token codec kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
+ */
 public final class OfflineNotePaymentTokenCodec {
   public static final String TYPE = "offline_payment_token";
   public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-payment:";

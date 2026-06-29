@@ -713,6 +713,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         lane_catalog,
         dataspace_catalog,
         dataspace_fee_sponsors: BTreeMap::new(),
+        dataspace_fee_sponsor_policies: BTreeMap::new(),
         routing_policy,
         registry,
         governance,

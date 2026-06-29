@@ -1760,9 +1760,9 @@ impl PipelineStatusKind {
             Self::Queued => 0,
             Self::Approved => 1,
             Self::Expired => 2,
-            Self::Committed => 3,
-            Self::Applied => 4,
-            Self::Rejected => 5,
+            Self::Rejected => 3,
+            Self::Committed => 4,
+            Self::Applied => 5,
         }
     }
 
@@ -6221,7 +6221,8 @@ async fn handler_offline_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6242,16 +6243,8 @@ async fn handler_offline_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -6262,7 +6255,8 @@ async fn handler_offline_v2_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6283,16 +6277,8 @@ async fn handler_offline_v2_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -15027,6 +15013,14 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
         ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
+        (
+            QueryOutputBatchBox::FeeSponsorPolicy(mut left),
+            QueryOutputBatchBox::FeeSponsorPolicy(right),
+        ) => merge_variant!(left, right, FeeSponsorPolicy),
+        (
+            QueryOutputBatchBox::FeeSponsorPolicyId(mut left),
+            QueryOutputBatchBox::FeeSponsorPolicyId(right),
+        ) => merge_variant!(left, right, FeeSponsorPolicyId),
         (left, right) => Err(torii_proxy_error_response(
             StatusCode::CONFLICT,
             "query_conflict",
@@ -15148,6 +15142,12 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
             canonicalize_variant!(items, AnonymousAssetEscrowRecord)
+        }
+        QueryOutputBatchBox::FeeSponsorPolicy(items) => {
+            canonicalize_variant!(items, FeeSponsorPolicy)
+        }
+        QueryOutputBatchBox::FeeSponsorPolicyId(items) => {
+            canonicalize_variant!(items, FeeSponsorPolicyId)
         }
     }
 }
@@ -16415,9 +16415,9 @@ fn pipeline_status_payload_rank(
         "Queued" => Ok(0),
         "Approved" => Ok(1),
         "Expired" => Ok(2),
-        "Committed" => Ok(3),
-        "Applied" => Ok(4),
-        "Rejected" => Ok(5),
+        "Rejected" => Ok(3),
+        "Committed" => Ok(4),
+        "Applied" => Ok(5),
         other => Err(torii_internal_json_error(format!(
             "unknown pipeline status kind `{other}` in routed response"
         ))),
@@ -19137,7 +19137,42 @@ mod torii_routed_read_tests {
         assert_eq!(payload.resolved_from, "state");
     }
 
-    fn pipeline_status_hint_response(kind: &str) -> Response {
+    #[tokio::test]
+    async fn merged_pipeline_status_response_prefers_applied_over_cached_rejection() {
+        let response = merged_pipeline_status_response(
+            vec![
+                norito::json!({
+                    "hash": "abc",
+                    "status": {
+                        "kind": "Rejected",
+                        "block_height": null,
+                        "rejection_reason": null
+                    },
+                    "scope": "global",
+                    "resolved_from": "cache"
+                }),
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Applied", "block_height": 7},
+                    "scope": "global",
+                    "resolved_from": "state"
+                }),
+            ],
+            "proxy",
+        )
+        .expect("pipeline status fanout should prefer committed success over stale rejection");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&body).expect("status payload");
+        assert_eq!(payload.status.kind, "Applied");
+        assert_eq!(payload.resolved_from, "state");
+    }
+
+    fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
         crate::utils::respond_with_format(
             PipelineTransactionStatusResponse::new(
                 "abc".to_owned(),
@@ -19147,7 +19182,7 @@ mod torii_routed_read_tests {
                     rejection_reason: None,
                 },
                 "global".to_owned(),
-                "cache".to_owned(),
+                resolved_from.to_owned(),
             ),
             ResponseFormat::Json,
         )
@@ -19156,7 +19191,7 @@ mod torii_routed_read_tests {
     #[tokio::test]
     async fn pipeline_status_hint_ignores_non_terminal_successes() {
         for kind in ["Queued", "Approved", "Committed"] {
-            let response = pipeline_status_hint_response(kind);
+            let response = pipeline_status_hint_response(kind, "cache");
 
             let hinted = pipeline_status_hinted_global_response(response)
                 .await
@@ -19170,14 +19205,30 @@ mod torii_routed_read_tests {
     }
 
     #[tokio::test]
-    async fn pipeline_status_hint_allows_terminal_successes() {
-        for kind in ["Applied", "Rejected", "Expired"] {
-            let response = pipeline_status_hint_response(kind);
+    async fn pipeline_status_hint_ignores_cached_negative_terminal_statuses() {
+        for kind in ["Rejected", "Expired"] {
+            let response = pipeline_status_hint_response(kind, "cache");
+
+            let hinted = pipeline_status_hinted_global_response(response)
+                .await
+                .expect("hint classifier should not fail");
+
+            assert!(
+                hinted.is_none(),
+                "global status must fan out instead of trusting hinted cached {kind}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hint_allows_authoritative_terminal_statuses() {
+        for (kind, resolved_from) in [("Applied", "cache"), ("Rejected", "state")] {
+            let response = pipeline_status_hint_response(kind, resolved_from);
 
             let hinted = pipeline_status_hinted_global_response(response)
                 .await
                 .expect("hint classifier should not fail")
-                .expect("terminal hinted status may short-circuit");
+                .expect("authoritative hinted status may short-circuit");
             let body = axum::body::to_bytes(hinted.into_body(), usize::MAX)
                 .await
                 .expect("hinted body should be readable");
@@ -19185,6 +19236,7 @@ mod torii_routed_read_tests {
                 norito::json::from_slice(&body).expect("status payload");
 
             assert_eq!(payload.status.kind, kind);
+            assert_eq!(payload.resolved_from, resolved_from);
         }
     }
 
@@ -32481,6 +32533,7 @@ async fn handler_post_transaction(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32495,7 +32548,6 @@ async fn handler_post_transaction(
             )));
         }
     }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let transaction_bytes =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
             &transaction,
@@ -32579,6 +32631,7 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32596,7 +32649,6 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
@@ -34132,16 +34184,16 @@ fn pipeline_status_terminal_or_state_entry(
 ) -> Option<(PipelineStatusEntry, &'static str)> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
-    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
-        if entry.kind.is_terminal() {
-            return Some((entry, "cache"));
-        }
-    }
-
     if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Some((entry, "state"));
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind.is_terminal() {
+            return Some((entry, "cache"));
+        }
     }
 
     None
@@ -34241,11 +34293,14 @@ fn execute_pipeline_status_local_read(
 }
 
 #[cfg(feature = "app_api")]
-fn pipeline_status_payload_is_terminal(payload: &PipelineTransactionStatusResponse) -> bool {
-    matches!(
-        payload.status.kind.as_str(),
-        "Applied" | "Rejected" | "Expired"
-    )
+fn pipeline_status_payload_is_authoritative_hint(
+    payload: &PipelineTransactionStatusResponse,
+) -> bool {
+    match payload.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" | "Expired" => payload.resolved_from == "state",
+        _ => false,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -34270,7 +34325,7 @@ async fn pipeline_status_hinted_global_response(
             )
         })?;
     let is_terminal = norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes)
-        .map(|payload| pipeline_status_payload_is_terminal(&payload))
+        .map(|payload| pipeline_status_payload_is_authoritative_hint(&payload))
         .unwrap_or(false);
     let response = Response::from_parts(parts, Body::from(bytes));
 
@@ -45730,6 +45785,14 @@ pub(crate) mod tests_runtime_handlers {
         route_calls
     }
 
+    fn install_single_slot_transaction_queue(app: &mut SharedAppState) {
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
+        queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
+        app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
+        app_mut.high_load_tx_threshold = usize::MAX;
+    }
+
     fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> SignedTransaction {
         let mut signature = tx.signature().payload().payload().to_vec();
         let last = signature
@@ -45815,6 +45878,65 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+        install_single_slot_transaction_queue(&mut app);
+
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xce,
+            Algorithm::Ed25519,
+            "derive queue-before-rate-limit fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "queue-before-rate-2".to_string())])
+            .sign(keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            headers.clone(),
+            None,
+            versioned_signed_for_test(&tx1),
+        )
+        .await
+        .expect("first transaction should fill the queue")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction(
+            State(app.clone()),
+            headers,
+            None,
+            versioned_signed_for_test(&tx2),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected queue full before token rate limit"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
     }
 
     #[tokio::test]
@@ -46054,6 +46176,74 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limit() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+        install_single_slot_transaction_queue(&mut app);
+
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xcf,
+            Algorithm::Ed25519,
+            "derive entrypoint queue-before-rate-limit fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-queue-before-rate-1".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-queue-before-rate-2".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-api-token",
+            HeaderValue::from_static("entrypoint-queue-before-rate"),
+        );
+
+        let first = super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers.clone(),
+            None,
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx1)),
+        )
+        .await
+        .expect("first entrypoint should fill the queue")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers,
+            None,
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx2)),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected queue full before token rate limit"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
     }
 
     #[tokio::test]
@@ -46527,13 +46717,7 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_overflow() {
         let mut app = mk_app_state_for_tests();
-        {
-            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-            let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
-            queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
-            app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
-            app_mut.high_load_tx_threshold = usize::MAX;
-        }
+        install_single_slot_transaction_queue(&mut app);
 
         let keypair = checked_torii_test_keypair_from_seed_byte(
             0xd5,
@@ -50625,28 +50809,30 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
-    fn pipeline_status_merge_prefers_higher_rank() {
+    fn pipeline_status_merge_prefers_committed_success_over_cached_rejection() {
         let now = Instant::now();
-        let mut entry = PipelineStatusEntry::at_time(PipelineStatusKind::Applied, None, None, now);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        let mut entry =
+            PipelineStatusEntry::at_time(PipelineStatusKind::Rejected, None, Some(rejection), now);
         entry.merge_from_event(PipelineStatusEntry::at_time(
-            PipelineStatusKind::Expired,
-            None,
+            PipelineStatusKind::Committed,
+            NonZeroU64::new(7),
             None,
             now + Duration::from_secs(1),
         ));
-        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+        assert_eq!(entry.kind, PipelineStatusKind::Committed);
+        assert_eq!(entry.block_height, NonZeroU64::new(7));
+        assert!(entry.rejection.is_none());
 
-        let height = NonZeroU64::new(7).expect("height");
-        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
         entry.merge_from_event(PipelineStatusEntry::at_time(
-            PipelineStatusKind::Rejected,
-            Some(height),
-            Some(rejection.clone()),
+            PipelineStatusKind::Applied,
+            NonZeroU64::new(7),
+            None,
             now + Duration::from_secs(2),
         ));
-        assert_eq!(entry.kind, PipelineStatusKind::Rejected);
-        assert_eq!(entry.block_height, Some(height));
-        assert_eq!(entry.rejection, Some(rejection));
+        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+        assert_eq!(entry.block_height, NonZeroU64::new(7));
+        assert!(entry.rejection.is_none());
     }
 
     #[test]
@@ -51877,6 +52063,61 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        store_block(&app, block);
+
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(rejection)),
+        );
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload
+                .get("status")
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Applied")
+        );
+        assert_eq!(
+            payload
+                .get("resolved_from")
+                .and_then(norito::json::Value::as_str),
+            Some("state")
+        );
+    }
+
+    #[tokio::test]
     async fn pipeline_status_handler_encodes_rejection_as_base64() {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
@@ -52635,6 +52876,9 @@ pub(crate) mod tests_runtime_handlers {
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -60888,6 +61132,7 @@ pub(crate) mod tests_runtime_handlers {
             code_b64: code_b64.clone(),
             contract_alias: "rate-limit::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
         };
         // Exhaust the exact handler key up front so this regression does not depend
         // on how quickly the first deploy request completes on the current host.
@@ -61865,6 +62110,7 @@ pub(crate) mod tests_runtime_handlers {
             code_b64,
             contract_alias: "deploy-test::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
         };
         let resp = super::handler_post_contract_deploy(
             State(app),

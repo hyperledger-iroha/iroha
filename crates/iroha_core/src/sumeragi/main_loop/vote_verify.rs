@@ -15,6 +15,8 @@ use super::votes::record_vote_drop_without_roster;
 use super::*;
 use iroha_crypto::{Algorithm, HashOf};
 
+const AUTO_WORKER_MIN: usize = 2;
+const AUTO_WORKER_MAX: usize = 8;
 const VOTE_VERIFY_BATCH_MAX: usize = 64;
 static VOTE_VERIFY_AGGREGATE_USED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VOTE_VERIFY_AGGREGATE_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -28,11 +30,12 @@ fn resolve_worker_config(
     result_queue_cap: usize,
 ) -> (usize, usize, usize) {
     let threads = if worker_threads == 0 {
-        std::thread::available_parallelism()
+        let detected = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1)
+            .unwrap_or(1);
+        detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
-        worker_threads
+        worker_threads.max(1)
     };
     let work_queue_cap = if work_queue_cap == 0 {
         threads.saturating_mul(4).max(4)
@@ -671,11 +674,20 @@ mod tests {
     fn vote_verify_worker_config_auto_scales() {
         let expected_threads = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX);
         let (threads, work_cap, result_cap) = resolve_worker_config(0, 0, 0);
         assert_eq!(threads, expected_threads);
         assert_eq!(work_cap, expected_threads.saturating_mul(4).max(4));
         assert_eq!(result_cap, expected_threads.saturating_mul(8).max(8));
+    }
+
+    #[test]
+    fn vote_verify_worker_config_preserves_explicit_count() {
+        let (threads, work_cap, result_cap) = resolve_worker_config(32, 0, 0);
+        assert_eq!(threads, 32);
+        assert_eq!(work_cap, 128);
+        assert_eq!(result_cap, 256);
     }
 
     #[test]

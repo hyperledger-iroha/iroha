@@ -362,9 +362,6 @@ pub mod isi {
     const OFFLINE_NOTE_ATTESTATION_EVIDENCE_DOMAIN: &str = "offline-note-attestation-evidence";
     const OFFLINE_ATTESTATION_EVIDENCE_PREFIX: &[u8] = b"offline-device-attestation-evidence-v1";
     const OFFLINE_NOTE_ATTESTATION_RECENT_BLOCK_WINDOW: u64 = 128;
-    const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST_LEGACY: &str = "ios-app-attest";
-    const OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_SCHEME: &str = "apple-app-attest-v1";
-    const OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_ALGORITHM: &str = "ecdsa-p256-sha256";
     const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST: &str = "ios-appattest";
     const OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT: &str = "android-keymint";
     const OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME: &str = "apple-appattest-counter-v1";
@@ -1386,12 +1383,6 @@ pub mod isi {
         certificate: &OfflineNoteKeyCertificate,
     ) -> Result<(), InstructionExecutionError> {
         let valid = match certificate.platform.as_str() {
-            OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST_LEGACY => {
-                certificate.assertion_scheme == OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_SCHEME
-                    && certificate.assertion_key_algorithm
-                        == OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_ALGORITHM
-                    && certificate.assertion_usage_count_limit.is_none()
-            }
             OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
                 certificate.assertion_scheme == OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME
                     && certificate.assertion_key_algorithm
@@ -8546,12 +8537,12 @@ pub mod isi {
             assert_eq!(st.commitments, vec![initial, change]);
             assert_eq!(st.root_history, vec![expected_root]);
 
-            let mut legacy = ZkAssetState::default();
-            legacy.push_commitment(initial, 8);
-            let legacy_root = legacy.push_commitment(change, 8);
+            let mut v1_root_state = ZkAssetState::default();
+            v1_root_state.push_commitment(initial, 8);
+            let v1_root = v1_root_state.push_commitment(change, 8);
             assert_ne!(
-                root, legacy_root,
-                "partial recursive redeem change output must not record the legacy tree root"
+                root, v1_root,
+                "partial recursive redeem change output must not record the retired v1 tree root"
             );
         }
 
@@ -9171,7 +9162,7 @@ pub mod isi {
 
         #[test]
         fn key_certificate_rejects_unsupported_hardware_assertion_profiles() {
-            let cases: [(&str, fn(&mut OfflineNoteKeyCertificate)); 4] = [
+            let cases: [(&str, fn(&mut OfflineNoteKeyCertificate)); 5] = [
                 (
                     "unsupported",
                     |certificate: &mut OfflineNoteKeyCertificate| {
@@ -9179,6 +9170,15 @@ pub mod isi {
                         certificate.assertion_scheme = "unit-test-one-use".to_owned();
                         certificate.assertion_key_algorithm = "ed25519-test".to_owned();
                         certificate.assertion_usage_count_limit = Some(1);
+                    },
+                ),
+                (
+                    "retired ios app attest spelling",
+                    |certificate: &mut OfflineNoteKeyCertificate| {
+                        certificate.platform = "ios-app-attest".to_owned();
+                        certificate.assertion_scheme = "apple-app-attest-v1".to_owned();
+                        certificate.assertion_key_algorithm = "ecdsa-p256-sha256".to_owned();
+                        certificate.assertion_usage_count_limit = None;
                     },
                 ),
                 ("splice", |certificate: &mut OfflineNoteKeyCertificate| {
@@ -11070,7 +11070,7 @@ pub mod isi {
         }
 
         #[test]
-        fn middleware_signed_certificate_authorization_still_works_without_attestation_marker() {
+        fn issuer_signed_certificate_authorization_works_without_attestation_marker() {
             let state = State::new(
                 World::default(),
                 Arc::clone(&Kura::blank_kura_for_testing()),
@@ -11085,7 +11085,7 @@ pub mod isi {
             let transaction = block.transaction();
 
             ensure_offline_note_certificate_authorized(&certificate, &account_id, &transaction)
-                .expect("middleware issuer signature should remain a valid fallback");
+                .expect("issuer signature should authorize without attestation marker");
         }
 
         #[test]
@@ -11898,13 +11898,13 @@ pub mod isi {
         fn offline_note_rejects_non_open_verify_envelope_proof_bytes() {
             let (state, mut proof, _public_inputs_hash) =
                 offline_note_verifier_test_state(ConfidentialStatus::Active);
-            proof.proof.bytes = b"legacy transcript payload".to_vec();
+            proof.proof.bytes = b"non-zk1 transcript payload".to_vec();
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let transaction = block.transaction();
 
             let err = offline_note_resolve_verifier(&proof, &transaction)
-                .expect_err("legacy transcript bytes must not decode as OpenVerifyEnvelope");
+                .expect_err("non-ZK1 transcript bytes must not decode as OpenVerifyEnvelope");
             assert_offline_rejection(err, "invalid_proof", "OpenVerifyEnvelope");
         }
 

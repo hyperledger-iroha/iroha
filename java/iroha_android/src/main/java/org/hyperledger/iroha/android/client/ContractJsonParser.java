@@ -199,7 +199,7 @@ public final class ContractJsonParser {
 
   private static String requiredString(final Object value, final String path) {
     final String string = optionalString(value);
-    if (string == null || string.isBlank()) {
+    if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();
@@ -219,7 +219,7 @@ public final class ContractJsonParser {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     final String string = value instanceof String ? (String) value : String.valueOf(value);
-    if (string == null || string.isBlank()) {
+    if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     if (!string.trim().equals(string)) {

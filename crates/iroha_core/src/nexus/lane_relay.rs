@@ -96,16 +96,6 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                 );
                 continue;
             }
-            status::push_lane_relay_envelope(envelope.clone());
-            if envelope.qc.is_none() {
-                iroha_logger::debug!(
-                    lane_id = %envelope.lane_id,
-                    dataspace_id = %envelope.dataspace_id,
-                    block_height = envelope.block_height,
-                    "retaining pending lane relay in status without broadcasting until QC is available"
-                );
-                continue;
-            }
             let key = LaneRelayKey::from_envelope(&envelope);
             let proof_status = envelope.proof_status();
             if self.seen.get(&key).is_some_and(|existing| {
@@ -115,6 +105,7 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                 continue;
             }
             self.seen.insert(key, proof_status);
+            status::push_lane_relay_envelope(envelope.clone());
             self.network.broadcast_relay(envelope);
         }
     }
@@ -268,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcaster_records_qcless_pending_relay_without_broadcasting() {
+    fn broadcaster_records_and_broadcasts_qcless_pending_relay() {
         let _guard = crate::sumeragi::status::lane_relay_test_guard();
         crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
@@ -280,7 +271,10 @@ mod tests {
 
         broadcaster.broadcast(vec![missing_proof]);
 
-        assert!(network.sent().is_empty());
+        let sent = network.sent();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].fastpq_proof.is_none());
+        assert!(sent[0].qc.is_none());
         let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
@@ -321,5 +315,33 @@ mod tests {
             "status keeps one relay per key and upgrades pending to verified"
         );
         assert!(snapshot[0].fastpq_proof.is_some());
+    }
+
+    #[test]
+    fn broadcaster_does_not_downgrade_verified_status_with_pending_duplicate() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = MockNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+
+        let verified = sample_envelope(4, 6);
+        let mut pending_duplicate = verified.clone();
+        pending_duplicate.fastpq_proof = None;
+
+        broadcaster.broadcast(vec![verified]);
+        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].fastpq_proof.is_some());
+
+        broadcaster.broadcast(vec![pending_duplicate]);
+
+        let sent = network.sent();
+        assert_eq!(sent.len(), 1);
+        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert!(
+            snapshot[0].fastpq_proof.is_some(),
+            "pending duplicate must not replace retained verified proof material"
+        );
     }
 }

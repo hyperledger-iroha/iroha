@@ -11,7 +11,10 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
-/** JSON persistence codec for structured Offline Note wallet notes. */
+/**
+ * Archived classic Offline Note wallet-note JSON codec kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
+ */
 public final class OfflineNoteWalletNoteJsonCodec {
   public static final long VERSION = 1L;
 
@@ -140,13 +143,11 @@ public final class OfflineNoteWalletNoteJsonCodec {
   }
 
   private static OfflineNoteWalletNoteState decodeState(final String state) {
-    if ("SPEND_PENDING".equals(state) || "spendPending".equals(state)) {
-      return OfflineNoteWalletNoteState.SPENT;
+    try {
+      return OfflineNoteWalletNoteState.valueOf(state);
+    } catch (final IllegalArgumentException exception) {
+      throw new IllegalArgumentException("invalid Offline Note wallet note state: " + state, exception);
     }
-    if ("CHANGE_PENDING".equals(state) || "changePending".equals(state)) {
-      return OfflineNoteWalletNoteState.SPENDABLE;
-    }
-    return OfflineNoteWalletNoteState.valueOf(state);
   }
 
   @SuppressWarnings("unchecked")

@@ -8,7 +8,6 @@ import {
   generateKeyPair,
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendInit,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   normalizeCryptoAlgorithm,
   preferredKagemushaOfflineSpendMode,
@@ -217,13 +216,18 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.preferredKagemushaOfflineSpendMode(),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
-      `${label} browser build must default to checked prefold spend mode`,
+      null,
+      `${label} browser build must expose no preferred Kagemusha mode without recursive native support`,
     );
     assert.equal(
-      crypto.preferredKagemushaOfflineSpendMode(true),
+      crypto.preferredKagemushaOfflineSpendMode(false, true),
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       `${label} native recursive availability should select recursive spend mode`,
+    );
+    assert.throws(
+      () => crypto.preferredKagemushaOfflineSpendMode(true),
+      /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,
+      `${label} browser build rejects partial explicit preferred-mode capabilities`,
     );
     assert.equal(
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
@@ -360,11 +364,11 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
-      crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      "",
     );
     assert.equal(
       crypto.isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
-      true,
+      false,
     );
     assert.equal(
       crypto.isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(

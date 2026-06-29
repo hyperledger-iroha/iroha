@@ -1505,22 +1505,14 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                     "Writing ABI-7 recursive compact key package to {}",
                     key_artifacts_path.display()
                 );
-                write_kagemusha_norito_artifact_file(
-                    key_artifacts_path,
-                    &key_artifacts,
-                    "KagemushaRecursiveCompactKeyArtifactsV1",
-                )
-                .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
+                write_kagemusha_norito_artifact_file(key_artifacts_path, &key_artifacts)
+                    .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
                 eprintln!(
                     "Writing ABI-7 recursive compact verifier-key package to {}",
                     verifier_keys_path.display()
                 );
-                write_kagemusha_norito_artifact_file(
-                    verifier_keys_path,
-                    &verifier_keys,
-                    "KagemushaRecursiveCompactVerifierKeysV1",
-                )
-                .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
+                write_kagemusha_norito_artifact_file(verifier_keys_path, &verifier_keys)
+                    .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
                 let key_artifacts_summary =
                     compact_key_output_summary_from_file(key_artifacts_path).wrap_err_with(
                         || format!("failed to summarize {}", key_artifacts_path.display()),
@@ -1634,22 +1626,14 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                     "Writing ABI-7 recursive compact key package to {}",
                     key_artifacts_path.display()
                 );
-                write_kagemusha_norito_artifact_file(
-                    key_artifacts_path,
-                    &key_artifacts,
-                    "KagemushaRecursiveCompactKeyArtifactsV1",
-                )
-                .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
+                write_kagemusha_norito_artifact_file(key_artifacts_path, &key_artifacts)
+                    .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
                 eprintln!(
                     "Writing ABI-7 recursive compact verifier-key package to {}",
                     verifier_keys_path.display()
                 );
-                write_kagemusha_norito_artifact_file(
-                    verifier_keys_path,
-                    &verifier_keys,
-                    "KagemushaRecursiveCompactVerifierKeysV1",
-                )
-                .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
+                write_kagemusha_norito_artifact_file(verifier_keys_path, &verifier_keys)
+                    .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
                 let key_artifacts_summary =
                     compact_key_output_summary_from_file(key_artifacts_path).wrap_err_with(
                         || format!("failed to summarize {}", key_artifacts_path.display()),
@@ -1945,28 +1929,14 @@ fn write_kagemusha_lineage_key_artifact_file(path: &std::path::Path, bytes: &[u8
 fn write_kagemusha_norito_artifact_file<T>(
     path: &std::path::Path,
     value: &T,
-    public_type_name: &str,
 ) -> Result<()>
 where
     T: norito::core::NoritoSerialize,
 {
     write_kagemusha_lineage_key_artifact_file_with(path, |file| {
         norito::core::to_writer_seek(&mut *file, value)
-            .map_err(|err| eyre::eyre!("failed to encode Norito artifact: {err}"))?;
-        patch_kagemusha_norito_artifact_public_schema_hash(file, public_type_name)
+            .map_err(|err| eyre::eyre!("failed to encode Norito artifact: {err}"))
     })
-}
-
-fn patch_kagemusha_norito_artifact_public_schema_hash(
-    file: &mut std::fs::File,
-    public_type_name: &str,
-) -> Result<()> {
-    use std::io::{Seek as _, Write as _};
-
-    let schema_hash = norito::core::schema_hash_for_name(public_type_name);
-    file.seek(std::io::SeekFrom::Start(6))?;
-    file.write_all(&schema_hash)?;
-    Ok(())
 }
 
 fn write_kagemusha_lineage_key_artifact_file_with<F>(

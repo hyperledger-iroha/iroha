@@ -225,6 +225,28 @@ dotnet_info_field_value() {
   '
 }
 
+path_list_has_empty_segment() {
+  local value="$1"
+  [[ -z "$value" \
+    || "$value" == :* \
+    || "$value" == \;* \
+    || "$value" == *: \
+    || "$value" == *\; \
+    || "$value" == *::* \
+    || "$value" == *\;\;* \
+    || "$value" == *:\;* \
+    || "$value" == *\;:* ]]
+}
+
+validate_nonempty_path_list() {
+  local label="$1"
+  local value="$2"
+  if path_list_has_empty_segment "$value"; then
+    echo "SCCP .NET SDK validation requires $label to contain no empty path-list segments before native bridge loader setup." >&2
+    return 1
+  fi
+}
+
 dotnet_info_section_field_count() {
   local section="$1"
   local label="$2"
@@ -1048,6 +1070,7 @@ phase_dotnet_sdk() {
   local bridge_library_path
   local bridge_library_sha256
   local bridge_target_dir
+  local dotnet_artifacts_path
   local dotnet_cli
   local dotnet_root
   local dotnet_trx_bytes
@@ -1055,6 +1078,7 @@ phase_dotnet_sdk() {
   local dotnet_trx_path
   local dotnet_trx_paths
   local dotnet_version
+  local dotnet_loader_path
   local dotnet_info
   local dotnet_test_output
   local dotnet_passed_count
@@ -1065,8 +1089,11 @@ phase_dotnet_sdk() {
   local dotnet_rid
   local dotnet_rid_count
   local dotnet_arch
-  local dotnet_arch_count
   local dotnet_arch_lc
+  local dotnet_host_arch
+  local dotnet_host_arch_count
+  local dotnet_os_arch
+  local dotnet_os_arch_count
   bridge_target_dir="${SCCP_DOTNET_BRIDGE_TARGET_DIR:-$CARGO_TARGET_DIR}"
   case "$bridge_target_dir" in
     /* | [A-Za-z]:/* | [A-Za-z]:\\*)
@@ -1077,6 +1104,7 @@ phase_dotnet_sdk() {
   esac
   bridge_library_dir="$bridge_target_dir/debug"
   bridge_library_path="$bridge_library_dir/connect_norito_bridge.dll"
+  dotnet_artifacts_path="$bridge_target_dir/dotnet-artifacts"
   dotnet_cli="$(resolve_dotnet)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dotnet_root="$(dirname "$dotnet_cli")"
@@ -1088,6 +1116,8 @@ phase_dotnet_sdk() {
     "DOTNET_ROOT=$dotnet_root"
     "DOTNET_CLI_TELEMETRY_OPTOUT=1"
     "DOTNET_CLI_UI_LANGUAGE=en"
+    "DOTNET_NOLOGO=1"
+    "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"
   )
   run_capture_in_dir dotnet_version "$ROOT/csharp" \
     "${dotnet_env[@]}" "$dotnet_cli" --version
@@ -1129,20 +1159,43 @@ phase_dotnet_sdk() {
       return 1
     fi
     dotnet_arch_count="$(dotnet_info_field_count "OS Architecture" <<<"$dotnet_info")"
+    dotnet_os_arch=""
+    dotnet_host_arch=""
     if [[ "$dotnet_arch_count" == 1 ]]; then
-      dotnet_arch="$(dotnet_info_field_value "OS Architecture" <<<"$dotnet_info")"
+      dotnet_os_arch="$(dotnet_info_field_value "OS Architecture" <<<"$dotnet_info")"
     else
       if [[ "$dotnet_arch_count" != 0 ]]; then
         echo "SCCP .NET SDK validation requires exactly one OS Architecture from dotnet --info; found: $dotnet_arch_count" >&2
         return 1
       fi
-      dotnet_arch_count="$(dotnet_info_section_field_count "Host" "Architecture" <<<"$dotnet_info")"
-      if [[ "$dotnet_arch_count" != 1 ]]; then
-        echo "SCCP .NET SDK validation requires exactly one Host Architecture from dotnet --info when OS Architecture is absent; found: $dotnet_arch_count" >&2
-        return 1
-      fi
-      dotnet_arch="$(dotnet_info_section_field_value "Host" "Architecture" <<<"$dotnet_info")"
     fi
+    dotnet_host_arch_count="$(dotnet_info_section_field_count "Host" "Architecture" <<<"$dotnet_info")"
+    if [[ "$dotnet_host_arch_count" == 1 ]]; then
+      dotnet_host_arch="$(dotnet_info_section_field_value "Host" "Architecture" <<<"$dotnet_info")"
+    elif [[ -z "$dotnet_os_arch" ]]; then
+      echo "SCCP .NET SDK validation requires exactly one Host Architecture from dotnet --info when OS Architecture is absent; found: $dotnet_host_arch_count" >&2
+      return 1
+    elif [[ "$dotnet_host_arch_count" != 0 ]]; then
+      echo "SCCP .NET SDK validation requires at most one Host Architecture from dotnet --info; found: $dotnet_host_arch_count" >&2
+      return 1
+    fi
+    if [[ -z "$dotnet_os_arch" && -z "$dotnet_host_arch" ]]; then
+      echo "SCCP .NET SDK validation requires exactly one Host Architecture from dotnet --info when OS Architecture is absent; found: $dotnet_host_arch_count" >&2
+      return 1
+    fi
+    if [[ -n "$dotnet_os_arch" && ! "$dotnet_os_arch" =~ ^(x64|x86|arm64|arm)$ ]]; then
+      echo "SCCP .NET SDK validation requires a canonical architecture; found: $dotnet_os_arch" >&2
+      return 1
+    fi
+    if [[ -n "$dotnet_host_arch" && ! "$dotnet_host_arch" =~ ^(x64|x86|arm64|arm)$ ]]; then
+      echo "SCCP .NET SDK validation requires a canonical architecture; found: $dotnet_host_arch" >&2
+      return 1
+    fi
+    if [[ -n "$dotnet_os_arch" && -n "$dotnet_host_arch" && "$dotnet_os_arch" != "$dotnet_host_arch" ]]; then
+      echo "SCCP .NET SDK validation requires OS Architecture and Host Architecture to agree; found OS Architecture: $dotnet_os_arch, Architecture: $dotnet_host_arch" >&2
+      return 1
+    fi
+    dotnet_arch="${dotnet_os_arch:-$dotnet_host_arch}"
     if [[ ! "$dotnet_arch" =~ ^(x64|x86|arm64|arm)$ ]]; then
       echo "SCCP .NET SDK validation requires a canonical architecture; found: $dotnet_arch" >&2
       return 1
@@ -1155,9 +1208,12 @@ phase_dotnet_sdk() {
     printf 'SCCP .NET SDK OS: Windows\n'
     printf 'SCCP .NET SDK RID: %s\n' "$dotnet_rid"
     printf 'SCCP .NET SDK Architecture: %s\n' "$dotnet_arch_lc"
+    validate_nonempty_path_list "PATH" "${PATH:-}"
   fi
   run_in_dir "$ROOT" \
     env "CARGO_TARGET_DIR=$bridge_target_dir" \
+    "CARGO_INCREMENTAL=0" \
+    "CARGO_PROFILE_DEV_DEBUG=0" \
     cargo build -p connect_norito_bridge
   if [[ "$DRY_RUN" -eq 0 ]]; then
     if [[ ! -f "$bridge_library_path" ]]; then
@@ -1179,10 +1235,17 @@ phase_dotnet_sdk() {
     printf 'connect_norito_bridge native bridge: %s\n' "$bridge_library_path"
     printf 'connect_norito_bridge native bridge sha256: %s\n' "$bridge_library_sha256"
   fi
+  dotnet_loader_path="$bridge_library_dir"
+  if [[ -n "${PATH:-}" ]]; then
+    dotnet_loader_path="$dotnet_loader_path:$PATH"
+  fi
   run_in_dir "$ROOT/csharp" \
     "${dotnet_env[@]}" \
-    "PATH=$bridge_library_dir:$PATH" \
+    "PATH=$dotnet_loader_path" \
     "$dotnet_cli" restore Hyperledger.Iroha.Sdk.sln
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    rm -rf "$dotnet_artifacts_path"
+  fi
   if [[ "$DRY_RUN" -eq 0 ]]; then
     while IFS= read -r -d '' dotnet_trx_path; do
       rm -f "$dotnet_trx_path"
@@ -1195,9 +1258,11 @@ phase_dotnet_sdk() {
   fi
   run_capture_in_dir dotnet_test_output "$ROOT/csharp" \
     "${dotnet_env[@]}" \
-    "PATH=$bridge_library_dir:$PATH" \
+    "PATH=$dotnet_loader_path" \
     "$dotnet_cli" test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
+    --artifacts-path "$dotnet_artifacts_path" \
     --filter "FullyQualifiedName~Sccp" \
+    -p:ProduceReferenceAssembly=false \
     --nologo \
     --logger "trx;LogFileName=sccp-dotnet-sdk.trx"
   if [[ "$DRY_RUN" -eq 0 ]]; then

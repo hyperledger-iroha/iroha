@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Hyperledger.Iroha.Privacy;
@@ -729,26 +730,33 @@ public static class PrivacyNative
         bool requireAbi,
         Action<IntPtr> free)
     {
-        var algorithmIdBytes = PrivacyRequestTextBytes(algorithmId, nameof(algorithmId));
-        var entrypointBytes = PrivacyRequestTextBytes(entrypoint, nameof(entrypoint));
-        var vkRefBytes = PrivacyRequestTextBytes(vkRef, nameof(vkRef));
-        var publicInputsBytes = PrivacyRequestComponentBytes(
-            publicInputs,
-            nameof(publicInputs),
-            PrivacyRequestPublicInputsMaxBytes,
-            allowEmpty: false);
-        var witnessBytes = PrivacyRequestComponentBytes(
-            witness,
-            nameof(witness),
-            PrivacyRequestWitnessMaxBytes,
-            allowEmpty: true);
-        var proofBytes = PrivacyRequestComponentBytes(
-            proof,
-            nameof(proof),
-            PrivacyRequestProofMaxBytes,
-            allowEmpty: true);
+        byte[]? algorithmIdBytes = null;
+        byte[]? entrypointBytes = null;
+        byte[]? vkRefBytes = null;
+        byte[]? publicInputsBytes = null;
+        byte[]? witnessBytes = null;
+        byte[]? proofBytes = null;
         try
         {
+            var algorithmIdCopy = algorithmIdBytes = PrivacyRequestTextBytes(algorithmId, nameof(algorithmId));
+            var entrypointCopy = entrypointBytes = PrivacyRequestTextBytes(entrypoint, nameof(entrypoint));
+            var vkRefCopy = vkRefBytes = PrivacyRequestTextBytes(vkRef, nameof(vkRef));
+            var publicInputsCopy = publicInputsBytes = PrivacyRequestComponentBytes(
+                publicInputs,
+                nameof(publicInputs),
+                PrivacyRequestPublicInputsMaxBytes,
+                allowEmpty: false);
+            var witnessCopy = witnessBytes = PrivacyRequestComponentBytes(
+                witness,
+                nameof(witness),
+                PrivacyRequestWitnessMaxBytes,
+                allowEmpty: true);
+            var proofCopy = proofBytes = PrivacyRequestComponentBytes(
+                proof,
+                nameof(proof),
+                PrivacyRequestProofMaxBytes,
+                allowEmpty: true);
+
             if (requireAbi)
             {
                 RequireAbi();
@@ -763,18 +771,18 @@ public static class PrivacyNative
             try
             {
                 code = nativeCall(
-                    algorithmIdBytes,
-                    (UIntPtr)algorithmIdBytes.Length,
-                    entrypointBytes,
-                    (UIntPtr)entrypointBytes.Length,
-                    vkRefBytes,
-                    (UIntPtr)vkRefBytes.Length,
-                    publicInputsBytes,
-                    (UIntPtr)publicInputsBytes.Length,
-                    witnessBytes,
-                    (UIntPtr)witnessBytes.Length,
-                    proofBytes,
-                    (UIntPtr)proofBytes.Length,
+                    algorithmIdCopy,
+                    (UIntPtr)algorithmIdCopy.Length,
+                    entrypointCopy,
+                    (UIntPtr)entrypointCopy.Length,
+                    vkRefCopy,
+                    (UIntPtr)vkRefCopy.Length,
+                    publicInputsCopy,
+                    (UIntPtr)publicInputsCopy.Length,
+                    witnessCopy,
+                    (UIntPtr)witnessCopy.Length,
+                    proofCopy,
+                    (UIntPtr)proofCopy.Length,
                     out outPtr,
                     out outLen);
             }
@@ -786,12 +794,12 @@ public static class PrivacyNative
         }
         finally
         {
-            Array.Clear(algorithmIdBytes, 0, algorithmIdBytes.Length);
-            Array.Clear(entrypointBytes, 0, entrypointBytes.Length);
-            Array.Clear(vkRefBytes, 0, vkRefBytes.Length);
-            Array.Clear(publicInputsBytes, 0, publicInputsBytes.Length);
-            Array.Clear(witnessBytes, 0, witnessBytes.Length);
-            Array.Clear(proofBytes, 0, proofBytes.Length);
+            Clear(algorithmIdBytes);
+            Clear(entrypointBytes);
+            Clear(vkRefBytes);
+            Clear(publicInputsBytes);
+            Clear(witnessBytes);
+            Clear(proofBytes);
         }
     }
 
@@ -867,7 +875,7 @@ public static class PrivacyNative
         }
         finally
         {
-            Array.Clear(request, 0, request.Length);
+            Clear(request);
         }
     }
 
@@ -910,7 +918,6 @@ public static class PrivacyNative
         Action<IntPtr> free,
         params byte[] expectedSchemaBytes)
     {
-        var shouldClearNativeOutput = false;
         try
         {
             if (code != 0)
@@ -925,34 +932,38 @@ public static class PrivacyNative
                 throw new InvalidOperationException($"{symbol} returned a null output pointer.");
             }
 
-            shouldClearNativeOutput = true;
             var length = CheckedArchiveLength(symbol, outLen);
             var result = new byte[length];
-            Marshal.Copy(outPtr, result, 0, length);
-            if (!IsNoritoV1Archive(result))
+            try
             {
-                throw new InvalidOperationException($"{symbol} returned invalid Norito V1 archive.");
+                Marshal.Copy(outPtr, result, 0, length);
+                if (!IsNoritoV1Archive(result))
+                {
+                    throw new InvalidOperationException($"{symbol} returned invalid Norito V1 archive.");
+                }
+                if (!HasNonEmptyPrivacyNoritoPayload(result))
+                {
+                    throw new InvalidOperationException(
+                        $"{symbol} returned empty privacy result payload.");
+                }
+                if (!HasNoritoSchema(result, schemas))
+                {
+                    throw new InvalidOperationException(
+                        $"{symbol} returned unexpected privacy result schema.");
+                }
+                return result;
             }
-            if (!HasNonEmptyPrivacyNoritoPayload(result))
+            catch
             {
-                throw new InvalidOperationException(
-                    $"{symbol} returned empty privacy result payload.");
+                Clear(result);
+                throw;
             }
-            if (!HasNoritoSchema(result, schemas))
-            {
-                throw new InvalidOperationException(
-                    $"{symbol} returned unexpected privacy result schema.");
-            }
-            return result;
         }
         finally
         {
             if (outPtr != IntPtr.Zero)
             {
-                if (shouldClearNativeOutput)
-                {
-                    ClearNativeBuffer(outPtr, outLen);
-                }
+                ClearNativeBuffer(outPtr, outLen);
                 free(outPtr);
             }
         }
@@ -1003,7 +1014,7 @@ public static class PrivacyNative
         }
         finally
         {
-            Array.Clear(output, 0, output.Length);
+            Clear(output);
             ClearNativeBuffer(outPtr, outLen);
         }
     }
@@ -1118,6 +1129,27 @@ public static class PrivacyNative
         {
             throw new ArgumentNullException(parameterName);
         }
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException(
+                "Privacy request text field must not be empty or whitespace.",
+                parameterName);
+        }
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                throw new ArgumentException(
+                    "Privacy request text field must not contain whitespace.",
+                    parameterName);
+            }
+            if (char.IsControl(character))
+            {
+                throw new ArgumentException(
+                    "Privacy request text field must not contain control characters.",
+                    parameterName);
+            }
+        }
         var bytes = Encoding.UTF8.GetBytes(value);
         if (bytes.Length > PrivacyRequestTextFieldMaxBytes)
         {
@@ -1136,12 +1168,12 @@ public static class PrivacyNative
     {
         if (!allowEmpty && value.IsEmpty)
         {
-            throw new ArgumentException("Privacy request component must not be empty.", parameterName);
+            throw new ArgumentException($"{parameterName} must not be empty.", parameterName);
         }
         if (value.Length > maxBytes)
         {
             throw new ArgumentException(
-                $"Privacy request component must not exceed {maxBytes} bytes.",
+                $"{parameterName} must not exceed {maxBytes} bytes.",
                 parameterName);
         }
         return value.ToArray();
@@ -1310,10 +1342,10 @@ public static class PrivacyNative
         }
         finally
         {
-            Array.Clear(algorithmId, 0, algorithmId.Length);
-            Array.Clear(entrypoint, 0, entrypoint.Length);
-            Array.Clear(vkRef, 0, vkRef.Length);
-            Array.Clear(publicInputs, 0, publicInputs.Length);
+            Clear(algorithmId);
+            Clear(entrypoint);
+            Clear(vkRef);
+            Clear(publicInputs);
         }
     }
 
@@ -1327,7 +1359,15 @@ public static class PrivacyNative
         }
         finally
         {
-            Array.Clear(request, 0, request.Length);
+            Clear(request);
+        }
+    }
+
+    private static void Clear(byte[]? buffer)
+    {
+        if (buffer is not null)
+        {
+            CryptographicOperations.ZeroMemory(buffer);
         }
     }
 

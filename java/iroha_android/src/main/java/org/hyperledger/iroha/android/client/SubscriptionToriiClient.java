@@ -6,6 +6,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,9 +45,8 @@ public final class SubscriptionToriiClient {
     this.executor = Objects.requireNonNull(builder.executor, "executor");
     this.baseUri = Objects.requireNonNull(builder.baseUri, "baseUri");
     this.timeout = builder.timeout;
-    this.defaultHeaders =
-        java.util.Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
-    this.observers = List.copyOf(builder.observers);
+    this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
+    this.observers = Collections.unmodifiableList(new ArrayList<>(builder.observers));
   }
 
   public static Builder builder() {
@@ -56,7 +56,8 @@ public final class SubscriptionToriiClient {
   public CompletableFuture<SubscriptionPlanListResponse> listSubscriptionPlans(
       final SubscriptionPlanListParams params) {
     final TransportRequest request =
-        buildGetRequest(PLANS_PATH, params == null ? Map.of() : params.toQueryParameters());
+        buildGetRequest(
+            PLANS_PATH, params == null ? Collections.emptyMap() : params.toQueryParameters());
     notifyRequest(request);
     return executeHttpRequest(request, SubscriptionJsonParser::parsePlanList);
   }
@@ -69,7 +70,9 @@ public final class SubscriptionToriiClient {
   public CompletableFuture<SubscriptionListResponse> listSubscriptions(
       final SubscriptionListParams params) {
     final TransportRequest request =
-        buildGetRequest(SUBSCRIPTIONS_PATH, params == null ? Map.of() : params.toQueryParameters());
+        buildGetRequest(
+            SUBSCRIPTIONS_PATH,
+            params == null ? Collections.emptyMap() : params.toQueryParameters());
     notifyRequest(request);
     return executeHttpRequest(request, SubscriptionJsonParser::parseSubscriptionList);
   }
@@ -87,7 +90,7 @@ public final class SubscriptionToriiClient {
     final String normalizedId = requireNonBlank(subscriptionId, "subscription_id");
     final String encodedId = urlEncode(normalizedId);
     final String path = SUBSCRIPTIONS_PATH + "/" + encodedId;
-    final TransportRequest request = buildGetRequest(path, Map.of());
+    final TransportRequest request = buildGetRequest(path, Collections.emptyMap());
     notifyRequest(request);
     return executeHttpRequestAllowingNotFound(request, SubscriptionJsonParser::parseSubscriptionRecord);
   }
@@ -141,7 +144,7 @@ public final class SubscriptionToriiClient {
   }
 
   private TransportRequest buildGetRequest(final String path, final Map<String, String> query) {
-    final URI target = appendQuery(resolvePath(path), query == null ? Map.of() : query);
+    final URI target = appendQuery(resolvePath(path), query == null ? Collections.emptyMap() : query);
     final Map<String, String> headers = mergeHeaders();
     TransportSecurity.requireHttpRequestAllowed(
         "SubscriptionToriiClient", baseUri, target, headers, null);
@@ -193,7 +196,7 @@ public final class SubscriptionToriiClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return baseUri;
     }
     if (path.startsWith("http://") || path.startsWith("https://")) {

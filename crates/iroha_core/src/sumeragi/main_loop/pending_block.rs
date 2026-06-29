@@ -147,7 +147,6 @@ impl PendingBlock {
         pending
     }
 
-    #[cfg(test)]
     pub(super) fn payload_bytes(&self) -> &[u8] {
         self.payload_bytes
             .get_or_init(|| block_payload_bytes(&self.block))
@@ -752,7 +751,9 @@ mod tests {
         let first_hash = Hash::new(&first_bytes);
         let mut pending = PendingBlock::new(first_block, first_hash, 1, 0);
 
+        assert!(!pending.payload_bytes_cached_for_tests());
         assert_eq!(pending.payload_bytes(), first_bytes.as_slice());
+        assert!(pending.payload_bytes_cached_for_tests());
         assert_eq!(Hash::new(pending.payload_bytes()), first_hash);
 
         let second_block = sample_block(2);
@@ -760,7 +761,9 @@ mod tests {
         let second_hash = Hash::new(&second_bytes);
         pending.replace_block(second_block, second_hash, 2, 0);
 
+        assert!(!pending.payload_bytes_cached_for_tests());
         assert_eq!(pending.payload_bytes(), second_bytes.as_slice());
+        assert!(pending.payload_bytes_cached_for_tests());
         assert_eq!(Hash::new(pending.payload_bytes()), second_hash);
         assert_ne!(first_bytes, second_bytes);
     }
