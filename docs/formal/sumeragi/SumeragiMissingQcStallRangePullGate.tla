@@ -343,7 +343,7 @@ SafetyFast ==
   MissingQcStallRangePullCoreSafety
 
 ActionComparisonAnchors ==
-  ActionsMatchSpec
+  /\ ActionsMatchSpec
 
 ReasonClassifierAnchors ==
   /\ ReasonClassifierSafety
@@ -390,7 +390,7 @@ CooldownAndMarkAnchors ==
   /\ NoMark \in ImplementationActions(InactiveStall)
 
 MissingQcStallRangePullSafetyAnchors ==
-  /\ ActionComparisonAnchors
+  /\ ActionsMatchSpec
   /\ ReasonClassifierAnchors
   /\ ExactStallGateAnchors
   /\ SuppressionAnchors

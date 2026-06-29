@@ -169,7 +169,13 @@ def test_solana_destination_hex_parsers_redact_parser_causes():
 def test_solana_destination_hex_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token Solana destination hex TypeError detail"
             if exception_type is TypeError
@@ -205,12 +211,87 @@ def test_solana_destination_hex_parsers_redact_helper_exit_parser_causes(monkeyp
                     assert rendered == f"{label} must be hex"
                     assert "secret-token" not in rendered
                     assert exception_type.__name__ not in rendered
+                    if exception_type is module.argparse.ArgumentTypeError:
+                        assert (
+                            "ArgumentTypeError" not in rendered
+                        ), "Solana destination hex ArgumentTypeError detail leaked"
                     assert exc.__cause__ is None
                     assert exc.__suppress_context__ is True
                 else:
                     raise AssertionError(
                         f"{label} parser {exception_type.__name__} was accepted"
                     )
+
+
+def test_solana_destination_nonzero_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="verifier code hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "Solana destination fixed hex nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed Solana destination fixed-hex nonzero control accepted"
+            )
+
+        try:
+            module._require_fixed_bytes(
+                bytes(32),
+                label="verifier_code_hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "Solana destination fixed bytes nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed Solana destination fixed-bytes nonzero control accepted"
+            )
+
+
+def test_solana_destination_boolean_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for control in (1, "true", None):
+        try:
+            solana_route_canary_evidence_hash(
+                module,
+                program_immutable=control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "Solana route canary program_immutable must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed Solana route-canary program-immutable control accepted"
+            )
+
+        try:
+            module._json_summary(
+                solana_args(module),
+                bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR),
+                control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "Solana destination JSON expected_matches must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed Solana destination JSON expected-matches control accepted"
+            )
 
 
 def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
@@ -232,7 +313,13 @@ def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
     else:
         raise AssertionError("invalid Solana destination program base64 was accepted")
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_b64decode(_value, *, validate, exception_type=exception_type):
             del validate
@@ -253,6 +340,10 @@ def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
                 assert "secret-token" not in rendered
                 assert "decoder detail" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "Solana destination base64 ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -283,6 +374,47 @@ def test_solana_destination_file_parser_redacts_file_read_causes(tmp_path):
         raise AssertionError("missing Solana destination program file was accepted")
 
 
+def test_solana_program_bytes_file_rejects_unreadable_file_shapes(tmp_path):
+    module = load_evidence_module()
+    valid_program = b"\x7fELFsol"
+    outside = tmp_path / "secret-token-solana-program-outside.so"
+    outside.write_bytes(valid_program)
+    symlink_input = tmp_path / "secret-token-solana-program-link.so"
+    symlink_input.symlink_to(outside)
+    directory_input = tmp_path / "secret-token-solana-program-dir.so"
+    directory_input.mkdir()
+    real_dir = tmp_path / "real-solana-program-dir"
+    real_dir.mkdir()
+    (real_dir / "program.so").write_bytes(valid_program)
+    parent_link = tmp_path / "secret-token-solana-program-parent"
+    parent_link.symlink_to(real_dir, target_is_directory=True)
+    parent_symlink_input = parent_link / "program.so"
+    missing_input = tmp_path / "secret-token-solana-program-missing.so"
+
+    for path in (
+        symlink_input,
+        directory_input,
+        parent_symlink_input,
+        missing_input,
+    ):
+        try:
+            module.parse_program_bytes_file(
+                str(path),
+                label="verifier program bytes",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            suppress_context = exc.__suppress_context__
+        else:
+            raise AssertionError("Solana program bytes file shape was accepted")
+
+        assert rendered == "verifier program bytes file cannot be read"
+        assert "secret-token" not in rendered
+        assert "IsADirectoryError" not in rendered
+        assert "FileNotFoundError" not in rendered
+        assert suppress_context is True
+
+
 def noncanonical_base64_alias(raw: bytes) -> str:
     encoded = base64.b64encode(raw).decode("ascii")
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -304,6 +436,7 @@ def solana_route_canary_evidence_hash(
     programdata_slot=4321,
     program_account_context_slot=9000,
     programdata_account_context_slot=9000,
+    program_immutable=True,
 ):
     verifier_code_hash = module.solana_verifier_program_code_hash(program_bytes)
     return module.solana_route_canary_evidence_hash(
@@ -318,7 +451,7 @@ def solana_route_canary_evidence_hash(
         rpc_commitment="finalized",
         program_owner=module.SOLANA_UPGRADEABLE_LOADER_ID,
         programdata_owner=module.SOLANA_UPGRADEABLE_LOADER_ID,
-        program_immutable=True,
+        program_immutable=program_immutable,
         program_account_data=module.solana_upgradeable_program_account_data(
             programdata_address
         ),
@@ -361,6 +494,33 @@ def solana_toml_args(module):
     )
     args.verifier_program_bytes_base64 = SOLANA_VERIFIER_PROGRAM_BYTES
     return args
+
+
+def test_solana_destination_json_summary_rejects_non_boolean_programdata_readiness(
+    monkeypatch,
+) -> None:
+    """ProgramData readiness helper drift must not coerce into TOML readiness."""
+
+    module = load_evidence_module()
+    args = solana_toml_args(module)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_toml_programdata_metadata_ready", lambda _args: "ready")
+        try:
+            module._json_summary(
+                args,
+                bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR),
+                True,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "Solana destination ProgramData metadata readiness must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "Solana destination JSON summary accepted non-boolean ProgramData readiness"
+            )
 
 
 def test_solana_hex_parser_rejects_zero_and_wrong_width():

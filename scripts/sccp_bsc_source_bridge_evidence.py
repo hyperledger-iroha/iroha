@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import stat
 import sys
 from html import unescape as html_unescape
 from pathlib import Path
@@ -151,6 +152,9 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("BSC source bridge fixed hex nonzero must be a boolean")
+
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -158,7 +162,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -183,21 +187,44 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     return raw
 
 
+def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(mode):
+            raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
+
+
+def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
+    try:
+        _reject_runtime_bytecode_file_symlink_path(path)
+    except (OSError, argparse.ArgumentTypeError):
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+
+
 def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     """Parse runtime bytecode from a file containing hex text."""
 
     path = Path(value).expanduser()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    text = _read_runtime_bytecode_file_text(path, label=label)
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
 
 
@@ -750,20 +777,41 @@ def _require_bsc_sora_lane(args: argparse.Namespace) -> None:
         raise ValueError("BSC production source evidence requires target_domain = 0")
 
 
-def _require_live_component_hashes(args: argparse.Namespace) -> None:
-    for field, (component_id, component_kind) in bsc_template_components(
-        getattr(args, "bsc_network", None)
-    ).items():
-        if getattr(args, field) == _evm_family_template_component_hash(
+def _template_component_hashes(bsc_network: str | None = None) -> dict[str, bytes]:
+    return {
+        field: _evm_family_template_component_hash(
             component_id,
             component_kind,
-            bsc_network=getattr(args, "bsc_network", None),
-        ):
+            bsc_network=bsc_network,
+        )
+        for field, (component_id, component_kind) in bsc_template_components(
+            bsc_network
+        ).items()
+    }
+
+
+def _require_live_component_hashes(args: argparse.Namespace) -> None:
+    bsc_network = getattr(args, "bsc_network", None)
+    template_hashes = _template_component_hashes(bsc_network)
+    for field, template_hash in template_hashes.items():
+        if getattr(args, field) == template_hash:
             label = field.replace("_", " ")
             raise ValueError(
                 f"BSC production source evidence requires live {label}; "
                 f"template-derived {label} is not deployable"
             )
+    for field in _component_hash_args():
+        supplied_hash = getattr(args, field, None)
+        if supplied_hash is None:
+            continue
+        for template_field, template_hash in template_hashes.items():
+            if supplied_hash == template_hash:
+                label = field.replace("_", " ")
+                template_label = template_field.replace("_", " ")
+                raise ValueError(
+                    f"BSC production source evidence requires live {label}; "
+                    f"template-derived {template_label} is not deployable"
+                )
 
 
 def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> None:
@@ -1148,6 +1196,14 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     )
     toml_metadata_ready = _toml_receipt_metadata_ready(args)
     runtime_bytecode_ready = _toml_runtime_bytecode_metadata_ready(args)
+    if type(toml_metadata_ready) is not bool:
+        raise ValueError(
+            "BSC source bridge receipt metadata readiness must be a boolean"
+        )
+    if type(runtime_bytecode_ready) is not bool:
+        raise ValueError(
+            "BSC source bridge runtime bytecode readiness must be a boolean"
+        )
     summary = {
         "source_domain": args.source_domain,
         "target_domain": args.target_domain,
@@ -1434,13 +1490,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

@@ -146,12 +146,32 @@ BoundaryAndFutureAnchors ==
   /\ ActualIdleWait("at_gap") = NoWait
   /\ ActualIdleWait("future_last") = MinGap("future_last")
 
+WorkerTickShouldRunMatchesSpec ==
+  \A c \in Cases:
+    ActualShouldRun(c) = SpecShouldRun(c)
+
+WorkerTickIdleWaitMatchesSpec ==
+  \A c \in Cases:
+    ActualIdleWait(c) = SpecIdleWait(c)
+
+WorkerTickNoWaitRunEquivalence ==
+  \A c \in Cases:
+    (ActualIdleWait(c) = NoWait) = ActualShouldRun(c)
+
+WorkerTickPendingWaitPositive ==
+  \A c \in PendingCases:
+    ActualIdleWait(c) > 0
+
+WorkerTickReadyWaitNoWait ==
+  \A c \in ReadyCases:
+    ActualIdleWait(c) = NoWait
+
 WorkerTickGapExactness ==
-  /\ \A c \in Cases: ActualShouldRun(c) = SpecShouldRun(c)
-  /\ \A c \in Cases: ActualIdleWait(c) = SpecIdleWait(c)
-  /\ \A c \in Cases: (ActualIdleWait(c) = NoWait) = ActualShouldRun(c)
-  /\ \A c \in PendingCases: ActualIdleWait(c) > 0
-  /\ \A c \in ReadyCases: ActualIdleWait(c) = NoWait
+  /\ WorkerTickShouldRunMatchesSpec
+  /\ WorkerTickIdleWaitMatchesSpec
+  /\ WorkerTickNoWaitRunEquivalence
+  /\ WorkerTickPendingWaitPositive
+  /\ WorkerTickReadyWaitNoWait
   /\ CasePartitionExact
   /\ SaturatingElapsedBounds
   /\ RunReadinessPartition

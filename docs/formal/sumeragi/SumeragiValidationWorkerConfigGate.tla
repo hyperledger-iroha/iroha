@@ -197,8 +197,11 @@ QueueCapsPositive ==
     /\ output[2] >= 1
     /\ output[3] >= 1
 
-ValidationWorkerConfigCoreSafety ==
+ValidationWorkerConfigOutputMatches ==
   ActualOutput = SpecOutput
+
+ValidationWorkerConfigCoreSafety ==
+  ValidationWorkerConfigOutputMatches
   /\ AutoThreadClampAnchors
   /\ ExplicitThreadPreservation
   /\ ZeroWorkCapDerivation
@@ -207,7 +210,7 @@ ValidationWorkerConfigCoreSafety ==
   /\ QueueCapsPositive
 
 ValidationWorkerConfigExactness ==
-  ActualOutput = SpecOutput
+  ValidationWorkerConfigOutputMatches
   /\ AutoThreadClampAnchors
   /\ ExplicitThreadPreservation
   /\ ZeroWorkCapDerivation

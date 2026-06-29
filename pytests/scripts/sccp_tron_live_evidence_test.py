@@ -583,6 +583,7 @@ def test_tron_api_rejects_duplicate_json_keys():
         assert "secret-token" not in message
         assert "duplicate JSON key " not in message
         assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True, "TRON duplicate JSON context leaked"
     else:
         raise AssertionError("duplicate-key TRON API response was accepted")
 
@@ -909,6 +910,182 @@ def test_tron_runtime_input_parsers_redact_exception_causes(tmp_path):
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError("secret-bearing runtime input was accepted")
+
+
+def test_tron_live_runtime_files_reject_unreadable_file_shapes(tmp_path):
+    module = load_live_module()
+
+    def unreadable_paths(prefix, text):
+        outside = tmp_path / f"secret-token-{prefix}-outside"
+        outside.write_text(text, encoding="utf-8")
+        symlink = tmp_path / f"secret-token-{prefix}-link"
+        symlink.symlink_to(outside)
+        directory = tmp_path / f"secret-token-{prefix}-dir"
+        directory.mkdir()
+        real_parent = tmp_path / f"secret-token-{prefix}-real-parent"
+        real_parent.mkdir()
+        (real_parent / "input").write_text(text, encoding="utf-8")
+        symlink_parent = tmp_path / f"secret-token-{prefix}-parent-link"
+        symlink_parent.symlink_to(real_parent, target_is_directory=True)
+        missing = tmp_path / f"secret-token-{prefix}-missing"
+        return (symlink, directory, symlink_parent / "input", missing)
+
+    cases = (
+        (
+            "--tron-pro-api-key-file cannot be read",
+            lambda path: module._runtime_tron_pro_api_key(
+                SimpleNamespace(
+                    tron_pro_api_key=None,
+                    tron_pro_api_key_file=str(path),
+                )
+            ),
+            unreadable_paths("tron-api-key", "runtime-secret-key\n"),
+        ),
+        (
+            "--witness-schedule-payload-file cannot be read",
+            lambda path: module._runtime_witness_schedule_payload(
+                SimpleNamespace(
+                    witness_schedule_payload_hex=None,
+                    witness_schedule_payload_file=str(path),
+                )
+            ),
+            unreadable_paths("witness-payload", "0x01\n"),
+        ),
+        (
+            "--witness-schedule-transition-json 0 file cannot be read",
+            lambda path: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(witness_schedule_transition_json=[f"@{path}"])
+            ),
+            unreadable_paths("witness-transition", "{}\n"),
+        ),
+    )
+    for expected_message, action, paths in cases:
+        for unreadable_file in paths:
+            try:
+                action(unreadable_file)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert "IsADirectoryError" not in rendered
+                assert "FileNotFoundError" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"unreadable TRON runtime file {unreadable_file} was accepted"
+                )
+
+
+def test_tron_live_hex_nonzero_controls_reject_non_booleans():
+    module = load_live_module()
+
+    for nonzero in (1, "true", None):
+        for action, expected_message, failure_message in (
+            (
+                lambda: module._parse_hex_blob(
+                    "0x00",
+                    label="runtime bytecode",
+                    nonzero=nonzero,
+                ),
+                "TRON live hex nonzero must be a boolean",
+                "malformed TRON live hex nonzero control accepted",
+            ),
+            (
+                lambda: module._parse_exact_hex_blob(
+                    "0x00",
+                    label="runtime bytecode",
+                    nonzero=nonzero,
+                ),
+                "TRON live exact hex nonzero must be a boolean",
+                "malformed TRON live exact-hex nonzero control accepted",
+            ),
+            (
+                lambda: module._parse_exact_hex32_blob(
+                    "0x" + "00" * 32,
+                    label="runtime hash",
+                    nonzero=nonzero,
+                ),
+                "TRON live exact hex32 nonzero must be a boolean",
+                "malformed TRON live exact-hex32 nonzero control accepted",
+            ),
+            (
+                lambda: module._parse_hex32_blob(
+                    "0x" + "00" * 32,
+                    label="runtime hash",
+                    nonzero=nonzero,
+                ),
+                "TRON live hex32 nonzero must be a boolean",
+                "malformed TRON live hex32 nonzero control accepted",
+            ),
+            (
+                lambda: module._optional_hex_blob_arg(
+                    SimpleNamespace(runtime_bytecode="0x00"),
+                    "runtime_bytecode",
+                    nonzero=nonzero,
+                ),
+                "TRON live optional hex nonzero must be a boolean",
+                "malformed TRON live optional-hex nonzero control accepted",
+            ),
+        ):
+            try:
+                action()
+            except ValueError as exc:
+                assert str(exc) == expected_message
+            else:
+                raise AssertionError(failure_message)
+
+
+def test_tron_live_boolean_controls_reject_non_booleans():
+    module = load_live_module()
+
+    for control in (1, "true", None):
+        for action, expected_message, failure_message in (
+            (
+                lambda: module._tron_block_header_raw_data_bytes(
+                    {},
+                    tx_trie_root_nonzero=control,
+                ),
+                "TRON block header txTrieRoot nonzero must be a boolean",
+                "malformed TRON block header txTrieRoot nonzero control accepted",
+            ),
+            (
+                lambda: module._parse_solid_block_header(
+                    {},
+                    label="solid block",
+                    expected_block_number=1,
+                    tx_trie_root_nonzero=control,
+                ),
+                "TRON block header txTrieRoot nonzero must be a boolean",
+                "malformed TRON solid block txTrieRoot nonzero control accepted",
+            ),
+            (
+                lambda: module._validate_route_allowlist_hash(
+                    supplied_hash=bytes.fromhex("11" * 32),
+                    route_canary_evidence_hash=None,
+                    source_records={},
+                    destination_verifier={},
+                    destination_binding_pinned=control,
+                ),
+                "TRON route allowlist destination_binding_pinned must be a boolean",
+                "malformed TRON route allowlist destination-binding pin accepted",
+            ),
+            (
+                lambda: module._runtime_bool_arg(
+                    SimpleNamespace(),
+                    "solid",
+                    default=control,
+                ),
+                "TRON runtime boolean default must be a boolean",
+                "malformed TRON runtime boolean default accepted",
+            ),
+        ):
+            try:
+                action()
+            except ValueError as exc:
+                assert str(exc) == expected_message
+            else:
+                raise AssertionError(failure_message)
 
 
 def test_witness_schedule_transition_json_rejects_duplicate_keys(tmp_path):
@@ -1846,6 +2023,110 @@ def test_live_tron_address_payload_parser_rejects_all_zero_base58check():
         raise AssertionError("zero TRON payload was encoded")
 
 
+def test_live_tron_collectors_reject_malformed_contract_metadata_gate_before_rpc():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    def forbidden_opener(_request, timeout):
+        del timeout
+        raise AssertionError("TRON API was called before metadata gate validation")
+
+    for include_contract_metadata in (1, "true", None):
+        try:
+            module.collect_source_bridge_evidence(
+                "https://tron.example",
+                source_bridge_address=fake.bridge,
+                caller_address=None,
+                tron_pro_api_key=None,
+                constant_endpoint="wallet/triggerconstantcontract",
+                include_contract_metadata=include_contract_metadata,
+                opener=forbidden_opener,
+                timeout=1.0,
+            )
+        except ValueError as exc:
+            assert str(exc) == "include_contract_metadata must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed TRON source metadata collection gate was accepted"
+            )
+
+        try:
+            module.collect_destination_verifier_evidence(
+                "https://tron.example",
+                destination_verifier_address=fake.destination,
+                caller_address=None,
+                tron_pro_api_key=None,
+                constant_endpoint="wallet/triggerconstantcontract",
+                include_contract_metadata=include_contract_metadata,
+                opener=forbidden_opener,
+                timeout=1.0,
+            )
+        except ValueError as exc:
+            assert str(exc) == "include_contract_metadata must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed TRON destination metadata collection gate was accepted"
+            )
+
+
+def test_live_tron_witness_schedule_mismatch_gate_rejects_non_booleans():
+    """Witness schedule mismatch policy must not accept truthy aliases."""
+
+    module = load_live_module()
+
+    for allow_expected_mismatch in (1, "true", None):
+        try:
+            module._source_event_witness_schedule_summary(
+                None,
+                child_witness_address=b"\x41" + bytes.fromhex("11" * 20),
+                parent_witness_address=b"\x41" + bytes.fromhex("22" * 20),
+                expected_schedule_hash=bytes.fromhex("33" * 32),
+                allow_expected_mismatch=allow_expected_mismatch,
+            )
+        except ValueError as exc:
+            assert str(exc) == "allow_expected_mismatch must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed TRON witness schedule mismatch gate was accepted"
+            )
+
+
+def test_live_tron_collect_rejects_malformed_runtime_booleans_before_rpc():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    def forbidden_opener(_request, timeout):
+        del timeout
+        raise AssertionError("TRON API was called before runtime boolean validation")
+
+    base = {
+        "tron_node_url": "https://tron.example",
+        "source_bridge_address": fake.bridge,
+        "destination_verifier_address": None,
+        "caller_address": None,
+        "no_getcontract": False,
+        "full_toml": False,
+        "solid": False,
+        "timeout": 1.0,
+        "tron_pro_api_key": None,
+        "tron_pro_api_key_file": None,
+    }
+
+    for flag in ("no_getcontract", "solid", "full_toml"):
+        for value in (1, "true", None):
+            args = dict(base)
+            args[flag] = value
+            try:
+                module.collect_live_evidence(
+                    SimpleNamespace(**args),
+                    opener=forbidden_opener,
+                )
+            except ValueError as exc:
+                assert str(exc) == f"--{flag.replace('_', '-')} must be true or false"
+            else:
+                raise AssertionError(f"malformed TRON runtime boolean {flag} was accepted")
+
+
 def test_live_evidence_collects_source_destination_and_offline_args():
     module = load_live_module()
     destination_runtime_bytecode = bytes.fromhex("6003600055")
@@ -2452,7 +2733,13 @@ def test_live_evidence_redacts_source_event_topic_parser_failures(monkeypatch):
             "secret-token source-event log data parser detail",
         ),
     ):
-        for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
 
             def fail_source_event_prefilter(
                 value,
@@ -2627,7 +2914,13 @@ def test_live_evidence_source_event_result_bytes_require_success(monkeypatch):
         )
         is False
     )
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_varint(_data, _cursor, *, label, exception_type=exception_type):
             raise exception_type(
@@ -5244,7 +5537,11 @@ def test_live_evidence_blocks_witness_schedule_total_weight_overflow():
         "witness schedule payload is invalid"
     )
     rendered = json.dumps(summary, sort_keys=True)
-    assert "witness schedule payload total weight must fit u64" not in rendered
+    assert (
+        "witness schedule payload total weight must fit u64" not in rendered
+    ), "TRON witness total-weight overflow detail leaked"
+    assert "total weight must fit" not in rendered
+    assert "18446744073709551615" not in rendered
 
 
 def test_live_evidence_blocks_duplicate_witness_schedule_address():
@@ -5284,7 +5581,11 @@ def test_live_evidence_blocks_duplicate_witness_schedule_address():
         "witness schedule payload is invalid"
     )
     rendered = json.dumps(summary, sort_keys=True)
-    assert "witness schedule payload witness 1 must be unique" not in rendered
+    assert (
+        "witness schedule payload witness 1 must be unique" not in rendered
+    ), "TRON duplicate witness schedule detail leaked"
+    assert "must be unique" not in rendered
+    assert "witness 1" not in rendered
 
 
 def test_live_evidence_rejects_block_witness_not_in_schedule():
@@ -8451,12 +8752,12 @@ def test_tron_route_canary_evidence_hash_rejects_invalid_transcript_fields():
     }
     assert isinstance(module._tron_route_canary_transaction_evidence_hash(**base), bytes)
 
-    def assert_hash_rejects(field, value, expected):
+    def assert_hash_rejects(field, value, expected, exception_type=RuntimeError):
         candidate = dict(base)
         candidate[field] = value
         try:
             module._tron_route_canary_transaction_evidence_hash(**candidate)
-        except RuntimeError as exc:
+        except exception_type as exc:
             assert expected in str(exc)
         else:
             raise AssertionError(f"{field} was accepted by the route-canary hasher")
@@ -8506,6 +8807,20 @@ def test_tron_route_canary_evidence_hash_rejects_invalid_transcript_fields():
         ("signature_recovers_to_owner", False, "signature recovery"),
     ):
         assert_hash_rejects(field, value, expected)
+
+    for field, expected in (
+        ("used_message_proof", "used_message_proof must be a boolean"),
+        (
+            "raw_data_owner_matches_transaction",
+            "raw_data_owner_matches_transaction must be a boolean",
+        ),
+        (
+            "signature_recovers_to_owner",
+            "signature_recovers_to_owner must be a boolean",
+        ),
+    ):
+        for value in (1, "true", None):
+            assert_hash_rejects(field, value, expected, exception_type=ValueError)
 
 
 def test_live_evidence_full_toml_revalidates_route_canary_destination_fields():
@@ -8676,7 +8991,13 @@ def test_live_evidence_redacts_route_canary_topic_parser_failures(monkeypatch):
             "secret-token route-canary log topic0 parser detail",
         ),
     ):
-        for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
 
             def fail_route_canary_prefilter(
                 value,

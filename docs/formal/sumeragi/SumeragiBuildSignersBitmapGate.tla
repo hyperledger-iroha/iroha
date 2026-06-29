@@ -220,9 +220,12 @@ OutOfRangeAndPaddingFiltered ==
 DuplicateSignerCollapsedExact ==
   ActualBitmap("duplicates_collapsed") = <<36>>
 
-BuildSignersBitmapExactness ==
-  /\ \A c \in Cases:
+AllBuildSignersBitmapsMatchSpec ==
+  \A c \in Cases:
     ActualBitmap(c) = SpecBitmap(c)
+
+BuildSignersBitmapExactness ==
+  /\ AllBuildSignersBitmapsMatchSpec
   /\ BitmapLengthExact
   /\ ZeroRosterAndAllocationExact
   /\ SingleSignerBitExact

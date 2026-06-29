@@ -204,7 +204,6 @@ CompactWideningAnchors ==
   /\ ActualOrder(17) = HeightViewOrder
 
 BlockMessageHeightViewSafetyAnchors ==
-  /\ SafetyFast
   /\ NoSlotProjectionAnchors
   /\ SlotProjectionAnchors
   /\ SourceSelectionAnchors

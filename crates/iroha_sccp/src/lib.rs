@@ -12758,6 +12758,54 @@ fn sccp_source_state_verifier_matches_profile(
     }
 }
 
+fn sccp_source_verifier_profile_template_for_domain(
+    source_domain: u32,
+) -> Option<SccpSourceVerifierMaterialV1> {
+    match source_domain {
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
+            sccp_evm_family_mainnet_source_verifier_material_v1(source_domain)
+        }
+        SCCP_DOMAIN_SOL => sccp_solana_mainnet_source_verifier_material_v1(),
+        SCCP_DOMAIN_TON => sccp_ton_mainnet_source_verifier_material_v1(),
+        SCCP_DOMAIN_TRON => sccp_tron_mainnet_source_verifier_material_v1(),
+        _ => None,
+    }
+}
+
+fn sccp_source_verifier_template_component_hashes(
+    template: &SccpSourceVerifierMaterialV1,
+) -> [H256; 8] {
+    [
+        template.source_trust_anchor_hash,
+        template.consensus_verifier_hash,
+        template.message_inclusion_verifier_hash,
+        template.finality_policy_hash,
+        template.source_state_verifier_hash,
+        template.source_bridge_emitter_code_hash,
+        template.source_bridge_network_id,
+        template.source_bridge_config_hash,
+    ]
+}
+
+fn sccp_hash_reuses_template_source_verifier_component(
+    hash: &H256,
+    template: &SccpSourceVerifierMaterialV1,
+) -> bool {
+    h256_is_nonzero(hash)
+        && sccp_source_verifier_template_component_hashes(template)
+            .iter()
+            .any(|template_hash| h256_is_nonzero(template_hash) && template_hash == hash)
+}
+
+fn sccp_source_verifier_hashes_reuse_template_components(
+    hashes: &[H256],
+    template: &SccpSourceVerifierMaterialV1,
+) -> bool {
+    hashes
+        .iter()
+        .any(|hash| sccp_hash_reuses_template_source_verifier_component(hash, template))
+}
+
 fn sccp_source_verifier_deployed_role_hashes_are_valid(
     template: &SccpSourceVerifierMaterialV1,
     source_trust_anchor_hash: H256,
@@ -12775,10 +12823,7 @@ fn sccp_source_verifier_deployed_role_hashes_are_valid(
         && h256_is_nonzero(&consensus_verifier_hash)
         && h256_is_nonzero(&message_inclusion_verifier_hash)
         && h256_is_nonzero(&finality_policy_hash)
-        && source_trust_anchor_hash != template.source_trust_anchor_hash
-        && consensus_verifier_hash != template.consensus_verifier_hash
-        && message_inclusion_verifier_hash != template.message_inclusion_verifier_hash
-        && finality_policy_hash != template.finality_policy_hash
+        && !sccp_source_verifier_hashes_reuse_template_components(&role_hashes, template)
         && sccp_nonzero_h256_values_are_pairwise_distinct(&role_hashes)
 }
 
@@ -12786,7 +12831,12 @@ fn sccp_deployed_hash_is_distinct_from_material_roles(
     hash: &H256,
     material: &SccpSourceVerifierMaterialV1,
 ) -> bool {
+    let reuses_template_component = sccp_source_verifier_profile_template_for_domain(
+        material.source_domain,
+    )
+    .is_some_and(|template| sccp_hash_reuses_template_source_verifier_component(hash, &template));
     h256_is_nonzero(hash)
+        && !reuses_template_component
         && *hash != material.source_trust_anchor_hash
         && *hash != material.consensus_verifier_hash
         && *hash != material.message_inclusion_verifier_hash
@@ -13053,6 +13103,28 @@ pub fn sccp_source_verifier_material_uses_builtin_placeholder_components(
         || material.finality_policy_hash == placeholder.finality_policy_hash
 }
 
+fn sccp_source_verifier_material_reuses_profile_template_component_hashes(
+    material: &SccpSourceVerifierMaterialV1,
+) -> bool {
+    let Some(template) = sccp_source_verifier_profile_template_for_domain(material.source_domain)
+    else {
+        return true;
+    };
+    sccp_source_verifier_hashes_reuse_template_components(
+        &[
+            material.source_trust_anchor_hash,
+            material.consensus_verifier_hash,
+            material.message_inclusion_verifier_hash,
+            material.finality_policy_hash,
+            material.source_state_verifier_hash,
+            material.source_bridge_emitter_code_hash,
+            material.source_bridge_network_id,
+            material.source_bridge_config_hash,
+        ],
+        &template,
+    )
+}
+
 fn sccp_source_verifier_material_matches_profile_template_with_deployed_hashes(
     material: &SccpSourceVerifierMaterialV1,
     template: &SccpSourceVerifierMaterialV1,
@@ -13077,15 +13149,7 @@ fn sccp_source_verifier_material_matches_profile_template_with_deployed_hashes(
 fn sccp_source_verifier_material_matches_domain_profile(
     material: &SccpSourceVerifierMaterialV1,
 ) -> bool {
-    let template = match material.source_domain {
-        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
-            sccp_evm_family_mainnet_source_verifier_material_v1(material.source_domain)
-        }
-        SCCP_DOMAIN_SOL => sccp_solana_mainnet_source_verifier_material_v1(),
-        SCCP_DOMAIN_TON => sccp_ton_mainnet_source_verifier_material_v1(),
-        SCCP_DOMAIN_TRON => sccp_tron_mainnet_source_verifier_material_v1(),
-        _ => None,
-    };
+    let template = sccp_source_verifier_profile_template_for_domain(material.source_domain);
     let Some(template) = template else {
         return false;
     };
@@ -13098,6 +13162,7 @@ pub fn sccp_source_verifier_material_is_production_ready(
     material.version == 1
         && !material.placeholder_material
         && !sccp_source_verifier_material_uses_builtin_placeholder_components(material)
+        && !sccp_source_verifier_material_reuses_profile_template_component_hashes(material)
         && sccp_source_verifier_material_matches_domain_profile(material)
         && sccp_source_state_verifier_is_production_ready(material)
         && sccp_source_bridge_emitter_binding_is_production_ready(material)
@@ -66332,6 +66397,17 @@ mod tests {
         assert!(
             sccp_evm_family_mainnet_source_verifier_material_with_hashes_v1(
                 source_domain,
+                template.consensus_verifier_hash,
+                deployed_hashes[1],
+                deployed_hashes[2],
+                deployed_hashes[3],
+            )
+            .is_none(),
+            "EVM-family source material constructors must reject cross-role template hash replay"
+        );
+        assert!(
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_v1(
+                source_domain,
                 deployed_hashes[1],
                 deployed_hashes[1],
                 deployed_hashes[2],
@@ -66380,6 +66456,19 @@ mod tests {
             .is_none(),
             "EVM-family source material must not reuse verifier role hashes as source bridge code hashes"
         );
+        assert!(
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                source_domain,
+                deployed_hashes[0],
+                deployed_hashes[1],
+                deployed_hashes[2],
+                deployed_hashes[3],
+                sample_evm_message_emitter_address(source_domain),
+                template.consensus_verifier_hash,
+            )
+            .is_none(),
+            "EVM-family source bridge code hashes must not replay template verifier hashes"
+        );
 
         let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
             source_domain,
@@ -66400,6 +66489,12 @@ mod tests {
         assert!(
             !sccp_source_verifier_material_is_production_ready(&reused_source_bridge_hash),
             "EVM-family source bridge code hashes must stay separated from verifier role hashes"
+        );
+        let mut cross_role_template_hash = material.clone();
+        cross_role_template_hash.source_trust_anchor_hash = template.consensus_verifier_hash;
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&cross_role_template_hash),
+            "EVM-family production readiness must reject cross-role template hash replay"
         );
         assert_eq!(
             material.source_bridge_emitter_id,
@@ -66770,6 +66865,16 @@ mod tests {
         );
         assert!(
             sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
+                template.consensus_verifier_hash,
+                [0xB2; 32],
+                [0xC3; 32],
+                [0xD4; 32],
+            )
+            .is_none(),
+            "Solana source material constructors must reject cross-role template hash replay"
+        );
+        assert!(
+            sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
                 [0xB2; 32], [0xB2; 32], [0xC3; 32], [0xD4; 32],
             )
             .is_none(),
@@ -66796,6 +66901,17 @@ mod tests {
             )
             .is_none(),
             "Solana source material constructors must reject template AccountsDB verifier hashes"
+        );
+        assert!(
+            sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+                sample_solana_vote_roster_hash(),
+                [0xB2; 32],
+                [0xC3; 32],
+                template.consensus_verifier_hash,
+                [0xD4; 32],
+            )
+            .is_none(),
+            "Solana source material constructors must reject cross-role template AccountsDB hash replay"
         );
         assert!(
             sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
@@ -66845,6 +66961,12 @@ mod tests {
             &template_consensus_hash
         ));
 
+        let mut cross_role_template_hash = material.clone();
+        cross_role_template_hash.source_trust_anchor_hash = template.consensus_verifier_hash;
+        assert!(!sccp_source_verifier_material_is_production_ready(
+            &cross_role_template_hash
+        ));
+
         let mut zero_inclusion_hash = material.clone();
         zero_inclusion_hash.message_inclusion_verifier_hash = [0u8; 32];
         assert!(!sccp_source_verifier_material_is_production_ready(
@@ -66869,6 +66991,13 @@ mod tests {
         template_accounts_db_hash.source_state_verifier_hash = template.source_state_verifier_hash;
         assert!(!sccp_source_verifier_material_is_production_ready(
             &template_accounts_db_hash
+        ));
+
+        let mut cross_role_template_accounts_db_hash = material.clone();
+        cross_role_template_accounts_db_hash.source_state_verifier_hash =
+            template.consensus_verifier_hash;
+        assert!(!sccp_source_verifier_material_is_production_ready(
+            &cross_role_template_accounts_db_hash
         ));
 
         let mut template_policy_hash = material;
@@ -68070,6 +68199,16 @@ mod tests {
         );
         assert!(
             sccp_ton_mainnet_source_verifier_material_with_hashes_v1(
+                template.consensus_verifier_hash,
+                [0x22; 32],
+                [0x23; 32],
+                [0x24; 32],
+            )
+            .is_none(),
+            "TON source material constructors must reject cross-role template hash replay"
+        );
+        assert!(
+            sccp_ton_mainnet_source_verifier_material_with_hashes_v1(
                 [0x22; 32], [0x22; 32], [0x23; 32], [0x24; 32],
             )
             .is_none(),
@@ -68096,6 +68235,17 @@ mod tests {
             )
             .is_none(),
             "TON source material constructors must reject template shard-state verifier hashes"
+        );
+        assert!(
+            sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
+                sample_ton_validator_set_hash(),
+                [0x22; 32],
+                [0x23; 32],
+                template.consensus_verifier_hash,
+                [0x24; 32],
+            )
+            .is_none(),
+            "TON source material constructors must reject cross-role template shard-state hash replay"
         );
         assert!(
             sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
@@ -68151,6 +68301,12 @@ mod tests {
             &template_consensus_hash
         ));
 
+        let mut cross_role_template_hash = material.clone();
+        cross_role_template_hash.source_trust_anchor_hash = template.consensus_verifier_hash;
+        assert!(!sccp_source_verifier_material_is_production_ready(
+            &cross_role_template_hash
+        ));
+
         let mut zero_inclusion_hash = material.clone();
         zero_inclusion_hash.message_inclusion_verifier_hash = [0u8; 32];
         assert!(!sccp_source_verifier_material_is_production_ready(
@@ -68161,6 +68317,13 @@ mod tests {
         template_source_state_hash.source_state_verifier_hash = template.source_state_verifier_hash;
         assert!(!sccp_source_verifier_material_is_production_ready(
             &template_source_state_hash
+        ));
+
+        let mut cross_role_template_source_state_hash = material.clone();
+        cross_role_template_source_state_hash.source_state_verifier_hash =
+            template.consensus_verifier_hash;
+        assert!(!sccp_source_verifier_material_is_production_ready(
+            &cross_role_template_source_state_hash
         ));
 
         let mut zero_source_state_hash = material.clone();
@@ -68918,6 +69081,16 @@ mod tests {
         );
         assert!(
             sccp_tron_mainnet_source_verifier_material_with_hashes_v1(
+                template.consensus_verifier_hash,
+                [0x32; 32],
+                [0x33; 32],
+                [0x34; 32],
+            )
+            .is_none(),
+            "TRON source material constructors must reject cross-role template hash replay"
+        );
+        assert!(
+            sccp_tron_mainnet_source_verifier_material_with_hashes_v1(
                 [0x32; 32], [0x32; 32], [0x33; 32], [0x34; 32],
             )
             .is_none(),
@@ -68964,6 +69137,21 @@ mod tests {
             )
             .is_none(),
             "TRON source material must not reuse verifier role hashes as source bridge code hashes"
+        );
+        assert!(
+            sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                sample_tron_witness_schedule_hash(),
+                [0x32; 32],
+                [0x33; 32],
+                sample_tron_message_emitter_address(),
+                template.consensus_verifier_hash,
+                sample_tron_source_bridge_network_id(),
+                sample_tron_source_bridge_owner_address(),
+                sample_tron_source_bridge_config_hash(),
+                [0x34; 32],
+            )
+            .is_none(),
+            "TRON source bridge code hashes must not replay template verifier hashes"
         );
         assert!(
             sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
@@ -69103,6 +69291,19 @@ mod tests {
         assert!(
             !sccp_source_verifier_material_is_production_ready(&reused_bridge_hash),
             "TRON source bridge code hashes must stay separated from finality role hashes"
+        );
+        let mut cross_role_template_hash = material.clone();
+        cross_role_template_hash.source_trust_anchor_hash = template.consensus_verifier_hash;
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&cross_role_template_hash),
+            "TRON production readiness must reject cross-role template hash replay"
+        );
+        let mut cross_role_template_bridge_hash = material.clone();
+        cross_role_template_bridge_hash.source_bridge_emitter_code_hash =
+            template.consensus_verifier_hash;
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&cross_role_template_bridge_hash),
+            "TRON production readiness must reject source-bridge template hash replay"
         );
         let mut reused_owner_material = material.clone();
         reused_owner_material.source_bridge_owner_address =

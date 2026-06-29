@@ -58,6 +58,7 @@ import {
   isCanonicalBscProductionArtifactPath,
   isSmokeFixtureGroth16VerifierMaterial,
   normalizeBscRpcUrl,
+  parseBoolean,
   parseJsonWithoutDuplicateKeys,
   normalizeVerifierMaterial,
   unsafeSecretReason,
@@ -76,6 +77,25 @@ const HASH_55 = `0x${"55".repeat(32)}`;
 const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
 const HASH_88 = `0x${"88".repeat(32)}`;
+const malformedBooleanOptionValues = Object.freeze([
+  " TRUE",
+  "true ",
+  "false ",
+  "TRUE",
+  "False",
+  "1",
+  "0",
+  "yes",
+  "on",
+  "",
+  null,
+  true,
+  false,
+  1,
+  0,
+  new String("true"),
+  Object.freeze({ toString: () => "true" }),
+]);
 const TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY = AccountAddress.fromAccount({
   publicKey: Buffer.from(
     "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -2216,6 +2236,99 @@ test("BSC route-manifest command binds deployment evidence and TAIRA burn-record
   );
 });
 
+test("BSC route-manifest command rejects output path collisions with inputs before writing artifacts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-collision-"));
+  try {
+    const evidencePath = join(dir, "deployment.evidence.json");
+    const contractPath = join(dir, "burn-record.contract.json");
+    const liveEvidencePath = join(dir, "live.evidence.json");
+    const fullTomlEvidencePath = join(dir, "full-toml.evidence.json");
+    const bundlePath = join(dir, "native-prover-bundle.json");
+    const destinationSidecarPath = join(dir, "destination-browser-prover.json");
+    const sourceSidecarPath = join(dir, "source-browser-prover.json");
+    const inputTexts = new Map([
+      [evidencePath, "sentinel:bsc-deployment-evidence\n"],
+      [contractPath, "sentinel:taira-contract\n"],
+      [liveEvidencePath, "sentinel:bsc-live-evidence\n"],
+      [fullTomlEvidencePath, "sentinel:bsc-full-toml-evidence\n"],
+      [bundlePath, "sentinel:bsc-native-prover-bundle\n"],
+      [destinationSidecarPath, "sentinel:bsc-destination-browser-prover\n"],
+      [sourceSidecarPath, "sentinel:bsc-source-browser-prover\n"],
+    ]);
+    for (const [path, text] of inputTexts.entries()) {
+      await writeFile(path, text);
+    }
+
+    const baseArgs = [
+      "route-manifest",
+      "--evidence",
+      evidencePath,
+      "--taira-contract",
+      contractPath,
+      "--live-evidence",
+      liveEvidencePath,
+      "--offline-full-toml-evidence",
+      fullTomlEvidencePath,
+      "--native-prover-bundle",
+      bundlePath,
+      "--destination-browser-prover-manifest",
+      destinationSidecarPath,
+      "--source-browser-prover-manifest",
+      sourceSidecarPath,
+      "--settlement-asset-definition-id",
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "--proof-artifact-hash",
+      HASH_44,
+      "--proving-key-hash",
+      HASH_55,
+    ];
+
+    const assertCollisionRejected = async (outPath, expected) => {
+      await assert.rejects(
+        () => main([...baseArgs, "--out", outPath]),
+        (error) => {
+          assert.match(error.message, expected);
+          return true;
+        },
+      );
+      for (const [path, text] of inputTexts.entries()) {
+        assert.equal(await readFile(path, "utf8"), text);
+      }
+    };
+
+    await assertCollisionRejected(
+      evidencePath,
+      /--out must not be the same path as --evidence/u,
+    );
+    await assertCollisionRejected(
+      contractPath,
+      /--out must not be the same path as --taira-contract/u,
+    );
+    await assertCollisionRejected(
+      liveEvidencePath,
+      /--out must not be the same path as --live-evidence/u,
+    );
+    await assertCollisionRejected(
+      fullTomlEvidencePath,
+      /--out must not be the same path as --offline-full-toml-evidence/u,
+    );
+    await assertCollisionRejected(
+      bundlePath,
+      /--out must not be the same path as --native-prover-bundle/u,
+    );
+    await assertCollisionRejected(
+      destinationSidecarPath,
+      /--out must not be the same path as --destination-browser-prover-manifest/u,
+    );
+    await assertCollisionRejected(
+      sourceSidecarPath,
+      /--out must not be the same path as --source-browser-prover-manifest/u,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("BSC publish-route-manifest records default gas limit in transaction metadata and evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-route-"));
   const manifestPath = join(dir, "route.manifest.json");
@@ -2457,6 +2570,9 @@ test("BSC publish-route-manifest supports explicit gas limit and rejects invalid
     assert.equal(calls.buildTransaction[0].metadata.gas_limit, 3_000_000);
 
     for (const badGasLimit of ["0", "-1", "2.5", "abc"]) {
+      const badOut = join(dir, `route.bad-${badGasLimit}.json`);
+      const badOutSentinel = `sentinel:route-bad-gas:${badGasLimit}\n`;
+      await writeFile(badOut, badOutSentinel);
       await assert.rejects(
         () =>
           main([
@@ -2464,7 +2580,7 @@ test("BSC publish-route-manifest supports explicit gas limit and rejects invalid
             "--manifest",
             manifestPath,
             "--out",
-            join(dir, `route.bad-${badGasLimit}.json`),
+            badOut,
             "--submit",
             "true",
             "--authority",
@@ -2478,10 +2594,261 @@ test("BSC publish-route-manifest supports explicit gas limit and rejects invalid
           ]),
         /--gas-limit must be a positive safe integer/u,
       );
+      assert.equal(await readFile(badOut, "utf8"), badOutSentinel);
     }
     assert.equal(calls.buildTransaction.length, 1);
     assert.equal(calls.fetch.length, 1);
   });
+});
+
+test("BSC publish commands reject malformed submit metadata before writing artifacts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-submit-metadata-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const templatePath = join(dir, "burn-record-vk.template.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    templatePath,
+    `${JSON.stringify(burnRecordVkTemplate(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const cases = [
+      {
+        command: [
+          "publish-route-manifest",
+          "--manifest",
+          manifestPath,
+          "--submit",
+          "true",
+          "--private-key-env",
+          privateKeyEnv,
+          "--wait-for-commit",
+          "false",
+        ],
+        out: join(dir, "route-missing-authority.json"),
+        sentinel: "sentinel:route-missing-authority\n",
+        pattern: /--authority is required/u,
+      },
+      {
+        command: [
+          "publish-burn-record-vk",
+          "--route-manifest",
+          manifestPath,
+          "--vk-template",
+          templatePath,
+          "--submit",
+          "true",
+          "--private-key-env",
+          privateKeyEnv,
+          "--wait-for-commit",
+          "false",
+        ],
+        out: join(dir, "vk-missing-authority.json"),
+        sentinel: "sentinel:vk-missing-authority\n",
+        pattern: /--authority is required/u,
+      },
+      {
+        command: [
+          "publish-burn-record-vk",
+          "--route-manifest",
+          manifestPath,
+          "--vk-template",
+          templatePath,
+          "--submit",
+          "true",
+          "--authority",
+          TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+          "--private-key-env",
+          privateKeyEnv,
+          "--gas-limit",
+          "0",
+          "--wait-for-commit",
+          "false",
+        ],
+        out: join(dir, "vk-bad-gas.json"),
+        sentinel: "sentinel:vk-bad-gas\n",
+        pattern: /--gas-limit must be a positive safe integer/u,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await writeFile(testCase.out, testCase.sentinel);
+      await assert.rejects(
+        () => main([...testCase.command, "--out", testCase.out]),
+        testCase.pattern,
+      );
+      assert.equal(await readFile(testCase.out, "utf8"), testCase.sentinel);
+    }
+    assert.equal(calls.buildTransaction.length, 0);
+    assert.equal(calls.fetch.length, 0);
+  });
+});
+
+test("BSC publish commands reject malformed submit booleans before writing or signing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-booleans-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const templatePath = join(dir, "burn-record-vk.template.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    templatePath,
+    `${JSON.stringify(burnRecordVkTemplate(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const malformedCliBooleans = malformedBooleanOptionValues.filter(
+      (value) => typeof value === "string" && value !== "",
+    );
+    for (const [index, value] of malformedCliBooleans.entries()) {
+      const routeSubmitOut = join(dir, `route-submit-${index}.json`);
+      const routeWaitOut = join(dir, `route-wait-${index}.json`);
+      const vkSubmitOut = join(dir, `vk-submit-${index}.json`);
+      const vkWaitOut = join(dir, `vk-wait-${index}.json`);
+      const routeSubmitSentinel = `sentinel:route-submit:${index}\n`;
+      const routeWaitSentinel = `sentinel:route-wait:${index}\n`;
+      const vkSubmitSentinel = `sentinel:vk-submit:${index}\n`;
+      const vkWaitSentinel = `sentinel:vk-wait:${index}\n`;
+      await writeFile(routeSubmitOut, routeSubmitSentinel);
+      await writeFile(routeWaitOut, routeWaitSentinel);
+      await writeFile(vkSubmitOut, vkSubmitSentinel);
+      await writeFile(vkWaitOut, vkWaitSentinel);
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            routeSubmitOut,
+            "--submit",
+            value,
+          ]),
+        /--submit must be true or false/u,
+      );
+      await assert.rejects(
+        () =>
+          main([
+            "publish-route-manifest",
+            "--manifest",
+            manifestPath,
+            "--out",
+            routeWaitOut,
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--wait-for-commit",
+            value,
+          ]),
+        /--wait-for-commit must be true or false/u,
+      );
+      await assert.rejects(
+        () =>
+          main([
+            "publish-burn-record-vk",
+            "--route-manifest",
+            manifestPath,
+            "--vk-template",
+            templatePath,
+            "--out",
+            vkSubmitOut,
+            "--submit",
+            value,
+          ]),
+        /--submit must be true or false/u,
+      );
+      await assert.rejects(
+        () =>
+          main([
+            "publish-burn-record-vk",
+            "--route-manifest",
+            manifestPath,
+            "--vk-template",
+            templatePath,
+            "--out",
+            vkWaitOut,
+            "--submit",
+            "true",
+            "--authority",
+            TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+            "--private-key-env",
+            privateKeyEnv,
+            "--wait-for-commit",
+            value,
+          ]),
+        /--wait-for-commit must be true or false/u,
+      );
+      assert.equal(await readFile(routeSubmitOut, "utf8"), routeSubmitSentinel);
+      assert.equal(await readFile(routeWaitOut, "utf8"), routeWaitSentinel);
+      assert.equal(await readFile(vkSubmitOut, "utf8"), vkSubmitSentinel);
+      assert.equal(await readFile(vkWaitOut, "utf8"), vkWaitSentinel);
+    }
+    assert.equal(calls.buildTransaction.length, 0);
+    assert.equal(calls.fetch.length, 0);
+  });
+});
+
+test("BSC publish commands reject output path collisions before writing artifacts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-collision-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const templatePath = join(dir, "burn-record-vk.template.json");
+  const manifestText = `${JSON.stringify(routeManifest(), null, 2)}\n`;
+  const templateText = `${JSON.stringify(burnRecordVkTemplate(), null, 2)}\n`;
+  await writeFile(manifestPath, manifestText);
+  await writeFile(templatePath, templateText);
+
+  await assert.rejects(
+    () =>
+      main([
+        "publish-route-manifest",
+        "--manifest",
+        manifestPath,
+        "--out",
+        manifestPath,
+      ]),
+    /--out must not be the same path as --manifest/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(templatePath, "utf8"), templateText);
+
+  await assert.rejects(
+    () =>
+      main([
+        "publish-burn-record-vk",
+        "--route-manifest",
+        manifestPath,
+        "--vk-template",
+        templatePath,
+        "--out",
+        manifestPath,
+      ]),
+    /--out must not be the same path as --route-manifest/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(templatePath, "utf8"), templateText);
+
+  await assert.rejects(
+    () =>
+      main([
+        "publish-burn-record-vk",
+        "--route-manifest",
+        manifestPath,
+        "--vk-template",
+        templatePath,
+        "--out",
+        templatePath,
+      ]),
+    /--out must not be the same path as --vk-template/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(templatePath, "utf8"), templateText);
 });
 
 test("BSC publish-burn-record-vk submits a locally signed transaction with gas metadata", async () => {
@@ -2884,6 +3251,125 @@ test("BSC route-manifest command builds production-ready manifests only with bou
       ]),
     /production-ready BSC route manifests require --offline-full-toml-evidence/u,
   );
+});
+
+test("BSC route-manifest readiness booleans reject malformed option values before writing artifacts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-booleans-"));
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const mainnetEvidencePath = join(dir, "mainnet-deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const fullTomlEvidencePath = join(dir, "full-config.evidence.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  const mainnetBindingHash = bscDestinationBindingHash({
+    networkId: BSC_MAINNET_NETWORK_ID_HEX,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+  });
+  const mainnetEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    bscNetwork: "mainnet",
+    readback: readyReadback({
+      chainIdHex: "0x38",
+      bridgeDestinationBindingHash: mainnetBindingHash,
+      bridgeNetworkId: BSC_MAINNET_NETWORK_ID_HEX,
+    }),
+    compiledContractCodeHashes: compiledContractCodeHashes(),
+  });
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    mainnetEvidencePath,
+    `${JSON.stringify(mainnetEvidence, null, 2)}\n`,
+  );
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(
+    fullTomlEvidencePath,
+    `${JSON.stringify(offlineFullTomlEvidence(), null, 2)}\n`,
+  );
+  const routeArgs = [
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+  ];
+  const mainnetRouteArgs = [
+    "route-manifest",
+    "--bsc-network",
+    "mainnet",
+    "--evidence",
+    mainnetEvidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--production-ready",
+    "true",
+    "--confirm-network",
+    "taira_bsc_xor",
+  ];
+  const malformedCliBooleans = malformedBooleanOptionValues.filter(
+    (value) => typeof value === "string" && value !== "",
+  );
+  const malformedRouteBooleanCases = [
+    {
+      flag: "production-ready",
+      args: routeArgs,
+      expected: /--production-ready must be true or false/u,
+    },
+    {
+      flag: "live-readback-checked",
+      args: routeArgs,
+      expected: /--live-readback-checked must be true or false/u,
+    },
+    {
+      flag: "full-toml-ready",
+      args: [
+        ...routeArgs,
+        "--offline-full-toml-evidence",
+        fullTomlEvidencePath,
+      ],
+      expected: /--full-toml-ready must be true or false/u,
+    },
+    {
+      flag: "confirm-mainnet",
+      args: mainnetRouteArgs,
+      expected: /--confirm-mainnet must be true or false/u,
+    },
+  ];
+
+  for (const { flag, args, expected } of malformedRouteBooleanCases) {
+    for (const [index, value] of malformedCliBooleans.entries()) {
+      const out = join(dir, `${flag}-${index}.route.manifest.json`);
+      const sentinel = `sentinel:${flag}:${index}\n`;
+      await writeFile(out, sentinel);
+      await assert.rejects(
+        () => main([...args, `--${flag}`, value, "--out", out]),
+        expected,
+      );
+      assert.equal(await readFile(out, "utf8"), sentinel);
+    }
+  }
 });
 
 test("BSC native EVM prover bundle rejects legacy fixture parity artifact aliases", () => {
@@ -5118,7 +5604,7 @@ test("BSC route-config refuses allow-unready for production-ready manifests", ()
 
 test("BSC route-config rejects malformed allow-unready option values", () => {
   const manifest = productionReadyRouteManifest();
-  for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0]) {
+  for (const value of malformedBooleanOptionValues) {
     assert.throws(
       () =>
         buildBscTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
@@ -5132,6 +5618,130 @@ test("BSC route-config rejects malformed allow-unready option values", () => {
           { "allow-unready": value },
         ),
       /--allow-unready must be true or false/u,
+    );
+  }
+});
+
+test("BSC route-config CLI rejects malformed allow-unready before writing artifacts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-boolean-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
+  );
+  const malformedCliBooleans = malformedBooleanOptionValues.filter(
+    (value) => typeof value === "string" && value !== "",
+  );
+
+  for (const [index, value] of malformedCliBooleans.entries()) {
+    const out = join(dir, `route-${index}.toml`);
+    const sentinel = `sentinel:bsc-route-config:${index}\n`;
+    await writeFile(out, sentinel);
+    await assert.rejects(
+      () =>
+        main([
+          "route-config",
+          "--manifest",
+          manifestPath,
+          "--out",
+          out,
+          "--allow-unready",
+          value,
+        ]),
+      /--allow-unready must be true or false/u,
+    );
+    assert.equal(await readFile(out, "utf8"), sentinel);
+  }
+});
+
+test("BSC route-config command rejects route output path collisions with inputs before writing artifacts", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-output-collision-"),
+  );
+  const manifestPath = join(dir, "route.manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const manifestText = `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`;
+  const baseConfigText = [
+    "[network]",
+    'address = "127.0.0.1:1337"',
+    'operator_marker = "base-config-input-must-survive"',
+    "",
+    "[torii]",
+    'address = "127.0.0.1:8080"',
+    "",
+  ].join("\n");
+  await writeFile(manifestPath, manifestText);
+  await writeFile(baseConfigPath, baseConfigText);
+
+  const routeOutputCollisionArgs = (outPath) => [
+    "route-config",
+    "--manifest",
+    manifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    outPath,
+  ];
+
+  await assert.rejects(
+    () => main(routeOutputCollisionArgs(manifestPath)),
+    /--out must not be the same path as --manifest/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+
+  await assert.rejects(
+    () => main(routeOutputCollisionArgs(baseConfigPath)),
+    /--out must not be the same path as --base-config/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+});
+
+test("BSC route-config command rejects route output path collisions before reading inputs", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-preread-collision-"),
+  );
+  const manifestPath = join(dir, "malformed-route.manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const manifestSentinel = "{ sentinel:bsc-route-config-malformed-manifest\n";
+  const baseConfigSentinel = "sentinel:bsc-route-config-base-input\n";
+  await writeFile(manifestPath, manifestSentinel);
+  await writeFile(baseConfigPath, baseConfigSentinel);
+
+  const routeOutputCollisionArgs = (outPath) => [
+    "route-config",
+    "--manifest",
+    manifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    outPath,
+  ];
+
+  await assert.rejects(
+    () => main(routeOutputCollisionArgs(manifestPath)),
+    /--out must not be the same path as --manifest/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestSentinel);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigSentinel);
+
+  await assert.rejects(
+    () => main(routeOutputCollisionArgs(baseConfigPath)),
+    /--out must not be the same path as --base-config/u,
+  );
+  assert.equal(await readFile(manifestPath, "utf8"), manifestSentinel);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigSentinel);
+});
+
+test("BSC boolean parser rejects malformed direct option values", () => {
+  assert.equal(parseBoolean(undefined, "--broadcast"), false);
+  assert.equal(parseBoolean("true", "--broadcast"), true);
+  assert.equal(parseBoolean("false", "--broadcast"), false);
+  for (const value of malformedBooleanOptionValues) {
+    assert.throws(
+      () => parseBoolean(value, "--broadcast"),
+      /--broadcast must be true or false/u,
     );
   }
 });
@@ -7632,6 +8242,71 @@ test("BSC native-prover-bundle validates attached manifest output before writing
   );
 });
 
+test("BSC native-prover-bundle rejects output path collisions before writing artifacts", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const collisionOut = join(fixture.workDir, "bundle-or-manifest.json");
+  const collisionSentinel = "sentinel: native bundle output collision\n";
+  const proofArtifactPath = join(fixture.artifactRoot, "proof-artifact.r1cs");
+  const auditArtifactPath = join(fixture.artifactRoot, "circuit-security-attestation.json");
+  const proofArtifactBytes = await readFile(proofArtifactPath);
+  const auditArtifactBytes = await readFile(auditArtifactPath);
+  const routeManifestText = await readFile(fixture.routeManifestPath, "utf8");
+  await writeFile(collisionOut, collisionSentinel);
+
+  const commandArgs = (extraArgs) => [
+    "native-prover-bundle",
+    ...Object.entries(fixture.options).flatMap(([key, value]) => [
+      `--${key}`,
+      value,
+    ]),
+    ...extraArgs,
+  ];
+
+  await assert.rejects(
+    () =>
+      main(
+        commandArgs([
+          "--out",
+          collisionOut,
+          "--attach-route-manifest-out",
+          collisionOut,
+        ]),
+      ),
+    /--attach-route-manifest-out must not be the same path as --out/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  await assert.rejects(
+    () => main(commandArgs(["--out", fixture.routeManifestPath])),
+    /--out must not be the same path as --route-manifest/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  await assert.rejects(
+    () => main(commandArgs(["--out", proofArtifactPath])),
+    /--out must not be the same path as --proof-artifact/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+
+  await assert.rejects(
+    () => main(commandArgs(["--out", auditArtifactPath])),
+    /--out must not be the same path as --audit-circuit-security/u,
+  );
+  assert.equal(await readFile(collisionOut, "utf8"), collisionSentinel);
+  assert.equal(await readFile(fixture.routeManifestPath, "utf8"), routeManifestText);
+  assert.deepEqual(await readFile(proofArtifactPath), proofArtifactBytes);
+  assert.deepEqual(await readFile(auditArtifactPath), auditArtifactBytes);
+});
+
 test("BSC native-prover-bundle rejects duplicate JSON keys in route manifests", async () => {
   const fixture = await writeNativeProverFixtureFiles();
   const duplicateRouteManifestPath = join(
@@ -8579,8 +9254,20 @@ test("BSC route-config refuses production-ready diagnostic verifier manifests", 
 test("BSC route-config refuses production-ready manifests with handoff placeholders", () => {
   const cases = [
     [
-      { operatorNote: "TODO replace verifier material before launch" },
+      { operatorNote: "placeholder verifier material must be replaced before launch" },
       /placeholder handoff material.*route manifest\.operatorNote/u,
+    ],
+    [
+      { operatorChecklist: ["to-do verifier handoff before launch"] },
+      /placeholder handoff material.*route manifest\.operatorChecklist\[0\]/u,
+    ],
+    [
+      { operatorChecklist: ["to_do verifier handoff before launch"] },
+      /placeholder handoff material.*route manifest\.operatorChecklist\[0\]/u,
+    ],
+    [
+      { operatorChecklist: ["to do verifier handoff before launch"] },
+      /placeholder handoff material.*route manifest\.operatorChecklist\[0\]/u,
     ],
     [
       {
@@ -8592,11 +9279,27 @@ test("BSC route-config refuses production-ready manifests with handoff placehold
     ],
     [
       {
+        postDeployLiveEvidence: {
+          launchChecklist: ["dummy verifier evidence must not ship"],
+        },
+      },
+      /placeholder handoff material.*route manifest\.postDeployLiveEvidence\.launchChecklist\[0\]/u,
+    ],
+    [
+      {
         destinationRollout: {
           replaceMeVerifierKeyHash: HASH_22,
         },
       },
       /placeholder handoff material.*route manifest\.destinationRollout\.replaceMeVerifierKeyHash/u,
+    ],
+    [
+      {
+        destinationRollout: {
+          yourVerifierMaterial: HASH_33,
+        },
+      },
+      /placeholder handoff material.*route manifest\.destinationRollout\.yourVerifierMaterial/u,
     ],
   ];
   for (const [overrides, pattern] of cases) {
@@ -8632,7 +9335,7 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       canonicalEvidencePath,
       {
         ...cleanEvidence,
-        operatorNote: "TODO replace verifier material before launch",
+        operatorNote: "placeholder verifier material must be replaced before launch",
       },
       "BSC deployment evidence",
     ).join(" "),
@@ -8690,7 +9393,7 @@ test("BSC canonical production output guard rejects diagnostic or draft material
     bscCanonicalProductionOutputProblems(
       `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-route.manifest.json`,
       productionReadyRouteManifest({
-        operatorNote: "TODO replace verifier material before launch",
+        operatorNote: "placeholder verifier material must be replaced before launch",
       }),
       "BSC route manifest",
     ).join(" "),
@@ -9495,6 +10198,65 @@ test("BSC route-config command refuses offline full TOML evidence without full c
   );
 });
 
+test("BSC route-config command rejects offline full TOML evidence output collisions before writing artifacts", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-evidence-collision-"),
+  );
+  const manifestPath = join(dir, "manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const out = join(dir, "full-config.toml");
+  const manifestText = `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`;
+  const baseConfigText = [
+    "[network]",
+    'address = "127.0.0.1:1337"',
+    'operator_marker = "base-config-must-not-be-replaced"',
+    "",
+    "[torii]",
+    'address = "127.0.0.1:8080"',
+    "",
+  ].join("\n");
+  const outSentinel = "sentinel: pre-existing route config\n";
+  await writeFile(manifestPath, manifestText);
+  await writeFile(baseConfigPath, baseConfigText);
+  await writeFile(out, outSentinel);
+
+  const args = (evidenceOut) => [
+    "route-config",
+    "--manifest",
+    manifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    out,
+    "--write-offline-full-toml-evidence",
+    evidenceOut,
+  ];
+
+  await assert.rejects(
+    () => main(args(out)),
+    /--write-offline-full-toml-evidence must not be the same path as --out/u,
+  );
+  assert.equal(await readFile(out, "utf8"), outSentinel);
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+
+  await assert.rejects(
+    () => main(args(manifestPath)),
+    /--write-offline-full-toml-evidence must not be the same path as --manifest/u,
+  );
+  assert.equal(await readFile(out, "utf8"), outSentinel);
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+
+  await assert.rejects(
+    () => main(args(baseConfigPath)),
+    /--write-offline-full-toml-evidence must not be the same path as --base-config/u,
+  );
+  assert.equal(await readFile(out, "utf8"), outSentinel);
+  assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+  assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+});
+
 test("BSC route-config command validates canonical offline evidence before writing route TOML", async () => {
   const dir = await mkdtemp(
     join(tmpdir(), "iroha-bsc-route-config-partial-evidence-"),
@@ -9667,6 +10429,34 @@ test("BSC deploy command refuses to broadcast without explicit testnet confirmat
       ]),
     /confirm-testnet/u,
   );
+});
+
+test("BSC deploy command rejects output path collisions before verifier parsing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-output-collision-"));
+  try {
+    const verifierFile = join(dir, "verifier.json");
+    const verifierText = "sentinel:bsc-verifier-material\n";
+    await writeFile(verifierFile, verifierText);
+
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          verifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+          "--out",
+          verifierFile,
+        ]),
+      /--out must not be the same path as --verifier/u,
+    );
+    assert.equal(await readFile(verifierFile, "utf8"), verifierText);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("BSC deploy command rejects malformed boolean switches before network use", async () => {

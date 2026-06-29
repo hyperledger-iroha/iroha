@@ -289,7 +289,7 @@ const PLACEHOLDER_BURN_RECORD_TEXT_PATTERN =
 const PRODUCTION_EVIDENCE_FORBIDDEN_WORDS =
   /\b(?:diagnostic|fixture|mock|placeholder|sample|stub|test-fixture|test-only)\b/iu;
 const PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN =
-  /(?:change[-_ ]?me|changeme|dummy|example|mock|placeholder|replace[-_ ]?me|sample|stub|test[-_ ]?only|fixture[-_ ]?only|todo|your[-_ ]?[a-z0-9_-]*)/iu;
+  /(?:change[-_ ]?me|changeme|dummy|example|mock|placeholder|replace[-_ ]?me|sample|stub|test[-_ ]?only|fixture[-_ ]?only|to[\s._-]*do|your[-_ ]?[a-z0-9_-]*)/iu;
 const DIAGNOSTIC_TEXT_KEYS = [
   "schema",
   "warning",
@@ -922,8 +922,8 @@ function parseArgs(argv) {
   return args;
 }
 
-function parseBoolean(value, label = "boolean option") {
-  if (value === undefined || value === null || value === "") return false;
+export function parseBoolean(value, label = "boolean option") {
+  if (value === undefined) return false;
   if (value === "true") return true;
   if (value === "false") return false;
   throw new Error(`${label} must be true or false.`);
@@ -3549,6 +3549,12 @@ function assertBscCanonicalProductionOutputSafe(pathName, value, label) {
   }
 }
 
+function assertDistinctResolvedPaths(leftPath, leftLabel, rightPath, rightLabel) {
+  if (resolve(leftPath) === resolve(rightPath)) {
+    throw new Error(`${leftLabel} must not be the same path as ${rightLabel}.`);
+  }
+}
+
 function normalizeNonEmptyText(value, label) {
   const normalized = trim(value);
   if (!normalized) {
@@ -3871,7 +3877,7 @@ function normalizePositiveSafeInteger(value, label, fallback = undefined) {
 
 function optionEnabled(options, key, fallback = false) {
   const value = ownValue(options, key);
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined) {
     return fallback;
   }
   if (value === "true") return true;
@@ -5721,14 +5727,14 @@ function assertProductionAuditHashLiteral(value, label) {
 async function normalizeAuditHashOrFile(root, value, label, options = {}) {
   const text = normalizeNonEmptyText(value, label);
   if (/^(?:0x)?[0-9a-f]{64}$/iu.test(text)) {
-    return assertProductionAuditHashLiteral(text, label);
+    return { sha256: assertProductionAuditHashLiteral(text, label), artifact: null };
   }
   if (text.startsWith("0x")) {
     throw new Error(`${label} must be a 32-byte hex hash or artifact file.`);
   }
   const artifact = await readArtifactUnderRoot(root, text, label);
   options.validateArtifact?.(artifact);
-  return artifact.sha256;
+  return { sha256: artifact.sha256, artifact };
 }
 
 async function readNativeProverAuditHashes(
@@ -5737,6 +5743,7 @@ async function readNativeProverAuditHashes(
   { parityFixture, selfTestFixture, profile, sdkArtifacts } = {},
 ) {
   const entries = [];
+  const artifacts = [];
   for (const [key, optionNames] of Object.entries(
     NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS,
   )) {
@@ -5773,12 +5780,15 @@ async function readNativeProverAuditHashes(
             : null,
       },
     );
-    if (derived && normalized !== derived) {
+    if (derived && normalized.sha256 !== derived) {
       throw new Error(`auditHashes.${key} must match the artifact sha256.`);
     }
-    entries.push([key, normalized]);
+    entries.push([key, normalized.sha256]);
+    if (normalized.artifact) {
+      artifacts.push({ ...normalized.artifact, auditKey: key });
+    }
   }
-  return Object.fromEntries(entries);
+  return { hashes: Object.fromEntries(entries), artifacts };
 }
 
 function extractBscBundleRouteBinding(record, label) {
@@ -10086,12 +10096,13 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
       verifierKey,
       verifierMaterial,
     });
-  const auditHashes = await readNativeProverAuditHashes(root, options, {
+  const auditMaterial = await readNativeProverAuditHashes(root, options, {
     parityFixture,
     selfTestFixture,
     profile,
     sdkArtifacts,
   });
+  const auditHashes = auditMaterial.hashes;
   requireNativeProverAuditHashesBindGroth16Material(
     auditHashes,
     groth16MaterialManifest,
@@ -10178,6 +10189,7 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
       parityFixture,
       selfTestFixture,
       sdkArtifacts,
+      auditArtifacts: auditMaterial.artifacts,
     },
     verifiedSdks,
     attachedRouteManifest:
@@ -13805,6 +13817,8 @@ async function commandDeploy(options) {
   if (!options.verifier) {
     throw new Error("deploy requires --verifier <verifier-key.json>.");
   }
+  const out = resolve(options.out ?? defaultDeploymentEvidenceOut(profile));
+  assertDistinctResolvedPaths(out, "--out", options.verifier, "--verifier");
   const allowDiagnosticVerifier = parseBoolean(
     options["allow-diagnostic-verifier"],
     "--allow-diagnostic-verifier",
@@ -13926,7 +13940,6 @@ async function commandDeploy(options) {
     ),
     bscNetwork: profile.key,
   });
-  const out = resolve(options.out ?? defaultDeploymentEvidenceOut(profile));
   assertBscCanonicalProductionOutputSafe(
     out,
     evidence,
@@ -14008,7 +14021,92 @@ async function commandEvidence(options) {
   };
 }
 
+function bscRouteManifestOutputPathEntries(options) {
+  const explicitOut = ownValue(options, "out");
+  if (explicitOut !== undefined && explicitOut !== null && trim(explicitOut) !== "") {
+    return [{ path: explicitOut, label: "--out" }];
+  }
+
+  const defaults = new Map();
+  for (const profile of Object.values(BSC_NETWORK_PROFILES)) {
+    const outputPath = defaultRouteManifestOut(profile);
+    defaults.set(resolve(outputPath), outputPath);
+  }
+  return [...defaults.values()].map((path) => ({
+    path,
+    label: "default --out",
+  }));
+}
+
+function pushBscRouteManifestInputPath(entries, value, label) {
+  if (value !== undefined && value !== null && trim(value) !== "") {
+    entries.push({ path: value, label });
+  }
+}
+
+function pushBscRouteManifestInputOptionPaths(entries, options, keys) {
+  for (const key of keys) {
+    pushBscRouteManifestInputPath(entries, ownValue(options, key), `--${key}`);
+  }
+}
+
+function bscRouteManifestInputPathEntries(options) {
+  const entries = [];
+  const evidenceKeys = ["evidence", "deployment-evidence"];
+  const hasEvidenceInput = evidenceKeys.some(
+    (key) =>
+      ownValue(options, key) !== undefined &&
+      ownValue(options, key) !== null &&
+      trim(ownValue(options, key)) !== "",
+  );
+  if (hasEvidenceInput) {
+    pushBscRouteManifestInputOptionPaths(entries, options, evidenceKeys);
+  } else {
+    entries.push({ path: DEFAULT_EVIDENCE_OUT, label: "--evidence" });
+  }
+
+  pushBscRouteManifestInputPath(
+    entries,
+    ownValue(options, "taira-contract") ?? DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT,
+    "--taira-contract",
+  );
+  pushBscRouteManifestInputPath(
+    entries,
+    ownValue(options, "live-evidence"),
+    "--live-evidence",
+  );
+  pushBscRouteManifestInputPath(
+    entries,
+    ownValue(options, "offline-full-toml-evidence"),
+    "--offline-full-toml-evidence",
+  );
+  pushBscRouteManifestInputOptionPaths(entries, options, [
+    "native-prover-bundle",
+    "native-evm-prover-bundle",
+    "bsc-native-prover-bundle",
+    "bsc-native-evm-prover-bundle",
+  ]);
+  pushBscRouteManifestInputOptionPaths(entries, options, [
+    "destination-browser-prover-manifest",
+    "destinationBrowserProverManifest",
+    "destination-prover-manifest",
+    "source-browser-prover-manifest",
+    "sourceBrowserProverManifest",
+    "source-prover-manifest",
+  ]);
+  return entries;
+}
+
+function assertBscRouteManifestOutputPathsDistinct(options) {
+  for (const output of bscRouteManifestOutputPathEntries(options)) {
+    for (const input of bscRouteManifestInputPathEntries(options)) {
+      assertDistinctResolvedPaths(output.path, output.label, input.path, input.label);
+    }
+  }
+}
+
 async function commandRouteManifest(options) {
+  assertBscRouteManifestOutputPathsDistinct(options);
   const evidence = await readJson(
     options.evidence ?? options["deployment-evidence"] ?? DEFAULT_EVIDENCE_OUT,
     "BSC deployment evidence",
@@ -14070,12 +14168,18 @@ async function commandRouteConfig(options) {
   const manifestPath = normalizeBscRouteManifestPath(
     options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
   );
+  const baseConfigPath = options["base-config"] ?? null;
+  if (options.out !== undefined) {
+    assertDistinctResolvedPaths(options.out, "--out", manifestPath, "--manifest");
+    if (baseConfigPath) {
+      assertDistinctResolvedPaths(options.out, "--out", baseConfigPath, "--base-config");
+    }
+  }
   const manifest = await readJson(manifestPath, "BSC route manifest");
   const profile =
     BSC_NETWORK_PROFILES[
       readFirstValue(manifest, "bscNetwork", "bsc_network", "network")
     ] ?? BSC_NETWORK_PROFILES.testnet;
-  const baseConfigPath = options["base-config"] ?? null;
   const toml = baseConfigPath
     ? buildMergedBscTairaXorRouteConfigToml(
         await readText(baseConfigPath, "base TAIRA config"),
@@ -14087,6 +14191,10 @@ async function commandRouteConfig(options) {
     options.out ??
     defaultRouteConfigOut(profile, { fullConfigMode: Boolean(baseConfigPath) });
   const out = resolve(outPath);
+  assertDistinctResolvedPaths(out, "--out", manifestPath, "--manifest");
+  if (baseConfigPath) {
+    assertDistinctResolvedPaths(out, "--out", baseConfigPath, "--base-config");
+  }
   assertBscCanonicalProductionOutputSafe(
     out,
     manifest,
@@ -14113,6 +14221,24 @@ async function commandRouteConfig(options) {
       options["write-offline-full-toml-evidence"] === "true"
         ? defaultRouteFullConfigEvidenceOut(profile)
         : options["write-offline-full-toml-evidence"],
+    );
+    assertDistinctResolvedPaths(
+      offlineFullTomlEvidenceOut,
+      "--write-offline-full-toml-evidence",
+      out,
+      "--out",
+    );
+    assertDistinctResolvedPaths(
+      offlineFullTomlEvidenceOut,
+      "--write-offline-full-toml-evidence",
+      manifestPath,
+      "--manifest",
+    );
+    assertDistinctResolvedPaths(
+      offlineFullTomlEvidenceOut,
+      "--write-offline-full-toml-evidence",
+      baseConfigPath,
+      "--base-config",
     );
     const manifestReferencePath = generatedEvidenceReferencePath(
       manifestPath,
@@ -14289,6 +14415,10 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
 }
 
 async function commandPublishRouteManifest(options) {
+  const submit = optionEnabled(options, "submit", false);
+  const waitForCommit = submit
+    ? optionEnabled(options, "wait-for-commit", true)
+    : true;
   const manifestPath = normalizeBscRouteManifestPath(
     options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
   );
@@ -14312,10 +14442,10 @@ async function commandPublishRouteManifest(options) {
       publication.sourceBrowserProverManifestHash,
   };
   const out = resolve(options.out ?? DEFAULT_ROUTE_MANIFEST_ISI_OUT);
-  await writeJsonNoSecrets(out, artifact);
+  assertDistinctResolvedPaths(out, "--out", manifestPath, "--manifest");
 
-  const submit = optionEnabled(options, "submit", false);
   if (!submit) {
+    await writeJsonNoSecrets(out, artifact);
     return {
       ok: true,
       wrote: out,
@@ -14331,7 +14461,6 @@ async function commandPublishRouteManifest(options) {
   const authority = normalizeNonEmptyText(options.authority, "--authority");
   const chainId = normalizeTairaChainId(options["chain-id"]);
   const toriiUrl = normalizeTairaToriiUrl(options["torii-url"]);
-  const waitForCommit = optionEnabled(options, "wait-for-commit", true);
   const commitTimeoutMs = normalizePositiveSafeInteger(
     options["commit-timeout-ms"],
     "--commit-timeout-ms",
@@ -14611,6 +14740,10 @@ async function waitForBurnRecordVkRegistryEntry(toriiUrl, vk, timeoutMs) {
 }
 
 async function commandPublishBurnRecordVk(options) {
+  const submit = optionEnabled(options, "submit", false);
+  const waitForCommit = submit
+    ? optionEnabled(options, "wait-for-commit", true)
+    : true;
   const manifestPath = normalizeBscRouteManifestPath(
     options["route-manifest"] ?? options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
   );
@@ -14650,10 +14783,13 @@ async function commandPublishBurnRecordVk(options) {
     status: vk.recordInput.status,
   };
   const out = resolve(options.out ?? DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT);
-  await writeJsonNoSecrets(out, artifact);
+  const manifestInputLabel =
+    options["route-manifest"] === undefined ? "--manifest" : "--route-manifest";
+  assertDistinctResolvedPaths(out, "--out", manifestPath, manifestInputLabel);
+  assertDistinctResolvedPaths(out, "--out", templatePath, "--vk-template");
 
-  const submit = optionEnabled(options, "submit", false);
   if (!submit) {
+    await writeJsonNoSecrets(out, artifact);
     return {
       ok: true,
       wrote: out,
@@ -14670,7 +14806,6 @@ async function commandPublishBurnRecordVk(options) {
   const authority = normalizeNonEmptyText(options.authority, "--authority");
   const chainId = normalizeTairaChainId(options["chain-id"]);
   const toriiUrl = normalizeTairaToriiUrl(options["torii-url"]);
-  const waitForCommit = optionEnabled(options, "wait-for-commit", true);
   const commitTimeoutMs = normalizePositiveSafeInteger(
     options["commit-timeout-ms"],
     "--commit-timeout-ms",
@@ -14841,10 +14976,49 @@ async function commandPublishBurnRecordVk(options) {
   };
 }
 
+function bscNativeProverBundleArtifactInputEntries(result) {
+  const artifactEntries = [
+    ["--proof-artifact", result.artifacts.proofArtifact],
+    ["--proving-key", result.artifacts.provingKey],
+    ["--verifier-key", result.artifacts.verifierKey],
+    ["--groth16-material-manifest", result.artifacts.groth16MaterialManifest],
+    ["--groth16-proof-self-test", result.artifacts.groth16ProofSelfTest],
+    ["--cross-sdk-parity", result.artifacts.parityFixture],
+    ["--native-prover-self-test", result.artifacts.selfTestFixture],
+    ...result.artifacts.auditArtifacts.map((artifact) => [
+      `--${NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS[artifact.auditKey][0]}`,
+      artifact,
+    ]),
+    ...result.artifacts.sdkArtifacts.map((artifact) => [
+      `--${sdkImplementationOptionName(artifact.sdk)}`,
+      artifact,
+    ]),
+  ];
+  return artifactEntries
+    .filter(([, artifact]) => artifact?.absolutePath)
+    .map(([label, artifact]) => ({
+      label,
+      path: artifact.absolutePath,
+    }));
+}
+
 async function commandNativeProverBundle(options) {
   const result = await buildBscNativeEvmProverBundleFromArtifacts(options);
   const profile = bscProfileFromNativeEvmProverBundle(result.bundle);
   const out = resolve(options.out ?? defaultNativeEvmProverBundleOut(profile));
+  const routeSourceLabel =
+    result.routeSource.kind === "route-manifest"
+      ? "--route-manifest"
+      : "--deployment-evidence";
+  assertDistinctResolvedPaths(
+    out,
+    "--out",
+    result.routeSource.path,
+    routeSourceLabel,
+  );
+  for (const artifact of bscNativeProverBundleArtifactInputEntries(result)) {
+    assertDistinctResolvedPaths(out, "--out", artifact.path, artifact.label);
+  }
   let attachedRouteManifestOut = null;
   if (options["attach-route-manifest-out"]) {
     if (!result.attachedRouteManifest) {
@@ -14853,6 +15027,12 @@ async function commandNativeProverBundle(options) {
       );
     }
     attachedRouteManifestOut = resolve(options["attach-route-manifest-out"]);
+    assertDistinctResolvedPaths(
+      attachedRouteManifestOut,
+      "--attach-route-manifest-out",
+      out,
+      "--out",
+    );
     assertBscCanonicalProductionOutputSafe(
       attachedRouteManifestOut,
       result.attachedRouteManifest,

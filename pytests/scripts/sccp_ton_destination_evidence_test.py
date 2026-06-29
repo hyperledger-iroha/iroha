@@ -173,6 +173,43 @@ def ton_args(module):
     )
 
 
+def test_ton_destination_json_summary_rejects_non_boolean_metadata_readiness(
+    monkeypatch,
+) -> None:
+    """Destination metadata readiness helper drift must not coerce into readiness."""
+
+    module = load_evidence_module()
+    cases = (
+        (
+            "_toml_account_metadata_ready",
+            "TON destination account metadata readiness must be a boolean",
+        ),
+        (
+            "_code_boc_root_metadata_ready",
+            "TON destination code BoC root readiness must be a boolean",
+        ),
+    )
+
+    for helper_name, expected_error in cases:
+        args = ton_args(module)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_toml_account_metadata_ready", lambda _args: True)
+            patch.setattr(module, "_code_boc_root_metadata_ready", lambda _args: True)
+            patch.setattr(module, helper_name, lambda _args: "ready")
+            try:
+                module._json_summary(
+                    args,
+                    bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+                    True,
+                )
+            except ValueError as exc:
+                assert str(exc) == expected_error
+            else:
+                raise AssertionError(
+                    f"TON destination JSON summary accepted non-boolean {helper_name}"
+                )
+
+
 def test_ton_hex_parser_rejects_zero_and_wrong_width():
     module = load_evidence_module()
 
@@ -294,7 +331,13 @@ def test_ton_destination_direct_parsers_redact_parser_causes(tmp_path):
 def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token TON destination hex TypeError detail"
             if exception_type is TypeError
@@ -330,6 +373,10 @@ def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes(monkeyp
                     assert rendered == f"{label} must be hex"
                     assert "secret-token" not in rendered
                     assert exception_type.__name__ not in rendered
+                    if exception_type is module.argparse.ArgumentTypeError:
+                        assert (
+                            "ArgumentTypeError" not in rendered
+                        ), "TON destination hex ArgumentTypeError detail leaked"
                     assert exc.__cause__ is None
                     assert exc.__suppress_context__ is True
                 else:
@@ -338,12 +385,71 @@ def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes(monkeyp
                     )
 
 
+def test_ton_destination_nonzero_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="verifier code hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "TON destination fixed hex nonzero must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed TON destination fixed-hex nonzero control accepted"
+            )
+
+        try:
+            module._require_fixed_bytes(
+                bytes(32),
+                label="verifier_code_hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "TON destination fixed bytes nonzero must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed TON destination fixed-bytes nonzero control accepted"
+            )
+
+
+def test_ton_destination_boolean_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for control in (1, "true", None):
+        try:
+            module._json_summary(
+                ton_args(module),
+                bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+                control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "TON destination JSON expected_matches must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed TON destination JSON expected-matches control accepted"
+            )
+
+
 def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes(
     monkeypatch,
 ):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type(
@@ -364,6 +470,10 @@ def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes(
                 assert rendered == "code BoC must be base64 or base64url"
                 assert "secret-token" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "TON destination base64 ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -447,6 +557,44 @@ def test_ton_code_boc_inline_parsers_reject_padded_values(tmp_path):
         assert "must not contain whitespace" in str(exc)
     else:
         raise AssertionError("internally spaced TON code BoC base64 file was accepted")
+
+
+def test_ton_code_boc_file_rejects_unreadable_file_shapes(tmp_path):
+    module = load_evidence_module()
+    valid_boc = bytes.fromhex(TON_CODE_BOC_HEX)
+    outside = tmp_path / "secret-token-ton-code-outside.boc"
+    outside.write_bytes(valid_boc)
+    symlink_input = tmp_path / "secret-token-ton-code-link.boc"
+    symlink_input.symlink_to(outside)
+    directory_input = tmp_path / "secret-token-ton-code-dir.boc"
+    directory_input.mkdir()
+    real_dir = tmp_path / "real-ton-code-dir"
+    real_dir.mkdir()
+    (real_dir / "code.boc").write_bytes(valid_boc)
+    parent_link = tmp_path / "secret-token-ton-code-parent"
+    parent_link.symlink_to(real_dir, target_is_directory=True)
+    parent_symlink_input = parent_link / "code.boc"
+    missing_input = tmp_path / "secret-token-ton-code-missing.boc"
+
+    for path in (
+        symlink_input,
+        directory_input,
+        parent_symlink_input,
+        missing_input,
+    ):
+        try:
+            module.parse_code_boc_file(str(path), label="code BoC")
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            suppress_context = exc.__suppress_context__
+        else:
+            raise AssertionError("TON code BoC file shape was accepted")
+
+        assert rendered == "code BoC file cannot be read"
+        assert "secret-token" not in rendered
+        assert "IsADirectoryError" not in rendered
+        assert "FileNotFoundError" not in rendered
+        assert suppress_context is True
 
 
 def test_ton_raw_address_parser_rejects_zero_malformed_and_noncanonical():
@@ -554,6 +702,34 @@ def test_ton_last_transaction_lt_requires_canonical_ascii_decimal():
             assert "--toml requires --last-transaction-lt" in str(exc)
         else:
             raise AssertionError(f"noncanonical TON LT metadata {value!r} was accepted")
+
+
+def test_ton_route_canary_rejects_boolean_last_transaction_lt():
+    module = load_evidence_module()
+    args = ton_args(module)
+
+    try:
+        module.ton_route_canary_evidence_hash(
+            route_allowlist_hash=args.route_allowlist_hash,
+            destination_binding_hash=args.expected_destination_binding_hash,
+            source_verifier_material_hash=args.source_verifier_material_hash,
+            source_adapter_engine_deployment_hash=(
+                args.source_adapter_engine_deployment_hash
+            ),
+            verifier_contract_address=args.verifier_contract_address,
+            verifier_code_hash=args.verifier_code_hash,
+            account_status=args.account_status,
+            account_state_hash=args.account_state_hash,
+            last_transaction_lt=True,
+            last_transaction_hash=args.last_transaction_hash,
+            verifier_code_boc_root_hash=args.verifier_code_hash,
+        )
+    except ValueError as exc:
+        assert str(exc) == "last_transaction_lt must be a positive decimal"
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("boolean TON route-canary last_transaction_lt was accepted")
 
 
 def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
@@ -951,6 +1127,9 @@ def test_ton_toml_code_boc_base64_reparse_redacts_parser_detail():
         assert "must be base64" not in rendered
         assert "canonical base64" not in rendered
         assert exc.__cause__ is None
+        assert (
+            exc.__suppress_context__ is True
+        ), "TON destination code BoC metadata context leaked"
     else:
         raise AssertionError("invalid copied TON code BoC base64 evidence was accepted")
 

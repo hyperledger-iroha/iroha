@@ -197,22 +197,37 @@ ConfigOverflowSaturationAnchors ==
   /\ ActualSuspicionMs("config_overflow_cooldown") =
      InputSuspicionRaw("config_overflow_cooldown")
 
+DurationMillisMatchesSpec ==
+  \A c \in DurationCases:
+    ActualDurationMillis(c) = SpecDurationMillis(c)
+
+ConfigWindowMatchesSpec ==
+  \A c \in ConfigCases:
+    ActualWindow(c) = SpecWindow(c)
+
+ConfigSuspicionMsMatchesSpec ==
+  \A c \in ConfigCases:
+    ActualSuspicionMs(c) = SpecSuspicionMs(c)
+
+ConfigThresholdMatchesSpec ==
+  \A c \in ConfigCases:
+    ActualThreshold(c) = SpecThreshold(c)
+
+ConfigMaxTaintedMatchesSpec ==
+  \A c \in ConfigCases:
+    ActualMaxTainted(c) = SpecMaxTainted(c)
+
+ConfigCooldownMsMatchesSpec ==
+  \A c \in ConfigCases:
+    ActualCooldownMs(c) = SpecCooldownMs(c)
+
 VNextPerformanceConfigCoreSafety ==
-  /\ \A c \in DurationCases:
-       ActualDurationMillis(c) = SpecDurationMillis(c)
-  /\ \A c \in ConfigCases:
-       ActualWindow(c) = SpecWindow(c)
-  /\ \A c \in ConfigCases:
-       ActualSuspicionMs(c) = SpecSuspicionMs(c)
-  /\ \A c \in ConfigCases:
-       ActualThreshold(c) = SpecThreshold(c)
-  /\ \A c \in ConfigCases:
-       ActualMaxTainted(c) = SpecMaxTainted(c)
-  /\ \A c \in ConfigCases:
-       ActualCooldownMs(c) = SpecCooldownMs(c)
-  /\ ActualDurationMillis("duration_overflow") = MaxU64
-  /\ ActualSuspicionMs("config_overflow_suspicion") = MaxU64
-  /\ ActualCooldownMs("config_overflow_cooldown") = MaxU64
+  /\ DurationMillisMatchesSpec
+  /\ ConfigWindowMatchesSpec
+  /\ ConfigSuspicionMsMatchesSpec
+  /\ ConfigThresholdMatchesSpec
+  /\ ConfigMaxTaintedMatchesSpec
+  /\ ConfigCooldownMsMatchesSpec
   /\ DurationBounds
   /\ DurationSaturationAnchors
   /\ ConfigFieldPreservation
@@ -221,21 +236,12 @@ VNextPerformanceConfigCoreSafety ==
   /\ ConfigOverflowSaturationAnchors
 
 VNextPerformanceConfigExactness ==
-  /\ \A c \in DurationCases:
-       ActualDurationMillis(c) = SpecDurationMillis(c)
-  /\ \A c \in ConfigCases:
-       ActualWindow(c) = SpecWindow(c)
-  /\ \A c \in ConfigCases:
-       ActualSuspicionMs(c) = SpecSuspicionMs(c)
-  /\ \A c \in ConfigCases:
-       ActualThreshold(c) = SpecThreshold(c)
-  /\ \A c \in ConfigCases:
-       ActualMaxTainted(c) = SpecMaxTainted(c)
-  /\ \A c \in ConfigCases:
-       ActualCooldownMs(c) = SpecCooldownMs(c)
-  /\ ActualDurationMillis("duration_overflow") = MaxU64
-  /\ ActualSuspicionMs("config_overflow_suspicion") = MaxU64
-  /\ ActualCooldownMs("config_overflow_cooldown") = MaxU64
+  /\ DurationMillisMatchesSpec
+  /\ ConfigWindowMatchesSpec
+  /\ ConfigSuspicionMsMatchesSpec
+  /\ ConfigThresholdMatchesSpec
+  /\ ConfigMaxTaintedMatchesSpec
+  /\ ConfigCooldownMsMatchesSpec
   /\ DurationBounds
   /\ DurationSaturationAnchors
   /\ ConfigFieldPreservation

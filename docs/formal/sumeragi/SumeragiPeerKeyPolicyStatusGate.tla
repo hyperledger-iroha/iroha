@@ -391,8 +391,7 @@ SafetyAnchors ==
   /\ ResetAfterRecordsClearsAllAnchors
 
 PeerKeyPolicyStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllPeerKeyPolicyCandidatesMatchSpec
   /\ SafetyAnchors
 
 PeerKeyPolicyStatusCorrectnessEnvelope ==

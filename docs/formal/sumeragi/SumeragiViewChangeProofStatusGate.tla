@@ -327,8 +327,7 @@ SafetyAnchors ==
   /\ ResetAnchors
 
 ViewChangeProofStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllViewChangeProofCandidatesMatchSpec
   /\ SafetyAnchors
 
 ViewChangeProofStatusCorrectnessEnvelope ==
