@@ -506,7 +506,7 @@ public final class OfflineNoteWallet {
                                                   noteCommitment,
                                                   noteSecret,
                                                   origin,
-                                                  OfflineNoteWalletNoteState.SPENDABLE,
+                                                  OfflineNoteWalletNoteState.ISSUE_PENDING,
                                                   now,
                                                   now);
                                           store.upsert(note);
@@ -1164,7 +1164,8 @@ public final class OfflineNoteWallet {
   }
 
   private static boolean isPendingState(final OfflineNoteWalletNoteState state) {
-    return state == OfflineNoteWalletNoteState.REDEEM_PENDING;
+    return state == OfflineNoteWalletNoteState.ISSUE_PENDING
+        || state == OfflineNoteWalletNoteState.REDEEM_PENDING;
   }
 
   private static String walletAssetId(final String assetDefinitionId, final String accountId) {

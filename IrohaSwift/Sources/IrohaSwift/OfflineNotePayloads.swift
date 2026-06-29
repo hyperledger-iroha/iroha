@@ -1,20 +1,20 @@
 import Foundation
 
-public enum OfflineNoteCompatibilityError: Error, LocalizedError, Equatable {
+public enum OfflineNotePayloadError: Error, LocalizedError, Equatable {
     case invalidField(String)
     case invalidPayload
 
     public var errorDescription: String? {
         switch self {
         case let .invalidField(field):
-            return "Offline Note compatibility field \(field) is invalid."
+            return "Offline Note field \(field) is invalid."
         case .invalidPayload:
-            return "Offline Note compatibility payload is invalid."
+            return "Offline Note payload is invalid."
         }
     }
 }
 
-enum OfflineNoteCompatibilityTextEncoding {
+enum OfflineNoteTextPayloadEncoding {
     static func base64UrlEncode(_ data: Data) -> String {
         data.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -89,7 +89,7 @@ enum OfflineNoteCompatibilityTextEncoding {
         guard isCanonicalHashHex(value),
               let data = Data(hexString: value),
               data.count == 32 else {
-            throw OfflineNoteCompatibilityError.invalidField(field)
+            throw OfflineNotePayloadError.invalidField(field)
         }
         return data
     }
@@ -183,7 +183,7 @@ public struct OfflineCompactKeyCertificate: Codable, Equatable, Sendable {
     }
 
     public static func decodePublicKey(_ value: String) -> Data? {
-        OfflineNoteCompatibilityTextEncoding.decodeExactBase64(value)
+        OfflineNoteTextPayloadEncoding.decodeExactBase64(value)
     }
 
     public func offlineNoteKeyCertificate() throws -> OfflineNoteKeyCertificate {
@@ -193,36 +193,36 @@ public struct OfflineCompactKeyCertificate: Codable, Equatable, Sendable {
         let resolvedAssertionScheme = assertionScheme ?? defaultAssertionScheme
         let resolvedAssertionKeyAlgorithm = assertionKeyAlgorithm ?? defaultAssertionKeyAlgorithm
         guard resolvedAssertionScheme == defaultAssertionScheme else {
-            throw OfflineNoteCompatibilityError.invalidField("assertion_scheme")
+            throw OfflineNotePayloadError.invalidField("assertion_scheme")
         }
         guard resolvedAssertionKeyAlgorithm == defaultAssertionKeyAlgorithm else {
-            throw OfflineNoteCompatibilityError.invalidField("assertion_key_algorithm")
+            throw OfflineNotePayloadError.invalidField("assertion_key_algorithm")
         }
         guard appAttestPublicKeyBase64 == nil else {
-            throw OfflineNoteCompatibilityError.invalidField("app_attest_public_key_base64")
+            throw OfflineNotePayloadError.invalidField("app_attest_public_key_base64")
         }
         guard let assertionPublicKeyValue = assertionPublicKey else {
-            throw OfflineNoteCompatibilityError.invalidField("assertion_public_key")
+            throw OfflineNotePayloadError.invalidField("assertion_public_key")
         }
         guard let version = UInt16(exactly: self.version) else {
-            throw OfflineNoteCompatibilityError.invalidField("version")
+            throw OfflineNotePayloadError.invalidField("version")
         }
         guard let publicKeyData = Self.decodePublicKey(publicKey), !publicKeyData.isEmpty else {
-            throw OfflineNoteCompatibilityError.invalidField("public_key")
+            throw OfflineNotePayloadError.invalidField("public_key")
         }
         guard let assertionPublicKeyData = Self.decodePublicKey(assertionPublicKeyValue),
               !assertionPublicKeyData.isEmpty else {
-            throw OfflineNoteCompatibilityError.invalidField("assertion_public_key")
+            throw OfflineNotePayloadError.invalidField("assertion_public_key")
         }
         let usageLimit = try assertionUsageCountLimit.map { value -> UInt32 in
             guard let converted = UInt32(exactly: value) else {
-                throw OfflineNoteCompatibilityError.invalidField("assertion_usage_count_limit")
+                throw OfflineNotePayloadError.invalidField("assertion_usage_count_limit")
             }
             return converted
         }
-        guard let issuerSignature = OfflineNoteCompatibilityTextEncoding.decodeExactBase64(issuerSignatureBase64),
+        guard let issuerSignature = OfflineNoteTextPayloadEncoding.decodeExactBase64(issuerSignatureBase64),
               issuerSignature.count == 64 else {
-            throw OfflineNoteCompatibilityError.invalidField("issuer_signature_base64")
+            throw OfflineNotePayloadError.invalidField("issuer_signature_base64")
         }
         return try OfflineNoteKeyCertificate(
             version: version,
@@ -264,7 +264,7 @@ public struct OfflineCompactKeyCertificate: Codable, Equatable, Sendable {
                 OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm
             )
         default:
-            throw OfflineNoteCompatibilityError.invalidField("platform")
+            throw OfflineNotePayloadError.invalidField("platform")
         }
     }
 
@@ -317,7 +317,7 @@ public struct OfflineReceiveRequestPayload: Codable, Equatable, Sendable {
             invoiceId: invoiceId,
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
-            canonicalAmount: amount.map(OfflineNoteCompatibilityTextEncoding.canonicalAmount),
+            canonicalAmount: amount.map(OfflineNoteTextPayloadEncoding.canonicalAmount),
             recipientKeyCertificate: recipientKeyCertificate,
             generatedAtMs: generatedAtMs,
             displayTtlMs: displayTtlMs,
@@ -502,7 +502,7 @@ public struct OfflineRecursiveProof: Codable, Equatable, Sendable {
               verifierKeyId == OfflineNoteConstants.recursiveVerifierName,
               proofBackend == OfflineNoteConstants.recursiveBackend,
               !verifierKeyId.contains(":") else {
-            throw OfflineNoteCompatibilityError.invalidField("verifier_key_id")
+            throw OfflineNotePayloadError.invalidField("verifier_key_id")
         }
         self.verifierKeyBackend = verifierKeyBackend
         self.verifierKeyId = verifierKeyId
@@ -521,13 +521,13 @@ public struct OfflineRecursiveProof: Codable, Equatable, Sendable {
     }
 
     public func offlineNoteRecursiveProof() throws -> OfflineNoteRecursiveProof {
-        let publicInputsHash = try OfflineNoteCompatibilityTextEncoding.requireHashHex(
+        let publicInputsHash = try OfflineNoteTextPayloadEncoding.requireHashHex(
             publicInputsHashHex,
             field: "public_inputs_hash_hex"
         )
-        guard let proofBytes = OfflineNoteCompatibilityTextEncoding.decodeExactBase64(proofBytesBase64),
+        guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeExactBase64(proofBytesBase64),
               !proofBytes.isEmpty else {
-            throw OfflineNoteCompatibilityError.invalidField("proof_bytes_base64")
+            throw OfflineNotePayloadError.invalidField("proof_bytes_base64")
         }
         return try OfflineNoteRecursiveProof(
             verifierBackend: verifierKeyBackend,
@@ -562,11 +562,11 @@ public struct OfflinePaymentTokenInputClaim: Codable, Equatable, Sendable {
                 amount: String,
                 claimHash: String? = nil) throws {
         let canonicalAmount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        let noteCommitmentData = try OfflineNoteCompatibilityTextEncoding.requireHashHex(
+        let noteCommitmentData = try OfflineNoteTextPayloadEncoding.requireHashHex(
             noteCommitment,
             field: "note_commitment"
         )
-        let keyCertificatePayloadHashData = try OfflineNoteCompatibilityTextEncoding.requireHashHex(
+        let keyCertificatePayloadHashData = try OfflineNoteTextPayloadEncoding.requireHashHex(
             keyCertificatePayloadHash,
             field: "key_certificate_payload_hash"
         )
@@ -578,11 +578,11 @@ public struct OfflinePaymentTokenInputClaim: Codable, Equatable, Sendable {
             amount: canonicalAmount
         ).claimHash().hexLowercased()
         if let claimHash {
-            guard OfflineNoteCompatibilityTextEncoding.isCanonicalHashHex(claimHash) else {
-                throw OfflineNoteCompatibilityError.invalidField("claim_hash")
+            guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(claimHash) else {
+                throw OfflineNotePayloadError.invalidField("claim_hash")
             }
             guard claimHash == computedClaimHash else {
-                throw OfflineNoteCompatibilityError.invalidField("claim_hash")
+                throw OfflineNotePayloadError.invalidField("claim_hash")
             }
         }
         self.domain = domain
@@ -596,11 +596,11 @@ public struct OfflinePaymentTokenInputClaim: Codable, Equatable, Sendable {
     public func offlineNoteIssuedClaim() throws -> OfflineNoteIssuedClaim {
         try OfflineNoteIssuedClaim(
             domain: domain,
-            noteCommitment: OfflineNoteCompatibilityTextEncoding.requireHashHex(
+            noteCommitment: OfflineNoteTextPayloadEncoding.requireHashHex(
                 noteCommitment,
                 field: "note_commitment"
             ),
-            keyCertificatePayloadHash: OfflineNoteCompatibilityTextEncoding.requireHashHex(
+            keyCertificatePayloadHash: OfflineNoteTextPayloadEncoding.requireHashHex(
                 keyCertificatePayloadHash,
                 field: "key_certificate_payload_hash"
             ),
@@ -613,7 +613,7 @@ public struct OfflinePaymentTokenInputClaim: Codable, Equatable, Sendable {
         guard let claimHash else {
             return true
         }
-        guard OfflineNoteCompatibilityTextEncoding.isCanonicalHashHex(claimHash) else {
+        guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(claimHash) else {
             return false
         }
         return (try? offlineNoteIssuedClaim().claimHash().hexLowercased()) == claimHash
@@ -658,7 +658,7 @@ public struct OfflinePaymentTokenOutputClaim: Codable, Equatable, Sendable {
             keyCertificate: keyCertificate,
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
-            canonicalAmount: OfflineNoteCompatibilityTextEncoding.canonicalAmount(amount)
+            canonicalAmount: OfflineNoteTextPayloadEncoding.canonicalAmount(amount)
         )
     }
 
@@ -687,7 +687,7 @@ public struct OfflinePaymentTokenOutputClaim: Codable, Equatable, Sendable {
 
     public func offlineNoteAuditOutputClaim() throws -> OfflineNoteAuditOutputClaim {
         try OfflineNoteAuditOutputClaim(
-            noteCommitment: OfflineNoteCompatibilityTextEncoding.requireHashHex(
+            noteCommitment: OfflineNoteTextPayloadEncoding.requireHashHex(
                 noteCommitment,
                 field: "note_commitment"
             ),
@@ -751,8 +751,8 @@ public struct OfflinePaymentToken: Codable, Equatable, Sendable {
             senderAccountId: senderAccountId,
             recipientAccountId: recipientAccountId,
             assetDefinitionId: assetDefinitionId,
-            canonicalAmount: OfflineNoteCompatibilityTextEncoding.canonicalAmount(amount),
-            canonicalChangeAmount: OfflineNoteCompatibilityTextEncoding.canonicalAmount(changeAmount),
+            canonicalAmount: OfflineNoteTextPayloadEncoding.canonicalAmount(amount),
+            canonicalChangeAmount: OfflineNoteTextPayloadEncoding.canonicalAmount(changeAmount),
             sourceNoteCommitment: sourceNoteCommitment,
             inputNullifiers: inputNullifiers,
             inputClaims: inputClaims,
@@ -871,14 +871,14 @@ public struct OfflinePaymentToken: Codable, Equatable, Sendable {
 
     public func auditBundle() throws -> OfflineNoteAuditBundle {
         try OfflineNoteAuditBundle(
-            tokenId: OfflineNoteCompatibilityTextEncoding.requireHashHex(tokenId, field: "token_id"),
+            tokenId: OfflineNoteTextPayloadEncoding.requireHashHex(tokenId, field: "token_id"),
             senderKeyCertificate: senderKeyCertificate.offlineNoteKeyCertificate(),
             inputNullifiers: inputNullifiers.map {
-                try OfflineNoteCompatibilityTextEncoding.requireHashHex($0, field: "input_nullifier")
+                try OfflineNoteTextPayloadEncoding.requireHashHex($0, field: "input_nullifier")
             },
             inputClaims: inputClaims.map { try $0.offlineNoteIssuedClaim() },
             outputCommitments: outputCommitments.map {
-                try OfflineNoteCompatibilityTextEncoding.requireHashHex($0, field: "output_commitment")
+                try OfflineNoteTextPayloadEncoding.requireHashHex($0, field: "output_commitment")
             },
             outputClaims: outputClaims.map { try $0.offlineNoteAuditOutputClaim() },
             recursiveProof: recursiveProof.offlineNoteRecursiveProof()

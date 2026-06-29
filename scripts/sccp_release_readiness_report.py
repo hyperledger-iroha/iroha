@@ -5239,7 +5239,7 @@ def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
 
 
 def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
-    if len(tokens) != 8 or _command_token_basename(tokens[0]) != "dotnet":
+    if len(tokens) < 8 or _command_token_basename(tokens[0]) != "dotnet":
         return False
     project_fragment = next(
         (
@@ -5259,14 +5259,27 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
     )
     project_tokens = shlex.split(project_fragment)
     expected_project = project_tokens[2] if len(project_tokens) > 2 else ""
+    if tokens[1] != "test" or tokens[2] != expected_project:
+        return False
+    index = 3
+    if index < len(tokens) and tokens[index] == "--artifacts-path":
+        index += 1
+        if index >= len(tokens) or not tokens[index] or tokens[index].startswith("-"):
+            return False
+        index += 1
+    if index + 1 >= len(tokens) or tokens[index] != "--filter":
+        return False
+    if tokens[index + 1].replace("\\|", "|") != filter_fragment.replace("\\|", "|"):
+        return False
+    index += 2
+    if index < len(tokens) and tokens[index] == "-p:ProduceReferenceAssembly=false":
+        index += 1
     return (
-        tokens[1] == "test"
-        and tokens[2] == expected_project
-        and tokens[3] == "--filter"
-        and tokens[4].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
-        and tokens[5] == "--nologo"
-        and tokens[6] == "--logger"
-        and tokens[7] == "trx;LogFileName=sccp-dotnet-sdk.trx"
+        index + 2 < len(tokens)
+        and tokens[index] == "--nologo"
+        and tokens[index + 1] == "--logger"
+        and tokens[index + 2] == "trx;LogFileName=sccp-dotnet-sdk.trx"
+        and index + 3 == len(tokens)
     )
 
 
@@ -5619,7 +5632,7 @@ def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     if not _dotnet_sdk_command_matches(tokens):
         return False
     if fragment.startswith("FullyQualifiedName"):
-        return tokens[4].replace("\\|", "|") == fragment.replace("\\|", "|")
+        return _command_option_values(tokens, "--filter") == [fragment]
     if fragment.startswith("dotnet test "):
         fragment_tokens = shlex.split(fragment)
         return (

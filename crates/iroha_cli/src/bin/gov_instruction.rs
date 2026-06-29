@@ -1,6 +1,7 @@
 //! Encode governance instructions and proof-gated governance helper transactions.
 
 use std::{
+    fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -9,13 +10,16 @@ use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    client::Client,
+    client::{Client, TransactionWaitOptions, TransactionWaitTerminalStatus},
     config::{Config, LoadPath},
     data_model::{
         account::address::ChainDiscriminantGuard,
         isi::{
-            InstructionBox, bridge::RecordSccpMessage, decode_instruction_from_pair,
-            governance::RegisterCitizen, verifying_keys,
+            InstructionBox,
+            bridge::{RecordSccpMessage, SccpRouteManifest, UpsertSccpRouteManifest},
+            decode_instruction_from_pair,
+            governance::RegisterCitizen,
+            verifying_keys,
         },
         metadata::Metadata,
         name::Name,
@@ -179,6 +183,21 @@ enum Command {
         #[arg(long)]
         route_id: String,
     },
+    /// Publish an on-chain SCCP route manifest from a route upsert JSON artifact.
+    PublishSccpRouteManifest {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        gas_asset_id: Option<String>,
+        #[arg(long, default_value_t = DEFAULT_LEDGER_GAS_LIMIT)]
+        gas_limit: u64,
+        #[arg(long)]
+        expected_route_id: Option<String>,
+        #[arg(long)]
+        expected_asset_key: Option<String>,
+    },
 }
 
 fn print_tx_stdin_json(bytes: &[u8]) {
@@ -314,6 +333,52 @@ fn tx_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
     Ok(metadata)
 }
 
+fn sccp_route_manifest_value_from_artifact(
+    value: norito::json::Value,
+) -> Result<norito::json::Value> {
+    let Some(object) = value.as_object() else {
+        return Err(eyre!("SCCP route manifest artifact must be a JSON object"));
+    };
+
+    if object.contains_key("route_id") {
+        return Ok(value);
+    }
+
+    if let Some(manifest) = object.get("manifest") {
+        return Ok(manifest.clone());
+    }
+
+    let Some(instruction) = object
+        .get("instruction")
+        .and_then(norito::json::Value::as_object)
+    else {
+        return Err(eyre!(
+            "SCCP route manifest artifact must contain `route_id`, `manifest`, or `instruction.UpsertSccpRouteManifest.manifest`"
+        ));
+    };
+    let Some(upsert) = instruction
+        .get("UpsertSccpRouteManifest")
+        .and_then(norito::json::Value::as_object)
+    else {
+        return Err(eyre!(
+            "SCCP route manifest artifact missing `instruction.UpsertSccpRouteManifest`"
+        ));
+    };
+    upsert
+        .get("manifest")
+        .cloned()
+        .ok_or_else(|| eyre!("SCCP route upsert artifact missing `manifest`"))
+}
+
+fn read_sccp_route_manifest_artifact(path: &Path) -> Result<SccpRouteManifest> {
+    let raw = fs::read_to_string(path)
+        .wrap_err_with(|| format!("failed to read SCCP route manifest `{}`", path.display()))?;
+    let value: norito::json::Value =
+        norito::json::from_str(&raw).wrap_err("failed to parse SCCP route manifest JSON")?;
+    let manifest_value = sccp_route_manifest_value_from_artifact(value)?;
+    norito::json::from_value(manifest_value).wrap_err("failed to decode SCCP route manifest")
+}
+
 fn load_config(path: &Path) -> Result<Config> {
     Config::load(LoadPath::Explicit(path.to_path_buf())).map_err(|report| {
         eyre!(
@@ -380,6 +445,126 @@ fn ensure_ivm_execution_vk(
     };
     eprintln!("ivm_execution_vk_registered={hash}");
     Ok(id)
+}
+
+fn publish_sccp_route_manifest(
+    config_path: PathBuf,
+    manifest_path: PathBuf,
+    gas_asset_id: Option<String>,
+    gas_limit: u64,
+    expected_route_id: Option<String>,
+    expected_asset_key: Option<String>,
+) -> Result<()> {
+    let config = load_config(&config_path)?;
+    let client = Client::new(config.clone());
+    let manifest = read_sccp_route_manifest_artifact(&manifest_path)?;
+
+    if let Some(expected) = expected_route_id.as_deref()
+        && manifest.route_id != expected
+    {
+        return Err(eyre!(
+            "route manifest id mismatch: expected `{expected}`, found `{}`",
+            manifest.route_id
+        ));
+    }
+    if let Some(expected) = expected_asset_key.as_deref()
+        && manifest.asset_key != expected
+    {
+        return Err(eyre!(
+            "route manifest asset mismatch: expected `{expected}`, found `{}`",
+            manifest.asset_key
+        ));
+    }
+    if !manifest.production_ready {
+        return Err(eyre!(
+            "route manifest `{}` is not marked production_ready",
+            manifest.route_id
+        ));
+    }
+
+    let route_id = manifest.route_id.clone();
+    let asset_key = manifest.asset_key.clone();
+    let has_source_verifier_material = manifest.source_verifier_material.is_some();
+    let has_source_adapter_engine_deployment = manifest.source_adapter_engine_deployment.is_some();
+    let has_source_adapter_engine = manifest.source_adapter_engine.is_some();
+
+    let mut metadata = tx_metadata(gas_asset_id.as_deref(), gas_limit)?;
+    insert_string_metadata(&mut metadata, "action", "publish_sccp_route_manifest")?;
+    insert_string_metadata(&mut metadata, "route_id", route_id.clone())?;
+    insert_string_metadata(&mut metadata, "asset_key", asset_key.clone())?;
+
+    let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
+        .with_metadata(metadata)
+        .with_instructions([InstructionBox::from(UpsertSccpRouteManifest::new(manifest))]);
+    let tx = sign_governance_transaction(
+        tx,
+        &config,
+        "failed to sign SCCP route manifest upsert transaction",
+    )?;
+    let versioned_tx_bytes =
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+        &versioned_tx_bytes,
+    )
+    .wrap_err("locally encoded SCCP route manifest transaction does not decode")?;
+    let mut submit_mode = "single";
+    let tx_hash = match client.submit_transaction_blocking(&tx) {
+        Ok(hash) => hash,
+        Err(err) if err.to_string().contains("length mismatch") => {
+            let payload = client.prepare_transaction_payload(&tx);
+            let hash = payload.hash();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .wrap_err("failed to create Tokio runtime for SCCP route batch submit")?;
+            runtime
+                .block_on(client.submit_prepared_transaction_payload_batch_async(&[payload]))
+                .wrap_err(
+                    "failed to submit SCCP route manifest upsert as one-item transaction batch",
+                )?;
+            let wait = client
+                .wait_for_transaction_terminal_status(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: config.transaction_status_timeout,
+                        poll_interval: std::time::Duration::from_millis(500),
+                        terminal_statuses: vec![TransactionWaitTerminalStatus::Applied],
+                    },
+                )
+                .wrap_err("SCCP route manifest batch submit did not reach Applied status")?;
+            if wait.terminal_kind != TransactionWaitTerminalStatus::Applied.as_str() {
+                return Err(eyre!(
+                    "SCCP route manifest batch submit stopped at `{}`: {}",
+                    wait.terminal_kind,
+                    wait.summary
+                ));
+            }
+            submit_mode = "batch";
+            hash
+        }
+        Err(err) => {
+            return Err(err).wrap_err("failed to submit SCCP route manifest upsert transaction");
+        }
+    };
+
+    let mut output = norito::json::Map::new();
+    output.insert("tx_hash".to_owned(), tx_hash.to_string().into());
+    output.insert("submit_mode".to_owned(), submit_mode.into());
+    output.insert("route_id".to_owned(), route_id.into());
+    output.insert("asset_key".to_owned(), asset_key.into());
+    output.insert(
+        "source_verifier_material".to_owned(),
+        has_source_verifier_material.into(),
+    );
+    output.insert(
+        "source_adapter_engine_deployment".to_owned(),
+        has_source_adapter_engine_deployment.into(),
+    );
+    output.insert(
+        "source_adapter_engine".to_owned(),
+        has_source_adapter_engine.into(),
+    );
+    print_json_value(&norito::json::Value::Object(output))
 }
 
 fn ivm_request_value(
@@ -770,6 +955,21 @@ fn main() -> Result<()> {
             recipient,
             route_id_codec,
             route_id,
+        )?,
+        Command::PublishSccpRouteManifest {
+            config,
+            manifest,
+            gas_asset_id,
+            gas_limit,
+            expected_route_id,
+            expected_asset_key,
+        } => publish_sccp_route_manifest(
+            config,
+            manifest,
+            gas_asset_id,
+            gas_limit,
+            expected_route_id,
+            expected_asset_key,
         )?,
     }
     Ok(())

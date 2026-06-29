@@ -7034,7 +7034,7 @@ const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
 
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
-extern "system" {
+unsafe extern "system" {
     fn GetDiskFreeSpaceExW(
         lp_directory_name: *const u16,
         lp_free_bytes_available_to_caller: *mut u64,

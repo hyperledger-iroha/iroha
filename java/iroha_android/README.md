@@ -1398,12 +1398,15 @@ pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
 `AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key
 on every committed wallet-state revision and rejects app-data rollback or
-cloned preference snapshots after the old revision key has been deleted. Retired
-`spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
+cloned preference snapshots after the old revision key has been deleted.
+Wallet `load` records newly issued local notes as `ISSUE_PENDING` until sync
+observes the matching `IssueOfflineNote` commit; rejected issue outcomes cancel
+the pending note. The Java Android wallet-note JSON codec rejects retired
+`spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING` state
 wallet-note state names are rejected; first-release records must use current
-state names.
-The core module includes an in-memory store and `ToriiOfflineNoteIssuerClient`
-for body-signed key-refill in tests and JVM tooling. Retired note issue and
+state names. The core module
+includes an in-memory store and `ToriiOfflineNoteIssuerClient` for body-signed
+key-refill in tests and JVM tooling. Retired note issue and
 `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
 fail-closed historical APIs; production offline payments use Kagemusha flows.
 
@@ -1417,7 +1420,7 @@ transport
     .thenAccept(readiness -> System.out.println(readiness.offlineNote()));
 ```
 
-Legacy offline HTTP routes were removed from the public offline client surface
+Retired offline HTTP routes were removed from the public offline client surface
 so callers cannot accidentally target Torii routes that now return 404.
 
 Use `OfflineToriiClient#getOfflineReadiness()` to check whether Torii exposes the offline note

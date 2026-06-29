@@ -53,7 +53,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNote.swift \
-  IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift \
+  IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNoteInstances.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNoteRedeemPlanner.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift \

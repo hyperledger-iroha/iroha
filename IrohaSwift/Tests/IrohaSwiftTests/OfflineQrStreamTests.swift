@@ -104,7 +104,7 @@ final class OfflineQrStreamTests: XCTestCase {
         XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
     }
 
-    func testCompatibilityReceiptAckTextCodecValidatesRequiredFields() throws {
+    func testReceiptAckTextCodecValidatesRequiredFields() throws {
         let ack = OfflineReceiptAck(
             tokenId: "token-1",
             recipientAccountId: "recipient@paynet",

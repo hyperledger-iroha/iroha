@@ -533,15 +533,6 @@ struct LaneSettlementBuilder {
     source_counts: BTreeMap<AssetDefinitionId, u64>,
 }
 
-#[cfg(test)]
-fn native_amx_full_signers_bitmap(roster_len: usize) -> Vec<u8> {
-    let mut signers_bitmap = vec![0_u8; roster_len.div_ceil(8)];
-    for idx in 0..roster_len {
-        signers_bitmap[idx / 8] |= 1_u8 << (idx % 8);
-    }
-    signers_bitmap
-}
-
 fn validate_native_amx_receipt_against_plan(
     receipt: &NativeAmxReceipt,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -20487,7 +20478,7 @@ mod tests {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
 
-    fn signed_native_amx_attestation_qc(
+    fn signed_native_amx_attestation_qc_with_signer_count(
         phase: NativeAmxPhase,
         source_id: [u8; iroha_crypto::Hash::LENGTH],
         tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -20496,6 +20487,7 @@ mod tests {
         participant: crate::queue::RoutingDecision,
         block_height: u64,
         keypairs: &[KeyPair],
+        signer_count: usize,
     ) -> NativeAmxAttestationQcV1 {
         let validator_set = keypairs
             .iter()
@@ -20515,6 +20507,7 @@ mod tests {
         let preimage = body.signature_preimage();
         let signatures = keypairs
             .iter()
+            .take(signer_count)
             .map(|keypair| {
                 checked_signature(keypair.private_key(), &preimage)
                     .payload()
@@ -20524,12 +20517,16 @@ mod tests {
         let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let bls_aggregate_signature =
             bls_normal_aggregate_signatures(&signature_refs).expect("aggregate AMX signatures");
+        let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+        for idx in 0..signer_count.min(validator_set.len()) {
+            signers_bitmap[idx / 8] |= 1_u8 << (idx % 8);
+        }
         NativeAmxAttestationQcV1 {
             body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set,
-            signers_bitmap: native_amx_full_signers_bitmap(keypairs.len()),
+            signers_bitmap,
             bls_aggregate_signature,
         }
     }
@@ -20541,6 +20538,24 @@ mod tests {
         block_height: u64,
         keypairs: &[KeyPair],
     ) -> NativeAmxReceipt {
+        signed_native_amx_receipt_with_signer_count(
+            source_id,
+            tx_entrypoint_hash,
+            routing_plan,
+            block_height,
+            keypairs,
+            keypairs.len(),
+        )
+    }
+
+    fn signed_native_amx_receipt_with_signer_count(
+        source_id: [u8; iroha_crypto::Hash::LENGTH],
+        tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
+        routing_plan: &crate::queue::RoutingPlan,
+        block_height: u64,
+        keypairs: &[KeyPair],
+        signer_count: usize,
+    ) -> NativeAmxReceipt {
         let crate::queue::RoutingPlan::NativeAmx(plan) = routing_plan else {
             panic!("test expects native AMX plan");
         };
@@ -20551,7 +20566,7 @@ mod tests {
             .map(|leg| NativeAmxLegRecord {
                 lane_id: leg.route.lane_id,
                 dataspace_id: leg.route.dataspace_id,
-                prepare_qc: signed_native_amx_attestation_qc(
+                prepare_qc: signed_native_amx_attestation_qc_with_signer_count(
                     NativeAmxPhase::Prepare,
                     source_id,
                     tx_entrypoint_hash,
@@ -20560,8 +20575,9 @@ mod tests {
                     leg.route,
                     block_height,
                     keypairs,
+                    signer_count,
                 ),
-                commit_qc: signed_native_amx_attestation_qc(
+                commit_qc: signed_native_amx_attestation_qc_with_signer_count(
                     NativeAmxPhase::Commit,
                     source_id,
                     tx_entrypoint_hash,
@@ -20570,6 +20586,7 @@ mod tests {
                     leg.route,
                     block_height,
                     keypairs,
+                    signer_count,
                 ),
             })
             .collect();
@@ -20671,6 +20688,54 @@ mod tests {
                 (cbuae, NativeAmxPhase::Prepare, NativeAmxPhase::Commit)
             ]
         );
+    }
+
+    #[test]
+    fn native_amx_receipt_validation_accepts_quorum_signed_four_member_qcs() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (world, keypairs) = native_amx_test_world_with_keys();
+        let world_view = world.view();
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx_hash.as_ref());
+        let receipt = signed_native_amx_receipt_with_signer_count(
+            source_id,
+            tx.hash_as_entrypoint(),
+            &routing_plan,
+            42,
+            &keypairs,
+            3,
+        );
+
+        validate_native_amx_receipt_against_plan(
+            &receipt,
+            tx.hash_as_entrypoint(),
+            &routing_plan,
+            source_id,
+            42,
+            &dataspace_catalog,
+            &world_view,
+        )
+        .expect("3-of-4 AMX QCs should validate");
+
+        assert_eq!(receipt.legs[0].prepare_qc.validator_set.len(), 4);
+        assert_eq!(receipt.legs[0].prepare_qc.signers_bitmap, vec![0b0000_0111]);
     }
 
     #[test]

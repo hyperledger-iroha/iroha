@@ -2754,9 +2754,9 @@ pub mod concurrency {
     /// Default stack size (bytes) for prover worker threads.
     pub const PROVER_STACK_BYTES: usize = 32 * 1024 * 1024;
     /// Default stack size (bytes) for Sumeragi helper threads.
-    pub const SUMERAGI_STACK_BYTES: usize = 32 * 1024 * 1024;
+    pub const SUMERAGI_STACK_BYTES: usize = 64 * 1024 * 1024;
     /// Minimum allowed Sumeragi helper-thread stack size.
-    pub const SUMERAGI_STACK_BYTES_MIN: usize = 8 * 1024 * 1024;
+    pub const SUMERAGI_STACK_BYTES_MIN: usize = 64 * 1024 * 1024;
     /// Maximum allowed Sumeragi helper-thread stack size.
     pub const SUMERAGI_STACK_BYTES_MAX: usize = 64 * 1024 * 1024;
     /// Default guest stack size (bytes) for IVM instances.

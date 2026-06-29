@@ -169,7 +169,7 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     public static func encodeReceiveRequest(_ payload: OfflineReceiveRequestPayload) throws -> String {
-        try OfflineNoteCompatibilityTextEncoding.encodeJsonText(payload, prefix: receiveRequestPrefix)
+        try OfflineNoteTextPayloadEncoding.encodeJsonText(payload, prefix: receiveRequestPrefix)
     }
 
     public static func decodeReceiveRequest(_ value: String) throws -> OfflineNoteReceiveRequest {
@@ -180,7 +180,7 @@ public enum OfflineNoteTransferTextPayloadCodec {
         if let request = try? OfflineNoteReceiveRequestCodec.decodeText(value) {
             return OfflineReceiveRequestPayload(request: request)
         }
-        return try OfflineNoteCompatibilityTextEncoding.decodeJsonText(
+        return try OfflineNoteTextPayloadEncoding.decodeJsonText(
             OfflineReceiveRequestPayload.self,
             from: value,
             prefix: receiveRequestPrefix
@@ -192,7 +192,7 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     public static func encodePaymentToken(_ payload: OfflinePaymentToken) throws -> String {
-        try OfflineNoteCompatibilityTextEncoding.encodeJsonText(payload, prefix: paymentTokenPrefix)
+        try OfflineNoteTextPayloadEncoding.encodeJsonText(payload, prefix: paymentTokenPrefix)
     }
 
     public static func decodeNativePaymentToken(_ value: String) throws -> OfflineNotePaymentToken {
@@ -200,7 +200,7 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     public static func decodePaymentToken(_ value: String) throws -> OfflinePaymentToken {
-        try OfflineNoteCompatibilityTextEncoding.decodeJsonText(
+        try OfflineNoteTextPayloadEncoding.decodeJsonText(
             OfflinePaymentToken.self,
             from: value,
             prefix: paymentTokenPrefix
@@ -212,7 +212,7 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     public static func encodeReceiptAck(_ payload: OfflineReceiptAck) throws -> String {
-        try OfflineNoteCompatibilityTextEncoding.encodeJsonText(payload, prefix: receiptAckPrefix)
+        try OfflineNoteTextPayloadEncoding.encodeJsonText(payload, prefix: receiptAckPrefix)
     }
 
     public static func decodeNativeReceiptAck(_ value: String) throws -> OfflineNoteReceiptAck {
@@ -225,7 +225,7 @@ public enum OfflineNoteTransferTextPayloadCodec {
             try validateReceiptAckFields(receiptAck)
             return receiptAck
         }
-        let receiptAck = try OfflineNoteCompatibilityTextEncoding.decodeJsonText(
+        let receiptAck = try OfflineNoteTextPayloadEncoding.decodeJsonText(
             OfflineReceiptAck.self,
             from: value,
             prefix: receiptAckPrefix

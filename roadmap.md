@@ -11,7 +11,7 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
-- Keep mobile Kagemusha offline compatibility and issuer-refill entrypoints
+- Keep mobile Kagemusha offline payload and issuer-refill entrypoints
   fail-closed for first release: Swift external certificate JSON and
   Kotlin/JVM plus Java Android Torii issuer refill certificates must resolve to
   canonical platform assertion profiles, canonical base64 public/assertion keys,
@@ -34,11 +34,11 @@ and completed history lives in [`status.md`](./status.md).
   retired versioned prefix, and mobile route/scheme comments and diagnostics
   must use retired terminology;
   retired recursive proof JSON must carry
-  canonical base64 `proof_bytes_base64`; Swift compatibility text payload
+  canonical base64 `proof_bytes_base64`; Swift payload text
   amounts, including nested payment-token input claims decoded from JSON, must
   reject malformed amount strings instead of preserving them, and input-claim
   `claim_hash` values must match the canonical issued-claim hash; Swift
-  compatibility certificates must reject retired assertion-key aliases such as
+  compact certificates must reject retired assertion-key aliases such as
   `app_attest_public_key_base64` and require canonical
   `assertion_public_key`; Swift, Kotlin/JVM, and Java Android raw Torii
   issuer-device-binding inputs must reject retired `device_public_key` and
@@ -52,7 +52,7 @@ and completed history lives in [`status.md`](./status.md).
   device-attestation registration must expose `keyCertificatePayload()` instead
   of synthesizing unsigned all-zero-signature certificates, and the SDK parity
   guard's
-  `--negative-control-swift-offline-note-compatibility-certificate-fail-closed`
+  `--negative-control-swift-offline-note-payload-certificate-fail-closed`
   plus
   `--negative-control-swift-offline-note-v2-registration-certificate-payload`
   plus `--negative-control-swift-key-refill-attestation-alias` plus
@@ -210,7 +210,7 @@ and completed history lives in [`status.md`](./status.md).
   cloned entrypoints directly from the block instead of first materializing a
   temporary full-block requeue vector. Queue plan journal replay now streams
   frames directly into the live-record map and new journal records no longer
-  duplicate entrypoint gossip bytes in the legacy compatibility field. Startup
+  duplicate entrypoint gossip bytes in the retired duplicate field. Startup
   journal installation counts replayable records from live journal keys instead
   of materializing full records solely to compute the count, and skipped
   compaction checks use the same live-key count instead of replaying full
@@ -267,7 +267,7 @@ and completed history lives in [`status.md`](./status.md).
   `proof_backend`, plus version-2 key-certificate envelopes, are rejected by the
   parser and pinned by the Kagemusha policy guard. Torii Offline Notes and
   Offline Notes V2 issuer body-auth tests now name rejected `X-Iroha` canonical
-  auth headers directly instead of treating them as a legacy compatibility path.
+  auth headers directly instead of treating them as a retired alias path.
   SDK bundle-summary asset validation now describes lowercase `hex:` plus
   exactly 16 bytes as raw non-UUID asset bytes, not a fallback path, while
   Python append request fixtures pass the explicit aggregation output selector.
@@ -279,7 +279,7 @@ and completed history lives in [`status.md`](./status.md).
   unavailable runtime bearer-audit dispatch path, pre-existing Halo2
   proof-envelope scope, and zero-hash Offline recursive proof-admission
   wildcard rejection; the policy guard rejects stale legacy/fallback wording,
-  and the SDK README parity guard rejects stale legacy/source-compatibility
+  and the SDK README parity guard rejects stale legacy/source-alias
   wording plus old classic note/proof-generation wording around retired Offline
   Note APIs across Swift, Kotlin/JVM, Android Java, and Python README surfaces.
   The production-readiness script now describes device-lab root handling as
@@ -311,6 +311,10 @@ and completed history lives in [`status.md`](./status.md).
   when available, and otherwise return no preferred production mode. Do not
   reintroduce checked-prefold spend-mode exports, checked-prefold fallbacks, or
   single-argument capability fallbacks.
+  Offline-to-offline Kagemusha transfers remain fee-free, but chain-facing
+  shield and redeem transactions keep Nexus fees; same-asset self-redeems can
+  fund that fee from the offline balance they credit online so unfunded users
+  are not blocked when the redeemed amount covers the fee.
 - Snapshot-backed node restarts now target hash-journal validation for
   historical blocks, keeping full Kura block-body loads only for suffix replay
   and the existing latest-tip rollback repair path.
@@ -345,11 +349,24 @@ and completed history lives in [`status.md`](./status.md).
   `--negative-control-mobile-offline-note-v2-retired-instruction-aliases`
   pinning the source and rejection-test coverage.
   Telemetry must also stay first-release strict: the retired iOS App Attest
-  compatibility-signature counter is removed, and the Kagemusha policy guard's
+  retired signature counter is removed, and the Kagemusha policy guard's
   retired App Attest negative control rejects reintroducing that metric or
-  compatibility-path wording.
+  old-path wording.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- The C# SDK package release corridor now has a reusable isolated
+  package-consumer guard that installs the packed NuGet artifact, rejects
+  project-reference fallback, and runs managed API smoke checks. The C# PR
+  workflow now packs into the guarded artifact directory and runs that consumer
+  smoke after packaging. The SCCP production-corridor `dotnet-sdk` workflow
+  route now targets `windows-latest`, installs the pinned Rust `1.93.1`
+  MSVC toolchain before Rust cache restore, and uses Bash execution so it can
+  produce native `connect_norito_bridge.dll` evidence. The Windows `.NET`
+  SCCP artifact is now collected and verified on `.NET 8.0.422` / `win-x64`:
+  the bridge DLL built with a recorded SHA-256, the native loader path was
+  first in `PATH`, `dotnet test` used a Windows-local artifacts directory,
+  VSTest reported 43 SCCP tests passed with zero failures or skips, and the
+  direct TRX file plus positive byte count were validated by the corridor.
 - Nexus public-lane validator state now treats `(lane_id, validator)` storage
   keys as authoritative ownership for live rosters and staking economics:
   mismatched persisted rows are ignored or rejected across topology inference,
@@ -706,6 +723,9 @@ and completed history lives in [`status.md`](./status.md).
   nested lineage/compact artifact entries and lineage proof-log entries bound
   to freshly recomputed bundle-relative paths, SHA-256 digests, and byte sizes
   before generic manifest drift can be used as a fallback.
+  C# source-level preferred-mode selection now uses the same ABI-7
+  compact-first policy, and the 2026-06-29 Windows `.NET 8.0.422` C# pass
+  certifies the compact-first selector on `win-x64`.
 - Kagemusha JS and Python SDKs now expose deterministic ABI-7 Pallas
   open-envelope archive builders for current-hop record bundles and previous
   recursive proof bundles. Keep the Node/PyO3 native symbols, JS source/dist,
@@ -893,6 +913,16 @@ and completed history lives in [`status.md`](./status.md).
   managed decoder validates previous-proof public inputs, public-input hash, and
   proof-box metadata through the same context-scoped recursive-proof decoder as
   bundle summaries.
+  silently.
+  The 2026-06-29 Windows `.NET 8.0.422` C# pass certifies the matching exact
+  C# verify-result, lineage-witness, nested proof-metadata trailing-field,
+  bundle-summary current-note, accumulator, bundle proof-metadata, and
+  previous-proof public-input-hash diagnostics on `win-x64`, including
+  malformed numeric payloads, fixed32 field lengths, domain/checksum failures,
+  raw chain-id payloads, hop-count bounds, trailing-field rejections,
+  unsupported circuit ids, verifier/proof-box backend failures, empty proof
+  bytes, empty proof public inputs, zero public-input hashes, public-input hash
+  mismatches, and short, count-prefixed, and long hash payloads.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# current-note
   amount decoders also pin a nested `Numeric` payload with a valid
   mantissa/scale plus an extra trailing field. Editable non-C# bundle
@@ -946,10 +976,16 @@ and completed history lives in [`status.md`](./status.md).
   `ParamName` for lineage, relationship, fixed32, and decimal-vector rejects
   through the shared `AssertArgumentDiagnostic` helper.
   The non-C# redeem change-output reserved-collision guard now mutates each
+  mutation. C# source-level bundle-summary preflight now also exposes
+  `TopupAnchorNullifiers` as defensive-copy metadata and rejects change outputs
+  that reuse the current note commitment, current note spend nullifier, or any
+  top-up anchor nullifier before native dispatch; the SDK parity guard mutates
+  those C# source/test markers with the other SDK reserved-collision checks.
+  The SDK redeem change-output reserved-collision guard now mutates each
   JavaScript source/dist/declaration, package-dist, Python, Swift, Kotlin/JVM,
-  and Android Java marker independently, restoring every surface and printing
-  exact diagnostics so top-up anchor collision coverage cannot be hidden by a
-  broad aggregate failure.
+  Android Java, and C# marker independently, restoring every surface and
+  printing exact diagnostics so top-up anchor collision coverage cannot be
+  hidden by a broad aggregate failure.
   The top-up anchor nullifier invariant guard now does the same for every
   case-label, diagnostic, precedence, and implementation marker across the
   non-C# SDKs, while preserving replace-all mutation for repeated labels and
@@ -1027,21 +1063,24 @@ and completed history lives in [`status.md`](./status.md).
   the control reports first-line diagnostics for every mutated
   SDK/package-dist surface in both the missing-record and dangling-record
   snapshots so partial drift remains visible in CI logs.
-  Non-C# typed redeem request constructors now decode lineage-witness previous
+  SDK typed redeem request constructors now decode lineage-witness previous
   proof summaries for semantic final bundles: witnesses with prior
   Reserved-lineage recursive proofs require `lineage_verifier_record`, while
   init-only or absent lineage witnesses reject dangling records. Native/core
   still owns full record-backed lineage-witness replay and metadata validation.
-  Those non-C# lineage-witness preflights now also reject
+  Those lineage-witness preflights now also reject
   `previous_recursive_proofs` count prefixes above the compact-token hop limit
   before attempting to read proof elements, with raw count-prefix-only vectors
-  pinned by
-  `--negative-control-non-csharp-lineage-witness-count-prefix-prechecks`.
+  pinned by `--negative-control-sdk-lineage-witness-count-prefix-prechecks`.
   Non-C# typed init and append request constructors now also match the
   JVM/Android Pallas preflight: they parse the record-bundle hop count, require
   current-hop Pallas open-envelope vectors to contain exactly one valid envelope
   per hop, and require Reserved-lineage append `previous_proof_open_envelopes`
-  to contain exactly one bounded Pallas envelope before native dispatch.
+  to contain exactly one bounded Pallas envelope before native dispatch. C#
+  source-level record-bundle entrypoints now also parse the record-bundle
+  `steps` count prefix and reject counts above the compact-token hop limit
+  before native dispatch, with raw count-prefix-only vectors pinned by
+  `--negative-control-sdk-record-bundle-fold-step-count-prechecks`.
   Those preflights also reject stale fixed-array encodings, trailing bytes,
   declared option lengths that exceed the supplied payload, and unknown option
   tags for Pallas `vk_commitment`,
@@ -1153,6 +1192,36 @@ and completed history lives in [`status.md`](./status.md).
   dispatch. The xUnit vectors use the ABI-7 aggregation append fixture, and the
   SDK append output/previous-material negative controls mutate the C# markers
   alongside the other SDK surfaces.
+  C# source-level redeem metadata-bound request paths now have matching
+  semantic lineage-witness summary negatives and previous recursive proof
+  count-prefix over-limit rejection, certified by the 2026-06-29 Windows
+  `.NET 8.0.422` C# pass. C# source-level record-bundle `steps` count-prefix
+  over-limit rejection is now implemented for the C# native-wrapper entrypoints
+  and certified by the same Windows pass.
+  C# source-level bundle-summary decoding now validates accumulator top-up
+  anchor nullifiers before recursive-proof parsing, including empty/over-limit
+  counts, zero values, duplicate or descending order, current-note material
+  reuse, raw over-limit count-prefix-only payloads, and malformed-proof/trailing
+  accumulator precedence. The 2026-06-29 Windows `.NET 8.0.422` C# pass
+  certifies those same top-up anchor vectors on `win-x64`.
+  C# source-level native-wrapper preflight now validates caller-supplied
+  current-hop Pallas open-envelope archives before recursive aggregation or
+  recursive compact-token native dispatch, including wrong schema, record-bundle
+  hop-count mismatches, missing metadata, stale fixed-array metadata, trailing
+  metadata-option bytes, declared metadata-option lengths that exceed the
+  supplied payload, unknown metadata-option tags, and raw count-prefix-only
+  `params.g`/`params.h` plus proof `l`/`r` sequence-count mismatches with no
+  sequence elements. The 2026-06-29 Windows `.NET 8.0.422` C# pass certifies
+  those same source-level vectors on `win-x64`. C# typed init/append request
+  encoders are now exposed for
+  source-level request construction and reject wrong-profile lineage key
+  artifacts, current-hop Pallas count/schema drift, missing or dangling
+  previous-lineage verifier records, missing or dangling Reserved-lineage
+  append previous-proof opening archives, malformed previous-proof openings,
+  and aggregation-output lineage-key material before native dispatch. The SDK
+  parity guard pins those source/test markers with
+  `--negative-control-csharp-init-append-request-codecs`, and the 2026-06-29
+  Windows `.NET 8.0.422` C# pass certifies those typed request vectors.
   Swift, Kotlin/JVM, and Android Java typed init/verifier request constructors
   now also assert exact diagnostics for missing init lineage verifier keys,
   wrong-schema record bundles, and wrong-schema verifier-record archives before
@@ -1168,6 +1237,9 @@ and completed history lives in [`status.md`](./status.md).
   The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path
   carrying the same exact missing-lineage-key and wrong-schema archive
   diagnostics.
+  The 2026-06-29 Windows `.NET 8.0.422` C# pass confirms the C# typed
+  init/verifier request path carries the same exact missing-lineage-key and
+  wrong-schema archive diagnostics on `win-x64`.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer
@@ -1204,6 +1276,10 @@ and completed history lives in [`status.md`](./status.md).
   The Ubuntu/Windows C# SDK matrix must keep the C# init/append helper overloads
   enforcing the same lineage key and typed-artifact preflight before any auto
   Pallas builder path.
+  C# init/append helper overloads that auto-generate Pallas openings now enforce
+  the same raw lineage key and typed-artifact preflight before invoking any
+  current-hop or previous-proof Pallas builder. The 2026-06-29 Windows
+  `.NET 8.0.422` C# pass certifies those helper-ordering vectors.
   Kotlin/JVM and Android Java append constructors now branch-select lineage key
   material before validating the nested `lineageProvingKeyArchive`, so
   malformed proving-key bytes on aggregation append outputs cannot mask the
@@ -1250,6 +1326,14 @@ and completed history lives in [`status.md`](./status.md).
   artifacts, auto-Pallas helper wrong-profile artifacts, and full current-hop
   Pallas inner-envelope metadata mismatches beyond the pinned missing
   `domain_tag` request path.
+  C# typed init/append request encoders now add matching source-level
+  diagnostics for raw lineage-key mismatches, wrong-profile typed artifacts,
+  current-hop Pallas count mismatches, missing Reserved-lineage append
+  previous-proof openings, malformed previous-proof opening archives, dangling
+  previous-proof openings, and aggregation-output lineage-key material.
+  C# generated-Pallas helper overloads now also pin wrong-profile typed-artifact
+  and raw lineage-key ordering before builder calls. The 2026-06-29 Windows
+  `.NET 8.0.422` C# pass certifies those typed C# diagnostics.
   Swift, Kotlin/JVM, and Android Java append constructors now also reject an
   unselectable `outputProofCircuitId` before applying optional lineage-key
   material selection, matching JavaScript and Python constructor ordering. The
@@ -1441,6 +1525,10 @@ and completed history lives in [`status.md`](./status.md).
   The Ubuntu/Windows C# SDK matrix must keep matching C# exact indexed
   hop-evidence diagnostics for transfer public-input shape, same-root rejection,
   multi-hop continuity, chain-id mismatch, and asset mismatch.
+  The 2026-06-29 Windows `.NET 8.0.422` C# pass certifies matching C# exact
+  indexed hop-evidence diagnostics for transfer public-input shape, same-root
+  rejection, multi-hop continuity, chain-id mismatch, and asset mismatch on
+  `win-x64`.
 - Kagemusha Offline/Offline V2 readiness parsers must reject the removed
   `offline_kagemusha_abi7*` key family outright. First-release readiness uses
   only the `offline_kagemusha_recursive_compact_*` key family, and every
@@ -1509,6 +1597,10 @@ and completed history lives in [`status.md`](./status.md).
   test, request-archive diagnostics, and component diagnostic markers.
   The Ubuntu/Windows C# SDK matrix must keep the same C# confidential
   transfer/unshield verify request proof-size prechecks.
+  verification.
+  The 2026-06-29 Windows `.NET 8.0.422` full C# pass certifies matching C#
+  confidential transfer/unshield verify request proof-size prechecks for
+  `proof must not exceed 33554432 bytes` on `win-x64`.
 - Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
   8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
   a freshly built `connect_norito_bridge` native library and 721 focused SDK
@@ -1539,9 +1631,10 @@ and completed history lives in [`status.md`](./status.md).
   transaction-builder negative control mutating one of those exact pairs.
   The Kagemusha C# SDK workflow now runs this lane through the same
   `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` script on Ubuntu and
-  Windows. The matrix builds a fresh `connect_norito_bridge` native library,
-  records the path and lowercase SHA-256, configures the loader path before
-  P/Invoke, and runs the .NET 8 test filter for
+  Windows, and the standalone C# PR workflow mirrors that native-bridge-backed
+  lane for C# changes. The matrices build a fresh `connect_norito_bridge`
+  native library, record the path and lowercase SHA-256, configure the loader
+  path before P/Invoke, and run the .NET 8 test filter for
   `KagemushaRecursiveSpendNativeTests`, `PrivacyNativeTests`,
   `TransactionBuilderTests`, `CanonicalRequestTests`, `ToriiClientTests`,
   `SignedQueryBuilderTests`, `SignedIterableQueryBuilderTests`,
@@ -1554,9 +1647,465 @@ and completed history lives in [`status.md`](./status.md).
     `connect_norito_bridge native bridge sha256:` before the P/Invoke tests
     start, with Windows proving the `.dll` loader path and Ubuntu proving the
     Linux shared-object path.
-  - The C# shared ABI-6 archive fixture assertions remain pinned to the current
-    append request hash
-    `60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57`,
+  combinations, invalid proof base64, non-exact receipt execution fields, and
+  zero receipt timestamps before callers consume receipt data.
+  C# Torii explorer block, transaction, and instruction REST reads plus typed
+  SSE projections now reject non-exact block/transaction hashes,
+  zero page/per-page pagination metadata, transaction-detail nonce and TTL type
+  confusion, instruction/rejection encodings including uppercase `0X` prefix
+  aliases, lowercase transaction signatures, null or missing list/stream/page
+  items, missing latest sample timestamps, missing required unsigned projection
+  counters, missing required summary string fields, malformed summary
+  `created_at` timestamps, and malformed or missing instruction boxes before
+  returning trusted indexed ledger projections.
+  C# Torii VPN session read/delete routes and SoraFS CID lookup, denylist-pack,
+  and content gateway routes now also reject malformed route identifiers before
+  HTTP dispatch while preserving valid internal SoraFS pack and path text.
+  C# Torii VPN profile, quote, session, receipt, and receipt-list responses,
+  plus raw VPN response and native-instruction DTO parsing, now reject null,
+  duplicate, or type-confused envelopes, duplicate keys inside ignored VPN
+  response/native-instruction extension values, missing or malformed
+  route/DNS/tunnel lists, missing native-instruction arrays, and counters,
+  missing or non-positive lease/DNS/MTU operational fields,
+  missing fee/grace/flow-label/padding fields, missing or zero
+  quote/session/receipt timestamps, inconsistent receipt-list totals, required
+  receipt-list `items`/`total` fields, required VPN quote/session/receipt
+  accounting counters, missing or non-exact profile/quote/session/receipt/list
+  item identity, endpoint, status, account, asset, and native-instruction
+  fields, and non-exact lowercase SPKI/key/hash/id/native-instruction hex
+  fields before returning trusted tunnel or settlement material. Optional
+  receipt `lease_id_hex`, TLS SPKI hashes, and nullable instruction objects
+  retain their nullable semantics.
+  C# Torii verifying-key registry reads and writes now reject malformed
+  backend/name route text, noncanonical I105 write authorities, non-exact
+  private-key, circuit, gas-schedule, curve, CID, commitment, and status request
+  fields, and non-positive version, `vk_len`, or max proof-size fields before
+  dispatch, while retaining explicit hex/status canonicalization after exact
+  preflight.
+  C# Torii verifying-key read responses now validate the returned detail
+  envelope, id and record backend/name material, version/height/status fields,
+  lowercase public-input and commitment hashes, optional inline key base64, and
+  record metadata before returning the raw JSON document. Verifying-key register/update
+  responses now also reject non-object, missing, null, false, or type-confused
+  `accepted` envelopes before returning the raw JSON document.
+  C# Torii SoraFS pin registration now rejects noncanonical I105 authority,
+  non-exact signer, chunker, storage-class, alias, digest, manifest, canonical
+  manifest/proof base64, and successor fields before dispatch, while retaining
+  explicit digest and storage-class canonicalization after exact preflight. Raw
+  SoraFS pin registration responses now also reject noncanonical I105 fee
+  treasury account ids. Raw chunker, storage-class, and pin-policy DTO parsing
+  now also rejects null, duplicate, case-drifted, or type-confused fields, duplicate keys inside
+  ignored extension values, invalid counters, non-exact chunker text, and
+  unknown storage-class values while canonicalizing omitted optional
+  multihash/retention counters to zero. Pin alias and registration responses,
+  plus raw pin DTO parsing, now also reject
+  duplicate/type-confused envelopes, noncanonical returned manifest/successor
+  hashes, malformed alias namespace/name/proof base64, unsigned
+  epoch/length/fee counters, malformed fee ids, and blank, padded,
+  internal-whitespace, NBSP-containing, or control-character `chunker_handle`
+  values before returning trusted DTOs. C# Torii SoraFS CID
+  lookup responses, plus raw CID lookup/file-entry DTO parsing, now reject
+  duplicate/type-confused fields, duplicate keys inside ignored CID lookup/
+  file-entry extension values, missing or non-exact content CID text, missing
+  or malformed lowercase manifest digest/id hex, malformed path components,
+  null path lists, and
+  missing or negative file geometry before returning trusted gateway listings. Buffered C# Torii SoraFS content
+  reads now also reject duplicated or noncanonical `sora-content-cid` headers
+  before returning content metadata while still treating the absent header as
+  absent optional metadata, and SoraFS content relative paths reject padding,
+  empty segments, traversal components, backslash separators, and control
+  characters before gateway dispatch. SoraFS denylist catalog/pack responses,
+  plus raw denylist pack/catalog DTO parsing, now reject duplicate/type-confused
+  fields, duplicate keys inside ignored catalog/pack extension values, null
+  lists/items, missing or malformed pack ids/source paths, non-exact manifest
+  CID text, malformed metadata text, boolean confusion, missing or non-positive
+  catalog versions, missing pack enablement/activity/count fields, and negative
+  counts before returning trusted pack policy metadata. Pin alias and registration responses,
+  plus raw pin DTO parsing,
+  now also reject duplicate keys inside ignored pin alias/register extension
+  values before returning trusted DTOs.
+  C# Torii multisig proposal and contract-call multisig responses, plus raw
+  multisig response DTO parsing, now reject false `ok` envelopes,
+  duplicate/type-confused fields, duplicate keys inside ignored extension
+  values, noncanonical I105 resolved multisig account ids, non-exact proposal
+  ids and instructions hashes, malformed transaction hashes, zero or malformed
+  creation-time counters, and blank, padded, internal-whitespace, NBSP-containing,
+  control-character, noncanonical, or otherwise malformed
+  `signing_message_b64` values before returning trusted signing material. C# Torii
+  multisig propose/approve request preflight now also requires canonical I105
+  account ids for explicit `multisig_account_id` selectors and
+  `signer_account_id`, while `multisig_account_alias` remains the alias path.
+  C# Torii contract deploy/activate/call/view request preflight now also
+  requires canonical I105 `authority` values, and contract-call `fee_sponsor`
+  values must be canonical I105 account ids before HTTP dispatch. C# Torii
+  generic and contract-call multisig proposal `fee_sponsor` values now share
+  the same canonical I105 requirement.
+  C# Torii onboarding, faucet, contract-call, generic multisig, and contract-call
+  multisig responses, plus raw onboarding/faucet/multisig-onboarding DTO
+  parsing, now reject duplicate/type-confused response envelopes, duplicate keys
+  inside ignored onboarding/faucet response extension values, missing or
+  noncanonical onboarding/faucet account ids, malformed UAID, asset, amount,
+  and status strings, and non-exact non-empty transaction hash fields before
+  returning trusted queued or executed transaction ids.
+  Raw C# account transaction, account-alias lookup, VPN profile, contract
+  deploy, contract-call/view, and contract-state DTO parsing now requires
+  serialized boolean fields before returning trusted response models, so absent
+  booleans cannot default to trusted `false` values.
+  C# Torii contract deploy, deploy-and-activate, and activation responses, plus
+  raw deployment/activation DTO parsing, now reject false `ok` envelopes,
+  duplicate/type-confused fields, duplicate keys inside ignored deployment/
+  activation extension values, missing or malformed deploy nonces, and missing
+  or non-exact returned contract address, dataspace, namespace, contract id, and
+  deployment hash text before callers trust returned deployment material.
+  C# Torii faucet puzzle responses now reject missing or non-exact PoW
+  algorithm labels, missing or non-exact anchor hashes, salt hex,
+  non-positive max-anchor-age bounds, and unsafe scrypt parameters, including
+  zero `scrypt_log_n`, excessive parallelization, and oversized ROMix memory,
+  before solving work. Faucet solve/claim inputs now also require canonical
+  I105 account ids before challenge hashing or HTTP dispatch.
+  Raw C# faucet puzzle DTO deserialization now applies the same fail-closed
+  checks, including top-level null rejection, duplicate-property rejection,
+  duplicate keys inside ignored puzzle extension values, unsigned numeric type
+  checks, required algorithm/hash/numeric challenge/work-factor fields, exact
+  anchor hashes, lowercase even-length salt text, positive max-anchor-age
+  bounds, and positive bounded scrypt parameters including parallelization and
+  ROMix memory ceilings.
+  C# Torii node capabilities responses, plus raw node capability DTO parsing,
+  now reject null nested capability objects, duplicate/type-confused capability
+  fields, duplicate keys inside ignored extension values, malformed
+  or missing signed-transaction schema hashes, malformed or missing
+  query/projection capability adverts, drifted query projection
+  constants/feature flags, malformed or missing crypto capability labels/lists,
+  duplicate or missing control-plane signing labels, SM2/default-hash mismatches,
+  inconsistent SM acceleration adverts, non-`1` first-release ABI versions,
+  missing first-release ABI/data-model/curve-registry counters, missing
+  SM/query/aggregate/projection capability flags, projection string labels/list
+  elements, or projection numeric constants, inconsistent curve allowlist
+  id/bitmap pairs, and negative data-model versions before returning trusted
+  metadata.
+  C# Torii runtime metadata responses now require first-release
+  `abi_version`, ABI policy/hash fields, and the `upgrade_events_total`
+  envelope, and still reject negative runtime upgrade counters and
+  inconsistent runtime upgrade counter totals before returning trusted
+  metadata.
+  Raw C# runtime metadata DTO deserialization now applies the same first-release
+  ABI and upgrade-counter exactness checks, including top-level null rejection,
+  duplicate-property rejection at every raw runtime metadata depth, integer type
+  checks, required `abi_version`, `policy`, `abi_hash_hex`,
+  `upgrade_events_total`, and `proposed`/`activated`/`canceled`
+  upgrade-counter fields, exact `V1` policy labels, lowercase 32-byte ABI
+  hashes, and nested
+  `upgrade_events_total` error context.
+  C# Torii contract metadata, contract-call, contract-view, verified-source,
+  and runtime ABI hash responses now reject non-exact returned code, ABI, and
+  actual-code hash fields plus nested verified-source provenance digest/text
+  fields before returning trusted control-plane DTOs. Raw C# contract manifest,
+  code-view, access-hint, entrypoint, analysis, syscall, memory,
+  source-reference, and verified-source job DTO deserialization now applies the
+  same fail-closed checks, including top-level null rejection,
+  duplicate-property rejection, type-confused list/string/boolean/counter
+  fields, bounded syscall numbers, exact rendered-source text, and nested
+  verified-source provenance counters.
+  C# Torii runtime ABI hash responses now also require exact first-release `V1`
+  policy labels before returning ABI hash material.
+  C# Torii verified-source job responses now also reject missing or malformed
+  returned job ids, status labels, timestamps, and messages before callers
+  trust source verification status.
+  C# Torii contract code-view responses now reject malformed nested permissions,
+  access hints, entrypoints, analysis/memory/syscall lists, warnings, and
+  rendered-source fields before returning trusted disassembly/source views.
+  C# Torii contract instance inventory responses, plus raw inventory DTO
+  parsing, now reject null/duplicate/type-confused list and item fields,
+  duplicate keys inside ignored instance/response extension values, non-exact
+  returned namespace/contract-id/code-hash text, missing required
+  namespace/contract-id/code-hash fields, malformed unsigned counters, required
+  `total`/`offset`/`limit` counters, and inconsistent
+  `total`/`offset`/`limit` counters before callers trust instance listings.
+  C# Torii contract-call responses, plus raw contract-call DTO parsing, now
+  reject false `ok` envelopes, duplicate/type-confused fields, duplicate keys
+  inside ignored contract-call extension values, missing or non-exact returned
+  dataspace, contract id, code/ABI/hash material, malformed or missing
+  creation-time counters, non-exact optional contract address/entrypoint text
+  when present, and noncanonical scaffold,
+  signed-transaction, or signing-message base64 before callers trust execution
+  material. Contract-view
+  success responses, plus raw success DTO parsing, now reject false `ok`
+  envelopes, duplicate/type-confused fields, duplicate keys inside ignored view
+  success extension values, missing or non-exact returned dataspace, contract
+  id, entrypoint, and code/ABI hash material, and non-exact optional contract
+  address text when present while preserving opaque result JSON. Contract-view
+  error responses, plus raw error and VM
+  diagnostic DTO parsing, now reject true `ok` envelopes, duplicate/type-confused
+  fields, duplicate keys inside ignored error/diagnostic extension values,
+  missing or non-exact returned dataspace, contract id, entrypoint, error,
+  code/ABI hash, and VM diagnostic trap/message text, non-exact optional
+  contract address text when present, missing VM diagnostic counters/flags/
+  limits, impossible VM diagnostic gas/cycle/stack counters, and non-positive
+  VM diagnostic gas/cycle/stack limits before callers trust execution material.
+  C# Torii contract instance and state query preflight now rejects zero
+  `limit` values before HTTP dispatch while preserving omitted limits and
+  first-page `offset = 0` semantics.
+  C# Torii contract state responses, plus raw state entry/response DTO parsing,
+  now reject null/duplicate/type-confused entries, paths, counters, and
+  booleans, duplicate keys inside ignored state entry/response extension values,
+  required `offset`/`limit` counters, missing or non-exact entry paths and
+  path-list elements, non-exact returned path/prefix/decode-error text, null
+  state entries, not-found entries carrying value material, stale
+  `next_offset`, over-limit item counts, non-exact `value_b64`, and mismatched
+  decoded lengths before callers trust state material.
+  C# Torii account list responses, plus raw account summary/page DTO parsing,
+  now reject null lists/items, duplicate/type-confused fields, malformed
+  account ids, missing page totals, and negative totals; explorer account/domain directory
+  responses, plus raw directory DTO parsing, reject null pagination/list/items,
+  duplicate/type-confused envelopes, malformed pagination, zero page/per-page
+  counters, item counters, noncanonical account/I105/owner account ids, and
+  malformed domain or logo text; explorer
+  asset-definition/asset/NFT/RWA inventory responses, plus raw inventory DTO
+  parsing, reject null pagination/list/items, duplicate/type-confused
+  envelopes, malformed pagination, zero page/per-page counters, item counters,
+  malformed RWA booleans, malformed identifiers/status/reference fields,
+  noncanonical owner and asset account ids, noncanonical quantity/value fields,
+  and malformed RWA parent lists; explorer
+  QR/health/metrics
+  responses, plus raw QR/health/metrics/duration DTO parsing, now reject
+  duplicate/type-confused fields, duplicate keys inside ignored snapshot
+  extension values, missing or noncanonical QR canonical account ids, malformed
+  QR literal/rendering text, dimensions/text, unsigned counters, durations,
+  malformed timestamp text,
+  missing QR network prefixes, missing QR modules/versions, missing health head
+  heights/sample timestamps, missing metrics aggregate counters, and missing
+  duration `ms` fields;
+  explorer econometrics/holder snapshot responses, plus raw
+  econometrics/snapshot DTO parsing, reject duplicate/type-confused windows,
+  counters, ratios, and holder/distribution lists, noncanonical holder account
+  ids, malformed definition identifiers, null econometrics and
+  holder-distribution lists/items, noncanonical numeric strings,
+  out-of-range distribution ratios, and null distributions; account asset-balance,
+  permission, and transaction-summary responses, plus their raw item/page DTO
+  parsing, now reject null list items, duplicate/type-confused fields,
+  duplicate keys inside ignored extension values for both page and page-item
+  contexts, missing or malformed asset/scope/name/alias/permission text,
+  noncanonical I105 account ids and transaction authorities, missing or
+  noncanonical quantities, missing or non-exact entrypoint hashes, boolean
+  confusion, non-positive transaction timestamps, missing page totals, and
+  negative totals before returning trusted account history while preserving
+  arbitrary permission payload JSON. The Linux .NET pass now also requires
+  canonical I105 account ids before dispatching account asset/transaction/
+  permission route reads.
+  Explorer transaction/instruction authority filters, instruction account
+  filters, and domain/asset-definition/asset/NFT/RWA owner filters now also
+  require canonical I105 account ids before dispatch.
+  C# Torii account/asset/contract alias lookup and resolve responses, plus raw
+  account alias lookup, alias index, alias resolution, and alias binding DTO
+  parsing, now reject duplicate/type-confused envelopes, duplicate keys inside
+  ignored alias lookup/index/resolution/binding extension values, missing or
+  malformed aliases, noncanonical account ids, malformed asset/contract ids,
+  dataspace/source/status fields, null lookup lists/items, required lookup
+  totals, required alias-index indexes, negative index fields, and missing or
+  non-positive binding timestamp fields before returning trusted alias metadata. By-account alias lookup
+  requests now also require canonical I105 account ids before dispatch.
+  C# Torii UAID portfolio, bindings, and manifest reads now reject non-exact
+  UAID route literals and portfolio `asset_id` filters before dispatch, while
+  retaining explicit bare/`uaid:` hex casing canonicalization after exact
+  preflight; account onboarding uses the same non-trimming UAID preflight. UAID
+  portfolio/bindings/manifest responses plus raw UAID DTO parsing now reject
+  duplicate/type-confused envelopes, duplicate keys inside ignored UAID
+  portfolio/bindings/manifest extension values, missing or noncanonical UAID
+  literals, missing or noncanonical nested account ids, malformed nested
+  dataspace/asset text, missing or noncanonical quantities, null nested
+  lists/items, missing or non-exact manifest hashes/status text, required
+  portfolio `accounts`/`positions`
+  totals, required manifest totals, required portfolio/bindings/manifest
+  dataspace IDs, required revocation epochs, and negative counters before
+  returning trusted space-directory inventory. Optional aliases, labels,
+  revocation reasons, and preserved manifest JSON remain nullable.
+  C# Torii pipeline transaction-status reads now reject non-exact transaction
+  hash and scope inputs before query dispatch, validate returned pipeline
+  hashes with the same exact preflight, and retain explicit 32-byte hash
+  casing/`0x` canonicalization after exact preflight. Transaction-status
+  responses now reject non-object/null envelopes, malformed status labels,
+  negative heights, non-exact returned scope/resolution text, and type-confused
+  rejection content; rejected status responses also reject blank, padded,
+  whitespace-containing, control-character, malformed, and noncanonical
+  rejection-content base64 before callers trust the status object.
+  The broad C# empty-string fallback audit now leaves only documented Torii
+  optional compatibility defaults for onboarding transaction hashes, VPN
+  receipt lease ids, and pipeline status metadata omitted by older status-only
+  envelopes; ZK backend catalog null labels are handled explicitly as
+  unsupported instead of being normalized through `""`, and the C# source tree
+  no longer carries null-forgiving `GetString()!`, `Deserialize<T>()!`,
+  `items[index]!`, or other null-forgiving operator unwraps in SDK sources.
+  C# typed pipeline/proof SSE streams now validate projected Torii payloads
+  before yielding typed events, rejecting missing proof-event selector text,
+  malformed category/event labels, non-exact hashes,
+  backend/verifying-key reference text, prune counters, removed proof records,
+  and malformed SSE metadata including noncanonical retry milliseconds. They
+  also decode event-stream bytes with strict UTF-8 before frame parsing, so
+  malformed stream bytes fail before replacement characters can enter raw or
+  typed SSE payloads. They also reparse `data:` frames with recursive
+  duplicate-key rejection before typed projection, so duplicate top-level event
+  fields or nested proof removal records cannot be collapsed by `JsonNode`.
+  C# health and metrics text responses now use the same strict UTF-8 decoding,
+  and malformed Torii error bodies are redacted while preserving HTTP status,
+  request URI, and reason phrase in `ToriiApiException`.
+  Raw C# `ToriiPipelineEvent`, `ToriiProofEvent`, and
+  `ToriiProofRemovedRecord` deserialization now applies the same exactness
+  checks, including top-level null rejection, required
+  category/event/backend field presence, duplicate-property rejection,
+  lowercase 32-byte hash enforcement, unsigned numeric fields, proof prune
+  count consistency, proof removed-record backend/hash presence, and
+  duplicate-key rejection inside preserved or ignored extension data for
+  unknown fields.
+  C# production `VerifyingKey`/`Proof` SSE subscription filters now reject
+  malformed JSON-shaped, padded, or duplicate-key filter JSON, non-exact
+  verifier-key selector names, and prefixed, uppercase, padded, or
+  control-character proof hash matchers before dispatch.
+  C# typed pipeline/proof and explorer block/transaction/instruction SSE
+  streams now also reject malformed, whitespace-only, JSON-null, and
+  duplicate-key raw data frames instead of silently skipping or collapsing them
+  before typed projection.
+  Raw C# Explorer block, transaction, instruction, instruction-box, and
+  instruction-json DTO deserialization now shares the high-level exactness
+  checks for top-level nulls, duplicate properties, lowercase 32-byte hashes,
+  exact instruction encodings, required unsigned counters, required
+  pagination/items/latest timestamp envelopes, required summary creation
+  timestamps and other required summary strings, positive page/per-page
+  metadata, canonical I105 transaction/instruction authority text, non-empty
+  status text, and page/list `items[index]` error context.
+  The Windows SCCP `.NET` release row is now certified with
+  `connect_norito_bridge.dll`, Windows loader paths, RID/architecture markers,
+  direct TRX output, and positive TRX bytes. The 2026-06-29 Windows
+  `.NET 8.0.422` focused and full C# passes now cover the broader C#
+  Kagemusha/native parity items in this section, including
+  malformed Norito input/output headers, caller archive-copy immutability,
+  verifier-unavailable status mapping, transaction-builder schema and wire-name
+  drift, and package/evidence parity. macOS or Linux `.NET 8` transcript
+  evidence must still not clear future Windows-only rows unless the release
+  gate being cleared is explicitly host-independent.
+  Windows-machine evidence and future collection rules:
+  - Keep collecting any future Windows-only C# certification on a Windows
+    machine, not from macOS/Linux transcript evidence, whenever the gate must
+    prove `connect_norito_bridge.dll`, Windows loader paths, RID, and
+    architecture.
+  - Select a stable .NET 8.0.x SDK and capture `dotnet --version` in the run log;
+    preview/prerelease SDK version strings or zero-padded numeric segments are
+    not release evidence. The `SCCP .NET SDK version:` marker must appear after
+    `dotnet --version`; earlier version markers are forged evidence. The phase
+    commands must run in `dotnet --version`, `dotnet --info`,
+    `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict
+    `dotnet test` order; reordered command transcripts are forged.
+  - Capture the Windows `dotnet --info` output, including OS name, OS platform,
+    RID, and architecture, so the native C# pass is tied to the host that loaded
+    the bridge. The corridor runner now requires exactly one `OS Name:`, one
+    `OS Platform:`, one `RID:`, and either one `OS Architecture:` field or, when
+    that field is absent, one Host `Architecture:` field from that output. When
+    both `OS Architecture:` and Host `Architecture:` are present they must
+    agree; both OS fields must be exactly `Windows`, the RID must be canonical
+    lower-case Windows, and the RID architecture segment must agree with the
+    architecture marker. The `SCCP .NET SDK OS:`, `RID:`, and `Architecture:`
+    markers must appear after `dotnet --info`; duplicate or missing
+    `OS Name:`/`OS Platform:` fields, including missing `OS Name:`, duplicate
+    `OS Name:`, missing `OS Platform:`, and duplicate `OS Platform:` cases,
+    missing or duplicate RID fields, duplicate `OS Architecture:`, missing or
+    duplicate Host `Architecture:` when `OS Architecture:` is absent, duplicate
+    Host `Architecture:` when it conflicts with OS architecture evidence,
+    uppercase, foreign-platform, or alias-architecture RID values, mismatched
+    RID/architecture pairs, architecture alias values such as `amd64`,
+    `x86_64`, or `aarch64`, colon-injected metadata values, or host markers
+    printed earlier fail before bridge build, restore, or test execution and
+    remain forged evidence.
+  - Keep the Windows `.NET 8` SCCP phase transcript free of restore/build
+    diagnostics: `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero
+    `Error(s)` counts, `Failed to restore`, and restore/build failed markers
+    are not-ready evidence even when later VSTest success and TRX markers are
+    present.
+  - Keep traced `.NET` phase commands shell-parseable; readiness and strict
+    bundle verification now reject malformed command quoting with a fixed
+    transcript blocker before non-canonical setup/test commands can be hidden
+    beside the strict SCCP command sequence. Unquoted shell-comment tails on
+    traced `.NET` commands are fixed blockers too, so copied text after `#`
+    cannot survive beside an otherwise canonical command. Shell xtrace command
+    extraction also normalizes hidden format/control characters before `.NET`
+    command validation, so an obfuscated `+ dotnet ...` line cannot bypass the
+    canonical setup/test command checks; copied command traces that require
+    hidden-character normalization are fixed blockers because release evidence
+    must carry raw canonical xtrace text. Parser normalization removes only the
+    runner's outer `(cd ... && ...)` wrapper parentheses, not parentheses inside
+    `.NET` command arguments such as the TRX logger value, and non-runner
+    parenthesized command groups such as `(dotnet test ...)` are fixed
+    transcript blockers instead of being normalized into canonical commands.
+    Runner `cd` wrappers for SDK commands must also match the phase-owned SDK
+    directory basename, so `.NET` commands traced from a non-`csharp` directory
+    fail with category-only diagnostics before forged local paths can leak.
+    Traced `.NET` `env` prefixes may only carry the runner-owned
+    `DOTNET_ROOT`, `DOTNET_CLI_TELEMETRY_OPTOUT=1`,
+    `DOTNET_CLI_UI_LANGUAGE=en`, and optional `PATH` assignments; extra or
+    drifted environment knobs are fixed transcript blockers. When a traced
+    `.NET` command invokes a directory-qualified `dotnet` binary, its
+    `DOTNET_ROOT` prefix must also match that binary directory; env-prefixed
+    bare `dotnet` commands and directory mismatches use the same fixed
+    transcript blocker. Traced restore/test `PATH` prefixes, when present, must
+    start with the freshly built `connect_norito_bridge.dll` directory printed
+    by the bridge marker, so a copied transcript cannot load a different native
+    bridge through `PATH`, and empty path-list segments such as trailing,
+    leading-after-prefix, or interior doubled separators remain fixed transcript
+	    blockers. The dotnet-sdk corridor runner now also rejects an inherited
+	    `PATH` with leading, trailing, interior, or semicolon-style empty
+	    path-list segments before bridge build, restore, or test execution, so a
+	    Windows host cannot produce evidence that the release verifier must reject
+	    later. The native bridge
+    `cargo build` trace may carry only the runner-owned `CARGO_TARGET_DIR` env
+    assignment; extra bridge-build env knobs are fixed transcript blockers.
+    Readiness and strict-bundle phase transcript checks also reject unrelated
+    traced commands in every phase, so copied side commands such as
+    `+ true ...` cannot sit beside the required evidence. The Swift SDK phase
+    keeps only the required Rust target and NoritoBridge XCFramework setup
+    commands as allowlisted setup traces.
+  - Require the Windows `.NET 8` SCCP VSTest summary to report `Skipped: 0`;
+    a `Passed!` line with skipped SCCP tests is not production-certifying
+    evidence even when `Failed: 0` and the total count is internally consistent,
+    and a noncanonical `Skipped: 00` summary is also rejected as forged evidence.
+    Any additional VSTest-shaped `Passed! - ...` line must also be canonical;
+    a failed, skipped, wrong-assembly, tabbed, or otherwise malformed summary
+    cannot sit beside one copied canonical summary before TRX evidence is
+    published, and readiness/release-bundle copied transcript verification must
+    reject the same malformed summary-shaped lines with a fixed category before
+    public evidence can certify the transcript. The runner-side summary parser
+    must normalize ANSI escapes, ASCII controls, and hidden format characters
+    before classifying summary-shaped lines, so obfuscated failed summaries
+    cannot bypass the pre-TRX publication gate. Copied readiness/release-bundle
+    `.NET` success markers are also rejected when they become canonical only
+    after ANSI/control/format stripping; copied evidence must carry the raw
+    canonical marker text.
+  - Require the VSTest summary duration to be a numeric unit duration such as
+    `1 s` or `65 ms`; free-form duration text is not release evidence.
+  - Require the VSTest summary to keep label/value and number/unit separators
+    present and to use only ordinary spaces for VSTest padding;
+    collapsed spacing or tab/control-whitespace splices in the success line are
+    forged evidence.
+  - Require the VSTest summary line to end with
+    `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)`, so copied pass counts from a
+    different test assembly cannot certify the SCCP `.NET` phase.
+  - Require the direct `sccp-dotnet-sdk.trx` XML to be VSTest-shaped: the root
+    must be `TestRun`, `UnitTestResult` rows must be direct children of
+    `Results`, and `UnitTest` definitions must be direct children of
+    `TestDefinitions` before the runner may publish `SCCP .NET SDK TRX:` or
+    TRX byte-count evidence. When a `UnitTestResult` carries `testName`, it
+    must match the SCCP definition bound by `testId` or `executionId` and carry
+    an exact `Sccp...` token itself. SCCP TRX definition/result names used for
+    binding must now come from the actual `TestMethod className.name` pair, not
+    only a spoofable outer `UnitTest name`, must share the same expected
+    assembly evidence from that `TestMethod` or its parent `UnitTest`, and must
+    also use canonical `TestMethod className` and `TestMethod name` values:
+    unpadded, ASCII-only, whitespace-free, and control-character-free.
+  - Ran `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` and a full direct
+    `dotnet test` command with the same native bridge path setup.
+  - The Windows runner log printed `connect_norito_bridge native bridge:`
+    and `connect_norito_bridge native bridge sha256:` for the freshly built
+    `connect_norito_bridge.dll` before the P/Invoke tests start.
+  - C# source-level shared ABI-6 archive fixture assertions now pin the
+    defaulted `lineage_verifier_records` field and regenerated append request
+    hash `60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57`,
     transition-profile init hash
     `a4862fe9dfa034755c292d8e92449589d9b499e2a20c1b27519261c4ab2136d5`,
     transition-profile append hash
@@ -1564,13 +2113,18 @@ and completed history lives in [`status.md`](./status.md).
     redeem request hash
     `1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d`,
     and redeem instruction hash
-    `dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85`.
-    The same lane must keep the trailing
-    `lineage_verifier_records: Vec<VerifyingKeyRecord>` field and the
-    metadata-bound redeem preflight overloads that treat single-record and
-    plural Reserved-lineage verifier-record evidence equivalently.
-  - The C# shared ABI-7 archive fixture assertions remain pinned to the
-    regenerated current `64x4` profile hashes: append-bundle
+    `dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85`,
+    with Linux native-backed C# gate coverage and 2026-06-29 Windows
+    `.NET 8.0.422` certification.
+  - C# source-level typed redeem preflight support now accepts the trailing
+    defaulted `lineage_verifier_records: Vec<VerifyingKeyRecord>` count and
+    rejects dangling, missing, negative, and over-limit vector cases before
+    native dispatch; first-release redeem evidence is plural and record-backed.
+    The 2026-06-29 Windows `.NET 8.0.422` C# pass certifies multi-profile
+    record-backed lineage-witness redeem cases.
+  - C# source-level shared ABI-7 archive fixture assertions now pin the
+    regenerated current `64x4` profile hashes:
+    append-bundle
     `107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5`,
     verify-request
     `ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d`,
@@ -1614,6 +2168,473 @@ and completed history lives in [`status.md`](./status.md).
     `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after C# Kagemusha,
     identifier receipt, transaction-builder, canonical auth, or privacy native
     surface changes.
+    The 2026-06-29 Windows `.NET 8.0.422` C# pass certifies those same ABI-7
+    assertions.
+  - The Windows focused pass includes `KagemushaRecursiveSpendNativeTests`,
+    `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
+    `ToriiClientTests`, `SignedQueryBuilderTests`, and
+    `SignedIterableQueryBuilderTests`, and `VerifyingKeyBackendTagTests`.
+    The Linux .NET pass now also pins `SignedIterableQueryBuilder` unset-request
+    rejection, non-zero cursor/limit/fetch-size preflight, the 10,000-row
+    fetch-size ceiling, nullable pagination clearing, explicit sort clearing,
+    and stale iterable selector/parameter reset before signing.
+  - `KagemushaRecursiveSpendNativeTests` exercises
+    `KagemushaOverlongCompactLength`,
+    `KagemushaOversizedTerminalCompactLength`,
+    `KagemushaHugeCanonicalCompactLength`,
+    `overlongVersionLengthArchive`, `oversizedTerminalCompactLengthArchive`,
+    `hugeCanonicalCompactLengthArchive`, `overlongCircuitStringArchive`, and
+    `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
+    address-space oversized, u64-overflowing compact lengths and invalid UTF-8
+    lineage archive circuit fields on Windows.
+  - The Windows C# pass includes the managed bundle-summary decoder
+    mirrors already covered on macOS: unsupported proof circuit
+    `kagemusha-recursive-spend-lineage-badhop-v1`, unsupported proof backend
+    `halo2/kzg`, empty recursive proof `ProofBox.bytes`, invalid accumulator
+    domains, malformed fixed-size accumulator asset/root fields, invalid
+    accumulator `hop_count` vectors, missing recursive-proof public inputs,
+    all-zero 32-byte public-input hashes, and public-input hash mismatches all
+    reject before native dispatch.
+  - The Windows C# pass includes managed bundle-summary decoder
+    malformed fixed-array vectors for the core accumulator corridor digests:
+    `aggregation_transcript_digest`, `nullifier_digest`,
+    `output_commitment_digest`, `fold_digest`,
+    `recursive_proof_chain_digest`, and
+    `transition_profile_binding_digest`; short, count-prefixed, and long
+    payload encodings must all reject with field-scoped diagnostics before
+    native dispatch.
+  - The Windows C# pass includes managed bundle-summary decoder
+    malformed fixed-array vectors for `append_opening_preflight_digest`,
+    `append_boundary_digest`, `verifier_params_fingerprint`,
+    `fixed_window_table_schedule_digest`,
+    `fixed_window_shared_table_manifest_digest`,
+    `fixed_window_table_base_digest`, and `verifier_witness_batch_digest`;
+    short, count-prefixed, and long payload encodings must all reject with
+    field-scoped diagnostics before native dispatch.
+  - C# source-level SDK README/native-material alias parity is now pinned:
+    generic proof-state, recursive/lineage proof-state,
+    aggregation-transcript, fixed-window table schedule/shared-manifest/base,
+    verifier-witness batch, transition-profile binding, append-opening
+    preflight, recursive verifier scalar-projection, and previous/resulting
+    accumulator aliases are documented as native-owned C# material, and the SDK
+    README native-material negative control mutates the C# branch with the rest
+    of the SDK READMEs. The 2026-06-29 SDK parity guard and JavaScript parity
+    meta-test rerun certifies that updated README parity guard after Windows
+    evidence collection.
+  - The Windows C# pass includes the managed bundle-summary decoder
+    vector that replaces accumulator field index 1 with a raw `chain_id`
+    string payload and rejects it before native dispatch.
+  - The Windows C# pass includes the managed bundle-summary decoder
+    vector that mutates only nested `ProofBox.backend` to `halo2/kzg` while
+    leaving verifier metadata unchanged, and rejects it before native dispatch.
+  - The Windows C# pass includes the managed bundle-summary decoder
+    trailing-field vectors already covered on macOS: extra top-level bundle,
+    accumulator-summary, current-note, current-note amount, recursive-proof,
+    verifier-key-id, and proof-box fields all reject before native dispatch.
+  - The Windows C# pass includes the managed verify-result and
+    lineage-witness trailing-field vectors already covered on macOS: extra
+    ABI-7 verify-result, top-level lineage-witness,
+    previous-recursive-proof-sequence, individual previous-proof, and nested
+    previous-proof verifier-key-id fields all reject before wallet preflight
+    trusts decoded summaries.
+  - The Windows C# pass includes the managed bundle and lineage-witness
+    previous-proof public-input-hash malformed fixed-array vectors already
+    covered on macOS: short, count-prefixed, and long hash payloads all reject
+    with field-scoped diagnostics before native dispatch.
+  - The Windows C# pass includes the same managed bundle current-note
+    malformed vectors already covered on macOS: all-zero note commitment,
+    all-zero spend nullifier, note/nullifier aliasing, zero amount, and the
+    short/long fixed-array note-commitment and spend-nullifier payload vectors
+    so they reject before native dispatch or wallet-facing summary metadata.
+  - The Windows C# pass includes typed verify request negatives already
+    covered on macOS for a missing `lineage_verifier_record` on a
+    Reserved-lineage final bundle and an extra `lineage_verifier_record` on a
+    semantic final bundle, matching the SDK preflight rule before P/Invoke
+    dispatch.
+  - The Windows C# pass includes typed redeem request negatives for
+    semantic final bundles with a missing `lineage_verifier_record` when the
+    lineage witness contains a prior Reserved-lineage proof, and with an extra
+    semantic `lineage_verifier_record` when the lineage witness is absent or
+    init-only, matching the non-C# SDK lineage-witness summary preflight before
+    P/Invoke dispatch.
+  - The Windows C# pass includes typed redeem `changeOutput` fixed32
+    negatives already covered on macOS: a 31-byte present change commitment and
+    an all-zero 32-byte present change commitment both reject before P/Invoke
+    dispatch or transaction-builder mutation.
+  - The Windows C# pass includes typed redeem `changeOutput`
+    reserved-collision negatives now covered by the Linux C# native-wrapper
+    gate: reusing the current note commitment, current note spend nullifier, or
+    a top-up anchor nullifier must reject before P/Invoke dispatch.
+  - The Windows C# pass labels and pins the accumulator top-up anchor
+    nullifier decode negatives now covered by the Linux C# native-wrapper gate:
+    empty list, zero nullifier, over-limit count, duplicate nullifier,
+    descending order, current-note commitment reuse, current-note spend
+    nullifier reuse, and the raw over-limit count-prefix-only case that carries
+    no sequence elements. The SDK parity guard now pins the exact diagnostic
+    split for those cases across SDKs: count out of range, zero nullifier,
+    non-strict sorted/unique order, and current-note material reuse.
+  - The Windows C# pass validates accumulator top-up anchor nullifiers
+    before recursive-proof parsing, matching the Linux C# native-wrapper gate,
+    so malformed proof bytes cannot mask an invalid top-up anchor set or change
+    the expected field-scoped diagnostic.
+  - C# source-level transition-profile summary decoding now covers shared
+    ABI-6 init/append archives, defensive-copy previous-anchor/output metadata,
+    missing/zero/duplicate/descending previous top-up anchor payloads, init
+    profiles that carry previous anchors, and append current-hop outputs or
+    current-note fields that reuse a carried previous anchor before native
+    dispatch. The SDK parity top-up-anchor negative control mutates those C#
+    source/test markers with the other SDK invariant checks. The 2026-06-29
+    Windows `.NET 8.0.422` C# pass certifies those same transition-profile
+    vectors on `win-x64`.
+  - The Windows C# pass confirms the C# ABI-7 Pallas open-envelope archive
+    builders, matching the source-level wrappers and macOS-focused tests for
+    current-hop record bundles and previous recursive proof bundles. The
+    Windows pass pins malformed input archives, stale/missing native symbols,
+    and malformed native output archive rejection before those helpers are
+    marked supported on that host.
+  - The Windows C# Pallas open-envelope preflight rejects wrong schema,
+    record-bundle hop-count mismatches, metadata-option shape errors, and raw
+    count-prefix-only `params.g`/`params.h` plus proof `l`/`r` sequence-count
+    mismatches for current-hop native-wrapper openings before element parsing
+    can mask them as truncated vectors. Add separate C# typed init/append
+    previous-proof opening coverage if that request-constructor surface is
+    exposed.
+  - The Windows C# pass includes the negative that a
+    whitespace-padded `CID1` circuit id in the lineage verifier key rejects as
+    `lineage_verifier_key` before native bridge dispatch, even when the
+    proving-key archive commits to that padded verifier key.
+  - C# now exposes managed Offline Note canonical payload models/codecs for
+    key-certificate payload, issued-claim, redeem-public-inputs,
+    audit-public-inputs, note-commitment preimage, input-nullifier preimage,
+    and payment-token-id preimage compact Norito archives. Focused .NET tests
+    mirror the Swift/Kotlin/Android exact-domain negatives, including
+    padded/forged domain rejection, and add embedded-whitespace,
+    malformed archive, forged packed-layout header, compact-length,
+    option/bool, account controller, vector, hash, amount, asset-checksum,
+    commitment-origin, chain-id nesting, secret/nonce length, derivation-hash,
+    and audit-output mismatch negatives before wallet code trusts public inputs.
+  - C# now exposes a managed Offline Note payment-token model/codec surface for
+    the legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff. The C#
+    model keeps audit bundles as opaque Norito bytes while decoding their
+    structure enough to reject token-id/audit mismatches, malformed audit
+    schemas/layouts including forged packed-layout headers, empty or mismatched
+    audit vectors, output commitment/claim ordering drift, unsupported recursive
+    proof metadata,
+    empty proof bytes, malformed bearer-audit-trail elements, and trails that
+    do not end with the token audit. Exact chain/payment text now rejects
+    blank, padded, internal-whitespace, and control-character values before
+    token construction or decode, `created_at_ms` must be positive for both
+    payment-token envelopes and payment-token-id preimages, and
+    text-envelope decoding rejects surrounding or embedded whitespace plus
+    noncanonical base64url pad-bit aliases before prefix/base64url parsing.
+    Receipt ACK helpers and direct payment-token recipient lookups now require
+    canonical I105 recipient account ids before matching audit outputs, so
+    alias-style or padded account labels cannot be queried as recipient ids.
+  - C# now exposes a managed Offline Note receive-request model/codec surface
+    for the legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff.
+    Focused .NET tests pin exact metadata, canonical I105 account ids,
+    asset-definition/asset/account binding, canonical amount text,
+    noncanonical dataspace scope suffix rejection, embedded key-certificate
+    account binding, 32-byte output commitments, wrong schema/layout/checksum
+    rejection, forged packed-layout headers on the request envelope and embedded
+    key-certificate archive, malformed compact fields, nested trailing bytes,
+    embedded-whitespace text fields, surrounding-whitespace text envelopes, and
+    padded, malformed, or noncanonical base64url text before wallet code trusts
+    a receive request.
+  - C# now exposes a managed Offline Note receipt ACK model/codec surface for
+    the legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff. Focused
+    .NET tests mirror Swift/Kotlin/Android exactness negatives for
+    `chain_id`, `payment_request_id`, `recipient_account_id`, 32-byte
+    `token_id`, positive `accepted_at_ms`, wrong schema/exact-layout/checksum,
+    forged packed-layout headers, malformed compact lengths, invalid UTF-8
+    strings, embedded-whitespace strings, alias-style account labels, trailing bytes,
+    surrounding-whitespace text envelopes, and padded or noncanonical base64url
+    text at construction and decode boundaries.
+  - C# now exposes a managed Offline Note wallet-note persistence surface with
+    opaque key-certificate/audit Norito bytes, structured origin/state metadata,
+    and the Swift/Kotlin/Android JSON field names. Focused .NET tests mirror
+    the exactness negatives for persisted `chain_id`, canonical I105
+    `account_id`, canonical `asset_id`, and optional
+    `spent_payment_request_id`, rejecting alias-style account labels, mismatched
+    asset account components, padded, embedded-whitespace, control-character, or
+    blank values instead of normalizing them across account-scope or
+    replay-prevention boundaries; they also pin malformed or noncanonical
+    base64, duplicate root and nested persistence JSON properties, malformed
+    hex, uppercase persisted commitment hex, noncanonical amount text, signed,
+    zero-padded, or overflowing numeric-string counters, zero `created_at_ms`,
+    unknown or unsupported state values, backward timestamp pairs, origin, and
+    note-secret boundaries.
+  - The Windows C# pass includes identifier receipt attestation
+    selector exactness: Torii JSON receipt parsing now rejects padded,
+    internal-whitespace, control-character, or mixed-case attestation `kind`
+    tags before selecting signed/proof behavior. Raw
+    `ToriiIdentifierResolveResponse`
+    deserialization now enforces the same nested signed/proof attestation shape
+    rules as `ToriiClient`. If C# canonical attestation builders are added
+    later, mirror the same selector checks there too.
+  - The Windows C# pass includes identifier receipt proof-attestation
+    exactness: Torii JSON receipt parsing now rejects missing, padded,
+    internal-whitespace, malformed, or noncanonical proof-attestation
+    `proof_b64` and whitespace-containing `proof_backend` labels before base64
+    decoding or proof behavior selection, and raw DTO deserialization rejects
+    signed/proof field mixing before callers can observe a partially trusted
+    receipt. If C# canonical attestation builders are added later, mirror the
+    same proof checks there too.
+  - C# Torii identifier-resolve JSON parsing now rejects padded response
+    internal-whitespace, or control-character response `signature`,
+    `signature_payload_hex`,
+    exposed `payload.opening.signature`, and signed-attestation `signature`
+    fields, plus uppercase `0X` prefix aliases on those hex fields, before
+    callers can decode or verify receipt bytes. The focused .NET 8 Torii tests
+    cover these source-level negatives, and raw
+    `ToriiIdentifierResolveResponse` deserialization now also rejects
+    odd-length, non-hex, and uppercase-`0X` legacy signature,
+    `signature_payload_hex`, nested opening signature, and signed-attestation
+    signature fields, and now applies the same policy-id, account/payload field,
+    timestamp, opening-signature, and signed/proof attestation exactness checks
+    to raw legacy `signature_payload` objects. If C# canonical
+    payload/attestation builders or verifier inputs are added later, mirror the
+    same padded/internal-whitespace, malformed-hex, and `0X` opening-signature
+    and signed-attestation signature vectors there too.
+  - The Windows C# pass includes identifier receipt policy-id
+    exactness: `ResolveIdentifierAsync` now rejects non-exact request
+    `policy_id`, top-level response `policy_id`, and
+    `signature_payload.policy_id` / `signature_payload.payload.policy_id`
+    values with padded, internal-whitespace, control-character, or malformed `kind#rule`
+    components before HTTP dispatch or receipt verification. It also rejects
+    blank, padded, internal-whitespace, NBSP-containing, or control-character
+    `encrypted_input` text before dispatch. If a C#
+    canonical receipt payload builder is added later, mirror the same
+    policy-id checks there too.
+  - The Windows C# pass includes identifier receipt program-id
+    exactness: Torii JSON receipt parsing now rejects padded,
+    internal-whitespace, or control-character
+    `signature_payload.payload.execution.program_id` and
+    `signature_payload.payload.opening.payload.program_id` values before receipt
+    verification. If a C# canonical receipt payload builder is added later,
+    mirror the same program-id checks there too.
+  - The Windows C# pass includes identifier receipt account-id
+    exactness: Torii JSON receipt parsing now rejects padded,
+    internal-whitespace, or control-character
+    `signature_payload.payload.account_id` values before receipt verification.
+    If a C# canonical receipt payload builder is added later, mirror the same
+    account-id checks there too.
+  - The Windows C# pass includes identifier receipt hash-field
+    exactness: Torii JSON receipt parsing now rejects padded,
+    internal-whitespace, or control-character
+    `signature_payload.payload.opaque_id`,
+    `signature_payload.payload.receipt_hash`,
+    `signature_payload.payload.uaid`, execution digest fields, and opening
+    payload digest fields before receipt verification. If a C# canonical
+    receipt payload builder is added later, mirror the same digest-field checks
+    there too.
+  - The Windows C# pass includes identifier receipt timestamp
+    exactness: Torii JSON receipt parsing now rejects padded,
+    internal-whitespace, or leading-zero numeric-string
+    receipt times for `signature_payload.payload.execution.executed_at_ms`,
+    `signature_payload.payload.execution.expires_at_ms`,
+    `signature_payload.payload.opening.payload.opened_at_ms`, and
+    `signature_payload.payload.opening.payload.expires_at_ms`, and rejects
+    non-positive receipt times before receipt verification. Raw
+    `ToriiIdentifierResolveResponse` deserialization now also validates nested
+    opening payload timestamps instead of relying on later client response
+    validation. If a C# canonical receipt payload builder is added later,
+    mirror the same u64 checks there too.
+  - The Windows C# `TransactionBuilder`/`TransactionEncodingContext`
+    pass includes the new focused negatives for padded constructor,
+    instruction, metadata, and common encoder fields. Chain ids,
+    authority/account ids, asset/domain ids, metadata keys, numeric strings,
+    optional strings, NFT/trigger labels, and label-like fields now reject
+    surrounding whitespace, internal whitespace, or control characters before
+    Norito transaction bytes are encoded or signed instead of normalizing with
+    `Trim()`. The Linux .NET pass now also rejects noncanonical transaction
+    authority account ids at builder construction and account-bearing
+    instruction fields at factory/constructor/update boundaries, including
+    alias-style, hex-literal, and sentinel aliases, plus transaction numeric
+    aliases such as signed positives, missing integer/fraction digits, leading
+    integer zeros, negative zero, zero creation-time milliseconds, and pre-epoch
+    `DateTimeOffset` values that could otherwise wrap during unsigned
+    conversion before encoding. It expands the adversarial instruction matrix
+    across transfer, mint/burn, all metadata set/remove factories, NFT paths,
+    trigger set/remove/repetition/execute paths, and fixed-byte/hash literal
+    helpers so each public managed transaction instruction family has a
+    non-exact boundary vector pinned before signing. Asset transfer/mint/burn
+    quantities now reject zero and negative values through builder, factory,
+    direct construction, and `with` mutation paths, while the generic numeric
+    codec still accepts signed canonical numerics for non-quantity fields.
+    Trigger repetition mint/burn instructions now also reject zero repetitions
+    through builder, factory, direct construction, and `with` mutation paths.
+  - The Windows C# canonical request auth pass includes the new
+    `CanonicalRequestTests` and `ToriiClientTests` negatives for padded,
+    internal-whitespace, explicitly blank, alias-style, hex-literal, or
+    noncanonical sentinel-alias account ids, caller-provided nonces, methods,
+    paths, signature-header text, and non-positive `timestampMs` values; the
+    implementation now rejects those values before signing or header emission
+    instead of accepting
+    `ArgumentException.ThrowIfNullOrWhiteSpace`, generating a fresh nonce for
+    caller-supplied blank values, or emitting zero/negative canonical-auth
+    timestamps. The Linux .NET pass now also rejects malformed canonical query
+    percent escapes and percent-decoded control bytes
+    before query sorting or signing, while preserving deterministic
+    normalization for valid escapes. The Linux .NET pass now also hardens
+    public `ToriiClient.SendAsync(...)` request setup so padded, NBSP-padded,
+    blank, internal-whitespace, or control-character paths and constructible
+    blank HTTP methods fail before URI construction, HTTP dispatch, or
+    canonical header generation.
+  - The Windows C# raw Torii submission pass includes the new
+    bearer-token, low-level query, `Accept`, `Last-Event-ID`, signed-query payload, and
+    transaction payload negatives. The Linux .NET pass now rejects padded,
+    whitespace-only, embedded-whitespace, control-character, malformed
+    percent-escape, invalid percent-encoded UTF-8, or
+    percent-decoded-control optional query text before URI construction, HTTP
+    dispatch, or canonical header generation, rejects malformed SSE
+    event-filter query percent escapes, invalid percent-encoded UTF-8, and
+    percent-decoded controls before JSON filter validation or dispatch, rejects
+    blank or non-exact configured bearer-token text, rejects non-exact optional
+    header text, malformed SSE resume ids, and noncanonical SSE retry metadata
+    before dispatch or stream yielding, rejects duplicate object keys in raw
+    `JsonDocument` GET/POST, signed-query JSON, pipeline-status JSON, and typed
+    Torii response bodies before callers can observe last-key-wins property
+    lookups or materialized DTOs, and rejects empty raw Norito
+    signed-query/transaction payloads before binary content is created.
+  - The Windows C# route-segment pass includes the new explorer/account
+    read negatives. The Linux .NET pass now rejects null, blank, padded,
+    internal-whitespace, and control-character path identifiers across explorer
+    account/domain/asset/NFT/RWA/block/transaction/instruction reads and account
+    asset/transaction/permission route reads before URI construction or HTTP
+    dispatch instead of trimming them into requests.
+  - The Windows C# explorer/account query-filter pass includes the new
+    domain, owner, asset, authority, transaction, instruction-kind, account
+    asset, and account scope negatives. The Linux .NET pass now rejects blank,
+    padded, internal-whitespace, and control-character typed filter values
+    before query construction or HTTP dispatch instead of trimming or omitting
+    them.
+  - The Windows C# account/explorer directory response pass includes
+    the new null page/list/item, malformed account id, malformed I105 address,
+    malformed domain/logo/owner text, and negative account-total negatives. The
+    Linux .NET pass now rejects those malformed Torii account and explorer
+    directory responses before returning trusted account or domain inventory.
+  - The Windows C# explorer inventory response pass includes the new
+    asset-definition, asset, NFT, and RWA negatives for null pagination/list/
+    item shapes, malformed identifiers and owners, malformed status/reference
+    fields, noncanonical quantity/value text, and malformed RWA parent lists.
+    The Linux .NET pass now rejects those malformed Torii inventory responses
+    before returning trusted asset, NFT, or RWA inventory.
+  - The Windows C# explorer supplemental response pass includes the new
+    QR, asset-definition econometrics, holder snapshot, health, and metrics
+    negatives for malformed account/definition identifiers, QR dimensions/text,
+    null nested lists/items/distributions, malformed numeric text, out-of-range
+    distribution ratios, and malformed timestamp fields. The Linux .NET pass
+    now rejects those malformed Torii responses before returning rendered QR,
+    aggregate econometrics, holder distribution, or explorer status snapshots.
+  - The Windows C# alias read pass includes the new lookup and resolve
+    negatives. The Linux .NET pass now rejects blank, padded,
+    internal-whitespace, and control-character account ids, aliases, dataspace
+    filters, and domain filters before HTTP dispatch instead of trimming them
+    into account/asset/contract alias requests.
+  - The Windows C# verifying-key read pass includes the new malformed
+    detail-envelope, id/backend/name, record backend mismatch, version,
+    lowercase fixed-hash, status, height-range, CID, gas-schedule, and
+    inline-key base64 response negatives. The Linux .NET pass now rejects those
+    malformed registry responses before returning the raw `JsonDocument` helper result. The same Windows pass includes verifying-key register/update response
+    negatives for non-object, missing, null, false, and type-confused
+    `accepted` envelopes.
+  - The Windows C# contract-write pass includes the new deploy,
+    activate, call, contract-view, multisig propose/approve, and
+    verified-source request negatives. The Linux .NET pass now rejects
+    noncanonical I105 contract authorities, contract-call fee sponsors, and
+    multisig fee sponsors, non-exact contract aliases/targets, malformed signer
+    material, malformed or noncanonical base64 frames, non-32-byte hashes, missing multisig
+    selectors, zero supplied multisig creation times, empty native instruction batches, and zero gas limits before
+    HTTP dispatch; deploy and
+    activation responses reject false `ok` envelopes and non-exact deployment
+    hash material; contract-call responses reject false `ok` envelopes and
+    non-exact or noncanonical `transaction_scaffold_b64`,
+    `signed_transaction_b64`, or `signing_message_b64` material; generic and
+    contract-call multisig proposal/approval responses reject false `ok`
+    envelopes and non-exact or noncanonical `signing_message_b64` before
+    callers trust returned signing material;
+    deploy DTOs now serialize Torii's current `contract_alias` field instead of
+    the retired `dataspace` request field.
+  - The Windows C# contract-read/admin pass includes the new code-hash,
+    namespace, verified-source job-id, contract instance-filter, and contract
+    state-query negatives. The Linux .NET pass now rejects non-exact contract
+    read route identifiers, non-32-byte code hashes, malformed hash prefixes,
+    padded instance filters, and blank/padded state path and decode fields before
+    HTTP dispatch instead of silently trimming them into Torii requests; code-byte
+    responses, plus raw code-byte DTO parsing, reject null, missing, duplicate,
+    and type-confused `code_b64` envelopes, duplicate keys inside ignored
+    extension values, and blank, padded, whitespace-containing,
+    control-character, and malformed `code_b64` before callers trust returned code material; contract
+    state responses reject non-exact `value_b64` and mismatched decoded
+    `value_len` before callers trust returned state material.
+  - The Windows C# Torii faucet pass includes the new account-faucet
+    PoW negatives. The Linux .NET pass now rejects non-exact local challenge
+    inputs, malformed nonce hex, unsupported or whitespace/control-character
+    puzzle algorithm selectors, uppercase response salt hex, one-sided claim
+    PoW anchor/nonce fields, zero anchor heights, and over-32-byte claim nonces
+    before scrypt work or HTTP dispatch.
+  - The Windows C# account-onboarding pass includes the new explicit
+    UAID contract and multisig shape negatives. The Linux .NET pass now rejects
+    raw `identity`, missing/even-low-bit UAIDs, ambiguous or missing
+    `account_id`/`public_key_hex` material, noncanonical I105 `account_id`
+    values, malformed identity commitments, non-exact permissions,
+    noncanonical multisig member account ids, zero/mismatched member weights,
+    impossible signer thresholds, and zero TTLs before HTTP dispatch.
+  - The Windows C# UAID Torii pass includes the new raw portfolio,
+    bindings, and manifest ignored-extension duplicate-key negatives. The Linux
+    .NET pass now rejects duplicate keys hidden inside ignored UAID extension
+    values across direct and nested portfolio, bindings, manifest lifecycle,
+    manifest revocation, and manifest record DTOs.
+  - The Windows C# VPN Torii pass includes the new write-request
+    pre-dispatch negatives plus uppercase fixed-hash, native-instruction
+    response, and raw ignored-extension duplicate-key negatives. The Linux .NET
+    pass now rejects padded, whitespace-containing, control-character,
+    wrong-length, prefixed, and non-hex quote/session/receipt fields before HTTP
+    dispatch while preserving Torii's empty exit-class default and empty receipt
+    lease-id fallback, and rejects duplicate keys hidden inside ignored VPN
+    profile, quote, session, receipt, receipt-list, and native-instruction
+    extension values. The same Linux .NET pass now rejects zero quote
+    expiration, zero connected/disconnected timestamps, session expiry values
+    that are not after connection time, and receipt disconnection values that
+    precede connection time across raw response DTOs and in-memory DTO writes.
+    VPN profile, quote, session, receipt, and receipt-list response account,
+    escrow, and operator account ids must now be canonical I105 values before
+    callers trust tunnel or settlement metadata.
+  - The Windows C# SoraFS Torii pass includes the buffered content CID
+    header negatives plus raw ignored-extension duplicate-key negatives. The
+    Linux .NET pass now rejects blank, uppercase, whitespace-containing,
+    control-character, non-CID, and duplicated `sora-content-cid` headers before
+    returning buffered content metadata while preserving the raw stream helper
+    and absent optional-header behavior, and rejects duplicate keys hidden inside
+    ignored SoraFS CID/file-entry, denylist catalog/pack, and pin
+    alias/register extension values.
+  - The Windows C# SDK lane includes `PrivacyNativeTests`, whose
+    cross-platform .NET 8 pass now covers the public VeRange V1 aliases
+    `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
+    `verifyVeRangeProofV1` alongside the generic `BuildProofV1` and
+    `VerifyProofV1` archive paths. The Linux .NET pass now also rejects
+    non-exact `PrivacyProofRequestV1` selector text for `algorithmId`,
+    `entrypoint`, and `vkRef` before native dispatch, including empty,
+    whitespace/non-breaking-space, control-character, and over-1024-byte
+    vectors.
+  - The Windows C# signed-query builder lane includes the new exactness
+    negatives. The Linux .NET pass now rejects noncanonical I105 authorities
+    and account-id selectors, including alias-style, hex-literal, and sentinel
+    aliases, plus whitespace-containing or control-character singular-query
+    selector, optional alias-filter, proof-hash, DA pin, SoraFS provider,
+    iterable selector, continuation cursor id, and sort-key text before Norito
+    encoding or signing while preserving accepted proof-hash casing/`0x`
+    canonicalization. Iterable continuation gas budgets now also reject zero
+    before signing when callers supply them.
+  - The Windows C# account-address lane includes the new I105 parser
+    exactness negatives. The Linux .NET pass now rejects padded I105 address
+    literals before canonical decoding, and now pins numeric `n` sentinels for
+    unsigned-u16 overflow, signed/fullwidth digit forms, leading-zero aliases,
+    and case-drifted signing-algorithm labels instead of trimming or
+    reinterpreting pasted account identifiers.
+  - Re-ran `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
+    the Windows evidence, clearing C# SDK parity status explicitly.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
   parity inventory: Kotlin/JVM runs recursive spend, canonical request auth,
   Torii confidential asset clients, Offline Torii readiness clients,
@@ -1923,11 +2944,10 @@ and completed history lives in [`status.md`](./status.md).
   append-opening preflight, recursive verifier scalar-projection, and
   previous/resulting accumulator material aliases across non-C# SDK surfaces
   and TypeScript declarations, so the scanner proves those material families
-  stay native-owned outside the package-declaration test too. Non-C# SDK
-  READMEs must document the same native-owned alias boundary, with a dedicated
-  negative control that mutates the Swift, Kotlin/JVM, Android Java, C#,
-  JavaScript/TypeScript, and Python docs through the same workflow-backed SDK
-  guard.
+  stay native-owned outside the package-declaration test too. SDK READMEs must
+  document the same native-owned alias boundary, with a dedicated negative
+  control that mutates the Swift, Kotlin/JVM, Android Java, C#,
+  JavaScript/TypeScript, and Python docs.
   That control must require exact diagnostics for every alias marker in every
   mutated README so a single generic proof-state marker cannot mask narrower
   documentation drift, and it must separately pin each SDK's "not request
@@ -2168,6 +3188,11 @@ and completed history lives in [`status.md`](./status.md).
   request path reporting the same exact digest
   length, zero-value, repeated-material, and amount/publicAmount diagnostics on
   both runner families.
+  The 2026-06-29 Windows `.NET 8.0.422` full C# pass confirms the C#
+  spendable-note request path reports the same exact digest length, zero-value,
+  and repeated-material diagnostics on `win-x64`, and confirms its
+  amount/publicAmount invalid-value vectors carry the same field-specific
+  diagnostics.
   Kotlin/JVM and Android Java typed verify request tests must also pin the
   exact `blockHeight must be non-negative` diagnostic for signed negative
   `Long` inputs, with the verify-lineage preflight negative control mutating
@@ -2200,6 +3225,9 @@ and completed history lives in [`status.md`](./status.md).
   controls mutate those exact table markers.
   The Ubuntu/Windows C# SDK matrix must keep the C# typed init/Pallas archive
   path reporting the same structured checksum and malformed archive diagnostics.
+  The 2026-06-29 Windows `.NET 8.0.422` C# pass confirms the C# typed
+  init/Pallas archive path reports the same structured checksum and malformed
+  archive diagnostics on `win-x64`.
   Kotlin/JVM and Android Java proof-output-only and evidence-builder tests must
   also keep exact diagnostics for empty hop lists, proof-only recursive spend
   helper rejection, rejected privacy build results, inactive unshield verifier
@@ -2212,6 +3240,9 @@ and completed history lives in [`status.md`](./status.md).
   The Ubuntu/Windows C# SDK matrix must keep the C# proof-output/evidence-helper
   path carrying the same rejected privacy result and inactive verifier-record
   diagnostics.
+  The 2026-06-29 Windows `.NET 8.0.422` full C# pass confirms the C#
+  proof-output/evidence-helper path carries the same rejected privacy result
+  and inactive verifier-record diagnostics on `win-x64`.
 - Kagemusha SDK README parity must keep the ABI-7 Pallas open-envelope builder
   helpers documented across Swift, Kotlin/JVM, Android Java, JavaScript/Node,
   Python, and C#. Those READMEs should name the current-hop record-bundle
@@ -2235,6 +3266,11 @@ and completed history lives in [`status.md`](./status.md).
   The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output
   diagnostics for recursive-spend redeem output, Pallas open-envelope builder
   output, previous-proof builder output, and compact projection output.
+  output reader before the Windows host-certification follow-up above.
+  The 2026-06-29 Windows `.NET 8.0.422` C# pass certifies matching exact C#
+  native-output diagnostics on `win-x64` for recursive-spend redeem output,
+  Pallas open-envelope builder output, previous-proof builder output, and
+  compact projection output.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
@@ -2461,14 +3497,23 @@ and completed history lives in [`status.md`](./status.md).
   cases.
   The focused .NET 8 C# Torii tests now include resolver public-key exactness
   for identifier receipt policy summaries: `GetIdentifierPoliciesAsync` rejects
-  blank, padded, and control-character `resolver_public_key` values before
-  returning summaries. If C# verifier inputs are added later, mirror the same
-  padded-key negative vectors there too.
+  blank, padded, internal-whitespace, and control-character
+  `resolver_public_key` values before returning summaries. If C# verifier
+  inputs are added later, mirror the same non-exact key negative vectors there
+  too.
   The focused .NET 8 C# Torii tests also include policy-summary `policy_id`
   exactness for identifier receipt policy summaries: `GetIdentifierPoliciesAsync`
-  rejects padded, control-character, and malformed `kind#rule` policy ids before
-  returning summaries. If C# identifier receipt verifier inputs are added later,
-  mirror the same policy-id negative vectors there too.
+  rejects padded, internal-whitespace, control-character, and malformed
+  `kind#rule` policy ids before returning summaries. If C# identifier receipt
+  verifier inputs are added later, mirror the same policy-id negative vectors
+  there too.
+  Raw C# identifier policy summary/page DTO deserialization now applies the
+  same fail-closed policy-id, resolver-key, required-field, and page-envelope
+  checks, including top-level null rejection, duplicate-property rejection,
+  duplicate-key rejection inside ignored extension values,
+  integer/boolean/list type checks, null item rejection, required page totals,
+  and write-side malformed policy-id or negative-total rejection before callers
+  trust identifier policy listings.
   The focused .NET 8 C# Torii tests include source-level Torii identifier-resolve
   signature exactness negatives covered by `ToriiClientTests`, including padded
   response `signature`, `signature_payload_hex`, exposed
@@ -2486,8 +3531,9 @@ and completed history lives in [`status.md`](./status.md).
   Rust coverage. Production verifier backend
   labels must keep the same
   exactness across Python, JavaScript, Kotlin/JVM, Android Java, Swift, and C#
-  Torii/instruction-builder surfaces: padded labels fail with a
-  surrounding-whitespace error before unsupported backend classification,
+  Torii/instruction-builder surfaces: blank labels fail as blank, padded labels
+  fail with a surrounding-whitespace error, and internal-whitespace labels fail
+  with a whitespace error before unsupported backend classification,
   verifier-key id construction, event-filter dispatch, or request dispatch.
   Swift, JavaScript/Node, and Python Torii contract/explorer query helpers must
   also reject padded account, authority, asset-definition/id, owned-by,
@@ -2531,16 +3577,26 @@ and completed history lives in [`status.md`](./status.md).
   time so Kagemusha helpers cannot be bypassed through direct payload use.
   Account-address/signing algorithm selectors must also stay exact across Python, JavaScript,
   Kotlin/JVM, Android Java, Swift, and C#: omitted default parameters can still
-  select Ed25519, but explicit blank or padded labels must fail before alias
-  normalization, public-key address construction, key-generation selection, or
-  native bridge dispatch. Offline-cash configuration snapshots must keep issuer
-  public keys exact across SDKs as non-empty printable ASCII with no whitespace
-  or non-ASCII normalization before offline exchange; their cached and required
-  native bridge ABI versions must also be positive integers before the
-  too-old-bridge comparison can report `unsupported_native_bridge_abi`, with the
-  JavaScript package-dist entrypoint carrying the same runtime vectors as the
-  source module. Swift's standalone issuer-key parser must reject padded
-  base64/base64url text before decoding.
+  select Ed25519, but explicit blank, padded, or internal-whitespace labels must
+  fail before alias normalization, public-key address construction,
+  key-generation selection, or native bridge dispatch. Offline-cash
+  configuration snapshots must keep chain, asset, issuer public key,
+  artifact-set, and circuit identifiers exact across SDKs as non-empty printable
+  ASCII with no whitespace or non-ASCII normalization before offline exchange;
+  future-created snapshots and expiry-at-or-before-created timestamp pairs must
+	  fail before wallet exchange, and cached and required native bridge ABI versions
+	  must also be positive integers before the too-old-bridge comparison can report
+	  `unsupported_native_bridge_abi`, with the JavaScript package-dist entrypoint
+	  carrying the same runtime vectors as the source module. C# Torii opaque JSON
+	  readers now reject duplicate object keys at any depth before preserving
+	  account-permission payloads, identifier receipt payloads, decoded identifier
+	  policy parameters, ignored identifier policy/receipt extension values, UAID
+	  manifests, contract-view results, or contract-state `value_json`; C# typed
+	  SSE projections also apply the same recursive
+	  duplicate-key rejection before preserving or deserializing raw `data:` JSON.
+	  Keep that policy for other SDKs that expose these fields as raw JSON.
+	  Swift's standalone issuer-key parser must reject padded base64/base64url text
+	  before decoding.
   Swift counterparty offline proof verification must also dispatch only exact
   `ios`/`android` platform labels so padded values cannot enter challenge or
   binding verification paths. Kotlin/JVM and Android Java canonical I105
@@ -6619,10 +7675,10 @@ and completed history lives in [`status.md`](./status.md).
 	  Groth16 artifact hashes, fixed source-proof hashes, and canonical SCCP
 	  message-bundle hash fields; keep the SDK tests and strict bundle/readiness
 	  inventory markers pinned. The focused JavaScript/Python, Swift,
-	  Kotlin/JVM, Java Android, and contract-smoke SCCP corridor phases now pass
-	  locally, with Homebrew OpenJDK 21 pinned via `JAVA_HOME` for the Java
-	  phases; the remaining host-dependent SCCP SDK certification is the Windows
-	  `.NET 8` evidence pass tracked below.
+	  Kotlin/JVM, Java Android, contract-smoke, and Windows `.NET 8.0.422`
+	  SCCP corridor phases now pass locally, with Homebrew OpenJDK 21 pinned via
+	  `JAVA_HOME` for the Java phases and `win-x64` evidence recorded for the
+	  `.NET` phase.
   Deployment-derived Rust bindings must additionally require the full
   standalone deployment descriptor shape before minting binding hashes, including
   TON partial-audit, receipt/VK replay, and adapter verifier-key drift
@@ -6668,10 +7724,12 @@ and completed history lives in [`status.md`](./status.md).
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1`, leading-zero values such as `01`, whitespace-padded values, and
-  plus-signed, decimal-looking, Unicode-confusable, or numeric JSON values
-  remain evidence blockers. The readiness-report and strict bundle tests also
-  mutate source and destination metadata independently so one canonical side
-  cannot hide the other side's drift.
+  plus-signed, decimal-looking, Unicode-confusable, numeric JSON, or oversized
+  JSON-RPC quantity values remain evidence blockers. C# destination-binding
+  expected-key checks now reject padded or control-character-suffixed expected
+  keys instead of trimming them before comparison. The readiness-report and
+  strict bundle tests also mutate source and destination metadata independently
+  so one canonical side cannot hide the other side's drift.
 - SCCP Ethereum source-event context inventory must keep the Rust EVM receipt
   duplicate matching-log rejection pinned alongside receipt-log RPC context
   checks, so one source receipt cannot satisfy admission with multiple matching
@@ -7846,9 +8904,9 @@ and completed history lives in [`status.md`](./status.md).
   native-artifact, manifest, release-notes, phase-transcript, self-verifier,
   and standalone strict-verifier summary items as open SCCP launch work because
   their direct generator and strict-verifier adversarial regressions are green.
-  Native .NET proof-request canonical replay remains a Windows validation item
-  until a stable `.NET 8.0.x` SDK Windows host captures release evidence. On
-  that Windows machine, prefer
+  Native .NET proof-request canonical replay is now certified by the
+  2026-06-29 stable `.NET 8.0.422` SDK Windows host release evidence. For any
+  future recertification on a Windows machine, prefer
   `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk` from Git
   Bash or WSL so the strict evidence markers are emitted by the same runner as
   the release checklist. For direct reproduction, record `dotnet --version`,
@@ -7858,15 +8916,15 @@ and completed history lives in [`status.md`](./status.md).
   SHA-256; prepend the bridge `debug` directory to `PATH`; run
   `dotnet restore csharp/Hyperledger.Iroha.Sdk.sln`; then run
   `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~Sccp" --logger "trx;LogFileName=sccp-dotnet-sdk.trx"`.
-  The blocker clears only after the Windows result counts, the strict
+  The 2026-06-29 blocker cleared after the Windows result counts, the strict
   `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, the positive
   `SCCP .NET SDK TRX bytes: <positive integer>` marker, and TRX/corridor log
-  paths are recorded in `status.md`; fixture parity or a non-Windows run must
+  paths were recorded in `status.md`; fixture parity or a non-Windows run must
   not be treated as final release evidence for this item. The source tree now
   includes .NET SCCP canonical-case rejection coverage for proof-request fixed
   hashes, local-admission source-material hashes, message-bundle/source-proof
-  binding, and optional Groth16 artifact hash fields; the Windows pass must
-  execute those tests and surface the uppercase byte alias plus `0X`
+  binding, and optional Groth16 artifact hash fields; the Windows pass executed
+  those tests and surfaced the uppercase byte alias plus `0X`
   public-input, statement, source-material, proof-artifact, and proving-key hash
   negatives in the `sccp-dotnet-sdk.trx` evidence. Required release evidence now
   names that canonical-case coverage explicitly in both readiness Markdown and
@@ -7993,17 +9051,18 @@ and completed history lives in [`status.md`](./status.md).
   The native bridge path marker must match the traced `CARGO_TARGET_DIR` value
   followed by `debug/connect_norito_bridge.dll`, and the release
   phase-transcript source inventory must pin that helper plus the
+  runner's empty-`PATH` preflight, fake-Windows adversarial path cases, and the
   readiness/bundle drift regressions.
   The VSTest summary, TRX path, and TRX bytes markers must each appear exactly
   once after the strict `dotnet test` command in the transcript;
   success-looking output before that command or duplicate success markers inside
   that command window remain forged evidence. Bare `Passed!` labels,
   zero-passed summaries, skipped summaries,
-	  wrong-assembly summaries, malformed duration summaries, forged totals, failed
-	  summaries, transcripts that run or report `dotnet test` before `dotnet restore`,
-	  the old ETH/BSC-mainnet-only `.NET` filter, extra non-canonical `.NET`
-	  setup/test commands before or beside the strict SCCP command sequence, uppercase or mixed-case
-	  RID/architecture markers, mismatched RID/architecture marker pairs,
+  wrong-assembly summaries, malformed duration summaries, forged totals, failed
+  summaries, transcripts that run or report `dotnet test` before `dotnet restore`,
+  the old ETH/BSC-mainnet-only `.NET` filter, extra non-canonical `.NET`
+  setup/test commands before or beside the strict SCCP command sequence, uppercase or mixed-case
+  RID/architecture markers, mismatched RID/architecture marker pairs,
   malformed version/OS/RID/architecture lines, host markers printed before
   `dotnet --info`, missing TRX markers, zero or
   malformed TRX byte markers, arbitrary TRX-looking paths, traversal-bearing,
@@ -8713,9 +9772,10 @@ and completed history lives in [`status.md`](./status.md).
   malformed/empty container remain readiness and published-bundle blockers.
   Individual SDK result rows must also remain canonical objects with all
   required fields, no unknown fields, and values matching the shared fixture
-  hashes and public-signal vector. Duplicate JSON keys inside fixture roots or
-  SDK result rows must fail before row values are trusted, so row-level shape
-  drift is rejected before release evidence can pass.
+  hashes and public-signal vector. Duplicate JSON keys inside fixture roots,
+  `sdk_results` maps, or SDK result rows must fail before row values are
+  trusted, so row-level shape drift is rejected before release evidence can
+  pass.
   Fixture root objects and SDK result rows also reject malformed unknown field
   names with structured blockers, so control characters, whitespace,
   Markdown-unsafe characters, and non-ASCII/confusable keys are never echoed in
@@ -8812,7 +9872,9 @@ and completed history lives in [`status.md`](./status.md).
   finalized-header shape source inventory to a production gate, so public SDK
   validators and negative tests for non-zero parent/state/body roots plus
   96-byte finalized-header signatures must stay pinned before active Ethereum
-  launch evidence can pass.
+  launch evidence can pass. Beacon REST response parsers must also reject
+  duplicate JSON keys at the root, nested-object, and array-contained-object
+  boundaries before finality evidence fields are trusted.
 - SCCP release readiness reports now also promote the Ethereum Beacon REST
   execution-payload binding source inventory to a production gate, so Beacon
   target-header/root/block reads, light-client finality-update evidence,
@@ -9666,8 +10728,9 @@ and completed history lives in [`status.md`](./status.md).
   binding, proof artifact, and proving key hashes. JS/browser, Swift,
   Kotlin/JVM, Java Android, and C# now expose that native prover bundle as a
   first-class SDK descriptor, validate the per-SDK native implementation rows
-  and audit hashes locally, parse the signed JSON manifest with the same
-  camelCase/snake_case release-tooling aliases, and let Ethereum mainnet
+  and audit hashes locally, decode manifest and parity/self-test fixture bytes
+  with strict UTF-8 before JSON parsing, parse the signed JSON manifest with the
+  same camelCase/snake_case release-tooling aliases, and let Ethereum mainnet
   outbound facades bind the descriptor hashes into proof requests while
   rejecting loose hash conflicts. The bundle parsers now reject noncanonical
   hash evidence, including uppercase or mixed-case `audit_hashes`, before apps
@@ -9988,8 +11051,11 @@ and completed history lives in [`status.md`](./status.md).
   `syncCommitteeBits` or whose `syncSignatureSlot` does not cover the
   finalized `beaconSlot`; those direct finality maps must also carry
   `finalityBranch`/`finality_branch` before easy inbound prover callbacks can
-  run. Accepted direct finality maps now strip known alias spellings from
-  callback-facing evidence while preserving unknown extension fields for app
+  run, and C# now rejects leading-zero or overflowing decimal/hex strings for
+  direct and Beacon REST u64 slot/counter fields instead of parsing them under
+  an alternate canonical value. Accepted direct finality maps now strip known
+  alias spellings from callback-facing evidence while preserving unknown
+  extension fields for app
   proof context. The EVM contract smoke path now also binds its `networkId`
   vector to a 32-byte Ethereum mainnet chain-id `1` value instead of a devnet
   label before exercising constructor and destination-binding checks, and the

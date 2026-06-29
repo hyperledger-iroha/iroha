@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
@@ -51,25 +52,66 @@ public static class EthereumMainnetSccp
 
     public static readonly IReadOnlyDictionary<string, string>
         EthNativeEvmProverRequiredImplementationsV1 =
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["javascript"] = "pure-typescript",
-                ["swift"] = "native-swift",
-                ["kotlin"] = "native-kotlin",
-                ["java-android"] = "native-java",
-                ["dotnet"] = "native-csharp",
-            };
+            new ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["javascript"] = "pure-typescript",
+                    ["swift"] = "native-swift",
+                    ["kotlin"] = "native-kotlin",
+                    ["java-android"] = "native-java",
+                    ["dotnet"] = "native-csharp",
+                });
 
     public static readonly IReadOnlyList<string> EthNativeEvmProverRequiredAuditHashesV1 =
-        new[]
+        Array.AsReadOnly(new[]
+            {
+                "circuit_security_audit",
+                "native_implementation_audit",
+                "reproducible_build_attestation",
+                "cross_sdk_fixture_parity",
+                "native_prover_self_test",
+                "no_wasm_no_remote_scan",
+            });
+
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+    internal static string DecodeStrictUtf8JsonBytes(byte[] payload, string parameterName)
+    {
+        try
         {
-            "circuit_security_audit",
-            "native_implementation_audit",
-            "reproducible_build_attestation",
-            "cross_sdk_fixture_parity",
-            "native_prover_self_test",
-            "no_wasm_no_remote_scan",
-        };
+            return StrictUtf8.GetString(payload);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new ArgumentException($"{parameterName} must be valid UTF-8 JSON.", parameterName, exception);
+        }
+    }
+
+    internal static void RejectDuplicateJsonProperties(JsonElement element, string label)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (!seen.Add(property.Name))
+                    {
+                        throw new ArgumentException($"{label} contains duplicate JSON key: {property.Name}");
+                    }
+                    RejectDuplicateJsonProperties(property.Value, $"{label}.{property.Name}");
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    RejectDuplicateJsonProperties(item, $"{label}[{index}]");
+                    index++;
+                }
+                break;
+        }
+    }
 
     internal static string NormalizeNativeEvmProverBundleHex32(string value, string name)
     {
@@ -1420,7 +1462,9 @@ public static class EthereumMainnetSccp
         EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts)
     {
         var submission = BuildEthereumCalldataUnchecked(input);
-        RequireVerifiedNativeProverArtifacts(nativeProverArtifacts, input.ProofResult!);
+        var proofResult = input.ProofResult
+            ?? throw new ArgumentException("proofResult is required.", nameof(input));
+        RequireVerifiedNativeProverArtifacts(nativeProverArtifacts, proofResult);
         return submission;
     }
 
@@ -1842,7 +1886,7 @@ public static class EthereumMainnetSccp
             }
         }
 
-        if (expectedKey is not null && !string.Equals(expectedKey.Trim(), key, StringComparison.Ordinal))
+        if (expectedKey is not null && !string.Equals(expectedKey, key, StringComparison.Ordinal))
         {
             throw new ArgumentException(
                 "expectedKey must match the Ethereum mainnet destination binding.",
@@ -2833,7 +2877,19 @@ public static class EthereumMainnetSccp
     private static ulong NormalizeRpcChainId(object? value)
     {
         var quantity = NormalizeRpcQuantity(value, "eth_chainId");
-        return Convert.ToUInt64(quantity[2..], 16);
+        return ParseCanonicalHexQuantityUInt64(quantity[2..], "eth_chainId");
+    }
+
+    private static ulong ParseCanonicalHexQuantityUInt64(string hex, string parameterName)
+    {
+        if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must fit in an unsigned 64-bit integer.",
+                parameterName);
+        }
+
+        return parsed;
     }
 
     private static ulong NormalizeUnsignedInteger(object? value, string parameterName)
@@ -2882,7 +2938,14 @@ public static class EthereumMainnetSccp
                     parameterName);
             }
 
-            return Convert.ToUInt64(hex, 16);
+            if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsedHex))
+            {
+                throw new ArgumentException(
+                    $"{parameterName} must fit in an unsigned 64-bit integer.",
+                    parameterName);
+            }
+
+            return parsedHex;
         }
 
         if (value.Length == 0
@@ -2893,7 +2956,14 @@ public static class EthereumMainnetSccp
                 parameterName);
         }
 
-        return ulong.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        if (!ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must fit in an unsigned 64-bit integer.",
+                parameterName);
+        }
+
+        return parsed;
     }
 
     private static IReadOnlyDictionary<string, object?> RequireDictionary(object? value, string label)
@@ -3278,7 +3348,7 @@ public static class EthereumMainnetSccp
             throw new ArgumentException($"{label} must be a canonical JSON-RPC quantity.", label);
         }
 
-        return Convert.ToUInt64(hex, 16);
+        return ParseCanonicalHexQuantityUInt64(hex, label);
     }
 
     private static byte[] EthereumRpcHexBytes(
@@ -4003,7 +4073,14 @@ public static class EthereumMainnetSccp
                 parameterName);
         }
 
-        return "0x" + Convert.ToUInt64(hex, 16).ToString("x", System.Globalization.CultureInfo.InvariantCulture);
+        if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must fit in an unsigned 64-bit integer.",
+                parameterName);
+        }
+
+        return "0x" + parsed.ToString("x", CultureInfo.InvariantCulture);
     }
 
     private static string NormalizePositiveRpcQuantity(object? value, string parameterName)
@@ -5345,7 +5422,53 @@ public sealed record EthereumMainnetLocalAdmissionSubmissionInput(
     string VerifierBackend = EthereumMainnetSccp.EvmGroth16Bn254ProofBackend,
     string EnvelopeEncoding = EthereumMainnetSccp.LocalAdmissionEnvelopeEncoding,
     string SubmissionKind = EthereumMainnetSccp.LocalAdmissionSubmissionKind,
-    string VerifierEntrypoint = EthereumMainnetSccp.LocalAdmissionEntrypoint);
+    string VerifierEntrypoint = EthereumMainnetSccp.LocalAdmissionEntrypoint)
+{
+    private byte[] proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] envelopeBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+}
 
 public sealed record EthereumMainnetLocalAdmissionPayload(
     byte[] ProofBytes,
@@ -5355,10 +5478,44 @@ public sealed record EthereumMainnetLocalAdmissionPayload(
     string SourceVerifierMaterialHash,
     string SourceAdapterEngineDeploymentHash)
 {
+    private byte[] proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
     public int Version { get; } = 1;
-    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
-    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
-    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+    public string ProofBytesHex => "0x" + Convert.ToHexString(proofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex => "0x" + Convert.ToHexString(publicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex => "0x" + Convert.ToHexString(bundleBytes).ToLowerInvariant();
 }
 
 public sealed record EthereumMainnetLocalAdmissionSubmission(
@@ -5375,6 +5532,51 @@ public sealed record EthereumMainnetLocalAdmissionSubmission(
     byte[] BundleBytes,
     byte[] EnvelopeBytes)
 {
+    private byte[] proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] envelopeBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+
     public int Version { get; } = 1;
     public string PlatformPayload { get; } = EthereumMainnetSccp.LocalAdmissionSubmissionKind;
     public string EnvelopeEncoding { get; } = EthereumMainnetSccp.LocalAdmissionEnvelopeEncoding;
@@ -5382,10 +5584,10 @@ public sealed record EthereumMainnetLocalAdmissionSubmission(
     public string VerifierEntrypoint { get; } = EthereumMainnetSccp.LocalAdmissionEntrypoint;
     public IReadOnlyList<EthereumMainnetSccpSubmissionArgument> Arguments { get; } =
         Array.Empty<EthereumMainnetSccpSubmissionArgument>();
-    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
-    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
-    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
-    public string EnvelopeHex { get; } = "0x" + Convert.ToHexString(EnvelopeBytes).ToLowerInvariant();
+    public string ProofBytesHex => "0x" + Convert.ToHexString(proofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex => "0x" + Convert.ToHexString(publicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex => "0x" + Convert.ToHexString(bundleBytes).ToLowerInvariant();
+    public string EnvelopeHex => "0x" + Convert.ToHexString(envelopeBytes).ToLowerInvariant();
 }
 
 public sealed record EthereumMainnetTransparentPublicInputs(
@@ -5459,6 +5661,9 @@ public sealed record EthereumMainnetNativeEvmProverBundleSdkArtifact
 
 public sealed record EthereumMainnetNativeEvmProverBundle
 {
+    private readonly EthereumMainnetNativeEvmProverBundleSdkArtifact[] nativeSdkArtifacts;
+    private readonly Dictionary<string, string> auditHashes;
+
     public EthereumMainnetNativeEvmProverBundle(
         string proofArtifactHash,
         string provingKeyHash,
@@ -5581,11 +5786,18 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                 $"auditHashes.{key}");
         }
 
-        AuditHashes = normalizedAuditHashes;
+        this.auditHashes = normalizedAuditHashes;
         var artifactsBySdk = new Dictionary<string, EthereumMainnetNativeEvmProverBundleSdkArtifact>(
             StringComparer.Ordinal);
         foreach (var artifact in nativeSdkArtifacts)
         {
+            if (artifact is null)
+            {
+                throw new ArgumentException(
+                    "nativeSdkArtifacts must not contain null entries.",
+                    nameof(nativeSdkArtifacts));
+            }
+
             if (!artifactsBySdk.TryAdd(artifact.Sdk, artifact))
             {
                 throw new ArgumentException(
@@ -5626,12 +5838,12 @@ public sealed record EthereumMainnetNativeEvmProverBundle
             new KeyValuePair<string, string>(
                 $"nativeSdkArtifacts[{artifact.Sdk}].implementationHash",
                 artifact.ImplementationHash)));
-        hashRoles.AddRange(AuditHashes
+        hashRoles.AddRange(auditHashes
             .OrderBy(row => row.Key, StringComparer.Ordinal)
             .Select(row => new KeyValuePair<string, string>($"auditHashes.{row.Key}", row.Value)));
         RequireNativeEvmProverBundleHashRoleSeparation(hashRoles);
 
-        NativeSdkArtifacts = sortedArtifacts;
+        this.nativeSdkArtifacts = sortedArtifacts;
         Schema = schema;
         BundleId = bundleId;
         Domain = domain;
@@ -5730,7 +5942,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
         var crossSdkFixtureParityHash = Sha256Hex(crossSdkFixtureParityBytes);
         if (!string.Equals(
                 crossSdkFixtureParityHash,
-                AuditHashes["cross_sdk_fixture_parity"],
+                auditHashes["cross_sdk_fixture_parity"],
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
@@ -5748,7 +5960,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
         var nativeProverSelfTestHash = Sha256Hex(nativeProverSelfTestBytes);
         if (!string.Equals(
                 nativeProverSelfTestHash,
-                AuditHashes["native_prover_self_test"],
+                auditHashes["native_prover_self_test"],
                 StringComparison.Ordinal))
         {
             throw new ArgumentException(
@@ -5804,7 +6016,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                 nameof(implementationBytes));
         }
 
-        var artifact = NativeSdkArtifacts.FirstOrDefault(row => string.Equals(row.Sdk, sdk, StringComparison.Ordinal));
+        var artifact = nativeSdkArtifacts.FirstOrDefault(row => string.Equals(row.Sdk, sdk, StringComparison.Ordinal));
         if (artifact is null)
         {
             throw new ArgumentException($"nativeProverBundle has no artifact row for sdk: {sdk}.", nameof(sdk));
@@ -5877,7 +6089,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                 nameof(NativeProverSelfTestArtifact));
         }
 
-        var artifact = NativeSdkArtifacts.FirstOrDefault(row => string.Equals(row.Sdk, sdk, StringComparison.Ordinal));
+        var artifact = nativeSdkArtifacts.FirstOrDefault(row => string.Equals(row.Sdk, sdk, StringComparison.Ordinal));
         if (artifact is null)
         {
             throw new ArgumentException($"nativeProverBundle has no artifact row for sdk: {sdk}.", nameof(sdk));
@@ -5914,7 +6126,9 @@ public sealed record EthereumMainnetNativeEvmProverBundle
         string? expectedDestinationBindingHash = null)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        return FromJson(Encoding.UTF8.GetString(payload), expectedDestinationBindingHash);
+        return FromJson(
+            EthereumMainnetSccp.DecodeStrictUtf8JsonBytes(payload, nameof(payload)),
+            expectedDestinationBindingHash);
     }
 
     public static EthereumMainnetNativeEvmProverBundle FromJsonElement(
@@ -5922,6 +6136,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
         string? expectedDestinationBindingHash = null)
     {
         RequireManifestObject(manifest, "nativeProverBundle");
+        EthereumMainnetSccp.RejectDuplicateJsonProperties(manifest, "nativeProverBundle");
         RequireManifestKeys(
             manifest,
             "nativeProverBundle",
@@ -6052,13 +6267,15 @@ public sealed record EthereumMainnetNativeEvmProverBundle
 
     public string BrowserImplementation { get; }
 
-    public IReadOnlyList<EthereumMainnetNativeEvmProverBundleSdkArtifact> NativeSdkArtifacts { get; }
+    public IReadOnlyList<EthereumMainnetNativeEvmProverBundleSdkArtifact> NativeSdkArtifacts =>
+        Array.AsReadOnly(nativeSdkArtifacts);
 
     public string? CrossSdkFixtureParityArtifact { get; }
 
     public string? NativeProverSelfTestArtifact { get; }
 
-    public IReadOnlyDictionary<string, string> AuditHashes { get; }
+    public IReadOnlyDictionary<string, string> AuditHashes =>
+        new Dictionary<string, string>(auditHashes, StringComparer.Ordinal);
 
     private static string Sha256Hex(byte[] value) => "0x" + Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
 
@@ -6449,7 +6666,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
             throw new ArgumentException($"{label} must be a string.");
         }
 
-        return value.GetString()!;
+        return value.GetString() ?? throw new ArgumentException($"{label} must be a string.");
     }
 
     internal static IReadOnlyList<string> ManifestStringList(JsonElement value, string label)
@@ -6483,7 +6700,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
 
         if (value.ValueKind == JsonValueKind.String)
         {
-            var text = value.GetString()!;
+            var text = value.GetString() ?? throw new ArgumentException($"{label} must be an integer.");
             if (text.Length == 0
                 || (text != "0" && (text[0] == '0' || !text.All(static character => character is >= '0' and <= '9')))
                 || !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
@@ -6589,6 +6806,8 @@ public sealed record EthereumMainnetNativeEvmProverBundle
 
 public sealed record EthereumMainnetNativeEvmProverParitySdkResult
 {
+    private readonly string[] publicSignalWords;
+
     public EthereumMainnetNativeEvmProverParitySdkResult(
         string receiptProofHash,
         string sourceProofHash,
@@ -6612,7 +6831,7 @@ public sealed record EthereumMainnetNativeEvmProverParitySdkResult
             throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
         }
 
-        PublicSignalWords = publicSignalWords
+        this.publicSignalWords = publicSignalWords
             .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
                 word,
                 $"publicSignalWords[{index}]"))
@@ -6631,7 +6850,7 @@ public sealed record EthereumMainnetNativeEvmProverParitySdkResult
 
     public string DestinationBindingHash { get; }
 
-    public IReadOnlyList<string> PublicSignalWords { get; }
+    public IReadOnlyList<string> PublicSignalWords => Array.AsReadOnly(publicSignalWords);
 
     public string CalldataHash { get; }
 
@@ -6640,6 +6859,9 @@ public sealed record EthereumMainnetNativeEvmProverParitySdkResult
 
 public sealed record EthereumMainnetNativeEvmProverParityFixture
 {
+    private readonly string[] publicSignalWords;
+    private readonly Dictionary<string, EthereumMainnetNativeEvmProverParitySdkResult> sdkResults;
+
     public EthereumMainnetNativeEvmProverParityFixture(
         EthereumMainnetNativeEvmProverBundle nativeProverBundle,
         string proofArtifactHash,
@@ -6717,7 +6939,7 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
             throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
         }
 
-        PublicSignalWords = publicSignalWords
+        this.publicSignalWords = publicSignalWords
             .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
                 word,
                 $"publicSignalWords[{index}]"))
@@ -6741,10 +6963,15 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
         foreach (var sdk in requiredSdks.OrderBy(static sdk => sdk, StringComparer.Ordinal))
         {
             var result = sdkResults[sdk];
+            if (result is null)
+            {
+                throw new ArgumentException($"sdkResults.{sdk} must not be null.", nameof(sdkResults));
+            }
+
             if (!string.Equals(result.ReceiptProofHash, ReceiptProofHash, StringComparison.Ordinal)
                 || !string.Equals(result.SourceProofHash, SourceProofHash, StringComparison.Ordinal)
                 || !string.Equals(result.DestinationBindingHash, DestinationBindingHash, StringComparison.Ordinal)
-                || !result.PublicSignalWords.SequenceEqual(PublicSignalWords)
+                || !result.PublicSignalWords.SequenceEqual(this.publicSignalWords)
                 || !string.Equals(result.CalldataHash, CalldataHash, StringComparison.Ordinal)
                 || !string.Equals(result.ToriiSubmitPayloadHash, ToriiSubmitPayloadHash, StringComparison.Ordinal))
             {
@@ -6758,7 +6985,7 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
         Domain = domain;
         Chain = chain;
         ProofBackend = proofBackend;
-        SdkResults = normalizedResults;
+        this.sdkResults = normalizedResults;
     }
 
     public string Schema { get; }
@@ -6781,13 +7008,14 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
 
     public string SourceProofHash { get; }
 
-    public IReadOnlyList<string> PublicSignalWords { get; }
+    public IReadOnlyList<string> PublicSignalWords => Array.AsReadOnly(publicSignalWords);
 
     public string CalldataHash { get; }
 
     public string ToriiSubmitPayloadHash { get; }
 
-    public IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverParitySdkResult> SdkResults { get; }
+    public IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverParitySdkResult> SdkResults =>
+        new Dictionary<string, EthereumMainnetNativeEvmProverParitySdkResult>(sdkResults, StringComparer.Ordinal);
 
     public static EthereumMainnetNativeEvmProverParityFixture FromJson(
         string json,
@@ -6803,7 +7031,9 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
         EthereumMainnetNativeEvmProverBundle nativeProverBundle)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        return FromJson(Encoding.UTF8.GetString(payload), nativeProverBundle);
+        return FromJson(
+            EthereumMainnetSccp.DecodeStrictUtf8JsonBytes(payload, nameof(payload)),
+            nativeProverBundle);
     }
 
     public static EthereumMainnetNativeEvmProverParityFixture FromJsonElement(
@@ -6813,6 +7043,7 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
         EthereumMainnetNativeEvmProverBundle.RequireManifestObject(
             fixture,
             "nativeProverParityFixture");
+        EthereumMainnetSccp.RejectDuplicateJsonProperties(fixture, "nativeProverParityFixture");
         EthereumMainnetNativeEvmProverBundle.RequireManifestKeys(
             fixture,
             "nativeProverParityFixture",
@@ -6972,6 +7203,8 @@ public sealed record EthereumMainnetNativeEvmProverParityFixture
 
 public sealed record EthereumMainnetNativeEvmProverSelfTestSdkResult
 {
+    private readonly string[] publicSignalWords;
+
     public EthereumMainnetNativeEvmProverSelfTestSdkResult(
         string requestHash,
         string witnessHash,
@@ -6999,7 +7232,7 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestSdkResult
             throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
         }
 
-        PublicSignalWords = publicSignalWords
+        this.publicSignalWords = publicSignalWords
             .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
                 word,
                 $"publicSignalWords[{index}]"))
@@ -7020,7 +7253,7 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestSdkResult
 
     public string ProofHash { get; }
 
-    public IReadOnlyList<string> PublicSignalWords { get; }
+    public IReadOnlyList<string> PublicSignalWords => Array.AsReadOnly(publicSignalWords);
 
     public string CalldataHash { get; }
 
@@ -7029,6 +7262,9 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestSdkResult
 
 public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
 {
+    private readonly string[] publicSignalWords;
+    private readonly Dictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult> sdkResults;
+
     public EthereumMainnetNativeEvmProverSelfTestFixture(
         EthereumMainnetNativeEvmProverBundle nativeProverBundle,
         string proofArtifactHash,
@@ -7114,7 +7350,7 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
             throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
         }
 
-        PublicSignalWords = publicSignalWords
+        this.publicSignalWords = publicSignalWords
             .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
                 word,
                 $"publicSignalWords[{index}]"))
@@ -7138,11 +7374,16 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
         foreach (var sdk in requiredSdks.OrderBy(static sdk => sdk, StringComparer.Ordinal))
         {
             var result = sdkResults[sdk];
+            if (result is null)
+            {
+                throw new ArgumentException($"sdkResults.{sdk} must not be null.", nameof(sdkResults));
+            }
+
             if (!string.Equals(result.RequestHash, RequestHash, StringComparison.Ordinal)
                 || !string.Equals(result.WitnessHash, WitnessHash, StringComparison.Ordinal)
                 || !string.Equals(result.SourceProofHash, SourceProofHash, StringComparison.Ordinal)
                 || !string.Equals(result.ProofHash, ProofHash, StringComparison.Ordinal)
-                || !result.PublicSignalWords.SequenceEqual(PublicSignalWords)
+                || !result.PublicSignalWords.SequenceEqual(this.publicSignalWords)
                 || !string.Equals(result.CalldataHash, CalldataHash, StringComparison.Ordinal)
                 || !string.Equals(result.ToriiSubmitPayloadHash, ToriiSubmitPayloadHash, StringComparison.Ordinal))
             {
@@ -7156,7 +7397,7 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
         Domain = domain;
         Chain = chain;
         ProofBackend = proofBackend;
-        SdkResults = normalizedResults;
+        this.sdkResults = normalizedResults;
     }
 
     public string Schema { get; }
@@ -7183,13 +7424,14 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
 
     public string ProofHash { get; }
 
-    public IReadOnlyList<string> PublicSignalWords { get; }
+    public IReadOnlyList<string> PublicSignalWords => Array.AsReadOnly(publicSignalWords);
 
     public string CalldataHash { get; }
 
     public string ToriiSubmitPayloadHash { get; }
 
-    public IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult> SdkResults { get; }
+    public IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult> SdkResults =>
+        new Dictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult>(sdkResults, StringComparer.Ordinal);
 
     public static EthereumMainnetNativeEvmProverSelfTestFixture FromJson(
         string json,
@@ -7205,7 +7447,9 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
         EthereumMainnetNativeEvmProverBundle nativeProverBundle)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        return FromJson(Encoding.UTF8.GetString(payload), nativeProverBundle);
+        return FromJson(
+            EthereumMainnetSccp.DecodeStrictUtf8JsonBytes(payload, nameof(payload)),
+            nativeProverBundle);
     }
 
     public static EthereumMainnetNativeEvmProverSelfTestFixture FromJsonElement(
@@ -7215,6 +7459,7 @@ public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
         EthereumMainnetNativeEvmProverBundle.RequireManifestObject(
             fixture,
             "nativeProverSelfTestFixture");
+        EthereumMainnetSccp.RejectDuplicateJsonProperties(fixture, "nativeProverSelfTestFixture");
         EthereumMainnetNativeEvmProverBundle.RequireManifestKeys(
             fixture,
             "nativeProverSelfTestFixture",
@@ -7409,11 +7654,26 @@ public sealed record EthereumMainnetNativeEvmProverArtifacts(
 
 public sealed record EthereumMainnetOutboundProofRequestInput
 {
+    private byte[] bundleBytes = [];
+    private byte[]? sourceProofBytes;
+
     public EthereumMainnetTransparentPublicInputs? PublicInputs { get; init; }
 
-    public byte[] BundleBytes { get; init; } = [];
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            bundleBytes = value.ToArray();
+        }
+    }
 
-    public byte[]? SourceProofBytes { get; init; }
+    public byte[]? SourceProofBytes
+    {
+        get => sourceProofBytes?.ToArray();
+        init => sourceProofBytes = value?.ToArray();
+    }
 
     public string StatementHash { get; init; } = string.Empty;
 
@@ -7444,7 +7704,53 @@ public sealed record EthereumMainnetOutboundProofRequest(
     string? ProofArtifactHash,
     string? ProvingKeyHash,
     string RequestHash,
-    EthereumMainnetSccpDestinationBinding DestinationBinding);
+    EthereumMainnetSccpDestinationBinding DestinationBinding)
+{
+    private byte[] publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private string[] publicSignalWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicSignalWords,
+        nameof(PublicSignalWords));
+    private byte[] bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] sourceProofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        SourceProofBytes,
+        nameof(SourceProofBytes));
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public string[] PublicSignalWords
+    {
+        get => publicSignalWords.ToArray();
+        init => publicSignalWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicSignalWords));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] SourceProofBytes
+    {
+        get => sourceProofBytes.ToArray();
+        init => sourceProofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(SourceProofBytes));
+    }
+}
 
 public sealed record EthereumMainnetOutboundProofResult(
     int Version,
@@ -7461,7 +7767,31 @@ public sealed record EthereumMainnetOutboundProofResult(
     string? ProvingKeyHash,
     string RequestHash,
     string EnvelopeHash,
-    EthereumMainnetSccpDestinationBinding DestinationBinding);
+    EthereumMainnetSccpDestinationBinding DestinationBinding)
+{
+    private byte[] proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private string[] publicSignalWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicSignalWords,
+        nameof(PublicSignalWords));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public string[] PublicSignalWords
+    {
+        get => publicSignalWords.ToArray();
+        init => publicSignalWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicSignalWords));
+    }
+}
 
 public sealed record EthereumMainnetSccpSubmissionInput(
     EthereumMainnetOutboundProofResult ProofResult);
@@ -7494,7 +7824,165 @@ public sealed record EthereumMainnetSccpSubmission(
     byte[] EnvelopeBytes,
     string EnvelopeHex,
     byte[] ProofBytes,
-    byte[] PublicInputWordsBytes);
+    byte[] PublicInputWordsBytes)
+{
+    private string[] publicInputWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicInputWords,
+        nameof(PublicInputWords));
+    private string[] publicSignalWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+        PublicSignalWords,
+        nameof(PublicSignalWords));
+    private EthereumMainnetSccpSubmissionArgument[] arguments =
+        EthereumMainnetSccpArrayGuards.CopyRequiredArguments(Arguments, nameof(Arguments));
+    private byte[] callData = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        CallData,
+        nameof(CallData));
+    private byte[] envelopeBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+    private byte[] proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputWordsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        PublicInputWordsBytes,
+        nameof(PublicInputWordsBytes));
+    private readonly string constructorCallDataHex = RequireHexMatches(CallDataHex, CallData, nameof(CallDataHex));
+    private readonly string constructorEnvelopeHex = RequireHexMatches(EnvelopeHex, EnvelopeBytes, nameof(EnvelopeHex));
+
+    public string CallDataHex
+    {
+        get
+        {
+            _ = constructorCallDataHex;
+            return Hex(callData);
+        }
+        init => _ = RequireHexMatches(value, callData, nameof(CallDataHex));
+    }
+
+    public string EnvelopeHex
+    {
+        get
+        {
+            _ = constructorEnvelopeHex;
+            return Hex(envelopeBytes);
+        }
+        init => _ = RequireHexMatches(value, envelopeBytes, nameof(EnvelopeHex));
+    }
+
+    public string[] PublicInputWords
+    {
+        get => publicInputWords.ToArray();
+        init => publicInputWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicInputWords));
+    }
+
+    public string[] PublicSignalWords
+    {
+        get => publicSignalWords.ToArray();
+        init => publicSignalWords = EthereumMainnetSccpArrayGuards.CopyRequiredStrings(
+            value,
+            nameof(PublicSignalWords));
+    }
+
+    public EthereumMainnetSccpSubmissionArgument[] Arguments
+    {
+        get => arguments.ToArray();
+        init => arguments = EthereumMainnetSccpArrayGuards.CopyRequiredArguments(
+            value,
+            nameof(Arguments));
+    }
+
+    public byte[] CallData
+    {
+        get => callData.ToArray();
+        init => callData = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(CallData));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputWordsBytes
+    {
+        get => publicInputWordsBytes.ToArray();
+        init => publicInputWordsBytes = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputWordsBytes));
+    }
+
+    private static string Hex(ReadOnlySpan<byte> value)
+    {
+        return "0x" + Convert.ToHexString(value).ToLowerInvariant();
+    }
+
+    private static string RequireHexMatches(string value, ReadOnlySpan<byte> bytes, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var expected = Hex(bytes);
+        if (!string.Equals(value, expected, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Hex view must match the supplied bytes.", parameterName);
+        }
+
+        return value;
+    }
+}
+
+file static class EthereumMainnetSccpArrayGuards
+{
+    internal static string[] CopyRequiredStrings(string[] value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        var copy = value.ToArray();
+        for (var index = 0; index < copy.Length; index++)
+        {
+            if (copy[index] is null)
+            {
+                throw new ArgumentException($"{parameterName}[{index}] must not be null.", parameterName);
+            }
+        }
+
+        return copy;
+    }
+
+    internal static EthereumMainnetSccpSubmissionArgument[] CopyRequiredArguments(
+        EthereumMainnetSccpSubmissionArgument[] value,
+        string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        var copy = value.ToArray();
+        for (var index = 0; index < copy.Length; index++)
+        {
+            if (copy[index] is null)
+            {
+                throw new ArgumentException($"{parameterName}[{index}] must not be null.", parameterName);
+            }
+        }
+
+        return copy;
+    }
+
+    internal static byte[] CopyRequiredBytes(byte[] value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        return value.ToArray();
+    }
+}
 
 public interface IEthereumMainnetExecutionProvider
 {
@@ -7518,7 +8006,17 @@ public sealed record EthereumMainnetBeaconRestResponse(
     byte[] Body,
     string? StatusMessage = null)
 {
-    public byte[] Body { get; init; } = Body.ToArray();
+    private byte[] body = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+        Body,
+        nameof(Body));
+
+    public byte[] Body
+    {
+        get => body.ToArray();
+        init => body = EthereumMainnetSccpArrayGuards.CopyRequiredBytes(
+            value,
+            nameof(Body));
+    }
 }
 
 public interface IEthereumMainnetBeaconRestTransport
@@ -8156,12 +8654,20 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         try
         {
             var document = JsonDocument.Parse(response.Body);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            try
+            {
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    throw new ArgumentException($"{label} response JSON must be an object");
+                }
+                EthereumMainnetSccp.RejectDuplicateJsonProperties(document.RootElement, $"{label} response JSON");
+                return document;
+            }
+            catch
             {
                 document.Dispose();
-                throw new ArgumentException($"{label} response JSON must be an object");
+                throw;
             }
-            return document;
         }
         catch (JsonException ex)
         {
@@ -8255,7 +8761,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         {
             throw new ArgumentException($"{label} must be a string");
         }
-        return value.GetString()!;
+        return value.GetString() ?? throw new ArgumentException($"{label} must be a string");
     }
 
     private static void RejectUnsafeBeaconRestPayload(JsonElement payload, string label)
@@ -8435,7 +8941,14 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         {
             throw new ArgumentException($"{parameterName} must be a canonical JSON-RPC quantity", parameterName);
         }
-        return "0x" + BigInteger.Parse("0" + hex, System.Globalization.NumberStyles.HexNumber).ToString("x");
+        if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must fit in an unsigned 64-bit integer.",
+                parameterName);
+        }
+
+        return "0x" + parsed.ToString("x", CultureInfo.InvariantCulture);
     }
 
     private static bool IsLowerHex(string text)
@@ -8445,14 +8958,37 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         => value switch
         {
             string text when text.StartsWith("0x", StringComparison.Ordinal)
-                => ulong.Parse(NormalizeRpcQuantity(text, parameterName)[2..], System.Globalization.NumberStyles.HexNumber),
-            string text when text.Trim() == text && text.All(char.IsDigit)
-                => ulong.Parse(text, System.Globalization.CultureInfo.InvariantCulture),
+                => ParseCanonicalHexQuantityUInt64(NormalizeRpcQuantity(text, parameterName)[2..], parameterName),
+            string text when IsCanonicalUnsignedDecimalText(text)
+                && ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var item)
+                => item,
             ulong item => item,
             long item when item >= 0 => (ulong)item,
             int item when item >= 0 => (ulong)item,
             _ => throw new ArgumentException($"{parameterName} must be an unsigned integer", parameterName),
         };
+
+    private static ulong ParseCanonicalHexQuantityUInt64(string hex, string parameterName)
+    {
+        if (!ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+        {
+            throw new ArgumentException(
+                $"{parameterName} must fit in an unsigned 64-bit integer.",
+                parameterName);
+        }
+
+        return parsed;
+    }
+
+    private static bool IsCanonicalUnsignedDecimalText(string text)
+    {
+        if (text.Length == 0 || (text.Length > 1 && text[0] == '0'))
+        {
+            return false;
+        }
+
+        return text.All(static ch => ch is >= '0' and <= '9');
+    }
 
     private static string BeaconBlockHeaderRoot(
         ulong slot,
@@ -8595,6 +9131,9 @@ public sealed record EthereumMainnetBeaconFinalityEvidence(
 
 public sealed record EthereumMainnetReceiptProof
 {
+    private IReadOnlyList<byte[]> receiptTrieProofNodes = Array.Empty<byte[]>();
+    private IReadOnlyList<byte[]> inclusionBranch = Array.Empty<byte[]>();
+
     public int SourceDomain { get; init; } = EthereumMainnetSccp.DomainEthereum;
 
     public string SourceEventDigest { get; init; } = string.Empty;
@@ -8613,34 +9152,103 @@ public sealed record EthereumMainnetReceiptProof
 
     public ulong ReceiptRootIndex { get; init; }
 
-    public IReadOnlyList<byte[]> ReceiptTrieProofNodes { get; init; } = Array.Empty<byte[]>();
+    public IReadOnlyList<byte[]> ReceiptTrieProofNodes
+    {
+        get => CopyByteArrays(receiptTrieProofNodes);
+        init => receiptTrieProofNodes = CopyByteArrays(value);
+    }
 
-    public IReadOnlyList<byte[]> InclusionBranch { get; init; } = Array.Empty<byte[]>();
+    public IReadOnlyList<byte[]> InclusionBranch
+    {
+        get => CopyByteArrays(inclusionBranch);
+        init => inclusionBranch = CopyByteArrays(value);
+    }
+
+    private static IReadOnlyList<byte[]> CopyByteArrays(IReadOnlyList<byte[]> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var output = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            var item = values[index] ?? throw new ArgumentException("List item must not be null.", nameof(values));
+            output[index] = item.ToArray();
+        }
+
+        return Array.AsReadOnly(output);
+    }
 }
 
 public sealed record EvmReceiptTrieProof(
     string ReceiptsRoot,
     string ReceiptRlp,
     string ReceiptTrieKey,
-    IReadOnlyList<byte[]> ReceiptTrieProofNodes);
+    IReadOnlyList<byte[]> ReceiptTrieProofNodes)
+{
+    private IReadOnlyList<byte[]> receiptTrieProofNodes = CopyByteArrays(ReceiptTrieProofNodes);
+
+    public IReadOnlyList<byte[]> ReceiptTrieProofNodes
+    {
+        get => CopyByteArrays(receiptTrieProofNodes);
+        init => receiptTrieProofNodes = CopyByteArrays(value);
+    }
+
+    private static IReadOnlyList<byte[]> CopyByteArrays(IReadOnlyList<byte[]> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var output = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            var item = values[index] ?? throw new ArgumentException("List item must not be null.", nameof(values));
+            output[index] = item.ToArray();
+        }
+
+        return Array.AsReadOnly(output);
+    }
+}
 
 public sealed record EthereumMainnetInboundEvidence
 {
+    private IReadOnlyDictionary<string, object?>? receipt;
+    private IReadOnlyDictionary<string, object?>? block;
+    private IReadOnlyDictionary<string, object?>? beaconFinality;
+    private IReadOnlyList<IReadOnlyDictionary<string, object?>>? blockReceipts;
+    private IReadOnlyList<byte[]>? inclusionBranch;
+
     public int SourceDomain { get; init; } = EthereumMainnetSccp.DomainEthereum;
 
     public int TargetDomain { get; init; } = EthereumMainnetSccp.DomainSora;
 
     public string? TransactionHash { get; init; }
 
-    public IReadOnlyDictionary<string, object?>? Receipt { get; init; }
+    public IReadOnlyDictionary<string, object?>? Receipt
+    {
+        get => SccpObjectSnapshots.CopyDictionaryOrNull(receipt);
+        init => receipt = SccpObjectSnapshots.CopyDictionaryOrNull(value);
+    }
 
-    public IReadOnlyDictionary<string, object?>? Block { get; init; }
+    public IReadOnlyDictionary<string, object?>? Block
+    {
+        get => SccpObjectSnapshots.CopyDictionaryOrNull(block);
+        init => block = SccpObjectSnapshots.CopyDictionaryOrNull(value);
+    }
 
-    public IReadOnlyDictionary<string, object?>? BeaconFinality { get; init; }
+    public IReadOnlyDictionary<string, object?>? BeaconFinality
+    {
+        get => SccpObjectSnapshots.CopyDictionaryOrNull(beaconFinality);
+        init => beaconFinality = SccpObjectSnapshots.CopyDictionaryOrNull(value);
+    }
 
-    public IReadOnlyList<IReadOnlyDictionary<string, object?>>? BlockReceipts { get; init; }
+    public IReadOnlyList<IReadOnlyDictionary<string, object?>>? BlockReceipts
+    {
+        get => SccpObjectSnapshots.CopyDictionaryListOrNull(blockReceipts);
+        init => blockReceipts = SccpObjectSnapshots.CopyDictionaryListOrNull(value);
+    }
 
-    public IReadOnlyList<byte[]>? InclusionBranch { get; init; }
+    public IReadOnlyList<byte[]>? InclusionBranch
+    {
+        get => inclusionBranch is null ? null : CopyByteArrays(inclusionBranch);
+        init => inclusionBranch = value is null ? null : CopyByteArrays(value);
+    }
 
     public EthereumMainnetReceiptProof? ReceiptProof { get; init; }
 
@@ -8658,5 +9266,18 @@ public sealed record EthereumMainnetInboundEvidence
         {
             BeaconFinality = evidence?.ToDictionary(additionalFields),
         };
+    }
+
+    private static IReadOnlyList<byte[]> CopyByteArrays(IReadOnlyList<byte[]> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var output = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            var item = values[index] ?? throw new ArgumentException("List item must not be null.", nameof(values));
+            output[index] = item.ToArray();
+        }
+
+        return Array.AsReadOnly(output);
     }
 }

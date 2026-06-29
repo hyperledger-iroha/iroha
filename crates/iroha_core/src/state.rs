@@ -22819,6 +22819,8 @@ impl State {
     #[must_use]
     pub fn zk_snapshot(&self) -> iroha_config::parameters::actual::Zk {
         let mut zk = self.zk.clone();
+        let params = self.world.parameters.view();
+        apply_on_chain_sccp_lane_materials(&mut zk, params.get());
         zk.sccp_route_manifests = self.sccp_route_manifests.read().clone();
         zk
     }
@@ -27485,6 +27487,60 @@ pub fn default_zk_consensus_policy_hash() -> [u8; 32] {
     compute_zk_consensus_policy_hash(&default_zk_config())
 }
 
+const SCCP_ON_CHAIN_LANE_MATERIALS_PARAMETER_ID: &str = "sccp_lane_materials_v1";
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SccpOnChainLaneMaterialsV1 {
+    version: u8,
+    sccp_source_verifier_materials:
+        Vec<iroha_config::parameters::actual::SccpSourceVerifierMaterial>,
+    sccp_source_adapter_engine_deployments:
+        Vec<iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment>,
+    sccp_destination_rollouts: Vec<iroha_config::parameters::actual::SccpDestinationRollout>,
+    sccp_route_allowlists: Vec<iroha_config::parameters::actual::SccpRouteAllowlist>,
+}
+
+fn sccp_on_chain_lane_materials_parameter_id() -> CustomParameterId {
+    let name = Name::from_str(SCCP_ON_CHAIN_LANE_MATERIALS_PARAMETER_ID)
+        .expect("hardcoded SCCP lane-material parameter id is a valid Name");
+    CustomParameterId::new(name)
+}
+
+fn apply_on_chain_sccp_lane_materials(
+    zk: &mut iroha_config::parameters::actual::Zk,
+    params: &Parameters,
+) {
+    let id = sccp_on_chain_lane_materials_parameter_id();
+    let Some(custom) = params.custom().get(&id) else {
+        return;
+    };
+    let payload = match custom
+        .payload()
+        .try_into_any_norito::<SccpOnChainLaneMaterialsV1>()
+    {
+        Ok(payload) => payload,
+        Err(error) => {
+            warn!(
+                ?error,
+                "Failed to decode on-chain SCCP lane-material parameter payload"
+            );
+            return;
+        }
+    };
+    if payload.version != 1 {
+        warn!(
+            version = payload.version,
+            "Ignoring unsupported on-chain SCCP lane-material parameter version"
+        );
+        return;
+    }
+
+    zk.sccp_source_verifier_materials = payload.sccp_source_verifier_materials;
+    zk.sccp_source_adapter_engine_deployments = payload.sccp_source_adapter_engine_deployments;
+    zk.sccp_destination_rollouts = payload.sccp_destination_rollouts;
+    zk.sccp_route_allowlists = payload.sccp_route_allowlists;
+}
+
 fn zk_policy_put_bytes(hasher: &mut Sha256, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).expect("ZK policy field length must fit into u64");
     Sha2Digest::update(hasher, len.to_be_bytes());
@@ -30060,12 +30116,16 @@ impl<'state> StateBlock<'state> {
     ///
     /// # Errors
     /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
-    pub fn commit(self) -> Result<(), TransactionsBlockError> {
+    pub fn commit(mut self) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if self.mode_cutover_next_set_in_block ^ self.mode_cutover_activation_set_in_block {
             return Err(TransactionsBlockError::ModeStagingInvariant);
         }
         let block_height = self._curr_block.height().get();
+        let current_axt_slot =
+            current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
+        let axt_replay_retention_slots = self.nexus.axt.replay_retention_slots.get();
+        self.prune_axt_replay_ledger(current_axt_slot, axt_replay_retention_slots);
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             state_ref,
@@ -30908,7 +30968,7 @@ impl<'state> StateBlock<'state> {
         let next_scale_out_lane_id =
             self.next_autoscale_lane_id(autoscale.min_lanes.get(), autoscale.max_lanes.get());
         let can_scale_out = next_scale_out_lane_id.is_some();
-        let retire_lane = if autoscale_capacity_lanes > 1 {
+        let retire_lane = if autoscale_capacity_lanes > u64::from(autoscale.min_lanes.get()) {
             self.select_autoscale_lane_for_retire()
         } else {
             None
@@ -40719,6 +40779,9 @@ mod tests {
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -40742,6 +40805,182 @@ mod tests {
             post_deploy_route_canary_transaction_id: None,
             post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: None,
+        }
+    }
+
+    fn test_hex32(byte: &str) -> String {
+        format!("0x{}", byte.repeat(32))
+    }
+
+    fn test_address20(byte: &str) -> String {
+        format!("0x{}", byte.repeat(20))
+    }
+
+    fn bsc_source_verifier_material_for_testing()
+    -> iroha_config::parameters::actual::SccpSourceVerifierMaterial {
+        iroha_config::parameters::actual::SccpSourceVerifierMaterial {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_BSC,
+            source_chain: "bsc-testnet".to_owned(),
+            source_proof_plan: "BscValidatorSetReceiptProof".to_owned(),
+            finality_model: "BscValidatorSet".to_owned(),
+            adapter_circuit_id: "sccp:bsc:test-source-adapter:v1".to_owned(),
+            source_trust_anchor_id: "sccp:bsc:test-trust-anchor:v1".to_owned(),
+            source_trust_anchor_hash: test_hex32("11"),
+            consensus_verifier_id: "sccp:bsc:test-consensus:v1".to_owned(),
+            consensus_verifier_hash: test_hex32("12"),
+            message_inclusion_verifier_id: "sccp:bsc:test-receipt:v1".to_owned(),
+            message_inclusion_verifier_hash: test_hex32("13"),
+            source_state_verifier_id: String::new(),
+            source_state_verifier_hash: String::new(),
+            source_bridge_emitter_id: "sccp:bsc:test-source-bridge:v1".to_owned(),
+            source_bridge_emitter_address: test_address20("21"),
+            source_bridge_emitter_code_hash: test_hex32("14"),
+            source_bridge_network_id: test_hex32("15"),
+            source_bridge_owner_address: test_address20("22"),
+            source_bridge_config_hash: test_hex32("16"),
+            finality_policy_id: "sccp:bsc:test-finality-policy:v1".to_owned(),
+            finality_policy_hash: test_hex32("17"),
+            placeholder_material: false,
+        }
+    }
+
+    fn bsc_source_adapter_deployment_for_testing()
+    -> iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment {
+        iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_BSC,
+            target_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            source_chain: "bsc-testnet".to_owned(),
+            source_proof_plan: "BscValidatorSetReceiptProof".to_owned(),
+            finality_model: "BscValidatorSet".to_owned(),
+            adapter_proof_family: "openverify-bsc-validator-set-v1".to_owned(),
+            adapter_circuit_id: "sccp:bsc:test-source-adapter:v1".to_owned(),
+            adapter_verifier_vk_hash: test_hex32("18"),
+            source_trust_anchor_id: "sccp:bsc:test-trust-anchor:v1".to_owned(),
+            source_trust_anchor_hash: test_hex32("11"),
+            consensus_verifier_id: "sccp:bsc:test-consensus:v1".to_owned(),
+            consensus_verifier_hash: test_hex32("12"),
+            message_inclusion_verifier_id: "sccp:bsc:test-receipt:v1".to_owned(),
+            message_inclusion_verifier_hash: test_hex32("13"),
+            source_state_verifier_id: String::new(),
+            source_state_verifier_hash: String::new(),
+            source_bridge_emitter_id: "sccp:bsc:test-source-bridge:v1".to_owned(),
+            source_bridge_emitter_address: test_address20("21"),
+            source_bridge_emitter_code_hash: test_hex32("14"),
+            source_bridge_network_id: test_hex32("15"),
+            source_bridge_owner_address: test_address20("22"),
+            source_bridge_config_hash: test_hex32("16"),
+            finality_policy_id: "sccp:bsc:test-finality-policy:v1".to_owned(),
+            finality_policy_hash: test_hex32("17"),
+            deployment_receipt_hash: test_hex32("19"),
+            solana_tower_replay_verifier_hash: String::new(),
+            solana_full_accountsdb_lattice_verifier_hash: String::new(),
+            solana_bank_fork_choice_verifier_hash: String::new(),
+            solana_full_light_client_gate_hash: String::new(),
+            ton_masterchain_config_verifier_hash: String::new(),
+            ton_validator_set_transition_verifier_hash: String::new(),
+            ton_shard_accounts_dictionary_verifier_hash: String::new(),
+            ton_full_light_client_gate_hash: String::new(),
+            tron_dpos_source_gate_hash: String::new(),
+        }
+    }
+
+    fn bsc_destination_rollout_for_testing()
+    -> iroha_config::parameters::actual::SccpDestinationRollout {
+        iroha_config::parameters::actual::SccpDestinationRollout {
+            version: 1,
+            domain: iroha_sccp::SCCP_DOMAIN_BSC,
+            chain: "bsc-testnet".to_owned(),
+            verifier_plan: "EvmGroth16Bn254".to_owned(),
+            immutable_verifier_ready: true,
+            anchors_ready: true,
+            verifier_identity: Some(test_address20("31")),
+            verifier_code_hash: Some(test_hex32("32")),
+            verifier_key_hash: Some(test_hex32("33")),
+            destination_network_id: Some(test_hex32("34")),
+            destination_bridge_address: Some(test_address20("35")),
+            destination_binding_key: Some("evm:0:2:test-binding".to_owned()),
+            destination_binding_hash: Some(test_hex32("36")),
+            anchor_id: Some("sccp:bsc:test-anchor:v1".to_owned()),
+            solana_rpc_commitment: None,
+            solana_program_owner: None,
+            solana_programdata_owner: None,
+            solana_program_immutable: None,
+            solana_program_account_data_base64: None,
+            solana_programdata_address: None,
+            solana_programdata_slot: None,
+            solana_expected_programdata_slot: None,
+            solana_program_account_context_slot: None,
+            solana_programdata_account_context_slot: None,
+            solana_programdata_metadata_blake2b256: None,
+            solana_programdata_metadata_base64: None,
+            solana_programdata_executable_blake2b256: None,
+            solana_programdata_executable_base64: None,
+            ton_account_status: None,
+            ton_account_state_hash: None,
+            ton_last_transaction_lt: None,
+            ton_last_transaction_hash: None,
+            ton_verifier_code_boc_root_hash: None,
+            ton_verifier_code_boc: None,
+            blockers: Vec::new(),
+        }
+    }
+
+    fn bsc_route_allowlist_for_testing() -> iroha_config::parameters::actual::SccpRouteAllowlist {
+        iroha_config::parameters::actual::SccpRouteAllowlist {
+            version: 1,
+            domain: iroha_sccp::SCCP_DOMAIN_BSC,
+            chain: "bsc-testnet".to_owned(),
+            activation_policy: "GovernanceAllowlist".to_owned(),
+            route_allowlist_id: Some("sccp:bsc:test-route-allowlist:v1".to_owned()),
+            route_allowlist_hash: Some(test_hex32("41")),
+            route_canary_status: Some("passed".to_owned()),
+            route_canary_evidence_hash: Some(test_hex32("42")),
+            route_canary_route_allowlist_hash: Some(test_hex32("41")),
+            route_canary_destination_binding_hash: Some(test_hex32("36")),
+            evm_route_canary_transaction_hash: Some(test_hex32("43")),
+            evm_route_canary_log_index: Some(0),
+            evm_route_canary_receipt_block_number: Some(1),
+            evm_route_canary_receipt_block_hash: Some(test_hex32("44")),
+            evm_route_canary_receipt_block_finalized: Some(true),
+            evm_route_canary_block_receipts_root: Some(test_hex32("45")),
+            evm_route_canary_call_data_sha256: Some(test_hex32("46")),
+            evm_route_canary_message_id: Some(test_hex32("47")),
+            evm_route_canary_payload_hash: Some(test_hex32("48")),
+            evm_route_canary_target_domain: Some(iroha_sccp::SCCP_DOMAIN_SORA),
+            evm_route_canary_statement_hash: Some(test_hex32("49")),
+            evm_route_canary_commitment_root: Some(test_hex32("4a")),
+            evm_route_canary_finality_height: Some("1".to_owned()),
+            evm_route_canary_finality_block_hash: Some(test_hex32("4b")),
+            evm_route_canary_proof_version: Some(1),
+            evm_route_canary_proof_source_domain: Some(iroha_sccp::SCCP_DOMAIN_BSC),
+            evm_route_canary_used_message_proof: Some(true),
+            tron_route_canary_transaction_id: None,
+            tron_route_canary_transaction_owner_address: None,
+            tron_route_canary_block_number: None,
+            tron_route_canary_block_timestamp: None,
+            tron_route_canary_log_index: None,
+            tron_route_canary_message_id: None,
+            tron_route_canary_call_data_sha256: None,
+            tron_route_canary_payload_hash: None,
+            tron_route_canary_target_domain: None,
+            tron_route_canary_statement_hash: None,
+            tron_route_canary_commitment_root: None,
+            tron_route_canary_finality_height: None,
+            tron_route_canary_finality_block_hash: None,
+            tron_route_canary_proof_version: None,
+            tron_route_canary_proof_source_domain: None,
+            tron_route_canary_used_message_proof: None,
+            tron_route_canary_raw_data_owner_matches_transaction: None,
+            tron_route_canary_signature_sha256: None,
+            tron_route_canary_signature_recovered_address: None,
+            tron_route_canary_signature_recovers_to_owner: None,
+            ton_route_canary_account_state_hash: None,
+            ton_route_canary_last_transaction_lt: None,
+            ton_route_canary_last_transaction_hash: None,
+            routes_allowlisted: true,
+            blockers: Vec::new(),
         }
     }
 
@@ -42894,6 +43133,50 @@ mod tests {
             committed.route_id.as_str(),
             "config reapplication after committed state must preserve on-chain upserts"
         );
+    }
+
+    #[test]
+    fn zk_snapshot_overlays_on_chain_sccp_lane_materials() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut configured = state.zk_snapshot();
+        configured.sccp_source_verifier_materials.clear();
+        configured.sccp_source_adapter_engine_deployments.clear();
+        configured.sccp_destination_rollouts.clear();
+        configured.sccp_route_allowlists.clear();
+        state.set_zk(configured);
+
+        let payload = SccpOnChainLaneMaterialsV1 {
+            version: 1,
+            sccp_source_verifier_materials: vec![bsc_source_verifier_material_for_testing()],
+            sccp_source_adapter_engine_deployments: vec![
+                bsc_source_adapter_deployment_for_testing(),
+            ],
+            sccp_destination_rollouts: vec![bsc_destination_rollout_for_testing()],
+            sccp_route_allowlists: vec![bsc_route_allowlist_for_testing()],
+        };
+        {
+            let mut params = state.world.parameters.block();
+            params.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                iroha_data_model::parameter::CustomParameter::new(
+                    sccp_on_chain_lane_materials_parameter_id(),
+                    Json::new(payload),
+                ),
+            ));
+            params.commit();
+        }
+
+        let snapshot = state.zk_snapshot();
+        assert_eq!(snapshot.sccp_source_verifier_materials.len(), 1);
+        assert_eq!(
+            snapshot.sccp_source_verifier_materials[0].source_domain,
+            iroha_sccp::SCCP_DOMAIN_BSC
+        );
+        assert_eq!(snapshot.sccp_source_adapter_engine_deployments.len(), 1);
+        assert_eq!(snapshot.sccp_destination_rollouts.len(), 1);
+        assert_eq!(snapshot.sccp_route_allowlists.len(), 1);
     }
 
     #[test]
@@ -47501,6 +47784,71 @@ mod tests {
         assert_eq!(
             nexus.autoscale.last_transition_height, 0,
             "suppressed scale-in at minimum default-route capacity must not record a transition"
+        );
+    }
+
+    #[test]
+    fn autoscale_transition_scale_in_respects_configured_min_lanes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let elastic_lane =
+            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                2,
+                4,
+                200,
+            ))
+            .expect("apply autoscale min-lanes scale-in guard test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane at configured minimum");
+        let seeded_nexus = state.nexus_snapshot();
+        assert_eq!(
+            autoscale_default_route_capacity_lanes(
+                &seeded_nexus.routing_policy,
+                seeded_nexus.lane_catalog.lanes(),
+                seeded_nexus.autoscale.min_lanes.get(),
+                seeded_nexus.autoscale.max_lanes.get(),
+            ),
+            u64::from(seeded_nexus.autoscale.min_lanes.get()),
+            "test setup should place default-route capacity exactly at autoscale min_lanes"
+        );
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([LaneId::SINGLE, LaneId::new(2)]),
+            "autoscale must not retire capacity at the configured min_lanes floor"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "suppressed scale-in at configured min_lanes must not record a transition"
         );
     }
 
@@ -65859,7 +66207,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_block_apply_does_not_prune_axt_replay_ledger() {
+    fn ordinary_block_apply_defers_axt_replay_pruning_until_commit() {
         let dsid = DataSpaceId::new(42);
         let lane = LaneId::new(0);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
@@ -65900,12 +66248,18 @@ mod tests {
         let committed = valid.commit_unchecked().unpack(|_| {});
 
         let _ = state_block.apply_without_execution(&committed, Vec::new());
-        state_block.commit().expect("ordinary block should commit");
 
         assert_eq!(
-            state.world.axt_replay_ledger.view().get(&key).copied(),
+            state_block.world.axt_replay_ledger.get(&key).copied(),
             Some(stale),
-            "ordinary block apply must not scan and prune the AXT replay ledger"
+            "ordinary block apply should leave AXT replay pruning to commit"
+        );
+
+        state_block.commit().expect("ordinary block should commit");
+
+        assert!(
+            state.world.axt_replay_ledger.view().get(&key).is_none(),
+            "ordinary block commit should prune expired AXT replay entries"
         );
     }
 
@@ -70058,6 +70412,9 @@ mod tests {
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,

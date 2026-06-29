@@ -265,12 +265,23 @@ enum NoritoBridgeLoader {
         return nil
     }
 
-    private static func candidateArtifactManifestURLs(near binaryURL: URL) -> [URL] {
+    private static let artifactManifestMaxAscents = 64
+
+    static func candidateArtifactManifestURLsForTests(near binaryURL: URL, maxAscents: Int) -> [URL] {
+        candidateArtifactManifestURLs(near: binaryURL, maxAscents: maxAscents)
+    }
+
+    private static func candidateArtifactManifestURLs(
+        near binaryURL: URL,
+        maxAscents: Int = artifactManifestMaxAscents
+    ) -> [URL] {
         var seen = Set<String>()
         var candidates: [URL] = []
         var cursor = binaryURL.deletingLastPathComponent()
 
-        while true {
+        // Bound the ascent because Foundation URL normalization may not converge
+        // at the filesystem root on every platform.
+        for _ in 0..<max(0, maxAscents) {
             if cursor.pathExtension == "xcframework" {
                 let urls = [
                     cursor.appendingPathComponent("NoritoBridge.artifacts.json"),

@@ -457,7 +457,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
-    "IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoteInstances.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoteRedeemPlanner.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift",
@@ -1176,6 +1176,7 @@ NON_CSHARP_REDEEM_LINEAGE_RECORD_README_NEEDLES = (
 )
 
 WORKFLOW_PATH = ".github/workflows/pr_kagemusha_payload_bench.yml"
+PR_CSHARP_WORKFLOW_PATH = ".github/workflows/pr_csharp.yml"
 JS_PARITY_TEST_PATH = "javascript/iroha_js/test/kagemushaFfiContractParity.test.js"
 SDK_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES = {
     "IrohaSwift/README.md": "not Swift request fields",
@@ -1459,8 +1460,8 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-compact-projection-hardening",
     ),
     (
-        "Swift Offline Note compatibility certificate fail-closed negative control",
-        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-compatibility-certificate-fail-closed",
+        "Swift Offline Note payload certificate fail-closed negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-payload-certificate-fail-closed",
     ),
     (
         "Swift Offline Note retired route wording negative control",
@@ -1561,6 +1562,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "non-C# Pallas sequence-count precheck negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-sequence-count-prechecks",
+    ),
+    (
+        "C# Pallas open-envelope preflight negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-open-envelope-preflight",
+    ),
+    (
+        "C# typed init/append request codec negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-init-append-request-codecs",
     ),
     (
         "JVM/Android Pallas transcript-label byte-limit negative control",
@@ -1700,11 +1709,11 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     ),
     (
         "SDK lineage-witness previous-proof count-prefix negative control",
-        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-count-prefix-prechecks",
     ),
     (
-        "non-C# record-bundle fold-step count-prefix negative control",
-        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-record-bundle-fold-step-count-prechecks",
+        "SDK record-bundle fold-step count-prefix negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-record-bundle-fold-step-count-prechecks",
     ),
     (
         "SDK current-note amount trailing-field vector negative control",
@@ -2831,6 +2840,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script",
     ),
     (
+        "C# SDK dotnet artifacts path negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-artifacts-path-script",
+    ),
+    (
+        "C# SDK recursive spend fixture output negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-recursive-spend-fixtures-project",
+    ),
+    (
         "C# SDK native bridge script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script",
     ),
@@ -3172,10 +3189,10 @@ def require_same_set(actual, expected, label, errors):
     )
 
 
-def workflow_trigger_paths():
+def workflow_trigger_paths_from_text(workflow):
     paths = []
     in_paths = False
-    for line in read(WORKFLOW_PATH).splitlines():
+    for line in workflow.splitlines():
         if line.strip() == "paths:":
             in_paths = True
             continue
@@ -3188,6 +3205,10 @@ def workflow_trigger_paths():
         if line and not line.startswith("      "):
             break
     return paths
+
+
+def workflow_trigger_paths():
+    return workflow_trigger_paths_from_text(read(WORKFLOW_PATH))
 
 
 def check_workflow_paths(errors):
@@ -3700,6 +3721,102 @@ def check_workflow_runs_csharp_sdk_tests(errors):
         "Kagemusha payload benchmark job must wait for the C# SDK test job",
         errors,
     )
+
+
+def check_pr_csharp_workflow_runs_kagemusha_sdk_tests(texts, errors):
+    workflow = texts.get(PR_CSHARP_WORKFLOW_PATH, read(PR_CSHARP_WORKFLOW_PATH))
+    trigger_paths = workflow_trigger_paths_from_text(workflow)
+    for required_path in (
+        "ci/check_kagemusha_recursive_spend_csharp_sdk.sh",
+        "csharp/**",
+        "crates/connect_norito_bridge/**",
+        "fixtures/kagemusha_recursive_spend_abi6/**",
+        "fixtures/kagemusha_recursive_spend_abi7/**",
+    ):
+        require(
+            required_path in trigger_paths,
+            f"C# PR workflow must trigger Kagemusha SDK tests for {required_path}",
+            errors,
+        )
+
+    job_block = workflow_job_block(workflow, "kagemusha-native-bridge-sdk")
+    require(
+        job_block is not None,
+        "C# PR workflow must define the Kagemusha native-bridge SDK job",
+        errors,
+    )
+    if job_block is None:
+        return
+
+    matrix_runner_match = re.search(
+        r"(?m)^\s+runs-on:\s+\$\{\{\s*matrix\.os\s*\}\}\s*$",
+        job_block,
+    )
+    fail_fast_match = re.search(r"(?m)^\s+fail-fast:\s+false\s*$", job_block)
+    os_matrix_match = re.search(
+        r"(?m)^\s+os:\s+\[ubuntu-latest,\s+windows-latest\]\s*$",
+        job_block,
+    )
+    timeout_match = re.search(r"(?m)^\s+timeout-minutes:\s+40\s*$", job_block)
+    rust_cache_match = re.search(
+        r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$",
+        job_block,
+    )
+    dotnet_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-dotnet@v4\s*$",
+        job_block,
+    )
+    dotnet_version_match = re.search(
+        r"(?m)^\s+dotnet-version:\s+8\.0\.x\s*$",
+        job_block,
+    )
+    bash_shell_match = re.search(r"(?m)^\s+shell:\s+bash\s*$", job_block)
+    command_match = workflow_command_match(job_block, CSHARP_SDK_TEST_COMMAND)
+
+    require(
+        matrix_runner_match is not None
+        and fail_fast_match is not None
+        and os_matrix_match is not None,
+        "C# PR workflow must run Kagemusha SDK tests on Ubuntu and Windows",
+        errors,
+    )
+    require(
+        timeout_match is not None,
+        "C# PR workflow must give Kagemusha SDK tests enough cold-build time",
+        errors,
+    )
+    require(
+        rust_cache_match is not None,
+        "C# PR workflow must cache Rust artifacts for Kagemusha native bridge tests",
+        errors,
+    )
+    require(
+        dotnet_setup_match is not None and dotnet_version_match is not None,
+        "C# PR workflow must set up .NET 8 for Kagemusha SDK tests",
+        errors,
+    )
+    require(
+        bash_shell_match is not None,
+        "C# PR workflow must run the Kagemusha C# SDK script with bash",
+        errors,
+    )
+    require(
+        command_match is not None,
+        "C# PR workflow must run the Kagemusha recursive spend C# SDK tests",
+        errors,
+    )
+    if bash_shell_match is not None and command_match is not None:
+        require(
+            bash_shell_match.start() < command_match.start(),
+            "C# PR workflow must select bash before running Kagemusha C# SDK tests",
+            errors,
+        )
+    if dotnet_setup_match is not None and command_match is not None:
+        require(
+            dotnet_setup_match.start() < command_match.start(),
+            "C# PR workflow must set up dotnet before running Kagemusha C# SDK tests",
+            errors,
+        )
 
 
 def check_workflow_runs_javascript_sdk_tests(errors):
@@ -18377,7 +18494,7 @@ def check_swift(texts, errors):
     offline_note_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     offline_v2_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
     offline_proof_verifier_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineProofVerifierTests.swift"
-    offline_compatibility = "IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift"
+    offline_payloads = "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift"
     torii_offline_cash_api_models_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
     nfc_mobile_transport = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
     transport_ui_test = "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
@@ -18408,7 +18525,7 @@ def check_swift(texts, errors):
     )
     require_contains(
         texts,
-        offline_compatibility,
+        offline_payloads,
         (
             "let defaultProfile = try Self.expectedAssertionProfile(platform: platform)",
             "private static func expectedAssertionProfile(platform: String) throws -> (",
@@ -18416,123 +18533,123 @@ def check_swift(texts, errors):
             "case OfflineNoteV2Constants.iosAppAttestPlatform:",
             "OfflineNoteV2Constants.androidKeyMintAssertionScheme",
             "OfflineNoteV2Constants.iosAppAttestAssertionScheme",
-            'throw OfflineNoteCompatibilityError.invalidField("platform")',
+            'throw OfflineNotePayloadError.invalidField("platform")',
             "let resolvedAssertionScheme = assertionScheme ?? defaultAssertionScheme",
             "let resolvedAssertionKeyAlgorithm = assertionKeyAlgorithm ?? defaultAssertionKeyAlgorithm",
             "guard resolvedAssertionScheme == defaultAssertionScheme else {",
-            'throw OfflineNoteCompatibilityError.invalidField("assertion_scheme")',
+            'throw OfflineNotePayloadError.invalidField("assertion_scheme")',
             "guard resolvedAssertionKeyAlgorithm == defaultAssertionKeyAlgorithm else {",
-            'throw OfflineNoteCompatibilityError.invalidField("assertion_key_algorithm")',
+            'throw OfflineNotePayloadError.invalidField("assertion_key_algorithm")',
         ),
-        "Swift Offline Note compatibility certificate canonical profile source",
+        "Swift Offline Note payload certificate canonical profile source",
         errors,
     )
     require_not_regex(
         texts,
-        offline_compatibility,
+        offline_payloads,
         r"contains\(\"android\"\)",
-        "Swift Offline Note compatibility certificate exact platform profile source",
+        "Swift Offline Note payload certificate exact platform profile source",
         errors,
     )
     require_contains(
         texts,
-        offline_compatibility,
+        offline_payloads,
         (
             "static func decodeExactBase64(_ value: String) -> Data?",
             "value == value.trimmingCharacters(in: .whitespacesAndNewlines)",
             "decoded.base64EncodedString() == value",
-            "OfflineNoteCompatibilityTextEncoding.decodeExactBase64(value)",
-            "guard let issuerSignature = OfflineNoteCompatibilityTextEncoding.decodeExactBase64(issuerSignatureBase64),\n"
+            "OfflineNoteTextPayloadEncoding.decodeExactBase64(value)",
+            "guard let issuerSignature = OfflineNoteTextPayloadEncoding.decodeExactBase64(issuerSignatureBase64),\n"
             "              issuerSignature.count == 64 else {",
-            'throw OfflineNoteCompatibilityError.invalidField("issuer_signature_base64")',
+            'throw OfflineNotePayloadError.invalidField("issuer_signature_base64")',
             "issuerSignature: issuerSignature",
         ),
-        "Swift Offline Note compatibility certificate exact-base64 fail-closed source",
+        "Swift Offline Note payload certificate exact-base64 fail-closed source",
         errors,
     )
     require(
-        "Data(repeating: 0, count: 64)" not in texts[offline_compatibility],
-        "Swift Offline Note compatibility certificate must not synthesize zero issuer signatures",
+        "Data(repeating: 0, count: 64)" not in texts[offline_payloads],
+        "Swift Offline Note payload certificate must not synthesize zero issuer signatures",
         errors,
     )
     require_contains(
         texts,
-        offline_compatibility,
+        offline_payloads,
         (
             "guard appAttestPublicKeyBase64 == nil else {",
-            'throw OfflineNoteCompatibilityError.invalidField("app_attest_public_key_base64")',
+            'throw OfflineNotePayloadError.invalidField("app_attest_public_key_base64")',
             "guard let assertionPublicKeyValue = assertionPublicKey else {",
-            'throw OfflineNoteCompatibilityError.invalidField("assertion_public_key")',
+            'throw OfflineNotePayloadError.invalidField("assertion_public_key")',
         ),
-        "Swift Offline Note compatibility certificate retired assertion-key alias source",
+        "Swift Offline Note payload certificate retired assertion-key alias source",
         errors,
     )
     require(
-        "?? appAttestPublicKeyBase64" not in texts[offline_compatibility],
-        "Swift Offline Note compatibility certificate retired assertion-key alias source",
+        "?? appAttestPublicKeyBase64" not in texts[offline_payloads],
+        "Swift Offline Note payload certificate retired assertion-key alias source",
         errors,
     )
     require(
-        "?? publicKey" not in texts[offline_compatibility],
-        "Swift Offline Note compatibility certificate retired assertion-key alias source",
+        "?? publicKey" not in texts[offline_payloads],
+        "Swift Offline Note payload certificate retired assertion-key alias source",
         errors,
     )
     require_contains(
         texts,
-        offline_compatibility,
+        offline_payloads,
         (
-            "guard let proofBytes = OfflineNoteCompatibilityTextEncoding.decodeExactBase64(proofBytesBase64),\n"
+            "guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeExactBase64(proofBytesBase64),\n"
             "              !proofBytes.isEmpty else {",
-            'throw OfflineNoteCompatibilityError.invalidField("proof_bytes_base64")',
+            'throw OfflineNotePayloadError.invalidField("proof_bytes_base64")',
         ),
         "Swift Offline recursive proof exact-base64 source",
         errors,
     )
     require(
-        "decodeBase64Like" not in texts[offline_compatibility],
-        "Swift Offline compatibility must not keep permissive base64-like decoder",
+        "decodeBase64Like" not in texts[offline_payloads],
+        "Swift Offline payload must not keep permissive base64-like decoder",
         errors,
     )
     require_contains(
         texts,
-        offline_compatibility,
+        offline_payloads,
         (
             "static func canonicalAmount(_ value: String) throws -> String",
             "try ToriiOfflineCashCodec.canonicalAmountString(value)",
-            "canonicalAmount: amount.map(OfflineNoteCompatibilityTextEncoding.canonicalAmount)",
-            "canonicalAmount: OfflineNoteCompatibilityTextEncoding.canonicalAmount(amount)",
-            "canonicalChangeAmount: OfflineNoteCompatibilityTextEncoding.canonicalAmount(changeAmount)",
+            "canonicalAmount: amount.map(OfflineNoteTextPayloadEncoding.canonicalAmount)",
+            "canonicalAmount: OfflineNoteTextPayloadEncoding.canonicalAmount(amount)",
+            "canonicalChangeAmount: OfflineNoteTextPayloadEncoding.canonicalAmount(changeAmount)",
         ),
-        "Swift Offline Note compatibility amount strict source",
+        "Swift Offline Note payload amount strict source",
         errors,
     )
     require_contains(
         texts,
-        offline_compatibility,
+        offline_payloads,
         (
             "public init(from decoder: Decoder) throws",
             "static func isCanonicalHashHex(_ value: String) -> Bool",
             "value == value.lowercased()",
             "value.utf8.allSatisfy",
             "let computedClaimHash = try OfflineNoteIssuedClaim(",
-            "guard OfflineNoteCompatibilityTextEncoding.isCanonicalHashHex(claimHash) else",
+            "guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(claimHash) else",
             "guard claimHash == computedClaimHash else",
-            'throw OfflineNoteCompatibilityError.invalidField("claim_hash")',
+            'throw OfflineNotePayloadError.invalidField("claim_hash")',
             "claimHash: container.decodeIfPresent(String.self, forKey: .claimHash)",
         ),
-        "Swift Offline Note compatibility input-claim amount/hash strict source",
+        "Swift Offline Note payload input-claim amount/hash strict source",
         errors,
     )
     require(
-        "canonicalAmountOrOriginal" not in texts[offline_compatibility],
-        "Swift Offline compatibility must not keep permissive amount normalization",
+        "canonicalAmountOrOriginal" not in texts[offline_payloads],
+        "Swift Offline payload must not keep permissive amount normalization",
         errors,
     )
     require_contains(
         texts,
         offline_note_test,
         (
-            "func testOfflineCompatibilityRejectsInvalidAmountStrings() throws",
+            "func testOfflineNotePayloadRejectsInvalidAmountStrings() throws",
             'XCTAssertEqual(validReceive.amount, "1.00")',
             "XCTAssertNotNil(validInput.claimHash)",
             '.invalidAmount("not-an-amount")',
@@ -18552,7 +18669,7 @@ def check_swift(texts, errors):
             "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: mismatchedClaimHashData)",
             'XCTAssertEqual(validToken.changeAmount, "1.00")',
         ),
-        "Swift Offline Note compatibility amount strict tests",
+        "Swift Offline Note payload amount strict tests",
         errors,
     )
     require_contains(
@@ -18588,7 +18705,7 @@ def check_swift(texts, errors):
         texts,
         torii_offline_cash_api_models_test,
         (
-            "func testCompactKeyCertificateRejectsNonCanonicalCompatibilityFields() throws",
+            "func testCompactKeyCertificateRejectsNonCanonicalCertificateFields() throws",
             'assertionScheme: "android-keymint-ecdsa-p256-usage-limit"',
             '.invalidField("assertion_scheme")',
             'assertionKeyAlgorithm: "ed25519"',
@@ -18611,7 +18728,7 @@ def check_swift(texts, errors):
             '.invalidField("public_key")',
             '.invalidField("assertion_public_key")',
         ),
-        "Swift Offline Note compatibility certificate fail-closed tests",
+        "Swift Offline Note payload certificate fail-closed tests",
         errors,
     )
     require_contains(
@@ -20866,7 +20983,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
-        "IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoteInstances.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoteRedeemPlanner.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift",
@@ -22952,9 +23069,9 @@ def check_java_kotlin(texts, errors):
         texts,
         "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
         "public static bool LineageWitnessHasReservedPreviousProof(byte[] lineageWitnessArchive)",
-        "private static void RequireInitRequestRecordBundlePreflight(",
+        "public static KagemushaRecursiveSpendBundleSummary DecodeBundleSummary(byte[] bundleArchive)",
         (
-            "count > CompactTokenMaxHops",
+            "if (count > CompactTokenMaxHops)",
             "$\"lineageWitness.previousRecursiveProofs count must not exceed {CompactTokenMaxHops}\"",
         ),
         "C# lineage-witness previous-proof count precheck decoder",
@@ -23035,9 +23152,10 @@ def check_java_kotlin(texts, errors):
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
         (
-            "RecursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
-            "                    (ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1UL)",
-            "lineageWitness.previousRecursiveProofs count must not exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}",
+            "Archive: RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly(),",
+            "RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly()",
+            "lineageWitness.previousRecursiveProofs count must not exceed",
+            "(ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1",
         ),
         "C# lineage-witness previous-proof count-prefix vectors",
         errors,
@@ -23116,7 +23234,7 @@ def check_java_kotlin(texts, errors):
         texts,
         "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
         "private static int ReadVerifiedFoldStepCount(",
-        "private static int SkipRecordBundleFields(",
+        "private static byte[] RequireValidInputArchive(",
         (
             "if (count > CompactTokenMaxHops)",
             "$\"{field} fold step count must not exceed {CompactTokenMaxHops}\"",
@@ -23196,13 +23314,12 @@ def check_java_kotlin(texts, errors):
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
         (
-            "RecursiveSpendNativeInitAppendRejectOverLimitRecordBundleStepCountBeforeNativeBridge",
-            "RecursiveSpendNativeRecordBundleSurfacesRejectOverLimitStepCountBeforeNativeBridge",
-            "AssertRecordBundleStepCountPreflightRejects",
-            "AssertArgumentDiagnostic(\n"
-            "            $\"recordBundle.steps fold step count must not exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}\",",
-            "KagemushaUInt64Payload((ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1UL)",
-            "$\"recordBundle.steps fold step count must not exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}\"",
+            "RecursiveSpendRecordBundlePreflightRejectsOverLimitStepCountBeforeLoadingNativeBridge",
+            "var recordBundle = RecordBundleWithOverLimitStepCountOnly();",
+            "BuildPallasOpenEnvelopesArchive(recordBundle)",
+            "RecordBundleWithOverLimitStepCountOnly()",
+            "recordBundle.steps fold step count must not exceed",
+            "(ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1",
         ),
         "C# record-bundle fold-step count-prefix vectors",
         errors,
@@ -25872,6 +25989,25 @@ def check_java_kotlin(texts, errors):
         ),
     ):
         require_contains(texts, relative, needles, label, errors)
+    require_block_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        "private static byte[] RequireValidPallasOpenEnvelopesArchive(",
+        "private static BundleAccumulatorSummary ReadBundleAccumulatorSummary(",
+        (
+            "PallasOpenEnvelopeVectorSchemaHash",
+            "ValidatePallasOpenEnvelopesArchive",
+            "expectedEnvelopeCount",
+            "ReadPallasFixed32SequenceCount",
+            "mismatchMessage",
+            "ReadRequiredPallasMetadataOption",
+            "option tag must be 0 or 1",
+            "payload length mismatch",
+            "must be exactly 32 bytes",
+        ),
+        "C# Pallas open-envelope semantic preflight",
+        errors,
+    )
     for relative, needles, label in (
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
@@ -26000,6 +26136,81 @@ def check_java_kotlin(texts, errors):
             '.invalidArchive("previousProofOpenEnvelopes")',
         ),
         "Swift typed recursive spend append previous-proof Pallas diagnostics",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge",
+            "PallasOpenEnvelopesArchive",
+            "pallasOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+            "pallasOpenEnvelopesArchive requires exactly 1 envelope(s)",
+            "pallasOpenEnvelopes requires exactly 2 envelope(s)",
+            "spec.ParamsGSequencePayload = U64LE(5)",
+            "spec.ParamsHSequencePayload = U64LE(5)",
+            "spec.ProofLSequencePayload = U64LE(3)",
+            "spec.ProofRSequencePayload = U64LE(3)",
+            "spec.VkCommitmentPayload = KagemushaFixedArrayPayload(0x70, 32)",
+            "spec.PublicInputsSchemaHashPayload = KagemushaFixedArrayPayload(0x71, 32)",
+            "spec.DomainTagPayload = KagemushaFixedArrayPayload(0x72, 32)",
+            "OptionRawWithTrailingByte(SyntheticFixed32(0x70))",
+            "OptionRawWithUnknownTag()",
+            "OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x70))",
+        ),
+        "C# Pallas open-envelope malformed vector tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        (
+            "public sealed class KagemushaRecursiveSpendableNoteDescriptor",
+            "public static byte[] EncodeInitRequest(",
+            "public static byte[] EncodeInitRequestWithLineageMaterials(",
+            "public static byte[] EncodeAppendRequest(",
+            "public static byte[] EncodeAppendRequestWithLineageMaterials(",
+            "public static byte[] EncodeInitRequestWithGeneratedPallas(",
+            "public static byte[] EncodeAppendRequestWithGeneratedPallas(",
+            "private static byte[] EncodeAppendRequestCore(",
+            "private static (byte[]? LineageVerifierKey, byte[]? LineageProvingKeyArchive)",
+            "PrepareAppendGeneratedPallasPreflight(",
+            "BuildPallasOpenEnvelopesArchive(recordBundleArchive).NoritoBytes",
+            "BuildPreviousProofOpenEnvelopesArchive(previousBundleArchive).NoritoBytes",
+            "lineage_key_artifacts must be init artifacts",
+            "lineage_key_artifacts must be append artifacts",
+            "previousLineageVerifierRecordArchive is required for lineage previous bundles",
+            "previousProofOpenEnvelopesArchive is required for lineage append output",
+            "previousProofOpenEnvelopesArchive is only valid for lineage append output",
+            "lineageKeyArtifacts are only valid for lineage append output",
+            "RecursiveSpendInitRequestWireName",
+            "RecursiveSpendAppendRequestWireName",
+            "VerifyingKeyRecordWireName",
+        ),
+        "C# typed recursive spend init/append request codecs",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendInitRequestEncoderRejectsMalformedLineageAndPallasInputsBeforeNativeBridge",
+            "RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge",
+            "RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder",
+            "RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder",
+            "ValidSpendableNoteDescriptor",
+            "VerifyingKeyRecordArchive",
+            "wrongArtifactProfile",
+            "missingPreviousRecord",
+            "missingPreviousOpenings",
+            "malformedPreviousOpenings",
+            "overCountPreviousOpenings",
+            "danglingPreviousOpenings",
+            "wrongAppendArtifact",
+            "danglingLineageKeyMaterial",
+            "malformedRecordBundle",
+        ),
+        "C# typed recursive spend init/append request codec tests",
         errors,
     )
     require_contains(
@@ -26918,6 +27129,7 @@ def check_java_kotlin(texts, errors):
 
 def check_csharp(texts, errors):
     script = read(CSHARP_SDK_TEST_COMMAND)
+    test_project = read("csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj")
     require(
         'DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet}"' in script,
         "Kagemusha C# SDK script must keep the documented dotnet override variable",
@@ -26950,6 +27162,14 @@ def check_csharp(texts, errors):
     require(
         'BRIDGE_TARGET_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR:-${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target}"' in script,
         "Kagemusha C# SDK script must keep an overrideable native bridge target dir",
+        errors,
+    )
+    require(
+        'DOTNET_ARTIFACTS_PATH="${BRIDGE_TARGET_DIR}/dotnet-artifacts"' in script
+        and 'rm -rf "${DOTNET_ARTIFACTS_PATH}"' in script
+        and '--artifacts-path "${DOTNET_ARTIFACTS_PATH}"' in script
+        and "-p:ProduceReferenceAssembly=false" in script,
+        "Kagemusha C# SDK script must keep dotnet test artifacts under the native bridge target",
         errors,
     )
     require(
@@ -27022,6 +27242,12 @@ def check_csharp(texts, errors):
     require(
         expected_csharp_filter in script,
         "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, Torii, signed query, verifier backend, and identifier receipt tests",
+        errors,
+    )
+    require(
+        '<None Include="../../../fixtures/kagemusha_recursive_spend_abi6/*.json" Link="fixtures/kagemusha_recursive_spend_abi6/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />' in test_project
+        and '<None Include="../../../fixtures/kagemusha_recursive_spend_abi7/*.json" Link="fixtures/kagemusha_recursive_spend_abi7/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />' in test_project,
+        "Kagemusha C# SDK test project must copy shared ABI-6 and ABI-7 fixtures to test output",
         errors,
     )
     require_contains(
@@ -27482,6 +27708,10 @@ def check_csharp(texts, errors):
             "AssertRecursiveSpendNativeArchivePreflightRejectsEverywhere(\n            compressed,",
             "AssertRecursiveSpendNativeArchivePreflightRejectsEverywhere(\n            unsupportedFlags,",
             "AssertRecursiveSpendNativeArchivePreflightRejectsEverywhere(\n            invalidFieldBitset,",
+            "AssertRejectsMalformedEverywhere",
+            "AssertRejectsMalformedEverywhere(compressed, validArchive, validRecordBundle)",
+            "AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive, validRecordBundle)",
+            "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive, validRecordBundle)",
         ),
         "C# recursive spend input Norito guard tests",
         errors,
@@ -29558,6 +29788,33 @@ def check_sdk_redeem_change_output_reserved_collisions(texts, errors):
         "Android Java typed recursive spend redeem change-output reserved collision tests",
         errors,
     )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        (
+            "public IReadOnlyList<byte[]> TopupAnchorNullifiers => CopyByteArrays(topupAnchorNullifiers);",
+            "public static void ValidateRedeemChangeOutputNotReserved(",
+            "bundleSummary.TopupAnchorNullifiers",
+            "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
+            "string? publicAmount,\n        KagemushaRecursiveSpendBundleSummary bundleSummary,\n        ReadOnlySpan<byte> changeOutput",
+        ),
+        "C# recursive spend redeem change-output reserved collision guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendNativeRedeemChangeOutputPreflightRejectsReservedMaterialBeforeNativeBridge",
+            "bundleSummary.CurrentNote.NoteCommitment",
+            "bundleSummary.CurrentNote.SpendNullifier",
+            "bundleSummary.TopupAnchorNullifiers[0]",
+            "ValidateRedeemChangeOutputNotReserved",
+            "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
+        ),
+        "C# recursive spend redeem change-output reserved collision tests",
+        errors,
+    )
 
 
 def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
@@ -29576,6 +29833,13 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "bundle.accumulator.topup_anchor_nullifiers must not contain zero values",
         "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
         "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    )
+    transition_profile_diagnostics = (
+        "transition_profile.previous_topup_anchor_nullifiers count is out of range",
+        "transition_profile.previous_topup_anchor_nullifiers must not contain zero values",
+        "transition_profile.previous_topup_anchor_nullifiers must be strictly sorted and unique",
+        "transition_profile.previous_topup_anchor_nullifiers must not reuse current note material",
+        "transition_profile.output_commitments must not reuse previous top-up anchor nullifiers",
     )
     topup_anchor_precedence_labels = (
         "malformed proof cannot mask invalid top-up anchor nullifiers",
@@ -29811,52 +30075,61 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
         "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
         (
             "public const int FoldStepMaxInputs = 2;",
-            "private readonly byte[][] topupAnchorNullifiers;",
-            "public IReadOnlyList<byte[]> TopupAnchorNullifiers => Array.AsReadOnly(",
-            "ReadBundleTopupAnchorNullifiers(",
-            "ReadBundleFixed32Sequence(",
+            "private static byte[][] ReadBundleTopupAnchorNullifiersPayload(",
             "count == 0 || count > FoldStepMaxInputs",
             "RequireBundleTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);",
+            "private static void RequireBundleTopupAnchorNullifiers(",
             "topupAnchorNullifiers.Length == 0 || topupAnchorNullifiers.Length > FoldStepMaxInputs",
-            "CompareFixedBytes(topupAnchorNullifiers[index - 1], nullifier) >= 0",
             "nullifier.AsSpan().SequenceEqual(noteCommitment)",
-            "|| nullifier.AsSpan().SequenceEqual(spendNullifier)",
-        ) + topup_anchor_diagnostics,
+            "public const int FoldStepMaxOutputs = 2;",
+            "public static KagemushaRecursiveSpendTransitionProfileSummary DecodeTransitionProfileSummary(",
+            "PreviousTopupAnchorNullifiers => CopyByteArrays(previousTopupAnchorNullifiers);",
+            "CurrentHopOutputCommitments => CopyByteArrays(currentHopOutputCommitments);",
+            "private static byte[][] ReadTransitionProfileTopupAnchorNullifiersPayload(",
+            "private static TransitionProfileStepSummary ReadTransitionProfileStepStatement(",
+            "RequireTransitionProfilePreviousTopupAnchors(",
+            "previousTopupAnchorNullifiers.Length == 0 || previousTopupAnchorNullifiers.Length > FoldStepMaxInputs",
+            "foreach (var nullifier in previousTopupAnchorNullifiers)",
+            "foreach (var outputCommitment in currentHopOutputCommitments)",
+        ) + topup_anchor_diagnostics + transition_profile_diagnostics,
         "C# recursive spend top-up anchor nullifier invariant guard",
         errors,
     )
-    require_block_contains(
+    require_block_regex(
         texts,
         "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
         "private static BundleAccumulatorSummary ReadBundleAccumulatorSummary(",
-        "private static byte[][] ReadBundleTopupAnchorNullifiers(",
-        (
-            "var topupAnchorNullifiers = ReadBundleTopupAnchorNullifiers(",
-            "RequireBundleTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);\n        if (offset != payload.Length)",
-        ),
-        "C# recursive spend top-up anchor nullifier invariant guard",
+        "private static byte[][] ReadBundleTopupAnchorNullifiersPayload(",
+        r"RequireBundleTopupAnchorNullifiers\(topupAnchorNullifiers, currentNote\);[\s\S]*?if \(offset != payload\.Length\)",
+        "C# recursive spend top-up anchor nullifier precedence guard",
         errors,
     )
     require_contains(
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
         (
-            "Assert.NotEmpty(initBundle.TopupAnchorNullifiers);",
-            "initBundle.TopupAnchorNullifiers.Count <= KagemushaRecursiveSpendNative.FoldStepMaxInputs",
-            "KagemushaTopupAnchorNullifiersPayload",
-            "RecursiveSpendBundleCurrentNoteFieldPayload",
-            "KagemushaUInt64Payload((ulong)KagemushaRecursiveSpendNative.FoldStepMaxInputs + 1UL)",
-            "KagemushaTopupAnchorNullifiersPayload(new byte[32])",
-            "KagemushaFixed32(0x31),\n                        KagemushaFixed32(0x21)",
-            "KagemushaTopupAnchorNullifiersPayload(currentNoteCommitment)",
-            "KagemushaTopupAnchorNullifiersPayload(currentNoteSpendNullifier)",
-            "bundle.accumulator.topup_anchor_nullifiers count is truncated",
-            "bundle.accumulator.topup_anchor_nullifiers[0] must be exactly 32 bytes",
-            "bundle.accumulator.topup_anchor_nullifiers[0] byte field length must be 1",
-            "RecursiveSpendBundleWithEmptyProofBytes(zeroTopupAnchorBundle)",
-            "RecursiveSpendBundleWithAccumulatorTrailingField(zeroTopupAnchorBundle)",
-        ) + topup_anchor_diagnostics,
-        "C# typed recursive spend top-up anchor nullifier invariant tests",
+            "TopupAnchorNullifierCountPayload(0)",
+            "TopupAnchorNullifierCountPayload((ulong)KagemushaRecursiveSpendNative.FoldStepMaxInputs + 1)",
+            "TopupAnchorNullifiersPayload(new byte[32])",
+            "TopupAnchorNullifiersPayload(Fixed32(0x34), Fixed32(0x34))",
+            "TopupAnchorNullifiersPayload(Fixed32(0x35), Fixed32(0x34))",
+            "CurrentNote.NoteCommitment",
+            "CurrentNote.SpendNullifier",
+            "RecursiveSpendBundleWithEmptyProofBytes(",
+            "RecursiveSpendBundleWithAccumulatorTrailingField(",
+            "TopupAnchorNullifiersPayload(params byte[][] nullifiers)",
+            "RecursiveSpendTransitionProfileSummaryDecoderReadsSharedArchives",
+            "RecursiveSpendTransitionProfileSummaryDecoderRejectsPreviousTopupAnchorDrift",
+            'SharedRecursiveSpendArchive("transition_profile_init")',
+            'SharedRecursiveSpendArchive("transition_profile_append")',
+            "PreviousTopupAnchorNullifiers",
+            "CurrentHopOutputCommitments",
+            "RecursiveSpendTransitionProfileWithCurrentHopOutputCommitments",
+            "RecursiveSpendTransitionProfileWithCurrentNoteField",
+            "SortedFixed32(carriedPreviousTopupAnchor, nonReservedOutput)",
+            "AssertTransitionProfileSummaryRejects",
+        ) + topup_anchor_diagnostics + transition_profile_diagnostics + topup_anchor_precedence_labels,
+        "C# recursive spend top-up anchor nullifier invariant tests",
         errors,
     )
 
@@ -30194,6 +30467,7 @@ def run_checks(texts):
     check_workflow_runs_swift_sdk_parse(errors)
     check_swift_sdk_script_prints_swiftc_version(errors)
     check_workflow_runs_csharp_sdk_tests(errors)
+    check_pr_csharp_workflow_runs_kagemusha_sdk_tests(texts, errors)
     check_workflow_runs_javascript_sdk_tests(errors)
     check_javascript_sdk_script(errors)
     check_js_parity_meta_test(errors)
@@ -39336,6 +39610,32 @@ if mode == "--negative-control-csharp-sdk-job-workflow":
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK workflow job drift was not detected")
 
+if mode == "--negative-control-pr-csharp-kagemusha-sdk-workflow":
+    target = PR_CSHARP_WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        "  kagemusha-native-bridge-sdk:\n",
+        "  kagemusha-native-bridge-sdk-disabled:\n",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# PR Kagemusha SDK workflow job")
+    text_overrides[target] = mutated
+    expected = "C# PR workflow must define the Kagemusha native-bridge SDK job"
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        message = str(error)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: C# PR Kagemusha SDK workflow drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected C# PR Kagemusha SDK workflow drift")
+        print(first_lines_for_labels(message, (expected,))[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# PR Kagemusha SDK workflow drift was not detected")
+
 if mode == "--negative-control-csharp-sdk-setup-workflow":
     target = WORKFLOW_PATH
     original = read(target)
@@ -39535,6 +39835,52 @@ if mode == "--negative-control-csharp-sdk-dotnet-major-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK dotnet major script drift was not detected")
 
+if mode == "--negative-control-csharp-sdk-dotnet-artifacts-path-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        'DOTNET_ARTIFACTS_PATH="${BRIDGE_TARGET_DIR}/dotnet-artifacts"\n',
+        "",
+        1,
+    )
+    mutated = mutated.replace('rm -rf "${DOTNET_ARTIFACTS_PATH}"\n', "", 1)
+    mutated = mutated.replace('  --artifacts-path "${DOTNET_ARTIFACTS_PATH}" \\\n', "", 1)
+    mutated = mutated.replace('  -p:ProduceReferenceAssembly=false \\\n', "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK dotnet artifacts path")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK dotnet artifacts path drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK dotnet artifacts path drift was not detected")
+
+if mode == "--negative-control-csharp-sdk-recursive-spend-fixtures-project":
+    target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
+    original = read(target)
+    mutated = original.replace(
+        '    <None Include="../../../fixtures/kagemusha_recursive_spend_abi6/*.json" Link="fixtures/kagemusha_recursive_spend_abi6/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />\n',
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        '    <None Include="../../../fixtures/kagemusha_recursive_spend_abi7/*.json" Link="fixtures/kagemusha_recursive_spend_abi7/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK recursive spend fixture output")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK recursive spend fixture output drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK recursive spend fixture output drift was not detected")
+
 if mode == "--negative-control-csharp-sdk-native-bridge-script":
     target = CSHARP_SDK_TEST_COMMAND
     original = read(target)
@@ -39678,8 +40024,8 @@ if mode == "--negative-control-csharp-archive-copy":
         "invalidFieldBitset[39] = 0x20",
         "invalidFieldBitset[39] = 0x06",
     ).replace(
-        malformed_field_bitset_call,
-        permissive_field_bitset_call,
+        "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive, validRecordBundle)",
+        "AssertRejectsMalformedEverywhere(validArchive, validArchive, validRecordBundle)",
         1,
     ).replace(
         "AssertRejectsMalformedBridgeOutput(invalidFieldBitset)",
@@ -39689,7 +40035,7 @@ if mode == "--negative-control-csharp-archive-copy":
     if (
         mutated_test == original_test
         or "invalidFieldBitset[39] = 0x20" in mutated_test
-        or malformed_field_bitset_call in mutated_test
+        or "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive, validRecordBundle)" in mutated_test
         or "AssertRejectsMalformedBridgeOutput(invalidFieldBitset)" in mutated_test
     ):
         raise SystemExit("negative control failed: unable to mutate C# archive copy test")
@@ -44190,9 +44536,9 @@ if mode == "--negative-control-swift-offline-note-retired-route-wording":
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail-closed":
+if mode == "--negative-control-swift-offline-note-payload-certificate-fail-closed":
     mutated = dict(texts)
-    source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift"
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift"
     test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
     mutations = (
         (
@@ -44200,7 +44546,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "guard resolvedAssertionScheme == defaultAssertionScheme else {",
             "if false && resolvedAssertionScheme != defaultAssertionScheme {",
             (
-                "Swift Offline Note compatibility certificate canonical profile source",
+                "Swift Offline Note payload certificate canonical profile source",
             ),
         ),
         (
@@ -44208,22 +44554,22 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "case OfflineNoteV2Constants.androidKeyMintPlatform:",
             'case _ where platform.contains("android"):',
             (
-                "Swift Offline Note compatibility certificate exact platform profile source contains forbidden pattern",
+                "Swift Offline Note payload certificate exact platform profile source contains forbidden pattern",
             ),
         ),
         (
             source,
-            "guard let issuerSignature = OfflineNoteCompatibilityTextEncoding.decodeExactBase64(issuerSignatureBase64),\n"
+            "guard let issuerSignature = OfflineNoteTextPayloadEncoding.decodeExactBase64(issuerSignatureBase64),\n"
             "              issuerSignature.count == 64 else {\n"
-            "            throw OfflineNoteCompatibilityError.invalidField(\"issuer_signature_base64\")\n"
+            "            throw OfflineNotePayloadError.invalidField(\"issuer_signature_base64\")\n"
             "        }",
-            "let decodedSignature = OfflineNoteCompatibilityTextEncoding.decodeBase64Like(issuerSignatureBase64)\n"
+            "let decodedSignature = OfflineNoteTextPayloadEncoding.decodeBase64Like(issuerSignatureBase64)\n"
             "        let issuerSignature = decodedSignature?.count == 64\n"
             "            ? decodedSignature!\n"
             "            : Data(repeating: 0, count: 64)",
             (
-                "Swift Offline Note compatibility certificate exact-base64 fail-closed source",
-                "Swift Offline Note compatibility certificate must not synthesize zero issuer signatures",
+                "Swift Offline Note payload certificate exact-base64 fail-closed source",
+                "Swift Offline Note payload certificate must not synthesize zero issuer signatures",
             ),
         ),
         (
@@ -44231,22 +44577,22 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "decoded.base64EncodedString() == value",
             "true",
             (
-                "Swift Offline Note compatibility certificate exact-base64 fail-closed source",
+                "Swift Offline Note payload certificate exact-base64 fail-closed source",
             ),
         ),
         (
             source,
             "guard appAttestPublicKeyBase64 == nil else {\n"
-            "            throw OfflineNoteCompatibilityError.invalidField(\"app_attest_public_key_base64\")\n"
+            "            throw OfflineNotePayloadError.invalidField(\"app_attest_public_key_base64\")\n"
             "        }\n"
             "        guard let assertionPublicKeyValue = assertionPublicKey else {\n"
-            "            throw OfflineNoteCompatibilityError.invalidField(\"assertion_public_key\")\n"
+            "            throw OfflineNotePayloadError.invalidField(\"assertion_public_key\")\n"
             "        }",
             "let assertionPublicKeyValue = assertionPublicKey\n"
             "            ?? appAttestPublicKeyBase64\n"
             "            ?? publicKey",
             (
-                "Swift Offline Note compatibility certificate retired assertion-key alias source",
+                "Swift Offline Note payload certificate retired assertion-key alias source",
             ),
         ),
         (
@@ -44254,18 +44600,18 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "func testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias() throws",
             "func testCompactKeyCertificateAllowsRetiredAssertionPublicKeyAlias() throws",
             (
-                "Swift Offline Note compatibility certificate fail-closed tests",
+                "Swift Offline Note payload certificate fail-closed tests",
             ),
         ),
         (
             source,
-            "guard let proofBytes = OfflineNoteCompatibilityTextEncoding.decodeExactBase64(proofBytesBase64),\n"
+            "guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeExactBase64(proofBytesBase64),\n"
             "              !proofBytes.isEmpty else {",
-            "guard let proofBytes = OfflineNoteCompatibilityTextEncoding.decodeBase64Like(proofBytesBase64),\n"
+            "guard let proofBytes = OfflineNoteTextPayloadEncoding.decodeBase64Like(proofBytesBase64),\n"
             "              !proofBytes.isEmpty else {",
             (
                 "Swift Offline recursive proof exact-base64 source",
-                "Swift Offline compatibility must not keep permissive base64-like decoder",
+                "Swift Offline payload must not keep permissive base64-like decoder",
             ),
         ),
         (
@@ -44277,8 +44623,8 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "        (try? ToriiOfflineCashCodec.canonicalAmountString(value)) ?? value\n"
             "    }",
             (
-                "Swift Offline Note compatibility amount strict source",
-                "Swift Offline compatibility must not keep permissive amount normalization",
+                "Swift Offline Note payload amount strict source",
+                "Swift Offline payload must not keep permissive amount normalization",
             ),
         ),
         (
@@ -44286,7 +44632,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "claimHash: container.decodeIfPresent(String.self, forKey: .claimHash)",
             "claimHash: nil",
             (
-                "Swift Offline Note compatibility input-claim amount/hash strict source",
+                "Swift Offline Note payload input-claim amount/hash strict source",
             ),
         ),
         (
@@ -44294,15 +44640,15 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "value == value.lowercased()",
             "true",
             (
-                "Swift Offline Note compatibility input-claim amount/hash strict source",
+                "Swift Offline Note payload input-claim amount/hash strict source",
             ),
         ),
         (
             test,
-            "func testCompactKeyCertificateRejectsNonCanonicalCompatibilityFields() throws",
-            "func testCompactKeyCertificateAllowsNonCanonicalCompatibilityFields() throws",
+            "func testCompactKeyCertificateRejectsNonCanonicalCertificateFields() throws",
+            "func testCompactKeyCertificateAllowsNonCanonicalCertificateFields() throws",
             (
-                "Swift Offline Note compatibility certificate fail-closed tests",
+                "Swift Offline Note payload certificate fail-closed tests",
             ),
         ),
         (
@@ -44310,7 +44656,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             'for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"]',
             'for invalidPlatform in ["android"]',
             (
-                'Swift Offline Note compatibility certificate fail-closed tests missing for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"]',
+                'Swift Offline Note payload certificate fail-closed tests missing for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"]',
             ),
         ),
         (
@@ -44318,7 +44664,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "func testCompactKeyCertificateRejectsNonCanonicalBase64Encodings() throws",
             "func testCompactKeyCertificateAllowsNonCanonicalBase64Encodings() throws",
             (
-                "Swift Offline Note compatibility certificate fail-closed tests",
+                "Swift Offline Note payload certificate fail-closed tests",
             ),
         ),
         (
@@ -44326,7 +44672,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "let hexPublicKey = Data(repeating: 1, count: 33)",
             "let hexPublicKey = Data(repeating: 1, count: 32)",
             (
-                "Swift Offline Note compatibility certificate fail-closed tests",
+                "Swift Offline Note payload certificate fail-closed tests",
             ),
         ),
         (
@@ -44334,7 +44680,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "let urlSafeAssertionKey = Data(repeating: 0xFF, count: 32)",
             "let urlSafeAssertionKey = Data(repeating: 0x2F, count: 32)",
             (
-                "Swift Offline Note compatibility certificate fail-closed tests",
+                "Swift Offline Note payload certificate fail-closed tests",
             ),
         ),
         (
@@ -44347,10 +44693,10 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
-            "func testOfflineCompatibilityRejectsInvalidAmountStrings() throws",
-            "func testOfflineCompatibilityAllowsInvalidAmountStrings() throws",
+            "func testOfflineNotePayloadRejectsInvalidAmountStrings() throws",
+            "func testOfflineNotePayloadAllowsInvalidAmountStrings() throws",
             (
-                "Swift Offline Note compatibility amount strict tests",
+                "Swift Offline Note payload amount strict tests",
             ),
         ),
         (
@@ -44358,7 +44704,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             'noteCommitment: "0x\\(inputClaim.noteCommitment)"',
             "noteCommitment: inputClaim.noteCommitment",
             (
-                "Swift Offline Note compatibility amount strict tests",
+                "Swift Offline Note payload amount strict tests",
             ),
         ),
         (
@@ -44366,7 +44712,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             'claimHash: "0x\\(computedClaimHash)"',
             "claimHash: computedClaimHash",
             (
-                "Swift Offline Note compatibility amount strict tests",
+                "Swift Offline Note payload amount strict tests",
             ),
         ),
         (
@@ -44374,7 +44720,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "claimHash: computedClaimHash.uppercased()",
             "claimHash: computedClaimHash",
             (
-                "Swift Offline Note compatibility amount strict tests",
+                "Swift Offline Note payload amount strict tests",
             ),
         ),
         (
@@ -44382,7 +44728,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: inputData)",
             "JSONDecoder().decode(OfflinePaymentTokenOutputClaim.self, from: inputData)",
             (
-                "Swift Offline Note compatibility amount strict tests",
+                "Swift Offline Note payload amount strict tests",
             ),
         ),
         (
@@ -44390,7 +44736,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: mismatchedClaimHashData)",
             "JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: inputData)",
             (
-                "Swift Offline Note compatibility amount strict tests",
+                "Swift Offline Note payload amount strict tests",
             ),
         ),
         (
@@ -44416,7 +44762,7 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
         updated = current.replace(old, new, 1)
         if updated == current:
             raise SystemExit(
-                "negative control failed: unable to mutate Swift Offline Note compatibility certificate "
+                "negative control failed: unable to mutate Swift Offline Note payload certificate "
                 + target
             )
         mutated[target] = updated
@@ -44424,11 +44770,11 @@ if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail
             detect_negative_control(
                 mutated,
                 expected_labels,
-                "Swift Offline Note compatibility certificate fail-closed drift",
+                "Swift Offline Note payload certificate fail-closed drift",
             )
         )
         mutated[target] = current
-    print("negative control rejected Swift Offline Note compatibility certificate fail-closed drift")
+    print("negative control rejected Swift Offline Note payload certificate fail-closed drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -46608,6 +46954,208 @@ if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
+
+if mode == "--negative-control-csharp-pallas-open-envelope-preflight":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "private static byte[] RequireValidPallasOpenEnvelopesArchive(",
+            "private static byte[] RequireUncheckedPallasOpenEnvelopesArchive(",
+            "C# Pallas open-envelope semantic preflight",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "private static int ReadPallasFixed32SequenceCount(",
+            "private static int ReadPallasFixed32SequenceUnchecked(",
+            "C# Pallas open-envelope semantic preflight",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "private static byte[] ReadRequiredPallasMetadataOption(",
+            "private static byte[] ReadOptionalPallasMetadataOption(",
+            "C# Pallas open-envelope semantic preflight",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge",
+            "RecursiveSpendPallasOpenEnvelopePreflightAcceptsMalformedVectors",
+            "C# Pallas open-envelope malformed vector tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "spec.ParamsGSequencePayload = U64LE(5)",
+            "spec.ParamsGSequencePayload = Fixed32Sequence(4, 0x10)",
+            "C# Pallas open-envelope malformed vector tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "spec.ProofRSequencePayload = U64LE(3)",
+            "spec.ProofRSequencePayload = Fixed32Sequence(2, 0x50)",
+            "C# Pallas open-envelope malformed vector tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "spec.VkCommitmentPayload = KagemushaFixedArrayPayload(0x70, 32)",
+            "spec.VkCommitmentPayload = SyntheticFixed32(0x70)",
+            "C# Pallas open-envelope malformed vector tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "spec.VkCommitmentOptionPayload = OptionRawWithUnknownTag()",
+            "spec.VkCommitmentOptionPayload = OptionRaw(SyntheticFixed32(0x70))",
+            "C# Pallas open-envelope malformed vector tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "spec.VkCommitmentOptionPayload = OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x70))",
+            "spec.VkCommitmentOptionPayload = OptionRaw(SyntheticFixed32(0x70))",
+            "C# Pallas open-envelope malformed vector tests",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate C# Pallas open-envelope marker in {target}"
+            )
+        mutated[target] = updated
+        if label not in expected_labels:
+            expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: C# Pallas open-envelope preflight drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected C# Pallas open-envelope preflight drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: C# Pallas open-envelope preflight drift was not detected"
+    )
+
+if mode == "--negative-control-csharp-init-append-request-codecs":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "public static byte[] EncodeInitRequestWithLineageMaterials(",
+            "public static byte[] EncodeInitRequestWithUncheckedMaterials(",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "public static byte[] EncodeAppendRequestWithLineageMaterials(",
+            "public static byte[] EncodeAppendRequestWithUncheckedMaterials(",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "previousProofOpenEnvelopesArchive is required for lineage append output",
+            "previousProofOpenEnvelopesArchive may be absent for lineage append output",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "lineageKeyArtifacts are only valid for lineage append output",
+            "lineageKeyArtifacts may be supplied for any append output",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "public static byte[] EncodeInitRequestWithGeneratedPallas(",
+            "public static byte[] EncodeInitRequestWithUncheckedPallas(",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "public static byte[] EncodeAppendRequestWithGeneratedPallas(",
+            "public static byte[] EncodeAppendRequestWithUncheckedPallas(",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "PrepareAppendGeneratedPallasPreflight(",
+            "PrepareAppendUncheckedPallasPreflight(",
+            "C# typed recursive spend init/append request codecs",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendInitRequestEncoderRejectsMalformedLineageAndPallasInputsBeforeNativeBridge",
+            "RecursiveSpendInitRequestEncoderAcceptsMalformedLineageAndPallasInputs",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge",
+            "RecursiveSpendAppendRequestEncoderAcceptsPreviousProofOpeningAndLineageDrift",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "missingPreviousOpenings",
+            "acceptedMissingPreviousOpenings",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "danglingLineageKeyMaterial",
+            "acceptedDanglingLineageKeyMaterial",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder",
+            "RecursiveSpendGeneratedPallasInitRequestHelperAcceptsLineageBeforeNativeBuilder",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder",
+            "RecursiveSpendGeneratedPallasAppendRequestHelperAcceptsLineageBeforeNativeBuilder",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "malformedRecordBundle",
+            "uncheckedRecordBundle",
+            "C# typed recursive spend init/append request codec tests",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in replacements:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate C# init/append request codec marker in {target}"
+            )
+        mutated[target] = updated
+        if label not in expected_labels:
+            expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: C# init/append request codec drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected C# init/append request codec drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: C# init/append request codec drift was not detected"
+    )
 
 if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":
     mutated = dict(texts)
@@ -52156,7 +52704,7 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":
+if mode == "--negative-control-sdk-lineage-witness-count-prefix-prechecks":
     mutated = dict(texts)
     replacements = (
         (
@@ -52202,6 +52750,22 @@ if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks
             "count <= Integer.MAX_VALUE,\n"
             "        \"lineageWitness.previousRecursiveProofs count must not exceed \"",
             "Android Java lineage-witness previous-proof count precheck decoder",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "if (count > CompactTokenMaxHops)\n"
+            "        {\n"
+            "            throw BundleDecodeError(\n"
+            "                \"lineageWitness.previousRecursiveProofs\",\n"
+            "                $\"lineageWitness.previousRecursiveProofs count must not exceed {CompactTokenMaxHops}\");\n"
+            "        }",
+            "if (count > int.MaxValue)\n"
+            "        {\n"
+            "            throw BundleDecodeError(\n"
+            "                \"lineageWitness.previousRecursiveProofs\",\n"
+            "                $\"lineageWitness.previousRecursiveProofs count must not exceed {CompactTokenMaxHops}\");\n"
+            "        }",
+            "C# lineage-witness previous-proof count precheck decoder",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
@@ -52251,16 +52815,9 @@ if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks
             "Android Java lineage-witness previous-proof count-prefix vectors",
         ),
         (
-            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "count > CompactTokenMaxHops",
-            "count > int.MaxValue",
-            "C# lineage-witness previous-proof count precheck decoder",
-        ),
-        (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "RecursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(\n"
-            "                    (ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1UL)",
-            "SharedRecursiveSpendArchive(\"lineage_witness_append_result\")",
+            "Archive: RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly(),",
+            "Archive: SharedRecursiveSpendArchive(\"lineage_witness_append_result\"),",
             "C# lineage-witness previous-proof count-prefix vectors",
         ),
     )
@@ -52306,7 +52863,7 @@ if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":
+if mode == "--negative-control-sdk-record-bundle-fold-step-count-prechecks":
     mutated = dict(texts)
     replacements = (
         (
@@ -52427,10 +52984,20 @@ if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-precheck
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));\n"
-            "        if (count > CompactTokenMaxHops)",
-            "var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));\n"
-            "        if (count > ulong.MaxValue)",
+            "if (count > CompactTokenMaxHops)\n"
+            "        {\n"
+            "            throw RecordBundleDecodeError(\n"
+            "                field,\n"
+            "                $\"{field} fold step count must not exceed {CompactTokenMaxHops}\",\n"
+            "                parameterName);\n"
+            "        }",
+            "if (count > int.MaxValue)\n"
+            "        {\n"
+            "            throw RecordBundleDecodeError(\n"
+            "                field,\n"
+            "                $\"{field} fold step count must not exceed {CompactTokenMaxHops}\",\n"
+            "                parameterName);\n"
+            "        }",
             "C# record-bundle fold-step count precheck decoder",
             "if (count > CompactTokenMaxHops)",
         ),
@@ -52478,10 +53045,10 @@ if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-precheck
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "$\"recordBundle.steps fold step count must not exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}\"",
-            "$\"recordBundle.steps fold step count may exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}\"",
+            "var recordBundle = RecordBundleWithOverLimitStepCountOnly();",
+            "var recordBundle = RecordBundleWithStepCount();",
             "C# record-bundle fold-step count-prefix vectors",
-            "$\"recordBundle.steps fold step count must not exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}\"",
+            "var recordBundle = RecordBundleWithOverLimitStepCountOnly();",
         ),
     )
     detected_messages = []
@@ -55187,6 +55754,18 @@ if mode == "--negative-control-sdk-redeem-change-output-reserved-collisions":
             "repeat((byte) 0x7e, 32)",
             "Android Java typed recursive spend redeem change-output reserved collision tests",
         ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "bundleSummary.TopupAnchorNullifiers",
+            "Array.Empty<byte[]>()",
+            "C# recursive spend redeem change-output reserved collision guard",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "bundleSummary.TopupAnchorNullifiers[0]",
+            "NonReservedChangeOutput(bundleSummary)",
+            "C# recursive spend redeem change-output reserved collision tests",
+        ),
     )
     def expected_redeem_change_output_reserved_collision_label(old, label):
         marker = old.splitlines()[0]
@@ -55246,6 +55825,13 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
         "bundle.accumulator.topup_anchor_nullifiers must not contain zero values",
         "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
         "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    )
+    transition_profile_diagnostics = (
+        "transition_profile.previous_topup_anchor_nullifiers count is out of range",
+        "transition_profile.previous_topup_anchor_nullifiers must not contain zero values",
+        "transition_profile.previous_topup_anchor_nullifiers must be strictly sorted and unique",
+        "transition_profile.previous_topup_anchor_nullifiers must not reuse current note material",
+        "transition_profile.output_commitments must not reuse previous top-up anchor nullifiers",
     )
     topup_anchor_precedence_labels = (
         "malformed proof cannot mask invalid top-up anchor nullifiers",
@@ -55462,57 +56048,45 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "previousTopupAnchorNullifiers.Length == 0 || previousTopupAnchorNullifiers.Length > FoldStepMaxInputs",
+            "previousTopupAnchorNullifiers.Length > int.MaxValue",
+            "C# recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
             "RequireBundleTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);\n        if (offset != payload.Length)",
             "if (offset != payload.Length)\n        {\n            throw BundleDecodeError(\"bundle\", \"accumulator has trailing bytes\");\n        }\n        RequireBundleTopupAnchorNullifiers(topupAnchorNullifiers, currentNote);",
-            "C# recursive spend top-up anchor nullifier invariant guard",
-        ),
-        (
-            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "CompareFixedBytes(topupAnchorNullifiers[index - 1], nullifier) >= 0",
-            "CompareFixedBytes(topupAnchorNullifiers[index - 1], nullifier) < 0",
-            "C# recursive spend top-up anchor nullifier invariant guard",
-        ),
-        (
-            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "nullifier.AsSpan().SequenceEqual(noteCommitment)\n                || nullifier.AsSpan().SequenceEqual(spendNullifier)",
-            "false",
-            "C# recursive spend top-up anchor nullifier invariant guard",
+            "C# recursive spend top-up anchor nullifier precedence guard",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "KagemushaUInt64Payload((ulong)KagemushaRecursiveSpendNative.FoldStepMaxInputs + 1UL)",
-            "KagemushaUInt64Payload((ulong)KagemushaRecursiveSpendNative.FoldStepMaxInputs)",
-            "C# typed recursive spend top-up anchor nullifier invariant tests",
+            "TopupAnchorNullifierCountPayload((ulong)KagemushaRecursiveSpendNative.FoldStepMaxInputs + 1)",
+            "TopupAnchorNullifierCountPayload(1)",
+            "C# recursive spend top-up anchor nullifier invariant tests",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "KagemushaFixed32(0x31),\n                        KagemushaFixed32(0x21)",
-            "KagemushaFixed32(0x21),\n                        KagemushaFixed32(0x31)",
-            "C# typed recursive spend top-up anchor nullifier invariant tests",
+            "RecursiveSpendTransitionProfileSummaryDecoderRejectsPreviousTopupAnchorDrift",
+            "RecursiveSpendTransitionProfileSummaryDecoderAllowsPreviousTopupAnchorDrift",
+            "C# recursive spend top-up anchor nullifier invariant tests",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "KagemushaTopupAnchorNullifiersPayload(currentNoteCommitment)",
-            "KagemushaTopupAnchorNullifiersPayload(KagemushaFixed32(0x23))",
-            "C# typed recursive spend top-up anchor nullifier invariant tests",
+            "malformed proof cannot mask invalid top-up anchor nullifiers",
+            "malformed proof can mask invalid top-up anchor nullifiers",
+            "C# recursive spend top-up anchor nullifier invariant tests",
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "RecursiveSpendBundleWithEmptyProofBytes(zeroTopupAnchorBundle)",
-            "RecursiveSpendBundleWithEmptyProofBytes(initBundleArchive)",
-            "C# typed recursive spend top-up anchor nullifier invariant tests",
-        ),
-        (
-            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "RecursiveSpendBundleWithAccumulatorTrailingField(zeroTopupAnchorBundle)",
-            "RecursiveSpendBundleWithAccumulatorTrailingField(initBundleArchive)",
-            "C# typed recursive spend top-up anchor nullifier invariant tests",
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+            "trailing accumulator can mask invalid top-up anchor nullifiers",
+            "C# recursive spend top-up anchor nullifier invariant tests",
         ),
     )
     def expected_topup_anchor_nullifier_invariant_label(old, label):
         marker = old.splitlines()[0]
         if label.endswith("precedence guard"):
-            marker = marker.replace("(", r"\(")
+            marker = marker.replace("(", r"\(").replace(")", r"\)")
             return f"{label} missing pattern {marker}"
         return f"{label} missing {marker}"
 
@@ -55652,7 +56226,7 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
         ),
         (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
-            "C# typed recursive spend top-up anchor nullifier invariant tests",
+            "C# recursive spend top-up anchor nullifier invariant tests",
         ),
     )
     for target, label in message_targets:
@@ -55665,6 +56239,34 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
                 label,
                 "diagnostic",
                 replace_all=True,
+            )
+    transition_profile_message_targets = (
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "C# recursive spend top-up anchor nullifier invariant guard",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "C# recursive spend top-up anchor nullifier invariant tests",
+        ),
+    )
+    for target, label in transition_profile_message_targets:
+        for diagnostic in transition_profile_diagnostics:
+            replacement = diagnostic.replace(
+                "previous_topup_anchor_nullifiers",
+                "previous_topup_anchor_nullifiers_drifted",
+            ).replace("output_commitments", "output_commitments_drifted")
+            updated = mutated[target].replace(diagnostic, replacement)
+            if updated == mutated[target]:
+                raise SystemExit(
+                    "negative control failed: unable to mutate transition-profile top-up anchor diagnostic in "
+                    + target
+                    + ": "
+                    + diagnostic
+                )
+            mutated[target] = updated
+            expected_labels.append(
+                expected_topup_anchor_nullifier_invariant_label(diagnostic, label)
             )
     for target, old, new, label in replacements:
         detect_topup_anchor_nullifier_invariant_mutation(
@@ -59026,7 +59628,7 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
             "        if (recursiveCompactAvailable)\n        {\n            return KagemushaOfflineSpendMode.RecursiveCompactV1;\n        }\n\n",
-            "        _ = recursiveCompactAvailable;\n",
+            "",
             "C# preferred Kagemusha compact-first mode policy",
         ),
     )

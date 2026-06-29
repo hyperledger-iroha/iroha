@@ -436,6 +436,85 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
+    public void PrivacyNativeRejectsNonExactProofRequestTextBeforeNativeDispatch()
+    {
+        AssertRejectsText(
+            string.Empty,
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "algorithmId",
+            "empty or whitespace");
+        AssertRejectsText(
+            " ",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "algorithmId",
+            "empty or whitespace");
+        AssertRejectsText(
+            "\u00a0verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "algorithmId",
+            "must not contain whitespace");
+        AssertRejectsText(
+            "verange-transparent-range-v1\u0001",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "algorithmId",
+            "must not contain control characters");
+        AssertRejectsText(
+            "verange-transparent-range-v1",
+            "build VeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "entrypoint",
+            "must not contain whitespace");
+        AssertRejectsText(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1\u0001",
+            "bulletproofs:verange_transparent_range_v1",
+            "entrypoint",
+            "must not contain control characters");
+        AssertRejectsText(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            " bulletproofs:verange_transparent_range_v1",
+            "vkRef",
+            "must not contain whitespace");
+        AssertRejectsText(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            "bulletproofs:verange\u0001transparent_range_v1",
+            "vkRef",
+            "must not contain control characters");
+        AssertRejectsText(
+            new string('a', 1025),
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "algorithmId",
+            "must not exceed 1024 bytes");
+    }
+
+    [Fact]
+    public void PrivacyNativeRejectsNullProofRequestTextBeforeNativeDispatch()
+    {
+        AssertRejectsNullText(
+            null!,
+            "buildVeRangeProofV1",
+            "bulletproofs:verange_transparent_range_v1",
+            "algorithmId");
+        AssertRejectsNullText(
+            "verange-transparent-range-v1",
+            null!,
+            "bulletproofs:verange_transparent_range_v1",
+            "entrypoint");
+        AssertRejectsNullText(
+            "verange-transparent-range-v1",
+            "buildVeRangeProofV1",
+            null!,
+            "vkRef");
+    }
+
+    [Fact]
     public void PrivacyNativeRejectsInvalidProofRequestArchivesBeforeNativeDispatch()
     {
         var emptyPayloadRequest = PrivacyNoritoFrame(0x52);
@@ -525,6 +604,96 @@ public sealed class PrivacyNativeTests
         }
     }
 
+    private static void AssertRejectsText(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        string expectedParamName,
+        string expectedMessage)
+    {
+        var invoked = false;
+
+        var error = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.CallProofRequest(
+                algorithmId,
+                entrypoint,
+                vkRef,
+                new byte[] { 0x01 },
+                ReadOnlySpan<byte>.Empty,
+                ReadOnlySpan<byte>.Empty,
+                (
+                    byte[] algorithmIdPtr,
+                    UIntPtr algorithmIdLen,
+                    byte[] entrypointPtr,
+                    UIntPtr entrypointLen,
+                    byte[] vkRefPtr,
+                    UIntPtr vkRefLen,
+                    byte[] publicInputsPtr,
+                    UIntPtr publicInputsLen,
+                    byte[] witnessPtr,
+                    UIntPtr witnessLen,
+                    byte[] proofPtr,
+                    UIntPtr proofLen,
+                    out IntPtr outPtr,
+                    out UIntPtr outLen) =>
+                {
+                    invoked = true;
+                    outPtr = IntPtr.Zero;
+                    outLen = UIntPtr.Zero;
+                    return 0;
+                },
+                requireAbi: false,
+                free: _ => { }));
+
+        Assert.False(invoked);
+        Assert.Contains(expectedMessage, error.Message);
+        Assert.Equal(expectedParamName, error.ParamName);
+    }
+
+    private static void AssertRejectsNullText(
+        string algorithmId,
+        string entrypoint,
+        string vkRef,
+        string expectedParamName)
+    {
+        var invoked = false;
+
+        var error = Assert.Throws<ArgumentNullException>(() =>
+            PrivacyNative.CallProofRequest(
+                algorithmId,
+                entrypoint,
+                vkRef,
+                new byte[] { 0x01 },
+                ReadOnlySpan<byte>.Empty,
+                ReadOnlySpan<byte>.Empty,
+                (
+                    byte[] algorithmIdPtr,
+                    UIntPtr algorithmIdLen,
+                    byte[] entrypointPtr,
+                    UIntPtr entrypointLen,
+                    byte[] vkRefPtr,
+                    UIntPtr vkRefLen,
+                    byte[] publicInputsPtr,
+                    UIntPtr publicInputsLen,
+                    byte[] witnessPtr,
+                    UIntPtr witnessLen,
+                    byte[] proofPtr,
+                    UIntPtr proofLen,
+                    out IntPtr outPtr,
+                    out UIntPtr outLen) =>
+                {
+                    invoked = true;
+                    outPtr = IntPtr.Zero;
+                    outLen = UIntPtr.Zero;
+                    return 0;
+                },
+                requireAbi: false,
+                free: _ => { }));
+
+        Assert.False(invoked);
+        Assert.Equal(expectedParamName, error.ParamName);
+    }
+
     [Fact]
     public void PrivacyNativeProbeRequiresSuccessfulNonemptyOutput()
     {
@@ -593,24 +762,39 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeReadOutputFreesNonNullPointerOnBridgeErrors()
     {
+        var errorBytes = Encoding.UTF8.GetBytes("native-error-output-never-survives-free");
+        var pointer = Marshal.AllocHGlobal(errorBytes.Length);
         var freed = false;
-        var pointer = new IntPtr(1);
+        Marshal.Copy(errorBytes, 0, pointer, errorBytes.Length);
 
-        AssertInvalidOperationDiagnostic(
-            "iroha_privacy_verify_proof_v1 failed with bridge error code -311.",
-            () => PrivacyNative.ReadPrivacyOutput(
-                "iroha_privacy_verify_proof_v1",
-                -311,
-                pointer,
-                (UIntPtr)1,
-                ptr =>
-                {
-                    Assert.Equal(pointer, ptr);
-                    freed = true;
-                },
-                PrivacyNative.PrivacyVerifyProofResultSchemaByte));
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                PrivacyNative.ReadPrivacyOutput(
+                    "iroha_privacy_verify_proof_v1",
+                    -311,
+                    pointer,
+                    (UIntPtr)errorBytes.Length,
+                    ptr =>
+                    {
+                        Assert.Equal(pointer, ptr);
+                        AssertPointerZeroed(ptr, errorBytes.Length);
+                        Marshal.FreeHGlobal(ptr);
+                        pointer = IntPtr.Zero;
+                        freed = true;
+                    },
+                    PrivacyNative.PrivacyVerifyProofResultSchemaByte));
 
-        Assert.True(freed);
+            Assert.True(freed);
+            Assert.Contains("-311", error.Message);
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
     }
 
     [Fact]
@@ -958,6 +1142,12 @@ public sealed class PrivacyNativeTests
         var requestArchive = PrivacyNoritoFrameWithPayload(0x52);
         byte[]? buildRequest = null;
         byte[]? verifyRequest = null;
+        byte[]? requestAlgorithmId = null;
+        byte[]? requestEntrypoint = null;
+        byte[]? requestVkRef = null;
+        byte[]? requestPublicInputs = null;
+        byte[]? requestWitness = null;
+        byte[]? requestProof = null;
 
         var capabilitiesError = Assert.Throws<InvalidOperationException>(() =>
             PrivacyNative.CallCapabilities(
@@ -972,6 +1162,47 @@ public sealed class PrivacyNativeTests
         AssertSanitizedNativeFailure(
             capabilitiesError,
             "iroha_privacy_capabilities_v1 failed.",
+            witness);
+
+        var proofRequestError = Assert.Throws<InvalidOperationException>(() =>
+            PrivacyNative.CallProofRequest(
+                "verange-transparent-range-v1",
+                "buildVeRangeProofV1",
+                "bulletproofs:verange_transparent_range_v1",
+                Encoding.UTF8.GetBytes("public-inputs"),
+                Encoding.UTF8.GetBytes(witness),
+                Encoding.UTF8.GetBytes("candidate-proof"),
+                (
+                    byte[] algorithmIdPtr,
+                    UIntPtr algorithmIdLen,
+                    byte[] entrypointPtr,
+                    UIntPtr entrypointLen,
+                    byte[] vkRefPtr,
+                    UIntPtr vkRefLen,
+                    byte[] publicInputsPtr,
+                    UIntPtr publicInputsLen,
+                    byte[] witnessPtr,
+                    UIntPtr witnessLen,
+                    byte[] proofPtr,
+                    UIntPtr proofLen,
+                    out IntPtr outPtr,
+                    out UIntPtr outLen) =>
+                {
+                    requestAlgorithmId = algorithmIdPtr;
+                    requestEntrypoint = entrypointPtr;
+                    requestVkRef = vkRefPtr;
+                    requestPublicInputs = publicInputsPtr;
+                    requestWitness = witnessPtr;
+                    requestProof = proofPtr;
+                    Assert.Contains(witness, Encoding.UTF8.GetString(witnessPtr), StringComparison.Ordinal);
+                    outPtr = IntPtr.Zero;
+                    outLen = UIntPtr.Zero;
+                    throw new ApplicationException($"native panic included {witness}");
+                },
+                requireAbi: false));
+        AssertSanitizedNativeFailure(
+            proofRequestError,
+            "iroha_privacy_proof_request_v1 failed.",
             witness);
 
         var buildError = Assert.Throws<InvalidOperationException>(() =>
@@ -1013,6 +1244,19 @@ public sealed class PrivacyNativeTests
             witness);
         Assert.NotNull(buildRequest);
         Assert.NotNull(verifyRequest);
+        foreach (var temporary in new[]
+                 {
+                     requestAlgorithmId,
+                     requestEntrypoint,
+                     requestVkRef,
+                     requestPublicInputs,
+                     requestWitness,
+                     requestProof,
+                 })
+        {
+            Assert.NotNull(temporary);
+            Assert.True(Array.TrueForAll(temporary!, value => value == 0));
+        }
         Assert.True(Array.TrueForAll(buildRequest!, value => value == 0));
         Assert.True(Array.TrueForAll(verifyRequest!, value => value == 0));
         Assert.Equal(PrivacyNoritoFrameWithPayload(0x52), requestArchive);

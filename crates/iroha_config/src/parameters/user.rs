@@ -4570,6 +4570,12 @@ pub struct SccpRouteManifest {
     pub native_evm_prover_bundle_hash: Option<String>,
     /// Optional canonical native EVM prover bundle JSON.
     pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    pub source_verifier_material: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine_deployment: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine: Option<iroha_primitives::json::Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -5622,6 +5628,16 @@ impl SccpRouteManifest {
             "SCCP BSC route manifest production_ready requires native_evm_prover_bundle"
         );
         assert!(
+            !(self.production_ready && is_bsc_route && self.source_verifier_material.is_none()),
+            "SCCP BSC route manifest production_ready requires source_verifier_material"
+        );
+        assert!(
+            !(self.production_ready
+                && is_bsc_route
+                && self.source_adapter_engine_deployment.is_none()),
+            "SCCP BSC route manifest production_ready requires source_adapter_engine_deployment"
+        );
+        assert!(
             !(self.production_ready
                 && is_bsc_route
                 && (destination_browser_prover.is_none() || source_browser_prover.is_none())),
@@ -5810,6 +5826,9 @@ impl SccpRouteManifest {
             proving_key_hash,
             native_evm_prover_bundle_hash,
             native_evm_prover_bundle: self.native_evm_prover_bundle,
+            source_verifier_material: self.source_verifier_material,
+            source_adapter_engine_deployment: self.source_adapter_engine_deployment,
+            source_adapter_engine: self.source_adapter_engine,
             destination_browser_prover,
             source_browser_prover,
             deployment_evidence_sha256,
@@ -5901,6 +5920,27 @@ mod sccp_route_manifest_user_config_tests {
                 "schema": "sccp-bsc-native-evm-prover-bundle/v1",
                 "routeId": "taira_bsc_xor",
                 "assetKey": "xor"
+            }))),
+            source_verifier_material: Some(iroha_primitives::json::Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc"
+            }))),
+            source_adapter_engine_deployment: Some(iroha_primitives::json::Json::new(
+                norito::json!({
+                    "version": 1,
+                    "source_domain": 2,
+                    "target_domain": 0,
+                    "source_chain": "bsc",
+                    "deployment_receipt_hash": "0x5151515151515151515151515151515151515151515151515151515151515151"
+                }),
+            )),
+            source_adapter_engine: Some(iroha_primitives::json::Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc"
             }))),
             destination_browser_prover: Some(browser_prover_ref("destination", "60")),
             source_browser_prover: Some(browser_prover_ref("source", "70")),
@@ -6013,6 +6053,9 @@ mod sccp_route_manifest_user_config_tests {
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,

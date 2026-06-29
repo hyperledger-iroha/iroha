@@ -330,7 +330,7 @@ function toVersionedTransactionPayload(payload, nativeBinding) {
   ) {
     try {
       const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
-      if (encoded[0] === VERSIONED_TRANSACTION_PAYLOAD_VERSION) {
+      if (encoded.length > 0) {
         return encoded;
       }
     } catch {

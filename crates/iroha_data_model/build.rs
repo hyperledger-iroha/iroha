@@ -6,15 +6,12 @@
 
 use std::{env, fs, path::PathBuf};
 
+const BUILD_CONSTS: &str = include_str!("build_consts.rs");
+
 fn main() {
     println!("cargo:rerun-if-changed=build_consts.rs");
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("missing manifest dir");
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    fs::copy(
-        PathBuf::from(manifest_dir).join("build_consts.rs"),
-        out_dir.join("build_consts.rs"),
-    )
-    .expect("failed to copy build consts");
+    fs::write(out_dir.join("build_consts.rs"), BUILD_CONSTS).expect("failed to write build consts");
 }
 
 // Intentionally no helpers here; keep build script minimal.

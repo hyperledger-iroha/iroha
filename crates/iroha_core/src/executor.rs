@@ -677,6 +677,175 @@ fn nexus_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
     nexus_fee_exempt_instructions(instructions.as_ref())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RedeemFundedNexusFeeCapacity {
+    payer: AccountId,
+    capacity: Numeric,
+}
+
+fn redeem_funded_nexus_fee_capacity(
+    world: &impl WorldReadOnly,
+    cfg: &iroha_config::parameters::actual::NexusFees,
+    transaction: &SignedTransaction,
+    observation_time_ms: u64,
+    has_fee_sponsor: bool,
+) -> Result<Option<RedeemFundedNexusFeeCapacity>, NexusFeeAdmissionError> {
+    if has_fee_sponsor {
+        return Ok(None);
+    }
+
+    let payer = transaction.authority();
+    let instructions: &[InstructionBox] = match transaction.instructions() {
+        Executable::Instructions(instructions) => instructions.as_ref(),
+        Executable::IvmProved(proved) => proved.overlay.as_ref(),
+        Executable::ContractCall(_) | Executable::Ivm(_) => return Ok(None),
+    };
+
+    let mut candidate_redeems: Vec<(AssetDefinitionId, Numeric)> = Vec::new();
+    for instruction in instructions {
+        let any = instruction.as_any();
+        if any
+            .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
+            .is_some()
+        {
+            continue;
+        }
+        if let Some(redeem) =
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+        {
+            let redemption = &redeem.redemption;
+            if &redemption.recipient != payer || redemption.asset.account() != payer {
+                return Ok(None);
+            }
+            candidate_redeems.push((
+                redemption.asset.definition().clone(),
+                redemption.amount.clone(),
+            ));
+            continue;
+        }
+        if let Some(redeem) =
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>()
+        {
+            if &redeem.recipient != payer {
+                return Ok(None);
+            }
+            candidate_redeems.push((
+                redeem.bundle.accumulator.asset.clone(),
+                Numeric::new(redeem.public_amount, 0),
+            ));
+            continue;
+        }
+        return Ok(None);
+    }
+
+    if candidate_redeems.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(fee_asset_def) = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &cfg.fee_asset_id,
+        observation_time_ms,
+    ) else {
+        return Ok(None);
+    };
+
+    let mut redeemed_amount = Numeric::zero();
+    for (asset_def, amount) in candidate_redeems {
+        if asset_def != fee_asset_def {
+            return Ok(None);
+        }
+        redeemed_amount = checked_nexus_fee_add(redeemed_amount, amount, "offline redeem amount")?;
+    }
+
+    if redeemed_amount <= Numeric::zero() {
+        return Ok(None);
+    }
+
+    let payer_asset = AssetId::new(fee_asset_def, payer.clone());
+    let existing_balance = world
+        .assets()
+        .get(&payer_asset)
+        .map_or_else(Numeric::zero, |balance| (**balance).clone());
+    let capacity = checked_nexus_fee_add(
+        existing_balance,
+        redeemed_amount,
+        "offline redeem-funded fee capacity",
+    )?;
+
+    Ok(Some(RedeemFundedNexusFeeCapacity {
+        payer: payer.clone(),
+        capacity,
+    }))
+}
+
+fn redeem_funded_nexus_fee_covers(
+    world: &impl WorldReadOnly,
+    cfg: &iroha_config::parameters::actual::NexusFees,
+    transaction: &SignedTransaction,
+    observation_time_ms: u64,
+    next_block_height: u64,
+    has_fee_sponsor: bool,
+    fee: &Numeric,
+    in_flight_fees: Numeric,
+) -> Result<bool, NexusFeeAdmissionError> {
+    let Some(capacity) = redeem_funded_nexus_fee_capacity(
+        world,
+        cfg,
+        transaction,
+        observation_time_ms,
+        has_fee_sponsor,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    let mut required = fee.clone();
+    if cfg.lane_relay_burn_receipts_active_at(next_block_height) {
+        let unsettled =
+            unsettled_verified_nexus_fee_amount(world, &capacity.payer, cfg.fee_asset_id.as_str())?;
+        required = checked_nexus_fee_add(required, unsettled, "unsettled receipts")?;
+        required = checked_nexus_fee_add(required, in_flight_fees, "in-flight receipts")?;
+    }
+
+    Ok(capacity.capacity >= required)
+}
+
+fn check_redeem_funded_lane_relay_fee_balance(
+    world: &impl WorldReadOnly,
+    cfg: &iroha_config::parameters::actual::NexusFees,
+    payer: &AccountId,
+    observation_time_ms: u64,
+    fee: &Numeric,
+    in_flight_fees: Numeric,
+) -> Result<(), NexusFeeAdmissionError> {
+    let fee_asset_def = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &cfg.fee_asset_id,
+        observation_time_ms,
+    )
+    .ok_or_else(|| {
+        NexusFeeAdmissionError::ConfigInvalid(
+            "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
+                .to_owned(),
+        )
+    })?;
+    let payer_asset = AssetId::new(fee_asset_def, payer.clone());
+    let available = world
+        .assets()
+        .get(&payer_asset)
+        .map_or_else(Numeric::zero, |balance| (**balance).clone());
+    let unsettled = unsettled_verified_nexus_fee_amount(world, payer, cfg.fee_asset_id.as_str())?;
+    let required = checked_nexus_fee_add(fee.clone(), unsettled, "unsettled receipts")?;
+    let required = checked_nexus_fee_add(required, in_flight_fees, "in-flight receipts")?;
+    if available < required {
+        return Err(NexusFeeAdmissionError::Rejected(format!(
+            "redeemed offline fee balance for payer `{payer}` is insufficient: requires {required}, available {available}"
+        )));
+    }
+    Ok(())
+}
+
 fn parse_account_id_literal(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1541,6 +1710,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         route_dataspace_id,
     )
     .map_err(validation_fail_to_nexus_fee_admission_error)?;
+    let has_fee_sponsor = fee_sponsor.is_some();
     let externally_settled_sponsored_fee =
         fee_sponsor.is_some() && nexus.fees.external_settlement_enabled;
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission(transaction)?;
@@ -1581,6 +1751,20 @@ pub(crate) fn check_external_nexus_fee_admission(
     } else {
         transaction.authority().clone()
     };
+
+    let redeem_funded_nexus_fee = redeem_funded_nexus_fee_covers(
+        world,
+        &nexus.fees,
+        transaction,
+        observation_time_ms,
+        next_block_height,
+        has_fee_sponsor,
+        &fee,
+        Numeric::zero(),
+    )?;
+    if redeem_funded_nexus_fee {
+        return Ok(());
+    }
 
     if nexus
         .fees
@@ -1944,6 +2128,42 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
     }
 
     if !skip_nexus_fee {
+        let fee = compute_nexus_fee_amount(
+            &state_transaction.nexus.fees,
+            tx_bytes_len,
+            instruction_count,
+            gas_used,
+        )?;
+        let in_flight_fees = if state_transaction
+            .nexus
+            .fees
+            .lane_relay_burn_receipts_active_at(state_transaction.block_height())
+        {
+            state_transaction
+                .pending_nexus_fee_amount_for(
+                    authority,
+                    state_transaction.nexus.fees.fee_asset_id.as_str(),
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "Nexus fee budget arithmetic overflow while summing in-flight receipts"
+                            .to_owned(),
+                    )
+                })?
+        } else {
+            Numeric::zero()
+        };
+        let redeem_funded_nexus_fee = redeem_funded_nexus_fee_covers(
+            &state_transaction.world,
+            &state_transaction.nexus.fees,
+            transaction,
+            state_transaction.block_unix_timestamp_ms(),
+            state_transaction.block_height(),
+            fee_sponsor.is_some(),
+            &fee,
+            in_flight_fees,
+        )
+        .map_err(nexus_fee_admission_error_to_validation_fail)?;
         Executor::charge_nexus_fees(
             state_transaction,
             authority,
@@ -1953,6 +2173,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             tx_bytes_len,
             instruction_count,
             gas_used,
+            redeem_funded_nexus_fee,
         )?;
     }
 
@@ -2013,6 +2234,7 @@ impl Executor {
         tx_bytes_len: usize,
         instruction_count: usize,
         gas_used: u64,
+        redeem_funded_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         if !state_transaction.nexus.enabled {
             return Ok(());
@@ -2096,13 +2318,6 @@ impl Executor {
         };
         let payer_id = payer.to_string();
         if cfg.lane_relay_burn_receipts_active_at(state_transaction.block_height()) {
-            check_lane_relay_burn_canonical_sponsor(&state_transaction.world, &cfg, &payer)
-                .map_err(|err| match err {
-                    NexusFeeAdmissionError::Rejected(reason)
-                    | NexusFeeAdmissionError::ConfigInvalid(reason) => {
-                        ValidationFail::NotPermitted(reason)
-                    }
-                })?;
             let asset_label = cfg.fee_asset_id.clone();
             let in_flight_fees = state_transaction
                 .pending_nexus_fee_amount_for(&payer, cfg.fee_asset_id.as_str())
@@ -2112,19 +2327,43 @@ impl Executor {
                             .to_owned(),
                     )
                 })?;
-            check_lane_relay_burn_fee_budget(
-                &state_transaction.world,
-                &cfg,
-                &payer,
-                &fee,
-                in_flight_fees,
-            )
-            .map_err(|err| match err {
-                NexusFeeAdmissionError::Rejected(reason)
-                | NexusFeeAdmissionError::ConfigInvalid(reason) => {
-                    ValidationFail::NotPermitted(reason)
-                }
-            })?;
+            if redeem_funded_nexus_fee {
+                check_redeem_funded_lane_relay_fee_balance(
+                    &state_transaction.world,
+                    &cfg,
+                    &payer,
+                    state_transaction.block_unix_timestamp_ms(),
+                    &fee,
+                    in_flight_fees,
+                )
+                .map_err(|err| match err {
+                    NexusFeeAdmissionError::Rejected(reason)
+                    | NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                        ValidationFail::NotPermitted(reason)
+                    }
+                })?;
+            } else {
+                check_lane_relay_burn_canonical_sponsor(&state_transaction.world, &cfg, &payer)
+                    .map_err(|err| match err {
+                        NexusFeeAdmissionError::Rejected(reason)
+                        | NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                            ValidationFail::NotPermitted(reason)
+                        }
+                    })?;
+                check_lane_relay_burn_fee_budget(
+                    &state_transaction.world,
+                    &cfg,
+                    &payer,
+                    &fee,
+                    in_flight_fees,
+                )
+                .map_err(|err| match err {
+                    NexusFeeAdmissionError::Rejected(reason)
+                    | NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                        ValidationFail::NotPermitted(reason)
+                    }
+                })?;
+            }
             let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
             source_id.copy_from_slice(tx_hash.as_ref());
             let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
@@ -2319,6 +2558,7 @@ impl Executor {
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<AccountId>,
         skip_nexus_fee: bool,
+        redeem_funded_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         if require_gas_limit && gas_limit_md.is_none() {
             return Err(ValidationFail::NotPermitted(
@@ -2546,6 +2786,7 @@ impl Executor {
                 tx_bytes_len,
                 instruction_count,
                 used,
+                redeem_funded_nexus_fee,
             )?;
         }
 
@@ -2643,6 +2884,48 @@ impl Executor {
                 )?;
             }
         }
+        let redeem_funded_nexus_fee = if state_transaction.nexus.enabled && !skip_nexus_fee {
+            let (_, instruction_count, gas_used) = fee_bound_for_admission(&transaction)
+                .map_err(nexus_fee_admission_error_to_validation_fail)?;
+            let nexus_fee = compute_nexus_fee_amount(
+                &state_transaction.nexus.fees,
+                tx_bytes_len,
+                instruction_count,
+                gas_used,
+            )?;
+            let in_flight_fees = if state_transaction
+                .nexus
+                .fees
+                .lane_relay_burn_receipts_active_at(state_transaction.block_height())
+            {
+                state_transaction
+                    .pending_nexus_fee_amount_for(
+                        authority,
+                        state_transaction.nexus.fees.fee_asset_id.as_str(),
+                    )
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(
+                            "Nexus fee budget arithmetic overflow while summing in-flight receipts"
+                                .to_owned(),
+                        )
+                    })?
+            } else {
+                Numeric::zero()
+            };
+            redeem_funded_nexus_fee_covers(
+                &state_transaction.world,
+                &state_transaction.nexus.fees,
+                &transaction,
+                state_transaction.block_unix_timestamp_ms(),
+                state_transaction.block_height(),
+                fee_sponsor.is_some(),
+                &nexus_fee,
+                in_flight_fees,
+            )
+            .map_err(nexus_fee_admission_error_to_validation_fail)?
+        } else {
+            false
+        };
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
@@ -3001,6 +3284,7 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
+                    redeem_funded_nexus_fee,
                 ),
             (Self::Initial | Self::UserProvided(_), Executable::IvmProved(proved)) => {
                 let mut instructions = proved.overlay.into_vec();
@@ -3022,6 +3306,7 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     false,
+                    redeem_funded_nexus_fee,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::ContractCall(call)) => {
@@ -3554,6 +3839,7 @@ impl Executor {
                     tx_bytes_len,
                     0,
                     gas_used,
+                    false,
                 )?;
                 ivm_cache.put_cached_runtime(&runtime);
                 Ok(())
@@ -9543,6 +9829,116 @@ mod tests {
         );
         let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
+    }
+
+    #[test]
+    fn nexus_fee_offline_to_online_kagemusha_redeem_can_fund_fee_from_redeemed_amount() {
+        let (mut state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
+        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+            kagemusha_fee_test_recursive_bundle(asset_def_id),
+            authority_id.clone(),
+            1,
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-funded"),
+        );
+        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
+        let view = state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+            .expect("same-asset offline-to-online redeem can fund its Nexus fee");
+    }
+
+    #[test]
+    fn nexus_fee_offline_to_online_kagemusha_redeem_below_fee_is_rejected() {
+        let (mut state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        let nexus = state.nexus.get_mut();
+        nexus.fees.fee_asset_id = asset_def_id.to_string();
+        nexus.fees.base_fee = Numeric::from(2_u32);
+        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+            kagemusha_fee_test_recursive_bundle(asset_def_id),
+            authority_id.clone(),
+            1,
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-underfunded"),
+        );
+        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
+        let view = state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+            .expect_err("offline-to-online redeem below the fee must be rejected");
+        assert!(matches!(err, NexusFeeAdmissionError::Rejected(_)));
+    }
+
+    #[test]
+    fn nexus_fee_kagemusha_redeem_to_third_party_does_not_self_fund_fee() {
+        let (mut state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+            kagemusha_fee_test_recursive_bundle(asset_def_id),
+            recipient_id,
+            1,
+            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-third-party"),
+        );
+        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
+        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
+    }
+
+    #[test]
+    fn nexus_fee_lane_relay_burn_redeem_funded_balance_records_receipt_without_budget() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from(1_u32),
+        );
+        let world = World::with_assets([domain], [payer], [asset_definition], [payer_asset], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            nexus.fees.fee_receipts_activation_height = 1;
+        }
+
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(payer_kp.private_key());
+        let tx_hash = tx.hash();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+
+        super::Executor::charge_nexus_fees(&mut stx, &payer_id, tx_hash, None, 0, 0, 0, true)
+            .expect("redeem-funded public balance should record a lane fee receipt");
+
+        let pending = stx.drain_nexus_fee_records();
+        let receipt = pending.get(&tx_hash).expect("fee receipt recorded");
+        assert_eq!(receipt.payer_account_id, payer_id);
+        assert_eq!(receipt.fee_asset_id, asset_def_id.to_string());
+        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
     }
 
     #[test]

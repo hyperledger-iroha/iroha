@@ -267,7 +267,10 @@ for diagnostics and cross-language parity: `STATUS_ERROR`,
 `production_disabled = 4`, and `invalid_request = 5`; treat them as
 sanitized status metadata, not proof success.
 
-Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
+Wallet `load` persists newly issued local notes as `ISSUE_PENDING` until sync
+observes the matching `IssueOfflineNote` transaction commit; rejected issue
+outcomes cancel the pending note. Core wallet-note models use the current
+first-release state names. Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
 wallet-note state names are rejected; first-release records must use current
 state names.
 `OfflineNoteTransferHandoff` exposes one integration surface for local token
@@ -297,7 +300,7 @@ mismatches, and conflicting repeated headers or chunks.
 The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
 non-canonical zero-length reads, and direct read helpers with invalid requested
 lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
-decoding rejects fractional versions, unknown fields inside legacy
+decoding rejects fractional versions, unknown fields inside retired
 pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
 

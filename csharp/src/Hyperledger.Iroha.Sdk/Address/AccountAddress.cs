@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Hyperledger.Iroha.Address;
@@ -25,7 +26,7 @@ public sealed class AccountAddress
     ];
 
     private static readonly IReadOnlyDictionary<string, int> I105Index = BuildI105Index();
-    private static readonly IReadOnlyDictionary<string, CurveId> CurveAliases = new Dictionary<string, CurveId>(StringComparer.OrdinalIgnoreCase)
+    private static readonly IReadOnlyDictionary<string, CurveId> CurveAliases = new Dictionary<string, CurveId>(StringComparer.Ordinal)
     {
         ["ed"] = CurveId.Ed25519,
         ["ed25519"] = CurveId.Ed25519,
@@ -139,6 +140,11 @@ public sealed class AccountAddress
             throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must not contain surrounding whitespace");
         }
 
+        if (algorithm.Any(char.IsWhiteSpace))
+        {
+            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must not contain whitespace");
+        }
+
         var normalizedAlgorithm = algorithm;
         if (!IsPrintableAscii(normalizedAlgorithm) || !CurveAliases.TryGetValue(normalizedAlgorithm, out var curveId))
         {
@@ -194,19 +200,24 @@ public sealed class AccountAddress
             throw NewError(AccountAddressErrorCode.InvalidLength, "invalid length for address payload");
         }
 
-        if (trimmed.Contains('@', StringComparison.Ordinal))
+        if (!string.Equals(trimmed, encoded, StringComparison.Ordinal))
+        {
+            throw NewError(AccountAddressErrorCode.UnsupportedAddressFormat, "account address literals must not contain surrounding whitespace");
+        }
+
+        if (encoded.Contains('@', StringComparison.Ordinal))
         {
             throw NewError(AccountAddressErrorCode.UnsupportedAddressFormat, "account address literals must not include @domain; use canonical I105 form");
         }
 
-        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        if (encoded.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             throw NewError(AccountAddressErrorCode.UnsupportedAddressFormat, "canonical hex account addresses are not accepted; use canonical I105 form");
         }
 
-        var (discriminant, payload) = DecodeI105(trimmed, expectedDiscriminant);
+        var (discriminant, payload) = DecodeI105(encoded, expectedDiscriminant);
         var address = FromCanonicalBytes(payload);
-        if (!string.Equals(address.ToI105(discriminant), trimmed, StringComparison.Ordinal))
+        if (!string.Equals(address.ToI105(discriminant), encoded, StringComparison.Ordinal))
         {
             throw NewError(AccountAddressErrorCode.UnsupportedAddressFormat, "account address literals must use canonical I105 form");
         }
@@ -399,7 +410,7 @@ public sealed class AccountAddress
                 throw NewError(AccountAddressErrorCode.MissingI105Sentinel, "i105 address is missing the expected chain-discriminant sentinel");
             }
 
-            if (!ushort.TryParse(digits.ToString(), out var discriminant))
+            if (!ushort.TryParse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var discriminant))
             {
                 throw NewError(AccountAddressErrorCode.InvalidI105Discriminant, "i105 chain discriminant must fit in an unsigned 16-bit integer");
             }

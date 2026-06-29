@@ -83,6 +83,12 @@ pub struct SccpRouteManifest {
     pub native_evm_prover_bundle_hash: Option<String>,
     /// Optional canonical native EVM prover bundle JSON.
     pub native_evm_prover_bundle: Option<Json>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    pub source_verifier_material: Option<Json>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine_deployment: Option<Json>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine: Option<Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -462,6 +468,25 @@ mod tests {
                 "schema": "sccp-bsc-native-evm-prover-bundle/v1",
                 "routeId": "taira_bsc_xor",
                 "assetKey": "xor"
+            }))),
+            source_verifier_material: Some(Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc"
+            }))),
+            source_adapter_engine_deployment: Some(Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc",
+                "deployment_receipt_hash": "0x5454545454545454545454545454545454545454545454545454545454545454"
+            }))),
+            source_adapter_engine: Some(Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc"
             }))),
             destination_browser_prover: Some(browser_prover_ref(0x50)),
             source_browser_prover: Some(browser_prover_ref(0x60)),

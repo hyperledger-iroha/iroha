@@ -3167,7 +3167,7 @@ public final class OfflineNoteTest {
         issuerClient.lastIssueRequest.noteCommitmentHex(),
         "issuer request note commitment");
     assertEquals(
-        OfflineNoteWalletNoteState.SPENDABLE.name(),
+        OfflineNoteWalletNoteState.ISSUE_PENDING.name(),
         note.state().name(),
         "loaded note state");
   }
@@ -4575,9 +4575,13 @@ public final class OfflineNoteTest {
     final Map<String, Object> redeemVector = obj(chain, "redeem");
     final Map<String, Object> payment = obj(fixture, "payment_token");
     final OfflineNote.AuditBundle audit = audit(fixture);
+    final OfflineNote.Issue issue = issue(fixture);
     final OfflineNote.Redeem redeem = redeem(fixture);
     final OfflineNote.KeyCertificate recipientCertificate =
         certificate(obj(payment, "recipient_key_certificate"));
+    final OfflineNoteWalletNote issuePending =
+        sourceWalletNote(fixture, certificate(obj(payment, "sender_key_certificate")))
+            .withState(OfflineNoteWalletNoteState.ISSUE_PENDING, 1_700_000_003_000L);
     final OfflineNoteWalletNote redeemPending =
         new OfflineNoteWalletNote(
             string(derivation, "chain_id"),
@@ -4597,6 +4601,13 @@ public final class OfflineNoteTest {
         OfflineNoteOutcomeIndex.fromExplorerOutcomes(
             List.of(
                 new OfflineNoteExplorerInstructionOutcome(
+                    OfflineNoteOutcomeIndex.KIND_ISSUE,
+                    "Committed",
+                    "issue-tx",
+                    rawInstructionPair(
+                        OfflineNote.ISSUE_INSTRUCTION_SCHEMA,
+                        wirePayloadBytes(OfflineNote.issueInstruction(issue)))),
+                new OfflineNoteExplorerInstructionOutcome(
                     OfflineNoteOutcomeIndex.KIND_AUDIT,
                     "Committed",
                     "audit-tx",
@@ -4610,6 +4621,10 @@ public final class OfflineNoteTest {
                     rawInstructionPair(
                         OfflineNote.REDEEM_INSTRUCTION_SCHEMA,
                         wirePayloadBytes(OfflineNote.redeemInstruction(redeem))))));
+    assertEquals(
+        OfflineNoteWalletNoteState.SPENDABLE.name(),
+        committed.resolve(issuePending).state().name(),
+        "committed issue");
     assertTrue(
         committed.resolve(sourceWalletNote(fixture, certificate(obj(payment, "sender_key_certificate"))))
             == null,
@@ -4621,8 +4636,13 @@ public final class OfflineNoteTest {
 
     final OfflineNoteOutcomeIndex rejected =
         new OfflineNoteOutcomeIndex()
+            .recordRejectedIssue(issue, "issue-rejected")
             .recordRejectedAudit(audit, "audit-rejected")
             .recordRejectedRedeem(redeem, "redeem-rejected");
+    assertEquals(
+        OfflineNoteWalletNoteState.CANCELLED.name(),
+        rejected.resolve(issuePending).state().name(),
+        "rejected issue");
     assertEquals(
         OfflineNoteWalletNoteState.SPENDABLE.name(),
         rejected.resolve(redeemPending).state().name(),

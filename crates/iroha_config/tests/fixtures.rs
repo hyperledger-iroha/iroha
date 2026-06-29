@@ -2516,7 +2516,7 @@ fn minimal_config_snapshot() {
                 rayon_global_threads: 0,
                 scheduler_stack_bytes: 33554432,
                 prover_stack_bytes: 33554432,
-                sumeragi_stack_bytes: 33554432,
+                sumeragi_stack_bytes: 67108864,
                 guest_stack_bytes: 4194304,
                 gas_to_stack_multiplier: 4,
             },

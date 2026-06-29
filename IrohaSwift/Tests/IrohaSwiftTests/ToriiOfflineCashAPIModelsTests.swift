@@ -47,27 +47,27 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(androidCertificate.assertionUsageCountLimit, 1)
     }
 
-    func testCompactKeyCertificateRejectsNonCanonicalCompatibilityFields() throws {
+    func testCompactKeyCertificateRejectsNonCanonicalCertificateFields() throws {
         XCTAssertThrowsError(try Self.certificate(
             platform: "android-keymint",
             assertionScheme: "android-keymint-ecdsa-p256-usage-limit",
             assertionUsageCountLimit: 1
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_scheme"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("assertion_scheme"))
         }
 
         XCTAssertThrowsError(try Self.certificate(
             platform: "ios-appattest",
             assertionKeyAlgorithm: "ed25519"
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_key_algorithm"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("assertion_key_algorithm"))
         }
 
         XCTAssertThrowsError(try Self.certificate(
             platform: "ios-appattest",
             issuerSignatureBase64: "issuer-signature"
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("issuer_signature_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("issuer_signature_base64"))
         }
 
         for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"] {
@@ -77,7 +77,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
                 assertionKeyAlgorithm: "ecdsa-p256-sha256",
                 assertionUsageCountLimit: 1
             ).offlineNoteKeyCertificate()) { error in
-                XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("platform"))
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
             }
         }
     }
@@ -89,14 +89,14 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             assertionPublicKey: nil,
             appAttestPublicKeyBase64: retiredAlias
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("app_attest_public_key_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("app_attest_public_key_base64"))
         }
 
         XCTAssertThrowsError(try Self.certificate(
             platform: "ios-appattest",
             assertionPublicKey: nil
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_public_key"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("assertion_public_key"))
         }
     }
 
@@ -106,7 +106,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             platform: "ios-appattest",
             publicKey: hexPublicKey
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("public_key"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("public_key"))
         }
 
         let urlSafeAssertionKey = Data(repeating: 0xFF, count: 32)
@@ -116,7 +116,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             platform: "ios-appattest",
             assertionPublicKey: urlSafeAssertionKey
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_public_key"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("assertion_public_key"))
         }
 
         let canonicalSignature = Data(repeating: 2, count: 64).base64EncodedString()
@@ -124,13 +124,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             platform: "ios-appattest",
             issuerSignatureBase64: " \(canonicalSignature)"
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("issuer_signature_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("issuer_signature_base64"))
         }
         XCTAssertThrowsError(try Self.certificate(
             platform: "ios-appattest",
             issuerSignatureBase64: canonicalSignature.replacingOccurrences(of: "=", with: "")
         ).offlineNoteKeyCertificate()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("issuer_signature_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("issuer_signature_base64"))
         }
     }
 
@@ -280,7 +280,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             publicInputsHashHex: Self.hashHex(7),
             proofBytesBase64: hexProofBytes
         ).offlineNoteRecursiveProof()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("proof_bytes_base64"))
         }
 
         let urlSafeProofBytes = Data(repeating: 0xFF, count: 64)
@@ -290,21 +290,21 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             publicInputsHashHex: Self.hashHex(7),
             proofBytesBase64: urlSafeProofBytes
         ).offlineNoteRecursiveProof()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("proof_bytes_base64"))
         }
 
         XCTAssertThrowsError(try OfflineRecursiveProof(
             publicInputsHashHex: Self.hashHex(7),
             proofBytesBase64: " \(canonicalProofBytes)"
         ).offlineNoteRecursiveProof()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("proof_bytes_base64"))
         }
 
         XCTAssertThrowsError(try OfflineRecursiveProof(
             publicInputsHashHex: Self.hashHex(7),
             proofBytesBase64: canonicalProofBytes.replacingOccurrences(of: "=", with: "")
         ).offlineNoteRecursiveProof()) { error in
-            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("proof_bytes_base64"))
         }
     }
 

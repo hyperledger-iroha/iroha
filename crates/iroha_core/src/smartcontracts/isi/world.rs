@@ -8592,20 +8592,6 @@ pub mod isi {
         }
     }
 
-    fn validate_configured_sccp_single_lane_launch_scope(domain: u32) -> Result<(), Error> {
-        let Some((launch_domain, launch_policy_label, launch_source_label)) =
-            configured_sccp_single_lane_launch_policy_v1()
-        else {
-            return Ok(());
-        };
-        if domain != launch_domain {
-            return Err(invalid_bridge_proof(format!(
-                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
-            )));
-        }
-        Ok(())
-    }
-
     fn validate_configured_sccp_lane_launch_ready(
         zk_config: &iroha_config::parameters::actual::Zk,
         domain: u32,
@@ -8618,7 +8604,13 @@ pub mod isi {
         else {
             return validate_configured_sccp_all_lanes_launch_ready(zk_config);
         };
-        validate_configured_sccp_single_lane_launch_scope(domain)?;
+        let launch_policy_label =
+            match configured_sccp_single_lane_launch_policy_v1().map(|(domain, _, _)| domain) {
+                Some(launch_domain) if domain != launch_domain => {
+                    "on-chain SCCP lane activation policy"
+                }
+                _ => launch_policy_label,
+            };
 
         let readiness =
             iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
@@ -8718,7 +8710,6 @@ pub mod isi {
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
-            validate_configured_sccp_single_lane_launch_scope(source_domain)?;
             let destination_rollout = configured_sccp_destination_rollout_for_domain(
                 &state_transaction.zk,
                 source_domain,
@@ -9469,6 +9460,9 @@ pub mod isi {
             proving_key_hash: manifest.proving_key_hash,
             native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash,
             native_evm_prover_bundle: manifest.native_evm_prover_bundle,
+            source_verifier_material: manifest.source_verifier_material,
+            source_adapter_engine_deployment: manifest.source_adapter_engine_deployment,
+            source_adapter_engine: manifest.source_adapter_engine,
             destination_browser_prover: manifest
                 .destination_browser_prover
                 .map(sccp_route_browser_prover_ref_to_user),

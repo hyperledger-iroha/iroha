@@ -1356,9 +1356,9 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       'AssertArgumentDiagnostic(\n            "Pallas open-envelopes archive must contain a non-empty Norito payload.",\n            "pallasOpenEnvelopesArchive",',
       "KagemushaNoritoFrameWithPayload",
       "AssertRejectsMalformedEverywhere",
-      "AssertRejectsMalformedEverywhere(\n            compressed,",
-      "AssertRejectsMalformedEverywhere(\n            unsupportedFlags,",
-      "AssertRejectsMalformedEverywhere(\n            invalidFieldBitset,",
+      "AssertRejectsMalformedEverywhere(compressed, validArchive, validRecordBundle)",
+      "AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive, validRecordBundle)",
+      "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive, validRecordBundle)",
       "compressed[22] = 1",
       "unsupportedFlags[39] = 0x08",
       "invalidFieldBitset[39] = 0x20",
@@ -6656,7 +6656,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1[\s\S]*?_ = recursiveCompactAvailable;/u,
+      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
       "cross-SDK production default selector",
     ],
     [
@@ -14955,7 +14955,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-pallas-request-inner-envelope-preflight",
     "--negative-control-swift-lineage-key-package-binding",
     "--negative-control-swift-compact-projection-hardening",
-    "--negative-control-swift-offline-note-compatibility-certificate-fail-closed",
+    "--negative-control-swift-offline-note-payload-certificate-fail-closed",
     "--negative-control-swift-offline-note-retired-route-wording",
     "--negative-control-swift-offline-note-v2-registration-certificate-payload",
     "--negative-control-mobile-offline-note-v2-retired-ios-app-attest-profile",
@@ -14981,6 +14981,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-non-csharp-pallas-builder-native-output-guards",
     "--negative-control-non-csharp-pallas-metadata-option-shape",
     "--negative-control-non-csharp-pallas-sequence-count-prechecks",
+    "--negative-control-csharp-pallas-open-envelope-preflight",
+    "--negative-control-csharp-init-append-request-codecs",
     "--negative-control-jvm-android-pallas-transcript-label-byte-limit",
     "--negative-control-swift-pallas-transcript-label-byte-limit",
     "--negative-control-js-python-pallas-transcript-label-byte-limit",
@@ -15017,8 +15019,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-verify-result-redeem-aliases",
     "--negative-control-sdk-verify-lineage-record-preflight",
     "--negative-control-sdk-lineage-witness-trailing-field-vectors",
-    "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks",
-    "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks",
+    "--negative-control-sdk-lineage-witness-count-prefix-prechecks",
+    "--negative-control-sdk-record-bundle-fold-step-count-prechecks",
     "--negative-control-sdk-current-note-amount-trailing-field-vectors",
     "--negative-control-sdk-bundle-proof-circuit-vectors",
     "--negative-control-sdk-bundle-proof-backend-vectors",
@@ -15289,6 +15291,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-sdk-offline-readiness-test-filter-script",
     "--negative-control-swift-sdk-redeem-planner-test-filter-script",
     "--negative-control-swift-sdk-needs-workflow",
+    "--negative-control-pr-csharp-kagemusha-sdk-workflow",
     "--negative-control-csharp-sdk-job-workflow",
     "--negative-control-csharp-sdk-setup-workflow",
     "--negative-control-csharp-sdk-windows-matrix-workflow",
@@ -15300,6 +15303,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-dotnet-info-script",
     "--negative-control-csharp-sdk-dotnet-override-script",
     "--negative-control-csharp-sdk-dotnet-major-script",
+    "--negative-control-csharp-sdk-dotnet-artifacts-path-script",
+    "--negative-control-csharp-sdk-recursive-spend-fixtures-project",
     "--negative-control-csharp-sdk-native-bridge-script",
     "--negative-control-csharp-sdk-native-library-evidence-script",
     "--negative-control-csharp-sdk-native-library-sha-case-script",
@@ -15577,9 +15582,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /Swift retired Offline Note issuer source missing stripRetiredCanonicalBodyAuthHeaders\(defaultHeaders\)[\s\S]*?Swift retired Offline Note issuer tests missing "X-Iroha-Account": "retired-account"[\s\S]*?Swift retired Offline Note issuer tests contains forbidden pattern[\s\S]*?Kotlin retired Offline Note issuer source missing Collections\.unmodifiableMap\(stripRetiredCanonicalBodyAuthHeaders\(defaultHeaders\)\)[\s\S]*?Kotlin retired Offline Note issuer tests missing assertEquals<List<String>\?>\(listOf\("trace-1"\), executor\.requests\[0\]\.headers\["X-Client-Trace"\]\)[\s\S]*?Android Java retired Offline Note issuer source missing Collections\.unmodifiableMap\(stripRetiredCanonicalBodyAuthHeaders\([\s\S]*?Android Java retired Offline Note issuer tests missing defaultHeaders\.put\("X-Iroha-Account", "retired-account"\);/u,
     "Mobile retired Offline Note issuer negative control must mutate retired header stripping markers",
   );
-  assert.match(
+  assertContainsAll(
     mobileRetiredOfflineNoteIssuersBranch,
-    /Swift retired Offline Note issuer source missing where deviceBinding\.keys\.contains\(retiredKey\)[\s\S]*?Swift retired Offline Note issuer tests missing testToriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases[\s\S]*?Kotlin retired Offline Note issuer source missing deepCopyObject\(rejectRetiredDeviceBindingAliases\(deviceBinding\)\)[\s\S]*?Kotlin retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases[\s\S]*?Android Java retired Offline Note issuer device binding source missing rejectRetiredDeviceBindingAliases\(Objects\.requireNonNull\(deviceBinding, "deviceBinding"\)\);[\s\S]*?Android Java retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases/u,
+    [
+      "Swift retired Offline Note issuer source missing where deviceBinding.keys.contains(retiredKey)",
+      "Swift retired Offline Note issuer tests missing testToriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+      "Kotlin retired Offline Note issuer source missing deepCopyObject(rejectRetiredDeviceBindingAliases(deviceBinding))",
+      "Kotlin retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+      'Android Java retired Offline Note issuer device binding source missing rejectRetiredDeviceBindingAliases(Objects.requireNonNull(deviceBinding, \\"deviceBinding\\"));',
+      "Android Java retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+    ],
     "Mobile retired Offline Note issuer negative control must mutate retired assertion-key alias rejection markers",
   );
   assert.match(
@@ -17601,19 +17613,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "preferred Kagemusha single-argument fallback removal",
       "Python preferred Kagemusha explicit capability arity",
       "Rust data-model preferred Kagemusha compact-first mode policy",
-      "must not expose checked-prefold Kagemusha spend mode",
+      "C# preferred Kagemusha compact-first mode policy",
     ],
-    "preferred-mode fallback negative control must require every JS/Python/Rust fallback drift label",
-  );
-  assert.match(
-    preferredModeFallbackBranch,
-    /arguments\.length >= 2 \? recursiveCompactAvailable : false[\s\S]*?preferredMode\(recursiveSpendAvailable: Bool\)[\s\S]*?fun preferredMode\(recursiveSpendAvailable: Boolean\): Mode[\s\S]*?return preferredMode\(false, recursiveSpendAvailable\);[\s\S]*?PreferredMode\(bool recursiveSpendAvailable\)/u,
-    "preferred-mode fallback negative control must reintroduce single-argument selectors across SDKs",
+    "preferred-mode fallback negative control must require every JS/Python/Rust/C# fallback drift label",
   );
   assert.match(
     preferredModeFallbackBranch,
     /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha compact-first mode policy/u,
-    "preferred-mode fallback negative control must expect every editable-SDK compact-first label",
+    "preferred-mode fallback negative control must expect compact-first labels across editable SDKs including C#",
   );
   assertPerMutationDetector(
     preferredModeFallbackBranch,
@@ -18531,6 +18538,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       end: 'if mode == "--negative-control-csharp-sdk-job-workflow":',
       expected: "Kagemusha payload benchmark job must wait for the Swift SDK parse job",
       label: "Swift SDK dependency workflow branch must require the benchmark dependency label",
+    },
+    {
+      start: 'if mode == "--negative-control-pr-csharp-kagemusha-sdk-workflow":',
+      end: 'if mode == "--negative-control-csharp-sdk-setup-workflow":',
+      expected: "C# PR workflow must define the Kagemusha native-bridge SDK job",
+      label: "C# PR Kagemusha SDK workflow branch must require the standalone workflow job label",
     },
     {
       start: 'if mode == "--negative-control-csharp-sdk-windows-matrix-workflow":',
@@ -19583,7 +19596,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   const swiftCompactProjectionHardeningBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-compact-projection-hardening":'),
     guard.indexOf(
-      'if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail-closed":',
+      'if mode == "--negative-control-swift-offline-note-payload-certificate-fail-closed":',
     ),
   );
   assert.match(
@@ -19614,7 +19627,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   const swiftOfflineNoteRetiredRouteWordingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-offline-note-retired-route-wording":'),
     guard.indexOf(
-      'if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail-closed":',
+      'if mode == "--negative-control-swift-offline-note-payload-certificate-fail-closed":',
     ),
   );
   assertContainsAll(
@@ -19645,43 +19658,43 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
     "Swift retired-route wording negative control must restore snapshots and print diagnostics",
   );
-  const swiftOfflineNoteCompatibilityCertificateBranch = guard.slice(
+  const swiftOfflineNotePayloadCertificateBranch = guard.slice(
     guard.indexOf(
-      'if mode == "--negative-control-swift-offline-note-compatibility-certificate-fail-closed":',
+      'if mode == "--negative-control-swift-offline-note-payload-certificate-fail-closed":',
     ),
     guard.indexOf(
       'if mode == "--negative-control-swift-offline-note-v2-registration-certificate-payload":',
     ),
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
-    /OfflineNoteCompatibility\.swift[\s\S]*?ToriiOfflineCashAPIModelsTests\.swift[\s\S]*?guard resolvedAssertionScheme == defaultAssertionScheme else[\s\S]*?if false && resolvedAssertionScheme != defaultAssertionScheme[\s\S]*?decodeExactBase64[\s\S]*?issuer_signature_base64[\s\S]*?Data\(repeating: 0, count: 64\)[\s\S]*?decoded\.base64EncodedString\(\) == value[\s\S]*?guard appAttestPublicKeyBase64 == nil else[\s\S]*?\?\? appAttestPublicKeyBase64[\s\S]*?testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias[\s\S]*?testCompactKeyCertificateAllowsRetiredAssertionPublicKeyAlias[\s\S]*?testCompactKeyCertificateRejectsNonCanonicalCompatibilityFields[\s\S]*?testCompactKeyCertificateAllowsNonCanonicalCompatibilityFields[\s\S]*?testCompactKeyCertificateRejectsNonCanonicalBase64Encodings[\s\S]*?testCompactKeyCertificateAllowsNonCanonicalBase64Encodings/u,
-    "Swift Offline Note compatibility certificate negative control must mutate source guards and tests",
+    swiftOfflineNotePayloadCertificateBranch,
+    /OfflineNotePayloads\.swift[\s\S]*?ToriiOfflineCashAPIModelsTests\.swift[\s\S]*?guard resolvedAssertionScheme == defaultAssertionScheme else[\s\S]*?if false && resolvedAssertionScheme != defaultAssertionScheme[\s\S]*?decodeExactBase64[\s\S]*?issuer_signature_base64[\s\S]*?Data\(repeating: 0, count: 64\)[\s\S]*?decoded\.base64EncodedString\(\) == value[\s\S]*?guard appAttestPublicKeyBase64 == nil else[\s\S]*?\?\? appAttestPublicKeyBase64[\s\S]*?testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias[\s\S]*?testCompactKeyCertificateAllowsRetiredAssertionPublicKeyAlias[\s\S]*?testCompactKeyCertificateRejectsNonCanonicalCertificateFields[\s\S]*?testCompactKeyCertificateAllowsNonCanonicalCertificateFields[\s\S]*?testCompactKeyCertificateRejectsNonCanonicalBase64Encodings[\s\S]*?testCompactKeyCertificateAllowsNonCanonicalBase64Encodings/u,
+    "Swift Offline Note payload certificate negative control must mutate source guards and tests",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
+    swiftOfflineNotePayloadCertificateBranch,
     /case OfflineNoteV2Constants\.androidKeyMintPlatform:[\s\S]*?platform\.contains\("android"\)[\s\S]*?for invalidPlatform in \["android", "android-keymint ", "Android-keymint", "ios-appattest-android"\][\s\S]*?for invalidPlatform in \["android"\]/u,
-    "Swift Offline Note compatibility certificate negative control must mutate exact platform matching and malformed platform coverage",
+    "Swift Offline Note payload certificate negative control must mutate exact platform matching and malformed platform coverage",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
+    swiftOfflineNotePayloadCertificateBranch,
     /decodeExactBase64\(proofBytesBase64\)[\s\S]*?decodeBase64Like\(proofBytesBase64\)[\s\S]*?testRecursiveProofRejectsNonCanonicalBase64Encodings[\s\S]*?testRecursiveProofAllowsNonCanonicalBase64Encodings/u,
-    "Swift Offline Note compatibility certificate negative control must mutate recursive proof exact-base64 guards and tests",
+    "Swift Offline Note payload certificate negative control must mutate recursive proof exact-base64 guards and tests",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
-    /canonicalAmount\(_ value: String\) throws[\s\S]*?canonicalAmountOrOriginal\(_ value: String\)[\s\S]*?claimHash: container\.decodeIfPresent\(String\.self, forKey: \.claimHash\)[\s\S]*?claimHash: nil[\s\S]*?value == value\.lowercased\(\)[\s\S]*?"true"[\s\S]*?testOfflineCompatibilityRejectsInvalidAmountStrings[\s\S]*?testOfflineCompatibilityAllowsInvalidAmountStrings[\s\S]*?noteCommitment:[\s\S]*?0x[\s\S]*?inputClaim\.noteCommitment[\s\S]*?claimHash:[\s\S]*?0x[\s\S]*?computedClaimHash[\s\S]*?claimHash: computedClaimHash\.uppercased\(\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenInputClaim\.self, from: inputData\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenOutputClaim\.self, from: inputData\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenInputClaim\.self, from: mismatchedClaimHashData\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenInputClaim\.self, from: inputData\)/u,
-    "Swift Offline Note compatibility certificate negative control must mutate strict amount guards, input-claim decoder/hash guards, and tests",
+    swiftOfflineNotePayloadCertificateBranch,
+    /canonicalAmount\(_ value: String\) throws[\s\S]*?canonicalAmountOrOriginal\(_ value: String\)[\s\S]*?claimHash: container\.decodeIfPresent\(String\.self, forKey: \.claimHash\)[\s\S]*?claimHash: nil[\s\S]*?value == value\.lowercased\(\)[\s\S]*?"true"[\s\S]*?testOfflineNotePayloadRejectsInvalidAmountStrings[\s\S]*?testOfflineNotePayloadAllowsInvalidAmountStrings[\s\S]*?noteCommitment:[\s\S]*?0x[\s\S]*?inputClaim\.noteCommitment[\s\S]*?claimHash:[\s\S]*?0x[\s\S]*?computedClaimHash[\s\S]*?claimHash: computedClaimHash\.uppercased\(\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenInputClaim\.self, from: inputData\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenOutputClaim\.self, from: inputData\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenInputClaim\.self, from: mismatchedClaimHashData\)[\s\S]*?JSONDecoder\(\)\.decode\(OfflinePaymentTokenInputClaim\.self, from: inputData\)/u,
+    "Swift Offline Note payload certificate negative control must mutate strict amount guards, input-claim decoder/hash guards, and tests",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
-    /Swift Offline Note compatibility certificate canonical profile source[\s\S]*?Swift Offline Note compatibility certificate exact platform profile source[\s\S]*?Swift Offline Note compatibility certificate exact-base64 fail-closed source[\s\S]*?Swift Offline Note compatibility certificate must not synthesize zero issuer signatures[\s\S]*?Swift Offline Note compatibility certificate retired assertion-key alias source[\s\S]*?Swift Offline recursive proof exact-base64 source[\s\S]*?Swift Offline compatibility must not keep permissive base64-like decoder[\s\S]*?Swift Offline Note compatibility amount strict source[\s\S]*?Swift Offline compatibility must not keep permissive amount normalization[\s\S]*?Swift Offline Note compatibility input-claim amount\/hash strict source[\s\S]*?Swift Offline Note compatibility certificate fail-closed tests[\s\S]*?Swift Offline recursive proof exact-base64 tests[\s\S]*?Swift Offline Note compatibility amount strict tests/u,
-    "Swift Offline Note compatibility certificate negative control must require source and test labels",
+    swiftOfflineNotePayloadCertificateBranch,
+    /Swift Offline Note payload certificate canonical profile source[\s\S]*?Swift Offline Note payload certificate exact platform profile source[\s\S]*?Swift Offline Note payload certificate exact-base64 fail-closed source[\s\S]*?Swift Offline Note payload certificate must not synthesize zero issuer signatures[\s\S]*?Swift Offline Note payload certificate retired assertion-key alias source[\s\S]*?Swift Offline recursive proof exact-base64 source[\s\S]*?Swift Offline payload must not keep permissive base64-like decoder[\s\S]*?Swift Offline Note payload amount strict source[\s\S]*?Swift Offline payload must not keep permissive amount normalization[\s\S]*?Swift Offline Note payload input-claim amount\/hash strict source[\s\S]*?Swift Offline Note payload certificate fail-closed tests[\s\S]*?Swift Offline recursive proof exact-base64 tests[\s\S]*?Swift Offline Note payload amount strict tests/u,
+    "Swift Offline Note payload certificate negative control must require source and test labels",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
+    swiftOfflineNotePayloadCertificateBranch,
     /testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias[\s\S]*?testCompactKeyCertificateRejectsNonCanonicalBase64Encodings[\s\S]*?hexPublicKey[\s\S]*?Data\(repeating: 1, count: 33\)[\s\S]*?urlSafeAssertionKey[\s\S]*?Data\(repeating: 0xFF, count: 32\)/u,
-    "Swift Offline Note compatibility certificate negative control must pin noncanonical base64 tests",
+    "Swift Offline Note payload certificate negative control must pin noncanonical base64 tests",
   );
   assertContainsAll(
     guard,
@@ -19690,22 +19703,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       '.invalidField("app_attest_public_key_base64")',
       '.invalidField("assertion_public_key")',
     ],
-    "Swift Offline Note compatibility certificate guard must pin retired assertion-key alias test body",
+    "Swift Offline Note payload certificate guard must pin retired assertion-key alias test body",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
+    swiftOfflineNotePayloadCertificateBranch,
     /testRecursiveProofRejectsNonCanonicalBase64Encodings[\s\S]*?hexProofBytes[\s\S]*?Data\(repeating: 4, count: 33\)[\s\S]*?urlSafeProofBytes[\s\S]*?Data\(repeating: 0xFF, count: 64\)/u,
-    "Swift Offline Note compatibility certificate negative control must pin recursive proof noncanonical base64 tests",
+    "Swift Offline Note payload certificate negative control must pin recursive proof noncanonical base64 tests",
   );
   assert.match(
-    swiftOfflineNoteCompatibilityCertificateBranch,
-    /detect_negative_control\([\s\S]*?Swift Offline Note compatibility certificate fail-closed drift[\s\S]*?raise SystemExit\(0\)/u,
-    "Swift Offline Note compatibility certificate negative control must pass only through detect_negative_control",
+    swiftOfflineNotePayloadCertificateBranch,
+    /detect_negative_control\([\s\S]*?Swift Offline Note payload certificate fail-closed drift[\s\S]*?raise SystemExit\(0\)/u,
+    "Swift Offline Note payload certificate negative control must pass only through detect_negative_control",
   );
   assert.doesNotMatch(
-    swiftOfflineNoteCompatibilityCertificateBranch,
+    swiftOfflineNotePayloadCertificateBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
-    "Swift Offline Note compatibility certificate negative control must not unconditionally pass after run_checks",
+    "Swift Offline Note payload certificate negative control must not unconditionally pass after run_checks",
   );
   const swiftOfflineNoteV2RegistrationCertificatePayloadBranch = guard.slice(
     guard.indexOf(
@@ -20621,7 +20634,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const nonCsharpPallasSequenceCountBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":'),
-    guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
+    guard.indexOf('if mode == "--negative-control-csharp-pallas-open-envelope-preflight":'),
   );
   assertContainsAll(
     nonCsharpPallasSequenceCountBranch,
@@ -20680,6 +20693,93 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     nonCsharpPallasSequenceCountBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "non-C# Pallas sequence-count negative control must not unconditionally pass after run_checks",
+  );
+  const csharpPallasOpenEnvelopePreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-pallas-open-envelope-preflight":'),
+    guard.indexOf('if mode == "--negative-control-csharp-init-append-request-codecs":'),
+  );
+  assertContainsAll(
+    csharpPallasOpenEnvelopePreflightBranch,
+    [
+      "C# Pallas open-envelope semantic preflight",
+      "C# Pallas open-envelope malformed vector tests",
+      "private static byte[] RequireValidPallasOpenEnvelopesArchive(",
+      "private static int ReadPallasFixed32SequenceCount(",
+      "private static byte[] ReadRequiredPallasMetadataOption(",
+      "RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge",
+      "spec.ParamsGSequencePayload = U64LE(5)",
+      "spec.ProofRSequencePayload = U64LE(3)",
+      "spec.VkCommitmentPayload = KagemushaFixedArrayPayload(0x70, 32)",
+      "spec.VkCommitmentOptionPayload = OptionRawWithUnknownTag()",
+      "spec.VkCommitmentOptionPayload = OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x70))",
+    ],
+    "C# Pallas open-envelope negative control must mutate source parser and malformed vector markers",
+  );
+  assert.match(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /for target, old, new, label in replacements:[\s\S]*?if label not in expected_labels:[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?C# Pallas open-envelope preflight drift was not detected for/u,
+    "C# Pallas open-envelope negative control must require every mutated C# label to be reported",
+  );
+  assert.match(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "C# Pallas open-envelope negative control must print diagnostics for each mutated label",
+  );
+  assert.match(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: C# Pallas open-envelope preflight drift was not detected"\s*\)/u,
+    "C# Pallas open-envelope negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# Pallas open-envelope negative control must not unconditionally pass after run_checks",
+  );
+  const csharpInitAppendRequestCodecBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-init-append-request-codecs":'),
+    guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
+  );
+  assertContainsAll(
+    csharpInitAppendRequestCodecBranch,
+    [
+      "C# typed recursive spend init/append request codecs",
+      "C# typed recursive spend init/append request codec tests",
+      "public static byte[] EncodeInitRequestWithLineageMaterials(",
+      "public static byte[] EncodeAppendRequestWithLineageMaterials(",
+      "public static byte[] EncodeInitRequestWithGeneratedPallas(",
+      "public static byte[] EncodeAppendRequestWithGeneratedPallas(",
+      "PrepareAppendGeneratedPallasPreflight(",
+      "previousProofOpenEnvelopesArchive is required for lineage append output",
+      "lineageKeyArtifacts are only valid for lineage append output",
+      "RecursiveSpendInitRequestEncoderRejectsMalformedLineageAndPallasInputsBeforeNativeBridge",
+      "RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge",
+      "RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder",
+      "RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder",
+      "missingPreviousOpenings",
+      "danglingLineageKeyMaterial",
+      "malformedRecordBundle",
+    ],
+    "C# init/append request codec negative control must mutate source and test markers",
+  );
+  assert.match(
+    csharpInitAppendRequestCodecBranch,
+    /for target, old, new, label in replacements:[\s\S]*?if label not in expected_labels:[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?C# init\/append request codec drift was not detected for/u,
+    "C# init/append request codec negative control must require every mutated C# label to be reported",
+  );
+  assert.match(
+    csharpInitAppendRequestCodecBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "C# init/append request codec negative control must print diagnostics for each mutated label",
+  );
+  assert.match(
+    csharpInitAppendRequestCodecBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: C# init\/append request codec drift was not detected"\s*\)/u,
+    "C# init/append request codec negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpInitAppendRequestCodecBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# init/append request codec negative control must not unconditionally pass after run_checks",
   );
   const jvmAndroidPallasTranscriptLabelByteLimitBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
@@ -21111,18 +21211,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
-    /replacements\s*=\s*\{[\s\S]*?IrohaSwift\/README\.md[\s\S]*?proofState[\s\S]*?aggregation-transcript[\s\S]*?fixed-window[\s\S]*?verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive verifier[\s\S]*?previous\/resulting accumulator aliases[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?not C# request fields[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\}[\s\S]*?run_checks\(mutated\)/u,
+    /replacements\s*=\s*\{[\s\S]*?IrohaSwift\/README\.md[\s\S]*?proofState[\s\S]*?aggregation-transcript[\s\S]*?fixed-window[\s\S]*?verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive verifier[\s\S]*?previous\/resulting accumulator aliases[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\}[\s\S]*?run_checks\(mutated\)/u,
     "SDK README native material alias negative control must mutate the alias boundary across SDK READMEs",
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
-    /csharp\/README\.md/u,
-    "SDK README native material alias negative control must include C# README",
+    /csharp\/README\.md[\s\S]*?Proof-state and accumulator material aliases may be C# request fields\./u,
+    "SDK README native material alias negative control must mutate C# now that the C# README boundary is source-pinned",
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
     /detected_messages = \[\][\s\S]*?for target, \(old, new\) in replacements\.items\(\):[\s\S]*?for needle in SDK_NATIVE_MATERIAL_README_NEEDLES[\s\S]*?SDK_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES\[target\][\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK README native material alias drift was not detected for/u,
-    "SDK README native material alias negative control must require every SDK README marker and request-field drift to be reported",
+    "SDK README native material alias negative control must require each mutated SDK README marker and request-field drift to be reported",
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
@@ -22347,7 +22447,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkLineageWitnessTrailingFieldVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
-    guard.indexOf('if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":'),
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-count-prefix-prechecks":'),
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
@@ -22390,9 +22490,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "SDK lineage-witness trailing-field vector negative control must not unconditionally pass after run_checks",
   );
   const sdkLineageWitnessCountPrefixBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":'),
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-count-prefix-prechecks":'),
     guard.indexOf(
-      'if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":',
+      'if mode == "--negative-control-sdk-record-bundle-fold-step-count-prechecks":',
     ),
   );
   assertContainsAll(
@@ -22416,15 +22516,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
       "guard count <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
       "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
-      "count > CompactTokenMaxHops",
+      "if (count > CompactTokenMaxHops)",
       "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(",
       "_recursive_spend_lineage_witness_with_previous_proof_count_prefix_only(",
-      "RecursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(",
+      "Archive: RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly(),",
+      "RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly()",
       "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1",
       "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1",
-      "KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1UL",
     ],
     "SDK lineage-witness count-prefix negative control must mutate decoder prechecks and vectors",
+  );
+  assert.match(
+    sdkLineageWitnessCountPrefixBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK lineage-witness count-prefix negative control must mutate C# tests",
   );
   assert.match(
     sdkLineageWitnessCountPrefixBranch,
@@ -22456,16 +22561,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK lineage-witness count-prefix negative control must not unconditionally pass after run_checks",
   );
-  const nonCsharpRecordBundleFoldStepCountPrefixBranch = guard.slice(
+  const sdkRecordBundleFoldStepCountPrefixBranch = guard.slice(
     guard.indexOf(
-      'if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":',
+      'if mode == "--negative-control-sdk-record-bundle-fold-step-count-prechecks":',
     ),
     guard.indexOf(
       'if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":',
     ),
   );
   assertContainsAll(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     [
       "JavaScript record-bundle fold-step count precheck decoder",
       "JavaScript dist record-bundle fold-step count precheck decoder",
@@ -22496,37 +22601,43 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)",
       '"recordBundle.steps fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
       "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
-      "recordBundle.steps fold step count must not exceed {KagemushaRecursiveSpendNative.CompactTokenMaxHops}",
+      "var recordBundle = RecordBundleWithOverLimitStepCountOnly();",
+      "RecordBundleWithOverLimitStepCountOnly()",
     ],
-    "record-bundle fold-step count-prefix negative control must mutate decoder prechecks and vectors including C#",
+    "SDK record-bundle fold-step count-prefix negative control must mutate decoder prechecks and vectors",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
+    /csharp\/src\/Hyperledger\.Iroha\.Sdk\/Offline\/KagemushaRecursiveSpend\.cs[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK record-bundle fold-step count-prefix negative control must mutate C# source and tests",
+  );
+  assert.match(
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /expected_label = f"\{label\} missing \{expected_marker\}"[\s\S]*?run_checks\(mutated\)/u,
     "SDK record-bundle fold-step count-prefix negative control must validate the mutated text snapshot",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /if expected_label not in message:[\s\S]*?SDK record-bundle fold-step count-prefix drift was rejected for the wrong reason/u,
     "SDK record-bundle fold-step count-prefix negative control must require every SDK drift to be reported",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
     "SDK record-bundle fold-step count-prefix negative control must restore each target snapshot between mutations",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
     "SDK record-bundle fold-step count-prefix negative control must print diagnostics for every mutated surface",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /SDK record-bundle fold-step count-prefix drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK record-bundle fold-step count-prefix drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
     "SDK record-bundle fold-step count-prefix negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK record-bundle fold-step count-prefix negative control must not unconditionally pass after run_checks",
   );
@@ -22943,6 +23054,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /def expected_redeem_change_output_reserved_collision_label\(old, label\):[\s\S]*?marker = old\.splitlines\(\)\[0\][\s\S]*?expected_label = expected_redeem_change_output_reserved_collision_label\(old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?SDK redeem change-output reserved collision drift was rejected for the wrong reason/u,
     "SDK redeem change-output reserved collision negative control must require exact reported markers",
   );
+  assertContainsAll(
+    sdkRedeemChangeOutputReservedCollisionBranch,
+    [
+      "C# recursive spend redeem change-output reserved collision guard",
+      "C# recursive spend redeem change-output reserved collision tests",
+      "bundleSummary.TopupAnchorNullifiers",
+      "bundleSummary.TopupAnchorNullifiers[0]",
+    ],
+    "SDK redeem change-output reserved collision negative control must mutate C# guard and tests",
+  );
   assert.match(
     sdkRedeemChangeOutputReservedCollisionBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
@@ -23002,10 +23123,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
       "Android Java typed recursive spend top-up anchor nullifier invariant tests",
       "C# recursive spend top-up anchor nullifier invariant guard",
-      "C# typed recursive spend top-up anchor nullifier invariant tests",
-      "count == 0 || count > FoldStepMaxInputs",
-      "RecursiveSpendBundleWithEmptyProofBytes(zeroTopupAnchorBundle)",
-      "RecursiveSpendBundleWithAccumulatorTrailingField(zeroTopupAnchorBundle)",
+      "C# recursive spend top-up anchor nullifier precedence guard",
+      "C# recursive spend top-up anchor nullifier invariant tests",
+      "RecursiveSpendTransitionProfileSummaryDecoderRejectsPreviousTopupAnchorDrift",
+      "previousTopupAnchorNullifiers.Length == 0 || previousTopupAnchorNullifiers.Length > FoldStepMaxInputs",
+      "transition_profile.previous_topup_anchor_nullifiers count is out of range",
+      "transition_profile.output_commitments must not reuse previous top-up anchor nullifiers",
       "malformed proof cannot mask invalid top-up anchor nullifiers",
       "malformed proof can mask invalid top-up anchor nullifiers",
       "trailing accumulator cannot mask invalid top-up anchor nullifiers",
@@ -27016,7 +27139,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     csharpArchiveCopyBranch,
-    /malformed_field_bitset_call[\s\S]*?AssertRejectsMalformedEverywhere\([\s\S]*?invalidFieldBitset,[\s\S]*?validPallasOpenEnvelopesArchive[\s\S]*?permissive_field_bitset_call[\s\S]*?AssertRejectsMalformedEverywhere\([\s\S]*?validArchive,[\s\S]*?validArchive,[\s\S]*?validPallasOpenEnvelopesArchive/u,
+    /AssertRejectsMalformedEverywhere\(invalidFieldBitset, validArchive, validRecordBundle\)[\s\S]*?AssertRejectsMalformedEverywhere\(validArchive, validArchive, validRecordBundle\)/u,
     "C# archive wrapper copy negative control must mutate native input malformed-header coverage",
   );
   assert.match(
@@ -28722,6 +28845,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");
   const swiftRunner = source("ci/check_kagemusha_recursive_spend_swift_sdk.sh");
   const csharpRunner = source("ci/check_kagemusha_recursive_spend_csharp_sdk.sh");
+  const csharpTestsProject = source(
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+  );
   const jvmRunner = source("ci/check_kagemusha_recursive_spend_jvm_sdk.sh");
   assert.match(
     pythonRunner,
@@ -28882,6 +29008,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     csharpRunner,
     /DOTNET_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet\}"/,
     "Kagemusha C# SDK runner must keep the documented dotnet override variable",
+  );
+  assert.match(
+    csharpRunner,
+    /DOTNET_ARTIFACTS_PATH="\$\{BRIDGE_TARGET_DIR\}\/dotnet-artifacts"[\s\S]*rm -rf "\$\{DOTNET_ARTIFACTS_PATH\}"[\s\S]*--artifacts-path "\$\{DOTNET_ARTIFACTS_PATH\}"[\s\S]*-p:ProduceReferenceAssembly=false/u,
+    "Kagemusha C# SDK runner must keep dotnet test artifacts under the native bridge target",
+  );
+  assert.match(
+    csharpTestsProject,
+    /fixtures\/kagemusha_recursive_spend_abi6\/\*\.json[\s\S]*Link="fixtures\/kagemusha_recursive_spend_abi6\/%\(Filename\)%\(Extension\)"[\s\S]*fixtures\/kagemusha_recursive_spend_abi7\/\*\.json[\s\S]*Link="fixtures\/kagemusha_recursive_spend_abi7\/%\(Filename\)%\(Extension\)"/u,
+    "Kagemusha C# test project must copy shared recursive spend fixtures to the test output",
   );
   assert.match(
     csharpRunner,

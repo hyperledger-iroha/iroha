@@ -62,15 +62,149 @@ public sealed class SignedQueryBuilderTests
         AssertSignatureVerifies(envelope);
     }
 
+    [Fact]
+    public void SignedQueryEnvelopeDefensivelyCopiesBytes()
+    {
+        var envelope = new SignedQueryBuilder(FixtureAccountId)
+            .FindParameters()
+            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        var expectedVersionedNoritoBytes = envelope.VersionedNoritoBytes;
+        var expectedSignedQueryBytes = envelope.SignedQueryBytes;
+        var expectedPayloadBytes = envelope.PayloadBytes;
+        var expectedSignatureBytes = envelope.SignatureBytes;
+
+        MutateFirstByte(envelope.VersionedNoritoBytes);
+        MutateFirstByte(envelope.SignedQueryBytes);
+        MutateFirstByte(envelope.PayloadBytes);
+        MutateFirstByte(envelope.SignatureBytes);
+
+        Assert.Equal(expectedVersionedNoritoBytes, envelope.VersionedNoritoBytes);
+        Assert.Equal(expectedSignedQueryBytes, envelope.SignedQueryBytes);
+        Assert.Equal(expectedPayloadBytes, envelope.PayloadBytes);
+        Assert.Equal(expectedSignatureBytes, envelope.SignatureBytes);
+        AssertSignatureVerifies(envelope);
+
+        var constructorPayloadBytes = new byte[] { 0x07, 0x08, 0x09 };
+        var constructorSignatureBytes = Enumerable
+            .Range(0, Ed25519Signer.SignatureLength)
+            .Select(index => (byte)(0x0a + index))
+            .ToArray();
+        var constructorSignedQueryBytes = BuildSignedQueryBytes(constructorSignatureBytes, constructorPayloadBytes);
+        var constructorVersionedNoritoBytes = VersionSignedQueryBytes(constructorSignedQueryBytes);
+        var expectedConstructorSignedQueryBytes = constructorSignedQueryBytes.ToArray();
+        var expectedConstructorVersionedNoritoBytes = constructorVersionedNoritoBytes.ToArray();
+        var expectedConstructorPayloadBytes = constructorPayloadBytes.ToArray();
+        var expectedConstructorSignatureBytes = constructorSignatureBytes.ToArray();
+        var direct = new SignedQueryEnvelope(
+            constructorVersionedNoritoBytes,
+            constructorSignedQueryBytes,
+            constructorPayloadBytes,
+            constructorSignatureBytes);
+
+        MutateFirstByte(constructorVersionedNoritoBytes);
+        MutateFirstByte(constructorSignedQueryBytes);
+        MutateFirstByte(constructorPayloadBytes);
+        MutateFirstByte(constructorSignatureBytes);
+        MutateFirstByte(direct.VersionedNoritoBytes);
+        MutateFirstByte(direct.SignedQueryBytes);
+        MutateFirstByte(direct.PayloadBytes);
+        MutateFirstByte(direct.SignatureBytes);
+
+        Assert.Equal(expectedConstructorVersionedNoritoBytes, direct.VersionedNoritoBytes);
+        Assert.Equal(expectedConstructorSignedQueryBytes, direct.SignedQueryBytes);
+        Assert.Equal(expectedConstructorPayloadBytes, direct.PayloadBytes);
+        Assert.Equal(expectedConstructorSignatureBytes, direct.SignatureBytes);
+
+        static void MutateFirstByte(byte[] value)
+        {
+            Assert.NotEmpty(value);
+            value[0] ^= 0xff;
+        }
+    }
+
+    [Fact]
+    public void SignedQueryEnvelopeRejectsMalformedConstructorBytes()
+    {
+        var payloadBytes = new byte[] { 0x07 };
+        var signatureBytes = Enumerable.Repeat((byte)0x08, Ed25519Signer.SignatureLength).ToArray();
+        var signedQueryBytes = BuildSignedQueryBytes(signatureBytes, payloadBytes);
+        var versionedNoritoBytes = VersionSignedQueryBytes(signedQueryBytes);
+        var malformedSignedQueryBytes = new byte[] { 0x04, 0x05, 0x06 };
+
+        AssertArgumentException(
+            "versionedNoritoBytes",
+            () => new SignedQueryEnvelope([], signedQueryBytes, payloadBytes, signatureBytes));
+        AssertArgumentException(
+            "signedQueryBytes",
+            () => new SignedQueryEnvelope([0x01], [], payloadBytes, signatureBytes));
+        AssertArgumentException(
+            "payloadBytes",
+            () => new SignedQueryEnvelope(versionedNoritoBytes, signedQueryBytes, [], signatureBytes));
+        AssertArgumentException(
+            "signatureBytes",
+            () => new SignedQueryEnvelope(versionedNoritoBytes, signedQueryBytes, payloadBytes, signatureBytes[..^1]));
+        AssertArgumentException(
+            "versionedNoritoBytes",
+            () => new SignedQueryEnvelope([0x02, 0x04, 0x05, 0x06], signedQueryBytes, payloadBytes, signatureBytes));
+        AssertArgumentException(
+            "versionedNoritoBytes",
+            () => new SignedQueryEnvelope([0x01, 0x04, 0xff, 0x06], signedQueryBytes, payloadBytes, signatureBytes));
+        AssertArgumentException(
+            "signedQueryBytes",
+            () => new SignedQueryEnvelope(
+                VersionSignedQueryBytes(malformedSignedQueryBytes),
+                malformedSignedQueryBytes,
+                payloadBytes,
+                signatureBytes));
+        AssertArgumentException(
+            "payloadBytes",
+            () => new SignedQueryEnvelope(versionedNoritoBytes, signedQueryBytes, [0x08], signatureBytes));
+        AssertArgumentException(
+            "signatureBytes",
+            () =>
+            {
+                var mismatchedSignatureBytes = signatureBytes.ToArray();
+                mismatchedSignatureBytes[0] ^= 0xff;
+                _ = new SignedQueryEnvelope(
+                    versionedNoritoBytes,
+                    signedQueryBytes,
+                    payloadBytes,
+                    mismatchedSignatureBytes);
+            });
+        AssertArgumentException(
+            "signedQueryBytes",
+            () =>
+            {
+                var withTrailingField = signedQueryBytes.Concat(new byte[8]).ToArray();
+                _ = new SignedQueryEnvelope(
+                    VersionSignedQueryBytes(withTrailingField),
+                    withTrailingField,
+                    payloadBytes,
+                    signatureBytes);
+            });
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
     [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
     [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("merchant@sora")]
+    [InlineData("0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca")]
+    [InlineData("n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     public void ConstructorRejectsNonExactAuthority(string authorityAccountId)
     {
         Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(authorityAccountId));
+    }
+
+    [Fact]
+    public void ConstructorRejectsInternalWhitespaceAuthority()
+    {
+        AssertArgumentException(
+            "authorityAccountId",
+            () => new SignedQueryBuilder(FixtureAccountId.Insert(8, " ")));
     }
 
     [Fact]
@@ -82,7 +216,23 @@ public sealed class SignedQueryBuilderTests
         });
         Assert.Throws<ArgumentException>(() =>
         {
+            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId("merchant@sora");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
             new SignedQueryBuilder(FixtureAccountId).FindAssetById(" " + FixtureAssetDefinitionId, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindAssetById(
+                FixtureAssetDefinitionId,
+                "n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindAssetById(
+                FixtureAssetDefinitionId,
+                "0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca");
         });
         Assert.Throws<ArgumentException>(() =>
         {
@@ -102,21 +252,73 @@ public sealed class SignedQueryBuilderTests
         });
     }
 
+    [Fact]
+    public void QueryOperandSettersRejectInternalWhitespaceBeforeBuild()
+    {
+        AssertArgumentException(
+            "accountId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(FixtureAccountId.Insert(8, " ")));
+        AssertArgumentException(
+            "assetDefinitionId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindAssetById("asset def", FixtureAccountId));
+        AssertArgumentException(
+            "accountId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindAssetById(
+                FixtureAssetDefinitionId,
+                FixtureAccountId.Insert(8, "\t")));
+        AssertArgumentException(
+            "codeHash",
+            () => new SignedQueryBuilder(FixtureAccountId).FindContractManifestByCodeHash(
+                FixtureContractCodeHash.Insert(10, " ")));
+        AssertArgumentException(
+            "pepperId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindTwitterBindingByHash("pepper v1", FixtureTwitterDigest));
+        AssertArgumentException(
+            "digestHex",
+            () => new SignedQueryBuilder(FixtureAccountId).FindTwitterBindingByHash(
+                "pepper-v1",
+                FixtureTwitterDigest.Insert(10, " ")));
+        AssertArgumentException(
+            "domainId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindDomainEndorsements("ban ka"));
+        AssertArgumentException(
+            "domainId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindDomainEndorsementPolicy("ban ka"));
+        AssertArgumentException(
+            "committeeId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindDomainCommittee("committee 7"));
+        AssertArgumentException(
+            "storageTicket",
+            () => new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByTicket(FixtureStorageTicket.Insert(12, " ")));
+        AssertArgumentException(
+            "manifestDigest",
+            () => new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByManifest(
+                FixtureManifestDigest.Insert(12, "\u00A0")));
+        AssertArgumentException(
+            "alias",
+            () => new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByAlias("manifest root"));
+        AssertArgumentException(
+            "providerId",
+            () => new SignedQueryBuilder(FixtureAccountId).FindSorafsProviderOwner(FixtureProviderId.Insert(12, " ")));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
     [InlineData(" paynet")]
     [InlineData("paynet ")]
+    [InlineData("pay net")]
+    [InlineData("pay\u00A0net")]
     [InlineData("pay\u0000net")]
     public void FindAliasesByAccountIdRejectsNonExactOptionalFilters(string filter)
     {
-        Assert.Throws<ArgumentException>(() =>
+        AssertArgumentException("dataspace", () =>
         {
             new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(
                 FixtureAccountId,
                 dataspace: filter);
         });
-        Assert.Throws<ArgumentException>(() =>
+        AssertArgumentException("domain", () =>
         {
             new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(
                 FixtureAccountId,
@@ -301,6 +503,7 @@ public sealed class SignedQueryBuilderTests
             new string('a', 63),
             " " + new string('a', 64),
             new string('a', 64) + " ",
+            new string('a', 32) + " " + new string('a', 32),
             new string('a', 32) + "\u0000" + new string('a', 31),
             "0x0x" + new string('a', 64),
         })
@@ -365,6 +568,34 @@ public sealed class SignedQueryBuilderTests
         AssertSignatureVerifies(providerEnvelope);
     }
 
+    private static byte[] VersionSignedQueryBytes(byte[] signedQueryBytes)
+    {
+        var versionedNoritoBytes = new byte[signedQueryBytes.Length + 1];
+        versionedNoritoBytes[0] = 1;
+        signedQueryBytes.CopyTo(versionedNoritoBytes.AsSpan(1));
+        return versionedNoritoBytes;
+    }
+
+    private static byte[] BuildSignedQueryBytes(byte[] signatureBytes, byte[] payloadBytes)
+    {
+        var signedQuery = new OfflineNoritoWriter();
+        signedQuery.WriteField(EncodeConstVec(signatureBytes));
+        signedQuery.WriteField(payloadBytes);
+        return signedQuery.ToArray();
+    }
+
+    private static byte[] EncodeConstVec(byte[] value)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteUInt64LittleEndian((ulong)value.Length);
+        foreach (var item in value)
+        {
+            writer.WriteField([item]);
+        }
+
+        return writer.ToArray();
+    }
+
     private static void AssertSignatureVerifies(SignedQueryEnvelope envelope)
     {
         Assert.Equal(envelope.VersionedNoritoBytes[1..], envelope.SignedQueryBytes);
@@ -378,6 +609,12 @@ public sealed class SignedQueryBuilderTests
         var payloadHash = IrohaHash.Hash(envelope.PayloadBytes);
         var publicKey = Ed25519Signer.GetPublicKey(Convert.FromHexString(FixtureSeedHex));
         Assert.True(Ed25519Signer.Verify(payloadHash, envelope.SignatureBytes, publicKey));
+    }
+
+    private static void AssertArgumentException(string paramName, Action action)
+    {
+        var exception = Assert.Throws<ArgumentException>(action);
+        Assert.Equal(paramName, exception.ParamName);
     }
 
     private static (uint SingularDiscriminant, byte[] SingularPayload) ReadSingularQuery(SignedQueryEnvelope envelope)
