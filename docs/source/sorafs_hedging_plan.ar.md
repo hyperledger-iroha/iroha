@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_hedging_plan.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 89499e368934e755c75d39de12b92d69e1b59664f5107d9b89127e12c771021f
+source_hash: ac1ae1f75397efbc3f905bd346e8a519bc9fabf4d3060547cb16aaea21f2530c
 source_last_modified: "2026-06-26T00:58:45+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -49,7 +49,10 @@ is computed, so the JSON summary matches the fail-closed rollout decision. The
 checker supports shell-style
 `@ARGFILE` inputs
 so reviewed operator evidence paths can be replayed without embedding secrets
-or raw billing payloads.
+or raw billing payloads. The checker exports its required top-level payload
+fields as `EVIDENCE_REQUIRED_FIELDS`, and the collection planner dry-run JSON
+includes the checker-backed `evidence_contract` map for selected required
+kinds.
 `scripts/run_sorafs_hedging_rollout_evidence.py` now provides the matching
 collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
@@ -61,13 +64,13 @@ canary artifacts before promotion can pass.
 
 This is not yet a production hedging and billing stack. There is still no
 shipped `hedgingd`, price-feed collector service, `billingd`, statement
-publisher, SoraFS hedging/billing REST API, service-management CLI, statement
-fixture byte suite, released native bridge artifacts, runtime service wiring
+publisher, SoraFS hedging/billing REST API, service-management CLI, released
+native bridge artifacts, runtime service wiring
 that populates the hedging/billing metric families, or captured staged rollout
-evidence that passes the SFM-5 gate. A checked-in fixture generator, fixture
-manifest, and README now define the canonical SFM-5 feed, reference-price,
-line-item, statement, and negative fixture set that still needs to be generated
-and checked in. A checked-in Grafana dashboard plus Prometheus alert/test
+evidence that passes the SFM-5 gate. The checked-in fixture generator, fixture
+manifest, README, and generated `.to`/`.json` byte suite now define the
+canonical SFM-5 feed, reference-price, line-item, statement, and negative
+fixture set. A checked-in Grafana dashboard plus Prometheus alert/test
 fixtures and telemetry helper methods now define the hedging/billing
 observability contract that deployed services must satisfy.
 

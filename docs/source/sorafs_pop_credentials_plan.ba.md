@@ -44,8 +44,11 @@ not replace the missing runtime services or privacy proof backend.
 `scripts/run_sorafs_pop_credentials_rollout_evidence.py` provides the matching
 collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
-the gate thresholds, prints a dry-run command plan, and invokes the checker with
-a reproducible summary path.
+the gate thresholds, prints a dry-run command plan with the checker-backed
+`evidence_contract` map for the selected required kinds, and invokes the
+checker with a reproducible summary path. The checker exports those required
+top-level payload fields as `EVIDENCE_REQUIRED_FIELDS` for downstream
+automation.
 
 ## Existing Foundations
 

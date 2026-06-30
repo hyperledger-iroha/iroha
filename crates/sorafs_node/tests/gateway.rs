@@ -61,10 +61,11 @@ fn gateway_dataset_from_fixtures() -> GatewayDataset {
     let profile = chunk_profile_for_manifest(&manifest);
     let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
     let temp_dir = TempDir::new().expect("temp storage");
+    let root = temp_dir.path().canonicalize().expect("canonical temp dir");
     let signing_key = signing_key_file();
     let config = StorageConfig::builder()
         .enabled(true)
-        .data_dir(temp_dir.path().join("storage"))
+        .data_dir(root.join("storage"))
         .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
         .build();
     let node = NodeHandle::new(config);

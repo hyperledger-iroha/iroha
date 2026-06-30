@@ -9,12 +9,13 @@ use tempfile::tempdir;
 #[test]
 fn taikai_car_cli_generates_bundle() {
     let dir = tempdir().expect("tempdir");
-    let payload_path = dir.path().join("segment.m4s");
+    let dir_path = dir.path().canonicalize().expect("canonical tempdir");
+    let payload_path = dir_path.join("segment.m4s");
     fs::write(&payload_path, b"taikai-payload").expect("write payload");
-    let car_path = dir.path().join("segment.car");
-    let envelope_path = dir.path().join("segment.to");
-    let indexes_path = dir.path().join("segment.indexes.json");
-    let ingest_path = dir.path().join("segment.ingest.json");
+    let car_path = dir_path.join("segment.car");
+    let envelope_path = dir_path.join("segment.to");
+    let indexes_path = dir_path.join("segment.indexes.json");
+    let ingest_path = dir_path.join("segment.ingest.json");
 
     let mut cmd: Command = cargo_bin_cmd!("taikai_car");
     cmd.arg("--payload")

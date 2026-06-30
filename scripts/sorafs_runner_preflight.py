@@ -12,12 +12,32 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
+from sorafs_evidence_sensitivity import (
+    COMMON_SENSITIVE_KEYS,
+    HIGH_RISK_SENSITIVE_KEY_FRAGMENTS,
+    PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES,
+    normalize_sensitive_key,
+)
 from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
 from sorafs_path_identity import resolve_path_identity
 
 
 RUNNER_ARG_FIELD_RE = re.compile(r"[a-z][a-z0-9_]*\Z")
+PLAN_RENDERED_PATH_ERROR = (
+    "SoraFS runner plan-rendered paths must not contain secret-looking, "
+    "control-character, parent, current, drive-prefix, or platform-specific "
+    "components"
+)
+RUNNER_URL_ARG_ERROR = (
+    "SoraFS runner URL arguments must not contain userinfo, query strings, "
+    "fragments, control characters, or secret-looking host/path components"
+)
+RUNNER_PASSTHROUGH_ARG_ERROR = (
+    "SoraFS runner passthrough arguments must not contain secret-looking "
+    "option names, values, paths, URLs, or control characters"
+)
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -98,6 +118,191 @@ def runner_path_size_open_flags() -> int:
     if nofollow:
         flags |= nofollow
     return flags
+
+
+def is_payload_free_sensitive_reference(normalized_key: str) -> bool:
+    """Return whether a sensitive-looking path token is an allowed digest label."""
+
+    return any(
+        normalized_key.endswith(suffix)
+        for suffix in PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES
+    )
+
+
+def is_sensitive_path_component(component: str) -> bool:
+    """Return whether a path component looks like runtime secret material."""
+
+    exact_keys = frozenset(key.lower() for key in COMMON_SENSITIVE_KEYS)
+    normalized_keys = frozenset(normalize_sensitive_key(key) for key in exact_keys)
+    component_lower = component.lower()
+    normalized_component = normalize_sensitive_key(component)
+    return (
+        component_lower in exact_keys
+        or normalized_component in normalized_keys
+        or any(
+            fragment in normalized_component
+            and not is_payload_free_sensitive_reference(normalized_component)
+            for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
+        )
+    )
+
+
+def plan_rendered_path_is_safe(path: Path) -> bool:
+    """Return whether a path can be rendered in runner plans."""
+
+    if not isinstance(path, Path) or not path.name:
+        return False
+    for component in path.parts:
+        if component in {path.anchor, "/", ""}:
+            continue
+        has_windows_drive_prefix = (
+            len(component) >= 2
+            and component[1] == ":"
+            and component[0].isascii()
+            and component[0].isalpha()
+        )
+        if (
+            component in {".", ".."}
+            or "\\" in component
+            or has_windows_drive_prefix
+            or any(ord(character) < 32 or ord(character) == 127 for character in component)
+            or is_sensitive_path_component(component)
+        ):
+            return False
+    return True
+
+
+def validate_plan_rendered_paths(paths: Iterable[Any], errors: list[str]) -> None:
+    """Reject unsafe path components before runner paths enter command plans."""
+
+    error_list = _require_error_list(errors)
+    if any(
+        isinstance(path, Path) and not plan_rendered_path_is_safe(path)
+        for path in paths
+    ):
+        error_list.append(PLAN_RENDERED_PATH_ERROR)
+
+
+def runner_url_arg_is_plan_safe(value: str) -> bool:
+    """Return whether a URL can be rendered in runner plans."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or "\\" in value
+    ):
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        return False
+    if parsed.query or parsed.fragment:
+        return False
+    host = parsed.hostname or ""
+    for component in host.split("."):
+        if component and is_sensitive_path_component(unquote(component)):
+            return False
+    for component in parsed.path.split("/"):
+        if component and is_sensitive_path_component(unquote(component)):
+            return False
+    return True
+
+
+def require_runner_url_args(
+    args: argparse.Namespace,
+    fields: Sequence[str],
+    errors: list[str],
+) -> None:
+    """Reject unsafe URL arguments before they enter command plans."""
+
+    error_list = _require_error_list(errors)
+    for field in fields:
+        field_name = _require_runner_arg_field(field)
+        value = getattr(args, field_name, None)
+        if value is None:
+            continue
+        if not runner_url_arg_is_plan_safe(value):
+            if RUNNER_URL_ARG_ERROR not in error_list:
+                error_list.append(RUNNER_URL_ARG_ERROR)
+
+
+def runner_passthrough_arg_is_plan_safe(value: str) -> bool:
+    """Return whether a passthrough CLI argument can be rendered in plans."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or "\0" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        return False
+    if value.startswith(("http://", "https://")):
+        return runner_url_arg_is_plan_safe(value)
+
+    key, separator, raw_value = value.partition("=")
+    if value.startswith("-"):
+        option_name = key.lstrip("-").replace("-", "_")
+        if is_sensitive_path_component(option_name):
+            return False
+    elif separator and is_sensitive_path_component(key):
+        return False
+
+    checked_values = [raw_value] if separator else [value]
+    for checked_value in checked_values:
+        if not checked_value:
+            continue
+        if checked_value.startswith(("http://", "https://")):
+            if not runner_url_arg_is_plan_safe(checked_value):
+                return False
+            continue
+        if any(separator in checked_value for separator in ("/", "\\")):
+            if not plan_rendered_path_is_safe(Path(checked_value)):
+                return False
+            continue
+        if is_sensitive_path_component(checked_value):
+            return False
+    return True
+
+
+def require_runner_passthrough_args(
+    args: argparse.Namespace,
+    fields: Sequence[str],
+    sequence_fields: Sequence[str],
+    errors: list[str],
+) -> None:
+    """Reject unsafe passthrough command arguments before dry-run rendering."""
+
+    error_list = _require_error_list(errors)
+    values: list[Any] = []
+    for field in fields:
+        field_name = _require_runner_arg_field(field)
+        value = getattr(args, field_name, None)
+        if value is not None:
+            values.append(value)
+    for field in sequence_fields:
+        field_name = _require_runner_arg_field(field)
+        sequence = getattr(args, field_name, ())
+        if isinstance(sequence, (str, bytes, bytearray, Mapping)) or not isinstance(
+            sequence,
+            Sequence,
+        ):
+            if RUNNER_PASSTHROUGH_ARG_ERROR not in error_list:
+                error_list.append(RUNNER_PASSTHROUGH_ARG_ERROR)
+            continue
+        values.extend(sequence)
+    if any(
+        not isinstance(value, str) or not runner_passthrough_arg_is_plan_safe(value)
+        for value in values
+    ):
+        if RUNNER_PASSTHROUGH_ARG_ERROR not in error_list:
+            error_list.append(RUNNER_PASSTHROUGH_ARG_ERROR)
 
 
 def _runner_path_sequence(paths: Any, errors: list[str], *, label: str) -> Sequence[Any] | None:
@@ -452,6 +657,19 @@ def validate_runner_preflight(
 
     errors: list[str] = []
     verifier = getattr(args, "verifier", None)
+    out_dir = getattr(args, "out_dir", None)
+    configured_summary_out = getattr(args, "summary_out", None)
+    summary_out = (
+        configured_summary_out
+        if configured_summary_out is not None
+        else out_dir / summary_filename
+        if isinstance(out_dir, Path)
+        else configured_summary_out
+    )
+    validate_plan_rendered_paths((verifier, out_dir, summary_out), errors)
+    if errors:
+        return errors
+
     if not isinstance(verifier, Path):
         errors.append(
             f"--verifier `{path_diagnostic_label(verifier)}` "
@@ -485,17 +703,14 @@ def validate_runner_preflight(
                         "must exist and be a file"
                     )
 
-    out_dir = getattr(args, "out_dir", None)
     if not isinstance(out_dir, Path):
         errors.append(f"--out-dir `{path_diagnostic_label(out_dir)}` must be a path")
         return errors
     out_dir_identity = resolve_runner_output_path(out_dir, errors)
     out_dir_valid = validate_runner_output_dir(out_dir, errors)
 
-    configured_summary_out = getattr(args, "summary_out", None)
     if configured_summary_out is None and not out_dir_valid:
         return errors
-    summary_out = configured_summary_out or out_dir / summary_filename
     if not isinstance(summary_out, Path):
         errors.append(
             f"--summary-out `{path_diagnostic_label(summary_out)}` must be a path"
@@ -787,6 +1002,10 @@ def require_existing_files(
         if not isinstance(path, Path):
             errors.append(INPUT_FILE_PATH_DIAGNOSTIC)
             continue
+        if not plan_rendered_path_is_safe(path):
+            if PLAN_RENDERED_PATH_ERROR not in errors:
+                errors.append(PLAN_RENDERED_PATH_ERROR)
+            continue
         try:
             path_exists = path.exists()
         except (OSError, RuntimeError):
@@ -841,6 +1060,10 @@ def require_existing_dirs(
     if seen_map is None:
         return errors
     for path in path_items:
+        if isinstance(path, Path) and not plan_rendered_path_is_safe(path):
+            if PLAN_RENDERED_PATH_ERROR not in errors:
+                errors.append(PLAN_RENDERED_PATH_ERROR)
+            continue
         path_exists = inspect_runner_path_exists(path, errors, label=path_label)
         if path_exists is None:
             continue

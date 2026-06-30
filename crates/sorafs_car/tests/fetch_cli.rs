@@ -23,7 +23,14 @@ use sorafs_manifest::{
         AdmissionRecord, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     },
 };
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
+
+fn tempdir() -> std::io::Result<TempDir> {
+    let base = std::env::temp_dir().canonicalize()?;
+    tempfile::Builder::new()
+        .prefix("sorafs-fetch-cli-")
+        .tempdir_in(base)
+}
 
 fn write_payload(path: &PathBuf, size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];

@@ -1035,13 +1035,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut paid_pin_fee = Value::Null;
     match registration {
         Ok(response) => {
-            ensure_parent_dir(&register_response_path)?;
-            fs::write(&register_response_path, &response.response_bytes).map_err(|err| {
-                format!(
-                    "failed to write `{}`: {err}",
-                    register_response_path.display()
-                )
-            })?;
+            write_bytes(&register_response_path, &response.response_bytes)?;
             let fallback_failure = response.failure_message.clone();
             registration_ok = response.status.is_success() && fallback_failure.is_none();
             registration_summary.insert(
@@ -1156,10 +1150,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             );
             match result {
                 Ok(response) => {
-                    ensure_parent_dir(&response_path)?;
-                    fs::write(&response_path, &response.response_bytes).map_err(|err| {
-                        format!("failed to write `{}`: {err}", response_path.display())
-                    })?;
+                    write_bytes(&response_path, &response.response_bytes)?;
                     let ok = response.success();
                     entry.insert("endpoint".into(), Value::from(response.endpoint));
                     entry.insert(
@@ -1348,9 +1339,7 @@ fn build_deploy_artifacts(
             ));
         };
 
-    ensure_parent_dir(car_path)?;
-    let car_file = File::create(car_path)
-        .map_err(|err| format!("failed to create `{}`: {err}", car_path.display()))?;
+    let car_file = open_output_file(car_path)?;
     let mut writer = BufWriter::new(car_file);
     let mut payload_reader = payload_cursor;
     let stats = CarStreamingWriter::new(&plan)
@@ -1363,13 +1352,11 @@ fn build_deploy_artifacts(
     let plan_specs = plan.chunk_fetch_specs();
     let plan_json = chunk_fetch_specs_to_string(&plan_specs)
         .map_err(|err| format!("failed to render chunk plan JSON: {err}"))?;
-    ensure_parent_dir(plan_path)?;
     write_text(plan_path, plan_json.as_bytes())?;
 
     let pack_summary = render_summary(&input_summary, descriptor, handle, &plan, &stats, car_path);
     let pack_rendered = to_string_pretty(&pack_summary)
         .map_err(|err| format!("failed to render pack summary JSON: {err}"))?;
-    ensure_parent_dir(pack_summary_path)?;
     write_text(pack_summary_path, pack_rendered.as_bytes())?;
 
     let root_cid = stats
@@ -1400,14 +1387,11 @@ fn build_deploy_artifacts(
     let manifest_bytes = manifest
         .encode()
         .map_err(|err| format!("failed to encode manifest: {err}"))?;
-    ensure_parent_dir(manifest_path)?;
-    fs::write(manifest_path, &manifest_bytes)
-        .map_err(|err| format!("failed to write `{}`: {err}", manifest_path.display()))?;
+    write_bytes(manifest_path, &manifest_bytes)?;
     let manifest_json = to_string_pretty(
         &to_value(&manifest).map_err(|err| format!("failed to serialise manifest JSON: {err}"))?,
     )
     .map_err(|err| format!("failed to render manifest JSON: {err}"))?;
-    ensure_parent_dir(manifest_json_path)?;
     write_text(manifest_json_path, manifest_json.as_bytes())?;
 
     let manifest_digest = manifest
@@ -1933,7 +1917,6 @@ fn write_deploy_receipt_and_stdout(path: &Path, value: &Value) -> Result<(), Str
     let rendered =
         to_string_pretty(value).map_err(|err| format!("failed to render deploy receipt: {err}"))?;
     println!("{rendered}");
-    ensure_parent_dir(path)?;
     write_text(path, rendered.as_bytes())
 }
 
@@ -2458,8 +2441,7 @@ fn render_taikai_summary_value(inputs: &TaikaiBundleInputs, summary: &BundleSumm
 fn write_summary_json(path: &Path, value: &Value) -> Result<(), String> {
     let rendered =
         to_string_pretty(value).map_err(|err| format!("failed to render summary JSON: {err}"))?;
-    fs::write(path, rendered.as_bytes())
-        .map_err(|err| format!("failed to write summary JSON `{}`: {err}", path.display()))
+    write_text(path, rendered.as_bytes())
 }
 
 enum StatusOutputFormat {
@@ -2872,12 +2854,7 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
             body_snippet(&body)
         ));
     }
-    fs::write(&out_path, &body).map_err(|err| {
-        format!(
-            "failed to write export artefact to `{}`: {err}",
-            out_path.display()
-        )
-    })?;
+    write_bytes(&out_path, &body)?;
     println!("exported {} bytes to `{}`.", body.len(), out_path.display());
     Ok(())
 }
@@ -3032,9 +3009,7 @@ fn emit_car_and_artifacts<R: io::Read>(
     plan_out: Option<&PathBuf>,
     summary_out: Option<&PathBuf>,
 ) -> Result<(), String> {
-    ensure_parent_dir(car_out)?;
-    let car_file = File::create(car_out)
-        .map_err(|err| format!("failed to create `{}`: {err}", car_out.display()))?;
+    let car_file = open_output_file(car_out)?;
     let mut writer = BufWriter::new(car_file);
     let stats = CarStreamingWriter::new(&plan)
         .write_from_reader(&mut payload, &mut writer)
@@ -3048,7 +3023,6 @@ fn emit_car_and_artifacts<R: io::Read>(
     }
 
     if let Some(plan_path) = plan_out {
-        ensure_parent_dir(plan_path)?;
         let spec_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
             .map_err(|err| format!("failed to render chunk plan: {err}"))?;
         write_text(plan_path, spec_json.as_bytes())?;
@@ -3060,7 +3034,6 @@ fn emit_car_and_artifacts<R: io::Read>(
     println!("{rendered}");
 
     if let Some(summary_path) = summary_out {
-        ensure_parent_dir(summary_path)?;
         write_text(summary_path, rendered.as_bytes())?;
     }
 
@@ -3155,13 +3128,23 @@ fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
 }
 
 fn write_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_bytes(path, bytes)
+}
+
+fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = open_output_file(path)?;
+    file.write_all(bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
+}
+
+fn open_output_file(path: &Path) -> Result<File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
     validate_output_path(path)?;
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     set_no_follow_flag(&mut options);
-    let mut file = options
+    let file = options
         .open(path)
         .map_err(|err| format!("failed to open `{}` for writing: {err}", path.display()))?;
     let metadata = file
@@ -3173,8 +3156,7 @@ fn write_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
-    file.write_all(bytes)
-        .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
+    Ok(file)
 }
 
 fn validate_output_path(path: &Path) -> Result<(), String> {
@@ -4205,10 +4187,8 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let outcome = &session.outcome;
 
     if let Some(path) = output_path {
-        ensure_parent_dir(&path)?;
         let assembled = outcome.assemble_payload();
-        fs::write(&path, &assembled)
-            .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+        write_bytes(&path, &assembled)?;
     }
 
     let mut summary = build_fetch_summary(
@@ -4271,20 +4251,16 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         let manifest = session.local_proxy_manifest.as_ref().ok_or_else(|| {
             "--local-proxy-manifest-out requires `local_proxy.emit_browser_manifest = true` and an active local proxy runtime".to_string()
         })?;
-        ensure_parent_dir(&path)?;
         let manifest_value =
             to_value(manifest).expect("local proxy manifest should serialise to JSON");
         let manifest_json =
             to_string_pretty(&manifest_value).expect("local proxy manifest should emit valid JSON");
-        fs::write(&path, manifest_json.as_bytes())
-            .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+        write_text(&path, manifest_json.as_bytes())?;
     }
     let summary_text = to_string_pretty(&summary).expect("fetch summary should be serialisable");
     println!("{summary_text}");
     if let Some(path) = json_out {
-        ensure_parent_dir(&path)?;
-        fs::write(&path, summary_text.as_bytes())
-            .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+        write_text(&path, summary_text.as_bytes())?;
     }
 
     Ok(())
@@ -10022,11 +9998,72 @@ mod manifest_tests {
         AccountId::new(pk).to_string()
     }
 
+    fn canonical_temp_path(temp: &TempDir) -> std::path::PathBuf {
+        temp.path().canonicalize().expect("canonical tempdir")
+    }
+
+    #[test]
+    fn write_text_creates_parent_and_writes_bytes() {
+        let temp = TempDir::new().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let output_path = temp_path.join("nested").join("summary.json");
+
+        write_text(&output_path, br#"{"ok":true}"#).expect("write text");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            br#"{"ok":true}"#
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_output() {
+        let temp = TempDir::new().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let target_path = temp_path.join("target.txt");
+        fs::write(&target_path, b"unchanged").expect("write target");
+        let output_path = temp_path.join("output.txt");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_text(&output_path, b"changed").expect_err("reject symlink output");
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_parent() {
+        let temp = TempDir::new().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("output.txt");
+
+        let err = write_text(&output_path, b"changed").expect_err("reject symlink parent");
+
+        assert!(
+            err.contains("parent") && err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !real_dir.join("output.txt").exists(),
+            "symlink parent should not receive output"
+        );
+    }
+
     #[test]
     fn proxy_set_mode_updates_config_file() {
         let temp = TempDir::new().expect("tempdir");
-        let config_path = temp.path().join("orchestrator.json");
-        let json_out_path = temp.path().join("summary.json");
+        let root = canonical_temp_path(&temp);
+        let config_path = root.join("orchestrator.json");
+        let json_out_path = root.join("summary.json");
 
         let config = OrchestratorConfig {
             local_proxy: Some(LocalQuicProxyConfig {
@@ -10200,9 +10237,10 @@ mod manifest_tests {
     fn moderation_run_local_emits_torii_screening_request_json() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let temp = TempDir::new().expect("tempdir");
-        let manifest_path = temp.path().join("repro.json");
-        let payload_path = temp.path().join("payload.bin");
-        let out_path = temp.path().join("screening.json");
+        let root = canonical_temp_path(&temp);
+        let manifest_path = root.join("repro.json");
+        let payload_path = root.join("payload.bin");
+        let out_path = root.join("screening.json");
         let payload = b"moderation payload bytes";
         fs::write(
             &manifest_path,
@@ -10824,9 +10862,10 @@ mod manifest_tests {
     fn moderation_runner_canary_emits_payload_free_rollout_evidence() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let temp = TempDir::new().expect("tempdir");
-        let manifest_path = temp.path().join("repro.json");
-        let payload_path = temp.path().join("payload.bin");
-        let out_path = temp.path().join("runner-canary.json");
+        let root = canonical_temp_path(&temp);
+        let manifest_path = root.join("repro.json");
+        let payload_path = root.join("payload.bin");
+        let out_path = root.join("runner-canary.json");
         let payload = b"runner canary payload bytes";
         fs::write(
             &manifest_path,
@@ -11140,11 +11179,12 @@ mod manifest_tests {
     fn moderation_committee_canary_emits_payload_free_rollout_evidence() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let temp = TempDir::new().expect("tempdir");
-        let manifest_path = temp.path().join("repro.json");
-        let out_path = temp.path().join("committee-canary.json");
-        let result_a = temp.path().join("a.json");
-        let result_b = temp.path().join("b.json");
-        let result_c = temp.path().join("c.json");
+        let root = canonical_temp_path(&temp);
+        let manifest_path = root.join("repro.json");
+        let out_path = root.join("committee-canary.json");
+        let result_a = root.join("a.json");
+        let result_b = root.join("b.json");
+        let result_c = root.join("c.json");
         let payload = b"committee canary payload bytes";
         let subject = "cid:bafy-committee-canary";
         fs::write(
@@ -11269,11 +11309,12 @@ mod manifest_tests {
     fn moderation_committee_run_aggregates_runner_results() {
         let manifest = signed_moderation_repro_manifest_fixture();
         let temp = TempDir::new().expect("tempdir");
-        let manifest_path = temp.path().join("repro.json");
-        let out_path = temp.path().join("committee.json");
-        let result_a = temp.path().join("a.json");
-        let result_b = temp.path().join("b.json");
-        let result_c = temp.path().join("c.json");
+        let root = canonical_temp_path(&temp);
+        let manifest_path = root.join("repro.json");
+        let out_path = root.join("committee.json");
+        let result_a = root.join("a.json");
+        let result_b = root.join("b.json");
+        let result_c = root.join("c.json");
         let payload = b"committee payload bytes";
         let subject = "cid:bafy-committee";
         fs::write(
@@ -11653,12 +11694,9 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_bytes = manifest
         .encode()
         .map_err(|err| format!("failed to encode manifest: {err}"))?;
-    ensure_parent_dir(&manifest_out)?;
-    fs::write(&manifest_out, &manifest_bytes)
-        .map_err(|err| format!("failed to write `{}`: {err}", manifest_out.display()))?;
+    write_bytes(&manifest_out, &manifest_bytes)?;
 
     if let Some(json_path) = manifest_json_out.as_ref() {
-        ensure_parent_dir(json_path)?;
         let rendered = to_string_pretty(
             &norito::json::to_value(&manifest)
                 .map_err(|err| format!("failed to serialise manifest JSON: {err}"))?,
@@ -11775,9 +11813,7 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         .compile_source(&source_text)
         .map_err(|err| format!("failed to compile Kotodama source: {err}"))?;
 
-    ensure_parent_dir(&bytecode_out)?;
-    fs::write(&bytecode_out, &bytecode)
-        .map_err(|err| format!("failed to write `{}`: {err}", bytecode_out.display()))?;
+    write_bytes(&bytecode_out, &bytecode)?;
 
     let mut summary = Map::new();
     summary.insert(
@@ -11808,7 +11844,6 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
     Ok(())
@@ -12042,9 +12077,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     )?;
 
     if let Some(path) = response_out {
-        ensure_parent_dir(&path)?;
-        fs::write(&path, &submission.response_bytes)
-            .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+        write_bytes(&path, &submission.response_bytes)?;
     }
 
     let mut summary = Map::new();
@@ -12126,7 +12159,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
     if let Some(message) = submission.failure_message {
@@ -12200,14 +12232,11 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
         u64::try_from(entries.len()).unwrap_or(u64::MAX)
     });
 
-    ensure_parent_dir(&payload_out)?;
-    fs::write(&payload_out, &payload_bytes)
-        .map_err(|err| format!("failed to write `{}`: {err}", payload_out.display()))?;
+    write_bytes(&payload_out, &payload_bytes)?;
 
     let files_value = storage_files_to_json_value(files.as_deref());
     let files_rendered = to_string_pretty(&files_value)
         .map_err(|err| format!("failed to render storage files JSON: {err}"))?;
-    ensure_parent_dir(&files_out)?;
     write_text(&files_out, files_rendered.as_bytes())?;
 
     let mut summary = Map::new();
@@ -12247,7 +12276,6 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
 
@@ -12322,9 +12350,7 @@ fn storage_pin(raw_args: Vec<String>) -> Result<(), String> {
     )?;
 
     if let Some(path) = response_out {
-        ensure_parent_dir(&path)?;
-        fs::write(&path, &response.response_bytes)
-            .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+        write_bytes(&path, &response.response_bytes)?;
     }
 
     let response_text = String::from_utf8_lossy(&response.response_bytes);
@@ -12375,7 +12401,6 @@ fn storage_pin(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
 
@@ -13175,7 +13200,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
         successor_bytes,
     })?;
 
-    ensure_parent_dir(&proposal_out)?;
     let mut rendered = to_string_pretty(&proposal_value)
         .map_err(|err| format!("failed to render proposal JSON: {err}"))?;
     if !rendered.ends_with('\n') {
@@ -13336,7 +13360,6 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
     Ok(())
@@ -13661,7 +13684,6 @@ fn emit_reputation_json(value: Value, output: Option<&Path>) -> Result<(), Strin
 fn write_reputation_json(path: &Path, value: &Value) -> Result<(), String> {
     let rendered = to_string_pretty(value)
         .map_err(|err| format!("failed to render reputation JSON: {err}"))?;
-    ensure_parent_dir(path)?;
     write_text(path, rendered.as_bytes())
 }
 
@@ -13823,7 +13845,6 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render reputation summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
     Ok(())
@@ -14245,7 +14266,6 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render proof stream summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
-        ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
     if let Some(dir) = evidence_dir {
@@ -15068,7 +15088,6 @@ fn governance_dag_rebuild_head(raw_args: Vec<String>) -> Result<(), String> {
 
     let head_bytes = to_bytes(&head)
         .map_err(|err| format!("failed to encode rebuilt governance DAG head: {err}"))?;
-    ensure_parent_dir(&head_out)?;
     write_text(&head_out, &head_bytes)?;
     write_governance_blake3_sidecar(&head_out, &head_bytes)?;
 
@@ -15339,7 +15358,6 @@ fn governance_dag_checkpoint(raw_args: Vec<String>) -> Result<(), String> {
     }
     summary.insert("verification".into(), verification);
     let summary_value = Value::Object(summary);
-    ensure_parent_dir(&out)?;
     write_governance_dag_json(&out, &summary_value)?;
     print_governance_dag_json(&summary_value)
 }
@@ -16540,9 +16558,7 @@ fn write_governance_dag_car_archive(
     let (plan, payload) = CarBuildPlan::from_files_with_profile(files, descriptor.profile)
         .map_err(|err| format!("failed to build governance DAG CAR plan: {err}"))?;
 
-    ensure_parent_dir(car_out)?;
-    let car_file = File::create(car_out)
-        .map_err(|err| format!("failed to create `{}`: {err}", car_out.display()))?;
+    let car_file = open_output_file(car_out)?;
     let mut writer = BufWriter::new(car_file);
     let mut payload_reader = Cursor::new(payload);
     let stats = CarStreamingWriter::new(&plan)
@@ -16557,7 +16573,6 @@ fn write_governance_dag_car_archive(
     }
 
     if let Some(plan_path) = car_plan_out {
-        ensure_parent_dir(plan_path)?;
         let plan_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
             .map_err(|err| format!("failed to render governance DAG CAR chunk plan: {err}"))?;
         write_text(plan_path, plan_json.as_bytes())?;
@@ -17881,12 +17896,10 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to render signature bundle: {err}"))?;
 
     if let Some(path) = bundle_out.as_ref() {
-        ensure_parent_dir(path)?;
         write_text(path, bundle_rendered.as_bytes())?;
     }
 
     if let Some(path) = signature_out.as_ref() {
-        ensure_parent_dir(path)?;
         let mut signature_text = signature_hex.clone();
         signature_text.push('\n');
         write_text(path, signature_text.as_bytes())?;
@@ -19023,9 +19036,10 @@ mod tests {
     #[test]
     fn proof_stream_evidence_helper_writes_bundle() {
         let temp = tempdir().expect("tempdir");
-        let manifest_path = temp.path().join("sample_manifest.norito");
+        let root = temp.path().canonicalize().expect("canonical tempdir");
+        let manifest_path = root.join("sample_manifest.norito");
         fs::write(&manifest_path, b"norito-data").expect("write manifest");
-        let evidence_dir = temp.path().join("evidence");
+        let evidence_dir = root.join("evidence");
         let summary_json = r#"{"proof_kind":"por"}"#;
 
         write_proof_stream_evidence(

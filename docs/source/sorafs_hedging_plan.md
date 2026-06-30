@@ -43,7 +43,10 @@ is computed, so the JSON summary matches the fail-closed rollout decision. The
 checker supports shell-style
 `@ARGFILE` inputs
 so reviewed operator evidence paths can be replayed without embedding secrets
-or raw billing payloads.
+or raw billing payloads. The checker exports its required top-level payload
+fields as `EVIDENCE_REQUIRED_FIELDS`, and the collection planner dry-run JSON
+includes the checker-backed `evidence_contract` map for selected required
+kinds.
 `scripts/run_sorafs_hedging_rollout_evidence.py` now provides the matching
 collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
@@ -208,7 +211,7 @@ Required before rollout:
   promotion remains blocked unless the summary status is `ready`, including at
   least two distinct staged billing cycles whose reference-decision ids match a
   valid reference-price artifact in the same evidence bundle. The collection
-  planner's dry-run JSON includes an `evidence_contract` map so operators can
+  planner's dry-run JSON includes the checker-backed `evidence_contract` map so operators can
   inspect the exact required fields for each requested evidence kind before
   collecting or submitting live billing artifacts.
 

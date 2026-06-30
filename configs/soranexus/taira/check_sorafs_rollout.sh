@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
+WRITE_CONFIG_EXPLICIT=0
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
 IROHA_BIN="${IROHA_BIN:-}"
 SORAFS_MANIFEST_STUB_BIN="${SORAFS_MANIFEST_STUB_BIN:-}"
@@ -16,6 +17,10 @@ DECLARED_CAPACITY_GIB="${DECLARED_CAPACITY_GIB:-1}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-1}"
 DECLARATION_VALID_BLOCKS="${DECLARATION_VALID_BLOCKS:-10000}"
 PROVIDER_SEED_PREFIX="${PROVIDER_SEED_PREFIX:-taira-rollout-capacity-canary:v1}"
+CAPACITY_STATE_RECHECK_ATTEMPTS="${CAPACITY_STATE_RECHECK_ATTEMPTS:-10}"
+CAPACITY_STATE_RECHECK_DELAY_SECONDS="${CAPACITY_STATE_RECHECK_DELAY_SECONDS:-2}"
+SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS:-5}"
+SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS="${SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
 SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
 SORAFS_MANIFEST_STUB_RUNNER=()
@@ -34,6 +39,8 @@ Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--declaration-valid-blocks N]
                                [--provider-seed-prefix TEXT]
                                [--resolve-host HOST:IP|HOST:PORT:IP]
+                               [--curl-connect-timeout-seconds N]
+                               [--curl-max-time-seconds N]
                                [--skip-write-canary]
 
 Verify that a public Taira node exposes the required SoraFS routes and, unless
@@ -50,6 +57,8 @@ The check fails unless:
 When `--write-config` is omitted, the script bootstraps
 `/run/secrets/taira-canary-client.toml` automatically, onboarding a fresh
 ordinary account on Taira before running the capacity declaration canary.
+When `--write-config` is supplied, that runtime-only signer config is read
+as-is and is never overwritten by bootstrap.
 Use `--skip-write-canary` only for read-only validation.
 EOF
 }
@@ -70,6 +79,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       WRITE_CONFIG="$2"
+      WRITE_CONFIG_EXPLICIT=1
       shift 2
       ;;
     --iroha-bin)
@@ -136,6 +146,22 @@ while [[ $# -gt 0 ]]; do
       CURL_RESOLVE_RULES+=("$2")
       shift 2
       ;;
+    --curl-connect-timeout-seconds)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --curl-connect-timeout-seconds" >&2
+        exit 1
+      }
+      SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --curl-max-time-seconds)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --curl-max-time-seconds" >&2
+        exit 1
+      }
+      SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS="$2"
+      shift 2
+      ;;
     --skip-write-canary)
       SKIP_WRITE_CANARY=1
       shift
@@ -156,6 +182,61 @@ done
   echo "--public-root is required" >&2
   exit 1
 }
+
+require_unsigned_integer() {
+  local name="$1"
+  local value="$2"
+  local requirement="$3"
+
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "${name} must be ${requirement}" >&2
+    exit 1
+  fi
+}
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+
+  require_unsigned_integer "$name" "$value" "a positive integer"
+  if [[ "$value" =~ ^0+$ ]]; then
+    echo "${name} must be a positive integer" >&2
+    exit 1
+  fi
+}
+
+require_non_negative_integer() {
+  local name="$1"
+  local value="$2"
+
+  require_unsigned_integer "$name" "$value" "a non-negative integer"
+}
+
+validate_numeric_inputs() {
+  require_positive_integer \
+    "ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
+    "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
+  require_positive_integer \
+    "ROLLOUT_CANARY_STATUS_TIMEOUT_MS" \
+    "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  require_positive_integer "DECLARED_CAPACITY_GIB" "$DECLARED_CAPACITY_GIB"
+  require_positive_integer "STAKE_AMOUNT" "$STAKE_AMOUNT"
+  require_positive_integer "DECLARATION_VALID_BLOCKS" "$DECLARATION_VALID_BLOCKS"
+  require_positive_integer \
+    "CAPACITY_STATE_RECHECK_ATTEMPTS" \
+    "$CAPACITY_STATE_RECHECK_ATTEMPTS"
+  require_non_negative_integer \
+    "CAPACITY_STATE_RECHECK_DELAY_SECONDS" \
+    "$CAPACITY_STATE_RECHECK_DELAY_SECONDS"
+  require_positive_integer \
+    "SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS" \
+    "$SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
+  require_positive_integer \
+    "SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS" \
+    "$SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS"
+}
+
+validate_numeric_inputs
 
 if [[ -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
   WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
@@ -223,7 +304,17 @@ http_request() {
   local payload="${3:-}"
   local body_file
   local curl_status
-  local curl_cmd=(curl --silent --show-error)
+  local curl_cmd=(
+    curl
+    --silent
+    --show-error
+    --header
+    "accept: application/json"
+    --connect-timeout
+    "$SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
+    --max-time
+    "$SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS"
+  )
 
   body_file="$(mktemp)"
   cleanup
@@ -270,6 +361,103 @@ probe_surface() {
   expect_status "capacity/declare" POST "${root_url}/v1/sorafs/capacity/declare" 400 '{}'
   expect_status "capacity/schedule" POST "${root_url}/v1/sorafs/capacity/schedule" 400 '{}'
   expect_status "capacity/state" GET "${root_url}/v1/sorafs/capacity/state" 200
+}
+
+check_node_health() {
+  local root_url="$1"
+  echo "==> Taira node health: ${root_url}"
+  expect_status "status" GET "${root_url}/status" 200
+  python3 - "$last_body" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+blocks = payload.get("blocks")
+if not isinstance(blocks, int) or blocks <= 0:
+    raise SystemExit("status payload did not include a positive `blocks` value")
+PY
+
+  expect_status "sumeragi/status" GET "${root_url}/v1/sumeragi/status" 200
+  python3 - "$last_body" <<'PY'
+import json
+import sys
+
+
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def first_int(*values):
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    return None
+
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+commit_qc_height = first_int(
+    payload.get("commit_qc_height"),
+    dig(payload, "commit_qc", "height"),
+)
+highest_qc_height = first_int(
+    payload.get("highest_qc_height"),
+    dig(payload, "highest_qc", "height"),
+    dig(payload, "canonical", "highest_qc", "height"),
+)
+locked_qc_height = first_int(
+    payload.get("locked_qc_height"),
+    dig(payload, "locked_qc", "height"),
+    dig(payload, "canonical", "locked_qc", "height"),
+)
+canonical_height = first_int(
+    payload.get("canonical_height"),
+    dig(payload, "canonical", "height"),
+)
+validator_set_len = first_int(
+    payload.get("commit_qc_validator_set_len"),
+    dig(payload, "commit_qc", "validator_set_len"),
+)
+
+if commit_qc_height is None or commit_qc_height < 1:
+    raise SystemExit(
+        f"sumeragi/status reported an unhealthy commit QC height: {commit_qc_height!r}"
+    )
+if highest_qc_height is not None and highest_qc_height < commit_qc_height:
+    raise SystemExit(
+        "sumeragi/status highest QC height "
+        f"{highest_qc_height} is behind commit QC height {commit_qc_height}"
+    )
+if locked_qc_height is not None and locked_qc_height < commit_qc_height:
+    raise SystemExit(
+        "sumeragi/status locked QC height "
+        f"{locked_qc_height} is behind commit QC height {commit_qc_height}"
+    )
+if canonical_height is not None and canonical_height < commit_qc_height:
+    raise SystemExit(
+        "sumeragi/status canonical height "
+        f"{canonical_height} is behind commit QC height {commit_qc_height}"
+    )
+if validator_set_len is None or validator_set_len < 1:
+    raise SystemExit(
+        f"sumeragi/status reported an empty commit validator set: {validator_set_len!r}"
+    )
+if validator_set_len < 4:
+    raise SystemExit(
+        "sumeragi/status reported only "
+        f"{validator_set_len} validators in the commit QC set; Taira rollout expects at least 4"
+    )
+PY
 }
 
 build_write_canary_config() {
@@ -388,6 +576,21 @@ ensure_write_canary_config() {
 
   echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
   "${bootstrap_cmd[@]}" >&2
+}
+
+prepare_write_canary_config() {
+  local target_url="$1"
+
+  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
+  if [[ $WRITE_CONFIG_EXPLICIT -eq 1 ]]; then
+    [[ -f "$WRITE_CONFIG" ]] || {
+      echo "write canary config not found: $WRITE_CONFIG" >&2
+      exit 1
+    }
+    return 0
+  fi
+
+  ensure_write_canary_config "$target_url"
 }
 
 ensure_iroha_bin() {
@@ -734,8 +937,7 @@ run_write_canary() {
   ensure_iroha_bin
   ensure_sorafs_manifest_stub_bin
   ensure_sorafs_tx_stdin_builder_bin
-  [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$WRITE_CONFIG_DEFAULT"
-  ensure_write_canary_config "$target_url"
+  prepare_write_canary_config "$target_url"
 
   local temp_config work_dir request_path tx_stdin_path spec_path output_file account_id private_key current_blocks provider_id_hex
   temp_config="$(mktemp)"
@@ -796,7 +998,7 @@ run_write_canary() {
   fi
 
   local attempt
-  for ((attempt = 1; attempt <= 10; attempt++)); do
+  for ((attempt = 1; attempt <= CAPACITY_STATE_RECHECK_ATTEMPTS; attempt++)); do
     expect_status "capacity/state" GET "${target_url}/v1/sorafs/capacity/state" 200
     if python3 - "$last_body" "$provider_id_hex" <<'PY'
 import json
@@ -816,8 +1018,8 @@ PY
     then
       return 0
     fi
-    if [[ $attempt -lt 10 ]]; then
-      sleep 2
+    if [[ $attempt -lt CAPACITY_STATE_RECHECK_ATTEMPTS ]]; then
+      sleep "$CAPACITY_STATE_RECHECK_DELAY_SECONDS"
     fi
   done
 
@@ -827,6 +1029,7 @@ PY
 
 ROOT_URL="$(normalize_root_url "$PUBLIC_TORII_ROOT")"
 probe_surface "$ROOT_URL"
+check_node_health "$ROOT_URL"
 
 if [[ $SKIP_WRITE_CANARY -eq 0 ]]; then
   run_write_canary "$ROOT_URL"

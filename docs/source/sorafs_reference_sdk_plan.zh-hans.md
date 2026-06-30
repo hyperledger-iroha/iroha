@@ -373,8 +373,10 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke runner that emits `ValidationOutcomeV1` JSON for committed fixtures.
 - Implemented: portal reference SDK error catalogue at
   `docs/portal/docs/sorafs/reference-sdk/errors.md`.
-- Remaining: publish operator, metrics, and binding-generation guides once the
-  release artifacts and downstream packages are cut.
+- Implemented: the operator, metrics, and binding-generation guides below cover
+  the local release helper, `ValidationOutcomeV1` telemetry contract, checked C
+  header, and downstream package evidence handoff. Final release-specific URLs,
+  signatures, and package versions remain SF-11 release evidence.
 
 ## Packaging & Release
 - Rust APIs currently ship through `sorafs_manifest::reference` and

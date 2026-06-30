@@ -4402,7 +4402,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch appeal pricing readiness.",
-            "Fetch SoraFS appeal finance API readiness, including which mutating deposit, report, and settlement paths are still pending runtime escrow and ledger integration.",
+            "Fetch SoraFS appeal finance API readiness for the local quote, native deposit lifecycle, report/rollup publication, configured-signer settlement submission, moderation-derived settlement worker, reconciliation, and dashboard readback paths; hosted dashboard and multi-peer rollout evidence remain promotion gates.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -13474,6 +13474,27 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/por/trigger"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
+        let appeal_pricing_status_description = paths
+            .get("/v1/sorafs/appeals/pricing/status")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("appeal pricing status description");
+        assert!(appeal_pricing_status_description.contains("native deposit lifecycle"));
+        assert!(
+            appeal_pricing_status_description.contains("configured-signer settlement submission")
+        );
+        assert!(appeal_pricing_status_description.contains("moderation-derived settlement worker"));
+        assert!(
+            appeal_pricing_status_description.contains(
+                "hosted dashboard and multi-peer rollout evidence remain promotion gates"
+            )
+        );
+        let stale_pending_runtime_phrase =
+            ["still pending runtime escrow", " and ledger integration"].concat();
+        assert!(!appeal_pricing_status_description.contains(&stale_pending_runtime_phrase));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/settle"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/disburse"));

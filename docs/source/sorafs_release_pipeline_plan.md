@@ -115,7 +115,10 @@ summary: Current SF-6 release automation and QA surfaces.
   digests plus canonical artifact schema/status labels when present, reject
   extra artifact-row fields
   outside the schema-closed payload-free
-  artifact contract, require top-level
+  artifact contract, require per-lane rollout/release checkers to normalize
+  artifact row paths through the shared archive-label helper before summary
+  rendering, deriving labels relative to evidence directories or safe explicit
+  basenames, require top-level
   recognized-artifact inventory and validate it against the per-kind required-row
   artifact counts and `(kind, path, sha256)` identities plus matching required
   artifact metadata instead of ignoring it, validate schema-closed aggregate lane
@@ -123,8 +126,9 @@ summary: Current SF-6 release automation and QA surfaces.
   shapes before release review, validate the schema-closed aggregate summary
   envelope before writing the final production-readiness report, require
   aggregate status to match canonical aggregate diagnostics, require ready
-  aggregate summaries to carry complete deployment context and only present,
-  valid required rows, validate final
+  aggregate summaries to carry complete deployment context for a final
+  `prod`/`production` environment and only present, valid required rows,
+  validate final
   aggregate required rows for exact present and missing row output contracts,
   validate invalid aggregate required-row metadata before blocked rows are
   emitted for release review,
@@ -135,14 +139,16 @@ summary: Current SF-6 release automation and QA surfaces.
   diagnostic per gate, pin aggregate blockers for unknown schemas and explicit
   unrequired summaries, avoid payload or secret-bearing
   fields, reject unknown summary schemas discovered in summary directories, and
-  share the same
-  `deployment_id`/`environment`
+  share the same reviewed `deployment_id` with no non-reviewed deployment
+  markers plus a final `prod`/`production` `environment`
   before emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
   summary paths, requires exactly one summary input per required gate, requires
-  an explicit canonical `--deployment-id`/`--environment` pair, supports
-  `@ARGFILE`, rejects explicit summaries for lanes outside a narrowed
+  an explicit canonical `--deployment-id`/`--environment` pair whose deployment
+  id passes the reviewed deployment-id policy and whose environment is `prod`
+  or `production`, supports `@ARGFILE`, rejects explicit summaries for lanes
+  outside a narrowed
   `--require-gate` selection, validates the schema-closed collection plan
   envelope against the built command plan before dry-run output or execution,
   rejects non-object or non-strict-JSON collection-plan renderings before

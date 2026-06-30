@@ -42,7 +42,9 @@ from sorafs_runner_preflight import (  # noqa: E402
     inspect_runner_path_is_symlink,
     run_command_plan,
     require_existing_files,
+    require_runner_passthrough_args,
     require_runner_positive_int,
+    require_runner_url_args,
     render_runner_plan,
     validate_runner_input_parent_chain,
     validate_runner_plan_steps,
@@ -109,6 +111,13 @@ def split_source_entry_spec(spec: str) -> tuple[str, Path]:
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    require_runner_passthrough_args(
+        args,
+        ("iroha_bin",),
+        ("iroha_arg",),
+        errors,
+    )
+    require_runner_url_args(args, ("torii_url",), errors)
     require_rollout_deployment_id({"deployment_id": args.deployment_id}, errors)
     require_rollout_environment({"environment": args.environment}, errors)
     seen_input_files: dict[Path, tuple[str, Path]] = {}

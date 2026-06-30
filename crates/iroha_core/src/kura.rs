@@ -1990,13 +1990,12 @@ impl Kura {
         Ok(())
     }
 
-    /// Reconcile lane storage topology, provisioning directories for new lanes and
-    /// archiving storage for retired lanes.
+    /// Reconcile lane storage topology, provisioning directories for new lanes,
+    /// archiving storage for retired lanes, and replacing same-id lane incarnations.
     ///
-    /// When the same lane id appears in both `added` and `retired`, the operation
-    /// is a fresh replacement rather than an alias relabel. The old segment is
-    /// archived before the new segment is provisioned so the new lane incarnation
-    /// cannot inherit stale block or merge-ledger files.
+    /// Replacement pairs are fresh lane incarnations rather than alias relabels.
+    /// The old segment is archived before the new segment is provisioned so the
+    /// new lane cannot inherit stale block or merge-ledger files.
     ///
     /// # Errors
     /// Returns an [`Error`] if preparing or retiring storage directories fails for any entry.
@@ -2004,35 +2003,26 @@ impl Kura {
         &self,
         added: &[&LaneConfigEntry],
         retired: &[&LaneConfigEntry],
+        replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
-        let replacement_ids: BTreeSet<_> = added
-            .iter()
-            .map(|entry| entry.lane_id)
-            .filter(|lane_id| retired.iter().any(|entry| entry.lane_id == *lane_id))
-            .collect();
         let mut changed = false;
 
-        for entry in retired
-            .iter()
-            .copied()
-            .filter(|entry| replacement_ids.contains(&entry.lane_id))
-        {
-            self.retire_lane_storage(entry)?;
+        for (previous, _) in replacements {
+            self.retire_lane_storage(previous)?;
             changed = true;
         }
         for entry in added {
             self.prepare_lane_storage(entry)?;
             changed = true;
         }
-
-        for entry in retired
-            .iter()
-            .copied()
-            .filter(|entry| !replacement_ids.contains(&entry.lane_id))
-        {
+        for (_, current) in replacements {
+            self.prepare_lane_storage(current)?;
+            changed = true;
+        }
+        for entry in retired {
             self.retire_lane_storage(entry)?;
             changed = true;
         }
@@ -2061,35 +2051,21 @@ impl Kura {
         &self,
         added: &[&LaneConfigEntry],
         retired: &[&LaneConfigEntry],
+        replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
         relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
 
-        let added_by_lane: BTreeMap<_, _> =
-            added.iter().map(|entry| (entry.lane_id, *entry)).collect();
-        let retired_by_lane: BTreeMap<_, _> = retired
-            .iter()
-            .map(|entry| (entry.lane_id, *entry))
-            .collect();
-
-        for (lane_id, previous) in &retired_by_lane {
-            if let Some(current) = added_by_lane.get(lane_id) {
-                self.preflight_replace_lane_storage(previous, current)?;
-            }
+        for (previous, current) in replacements {
+            self.preflight_replace_lane_storage(previous, current)?;
         }
 
         for entry in added {
-            if retired_by_lane.contains_key(&entry.lane_id) {
-                continue;
-            }
             self.preflight_prepare_lane_storage(entry)?;
         }
         for entry in retired {
-            if added_by_lane.contains_key(&entry.lane_id) {
-                continue;
-            }
             self.preflight_retire_lane_storage(entry)?;
         }
         for (previous, current) in relabelled {
@@ -9608,7 +9584,7 @@ mod tests {
             .entry(LaneId::from(2))
             .expect("lane 2 entry");
 
-        kura.reconcile_lane_segments(&[lane2_entry], &[])
+        kura.reconcile_lane_segments(&[lane2_entry], &[], &[])
             .expect("provision lane 2");
 
         let lane2_blocks = lane2_entry.blocks_dir(&store_root);
@@ -9629,7 +9605,7 @@ mod tests {
             "lane 2 merge ledger missing"
         );
 
-        kura.reconcile_lane_segments(&[], &[lane1_entry])
+        kura.reconcile_lane_segments(&[], &[lane1_entry], &[])
             .expect("retire lane 1");
 
         assert!(
@@ -9678,7 +9654,7 @@ mod tests {
         let entry = lane_config.entry(LaneId::from(1)).expect("lane entry");
 
         let kura = Kura::blank_kura_for_testing();
-        kura.reconcile_lane_segments(&[entry], &[])
+        kura.reconcile_lane_segments(&[entry], &[], &[])
             .expect("no-op reconcile");
 
         assert!(
@@ -9745,7 +9721,7 @@ mod tests {
         std::fs::File::create(&conflict_dir).expect("seed conflicting file");
 
         let err = kura
-            .reconcile_lane_segments(&[conflicting_entry], &[])
+            .reconcile_lane_segments(&[conflicting_entry], &[], &[])
             .expect_err("expected lane provisioning to surface error");
         match err {
             Error::MkDir(_, path) => assert_eq!(path, conflict_dir),

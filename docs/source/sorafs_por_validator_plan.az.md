@@ -37,7 +37,10 @@ The shared SF-9 rollout gate in
 reporting/archive, observability, and governance-approval evidence needed before
 operators treat the local PoR validator/reporting surface as released, while
 `scripts/run_sorafs_por_rollout_evidence.py` provides the reviewed collection
-planner.
+planner. The shared checker exports its required top-level payload fields as
+`EVIDENCE_REQUIRED_FIELDS`, and the planner includes the checker-backed
+`evidence_contract` map in `--dry-run` output so validator/reporting operators
+can review the exact SF-9 artifact contract before promotion.
 
 ## Validator Personas
 - **Auditor:** Independent or council-appointed reviewer validating provider proofs, filing slashing proposals, and verifying remediation.

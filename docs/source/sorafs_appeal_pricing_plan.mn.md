@@ -8,7 +8,7 @@ source_hash: a198824eb738079cea112c31d42f259d98ce0ed631fd39a90ea461efafde5a3a
 source_last_modified: "2026-06-25T17:34:55+00:00"
 translation_last_reviewed: 2026-06-25
 title: Moderation Appeal Pricing Engine
-summary: SFM-4b2 implementation status for appeal quote, settlement, and disbursement helpers plus the remaining escrow and service gates.
+summary: SFM-4b2 implementation status for appeal quote, native asset-lock deposit instruction/status/confirmation/settlement execution, configured-signer and moderation-derived retry-aware settlement submission, settlement, and disbursement helpers plus the remaining ledger service gates.
 ---
 
 # Moderation Appeal Pricing Engine
@@ -53,9 +53,11 @@ deposit, settlement, submitter, worker, Governance DAG, dashboard,
 reconciliation, and governance approval evidence back to a valid pricing-config
 artifact in the same bundle. Config-digest mismatches are recorded on the
 offending artifact in the JSON summary before required-kind validity is
-reported, and
+reported. The checker also exports its required top-level payload fields as
+`EVIDENCE_REQUIRED_FIELDS`, and
 `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner.
+reviewed evidence collection planner/runner with a dry-run
+`evidence_contract` map for the selected required kinds.
 The repo still does not ship a standalone pricing daemon. Deposit custody uses
 the returned native `OpenAssetLock` instruction, which the authenticated payer
 must sign and submit through the normal transaction path, then external

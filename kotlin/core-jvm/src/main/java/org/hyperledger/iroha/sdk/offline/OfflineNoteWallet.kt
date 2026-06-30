@@ -55,7 +55,7 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
     val chainId: String,
     val accountId: String,
     val assetId: String,
-    val amount: String,
+    amount: String,
     val keyCertificate: OfflineNote.KeyCertificate,
     noteCommitment: ByteArray,
     noteSecret: ByteArray,
@@ -69,6 +69,7 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
     private val _noteCommitment = noteCommitment.copyOf()
     private val _noteSecret = noteSecret.copyOf()
     private val _bearerAuditTrail = bearerAuditTrail.toList()
+    val amount: String
     val spentPaymentRequestId: String?
     val canonicalAmount: String
 
@@ -76,12 +77,17 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
         requireExactNonBlankOfflineNoteField(chainId, "chainId")
         requireExactNonBlankOfflineNoteField(accountId, "accountId")
         require(_noteSecret.size == 32) { "note_secret must be exactly 32 bytes" }
-        canonicalAmount = OfflineNote.IssuedClaim(
+        val canonicalAssetId = OfflineNote.canonicalAssetId(assetId)
+        require(assetId == canonicalAssetId) { "asset_id must be canonical" }
+        canonicalAmount = OfflineNote.canonicalAmountString(amount)
+        require(amount == canonicalAmount) { "amount must be canonical" }
+        OfflineNote.IssuedClaim(
             noteCommitment = _noteCommitment,
             keyCertificatePayloadHash = keyCertificate.payloadHash(),
             assetId = assetId,
             amount = amount,
-        ).canonicalAmount
+        )
+        this.amount = canonicalAmount
         this.spentPaymentRequestId =
             spentPaymentRequestId?.let { requireExactNonBlankOfflineNoteField(it, "spentPaymentRequestId") }
     }
@@ -386,12 +392,19 @@ class OfflineNoteReceiveRequest(
     outputCommitment: ByteArray,
 ) {
     private val _outputCommitment = outputCommitment.copyOf()
-    val canonicalAmount: String = OfflineNote.AuditOutputClaim(
-        noteCommitment = _outputCommitment,
-        keyCertificate = keyCertificate,
-        assetId = assetId,
-        amount = amount,
-    ).canonicalAmount
+    val canonicalAmount: String = canonicalPositivePaymentAmountString(amount)
+
+    init {
+        val canonicalAssetId = OfflineNote.canonicalAssetId(assetId)
+        require(assetId == canonicalAssetId) { "asset_id must be canonical" }
+        require(amount == canonicalAmount) { "amount must be canonical" }
+        OfflineNote.AuditOutputClaim(
+            noteCommitment = _outputCommitment,
+            keyCertificate = keyCertificate,
+            assetId = assetId,
+            amount = amount,
+        )
+    }
 
     fun outputCommitment(): ByteArray = _outputCommitment.copyOf()
     fun outputCommitmentHex(): String = hexLower(_outputCommitment)
@@ -1402,14 +1415,15 @@ class OfflineNoteWallet @JvmOverloads constructor(
         val issuer = issuerClient ?: return failedFuture(
             IllegalStateException("Offline Note issuer client is required for load")
         )
+        val canonicalAmount: String
         try {
-            requirePositivePaymentAmount(amount)
+            canonicalAmount = canonicalPositivePaymentAmountString(amount)
         } catch (error: Throwable) {
             return failedFuture(error)
         }
         val assetId = walletAssetId(assetDefinitionId, accountId)
         val result = CompletableFuture<OfflineNoteWalletNote>()
-        issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
+        issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)
             .whenComplete { context, prepareError ->
                 loadExecutor.execute(prepareComplete@{
                     if (prepareError != null) {
@@ -1437,7 +1451,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                         noteCommitment = deriveNoteCommitment(
                             keyCertificate = context.keyCertificate,
                             assetId = assetId,
-                            amount = amount,
+                            amount = canonicalAmount,
                             noteSecret = noteSecret,
                             origin = origin,
                         )
@@ -1446,7 +1460,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                             accountId = accountId,
                             assetDefinitionId = assetDefinition(assetId),
                             assetId = assetId,
-                            amount = amount,
+                            amount = canonicalAmount,
                             loadContext = context,
                             noteCommitment = noteCommitment,
                         )
@@ -1483,7 +1497,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                                     chainId = chainId,
                                     accountId = accountId,
                                     assetId = assetId,
-                                    amount = amount,
+                                    amount = canonicalAmount,
                                     keyCertificate = issuedCertificate,
                                     noteCommitment = noteCommitment,
                                     noteSecret = noteSecret,
@@ -1505,7 +1519,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
     }
 
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteReceiveRequest {
-        requirePositivePaymentAmount(amount)
+        val canonicalAmount = canonicalPositivePaymentAmountString(amount)
         val paymentRequestId = idGenerator.nextId("payment-request")
         val keyCertificate = requireOwnerCertificateSigner().freshOwnerCertificate(accountId)
         requireTrustedOwnerCertificate(keyCertificate, accountId)
@@ -1518,7 +1532,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
         val outputCommitment = deriveNoteCommitment(
             keyCertificate = keyCertificate,
             assetId = assetId,
-            amount = amount,
+            amount = canonicalAmount,
             noteSecret = noteSecret,
             origin = origin,
         )
@@ -1526,7 +1540,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
             chainId = chainId,
             accountId = accountId,
             assetId = assetId,
-            amount = amount,
+            amount = canonicalAmount,
             keyCertificate = keyCertificate,
             noteCommitment = outputCommitment,
             noteSecret = noteSecret,
@@ -2126,6 +2140,12 @@ private fun requirePositivePaymentAmount(amount: String): BigDecimal {
     val value = decimal(amount)
     require(value.signum() > 0) { "Offline Note payment amount must be positive" }
     return value
+}
+
+private fun canonicalPositivePaymentAmountString(amount: String): String {
+    val canonical = OfflineNote.canonicalAmountString(amount)
+    requirePositivePaymentAmount(canonical)
+    return canonical
 }
 
 private fun canonicalDecimal(value: BigDecimal): String {

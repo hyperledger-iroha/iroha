@@ -88781,6 +88781,47 @@ mod nexus_lane_lifecycle_tests {
     }
 
     #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_same_plan_default_lane_replacement_without_queue_refresh()
+    {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                LaneId::SINGLE,
+                "fresh-default-route",
+                987_654,
+            )],
+            retire: vec![LaneId::SINGLE],
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("same-plan default-lane replacement must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("lane lifecycle plan cannot replace routing default lane 0")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected default-lane replacement plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(LaneId::SINGLE),
+            before_limits,
+            "rejected default-lane replacement plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
     async fn nexus_lane_lifecycle_rejects_duplicate_additions_without_queue_refresh() {
         let state = enabled_state_for_lifecycle_test();
         let queue = queue_for_lifecycle_test();

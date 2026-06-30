@@ -14,6 +14,9 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_runner_preflight import (  # noqa: E402
+    PLAN_RENDERED_PATH_ERROR,
+    RUNNER_PASSTHROUGH_ARG_ERROR,
+    RUNNER_URL_ARG_ERROR,
     command_plan_steps,
     emit_runner_error_block,
     emit_runner_exception,
@@ -24,15 +27,20 @@ from sorafs_runner_preflight import (  # noqa: E402
     inspect_runner_path_is_file,
     inspect_runner_path_is_symlink,
     inspect_runner_path_size,
+    plan_rendered_path_is_safe,
     render_runner_plan,
     require_existing_dirs,
     require_existing_files,
+    require_runner_passthrough_args,
     require_runner_non_negative_int,
     require_runner_positive_int,
+    require_runner_url_args,
     resolve_runner_input_file,
     resolve_runner_output_path,
     run_command_plan,
     runner_arg_label,
+    runner_passthrough_arg_is_plan_safe,
+    runner_url_arg_is_plan_safe,
     runner_path_size_open_flags,
     validate_command_plan_artifacts,
     validate_command_plan_step_shapes,
@@ -40,6 +48,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     validate_runner_output_dir,
     validate_runner_output_parent,
     validate_runner_preflight,
+    validate_plan_rendered_paths,
     write_runner_plan,
 )
 
@@ -300,6 +309,268 @@ def test_runner_preflight_sanitizes_malformed_non_path_targets(
     )
 
     assert errors == ["--summary-out `<non-path>` must be a path"]
+
+
+def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
+    assert plan_rendered_path_is_safe(Path("artifacts/sorafs/digest-summary.json"))
+    assert plan_rendered_path_is_safe(Path("artifacts/sorafs/gateway_load_digest.json"))
+
+    for path in (
+        Path("artifacts") / "private_key_output" / "summary.json",
+        Path("artifacts") / "bearer_token_summary.json",
+        Path("artifacts") / "nested" / ".." / "summary.json",
+        Path("."),
+        Path("artifacts") / "bad\\summary.json",
+        Path("artifacts") / "bad\nsummary.json",
+        Path("C:/sorafs/summary.json"),
+    ):
+        assert not plan_rendered_path_is_safe(path)
+
+
+def test_validate_plan_rendered_paths_rejects_unsafe_components_without_leaking() -> None:
+    errors: list[str] = []
+
+    validate_plan_rendered_paths(
+        (
+            Path("artifacts/sorafs/summary.json"),
+            Path("artifacts/sorafs/private_key_output/summary.json"),
+        ),
+        errors,
+    )
+
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    assert "private_key_output" not in "\n".join(errors)
+    assert "private_key" not in "\n".join(errors)
+
+
+def test_validate_runner_preflight_rejects_plan_rendered_out_dir_without_leaking(
+    tmp_path: Path,
+) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "private_key_output",
+            summary_out=None,
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert PLAN_RENDERED_PATH_ERROR in errors
+    rendered = "\n".join(errors)
+    assert "private_key_output" not in rendered
+    assert "private_key" not in rendered
+
+
+def test_validate_runner_preflight_rejects_plan_rendered_summary_out_without_leaking(
+    tmp_path: Path,
+) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=tmp_path / "bearer_token_summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert PLAN_RENDERED_PATH_ERROR in errors
+    rendered = "\n".join(errors)
+    assert "bearer_token_summary" not in rendered
+    assert "bearer_token" not in rendered
+
+
+def test_validate_runner_preflight_rejects_plan_rendered_verifier_without_leaking(
+    tmp_path: Path,
+) -> None:
+    verifier = tmp_path / "private_key_verifier.py"
+    verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert PLAN_RENDERED_PATH_ERROR in errors
+    rendered = "\n".join(errors)
+    assert "private_key_verifier" not in rendered
+    assert "private_key" not in rendered
+
+
+def test_validate_plan_rendered_paths_rejects_malformed_error_container() -> None:
+    try:
+        validate_plan_rendered_paths((Path("summary.json"),), "errors")
+    except ValueError as error:
+        assert "runner preflight errors must be a list of strings" in str(error)
+    else:
+        raise AssertionError("accepted malformed error container")
+
+
+def test_input_file_rejects_plan_rendered_unsafe_component_without_leaking(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "private_key_evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    errors = require_existing_files([evidence], "--evidence")
+
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "private_key_evidence" not in rendered
+    assert "private_key" not in rendered
+
+
+def test_input_file_accepts_payload_free_digest_label(tmp_path: Path) -> None:
+    evidence = tmp_path / "gateway_load_digest.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    assert require_existing_files([evidence], "--evidence") == []
+
+
+def test_input_directory_rejects_plan_rendered_unsafe_component_without_leaking(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "bearer_token_bundle"
+    evidence_dir.mkdir()
+
+    errors = require_existing_dirs([evidence_dir], "--executor-bundle")
+
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "bearer_token_bundle" not in rendered
+    assert "bearer_token" not in rendered
+
+
+def test_runner_url_arg_safety_rejects_secret_bearing_urls() -> None:
+    assert runner_url_arg_is_plan_safe("https://torii.example")
+    assert runner_url_arg_is_plan_safe("http://localhost:8080/v1/sorafs")
+    assert runner_url_arg_is_plan_safe("https://notifications.example/hook")
+
+    for value in (
+        "https://user:private_key@torii.example",
+        "https://torii.example/path?bearer_token=secret",
+        "https://torii.example/path#secret",
+        "https://private-key.example",
+        "https://torii.example/private_key/hook",
+        "https://torii.example/bearer%5Ftoken/hook",
+        "https://torii.example/bad\npath",
+        "ftp://torii.example",
+        "torii.example",
+    ):
+        assert not runner_url_arg_is_plan_safe(value)
+
+
+def test_require_runner_url_args_rejects_unsafe_urls_without_leaking() -> None:
+    errors: list[str] = []
+
+    require_runner_url_args(
+        argparse.Namespace(
+            torii_url="https://user:private_key@torii.example/path?token=secret"
+        ),
+        ("torii_url",),
+        errors,
+    )
+
+    assert errors == [RUNNER_URL_ARG_ERROR]
+    rendered = "\n".join(errors)
+    assert "private_key" not in rendered
+    assert "token=secret" not in rendered
+
+
+def test_require_runner_url_args_rejects_malformed_field_name() -> None:
+    for field in ("", "torii-url", "ToriiUrl", "_url", 7):
+        errors: list[str] = []
+        try:
+            require_runner_url_args(
+                argparse.Namespace(torii_url="https://torii.example"),
+                (field,),
+                errors,
+            )
+        except ValueError as error:
+            assert "runner argument field must be a snake_case string" in str(error)
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed field {field!r}")
+
+
+def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
+    for value in (
+        "iroha",
+        "/usr/local/bin/iroha",
+        "--config",
+        "/runtime/client.toml",
+        "--config=/runtime/client.toml",
+        "--proof-token-issuance",
+    ):
+        assert runner_passthrough_arg_is_plan_safe(value)
+
+    for value in (
+        "--private-key",
+        "--bearer-token=runtime-secret",
+        "authorization=Bearer token",
+        "/runtime/private_key/client.toml",
+        "https://user:private_key@torii.example",
+        "bad\narg",
+    ):
+        assert not runner_passthrough_arg_is_plan_safe(value)
+
+
+def test_require_runner_passthrough_args_rejects_unsafe_values_without_leaking() -> None:
+    errors: list[str] = []
+
+    require_runner_passthrough_args(
+        argparse.Namespace(
+            iroha_bin="/usr/local/bin/iroha",
+            iroha_arg=["--config", "/runtime/private_key/client.toml"],
+        ),
+        ("iroha_bin",),
+        ("iroha_arg",),
+        errors,
+    )
+
+    assert errors == [RUNNER_PASSTHROUGH_ARG_ERROR]
+    rendered = "\n".join(errors)
+    assert "private_key" not in rendered
+    assert "/runtime/private_key" not in rendered
+
+
+def test_require_runner_passthrough_args_rejects_malformed_containers() -> None:
+    errors: list[str] = []
+
+    require_runner_passthrough_args(
+        argparse.Namespace(iroha_arg="--config"),
+        (),
+        ("iroha_arg",),
+        errors,
+    )
+
+    assert errors == [RUNNER_PASSTHROUGH_ARG_ERROR]
+
+
+def test_require_runner_passthrough_args_rejects_malformed_field_name() -> None:
+    for field in ("", "iroha-bin", "IrohaBin", "_arg", 7):
+        errors: list[str] = []
+        try:
+            require_runner_passthrough_args(
+                argparse.Namespace(iroha_bin="iroha"),
+                (field,),
+                (),
+                errors,
+            )
+        except ValueError as error:
+            assert "runner argument field must be a snake_case string" in str(error)
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed field {field!r}")
 
 
 def test_runner_path_inspectors_sanitize_malformed_path_labels() -> None:
@@ -1000,13 +1271,13 @@ def test_summary_out_same_as_out_dir_fails_before_execution(tmp_path: Path) -> N
         argparse.Namespace(
             verifier=verifier,
             out_dir=out_dir,
-            summary_out=tmp_path / "nested" / ".." / "evidence",
+            summary_out=out_dir,
         ),
         summary_filename="rollout-summary.json",
     )
 
     assert errors == [
-        f"--summary-out `{tmp_path / 'nested' / '..' / 'evidence'}` "
+        f"--summary-out `{out_dir}` "
         f"must not be the same path as --out-dir `{out_dir}`"
     ]
 
@@ -1070,7 +1341,8 @@ def test_input_file_parent_chain_symlink_fails(tmp_path: Path) -> None:
 def test_missing_input_file_sanitizes_noncanonical_path() -> None:
     errors = require_existing_files([Path("missing\nfile.json")], "--evidence")
 
-    assert errors == ["input evidence file must exist and be a file"]
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    assert "missing\nfile" not in "\n".join(errors)
 
 
 def test_input_file_rejects_non_path_without_traceback() -> None:
@@ -1247,9 +1519,8 @@ def test_input_directory_parent_chain_symlink_fails(tmp_path: Path) -> None:
 def test_missing_input_directory_sanitizes_noncanonical_path() -> None:
     errors = require_existing_dirs([Path("missing\nbundle")], "--bundle")
 
-    assert errors == [
-        "--bundle `<non-canonical-path>` must exist and be a directory"
-    ]
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    assert "missing\nbundle" not in "\n".join(errors)
 
 
 def test_input_directory_rejects_non_path_without_traceback() -> None:

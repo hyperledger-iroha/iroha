@@ -11,6 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     build_kinded_evidence_artifact,
     build_required_evidence_summary,
@@ -31,6 +32,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     finalize_custom_required_evidence_rows,
     hashable_evidence_values,
     init_evidence_artifact_buckets,
+    is_archive_portable_artifact_path,
     is_hex,
     mark_required_evidence_invalid,
     mark_required_evidence_invalid_if_present,
@@ -109,6 +111,43 @@ from sorafs_evidence_validation import (  # noqa: E402
     validate_snapshot_bound_evidence_artifacts,
     validate_standard_evidence_payload,
 )
+
+
+def test_archive_artifact_path_label_prefers_evidence_directory_relative_path(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    nested = evidence_dir / "nested"
+    nested.mkdir(parents=True)
+    artifact = nested / "rollout.json"
+    artifact.write_text("{}", encoding="utf-8")
+
+    assert archive_artifact_path_label(artifact, [evidence_dir]) == Path(
+        "nested/rollout.json"
+    )
+
+
+def test_archive_artifact_path_label_falls_back_to_safe_basename(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    artifact = tmp_path / "explicit.json"
+    artifact.write_text("{}", encoding="utf-8")
+
+    assert archive_artifact_path_label(artifact, [evidence_dir]) == Path(
+        "explicit.json"
+    )
+
+
+def test_archive_artifact_path_rejects_nonportable_labels() -> None:
+    assert is_archive_portable_artifact_path("nested/rollout.json") is True
+    assert is_archive_portable_artifact_path("/tmp/rollout.json") is False
+    assert is_archive_portable_artifact_path("../rollout.json") is False
+    assert is_archive_portable_artifact_path("./rollout.json") is False
+    assert is_archive_portable_artifact_path("C:/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested\\rollout.json") is False
+    assert is_archive_portable_artifact_path("bad\nname.json") is False
 
 
 def test_build_evidence_artifact_records_payload_free_fingerprint() -> None:

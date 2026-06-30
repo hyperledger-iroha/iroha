@@ -2,6 +2,7 @@
 
 use std::{
     env, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -22,6 +23,10 @@ use sorafs_manifest::{
     chunker_registry, compute_advert_body_digest, compute_envelope_digest, compute_proposal_digest,
     verify_revocation_signatures,
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 const DEFAULT_OUTPUT_DIR: &str = "fixtures/sorafs_manifest/provider_admission";
 
 const PROVIDER_ID_HEX: &str = "0a0b0c0d0e0f0011223344556677889900aa0bb0ccddeeff1122334455667788";
@@ -87,8 +92,6 @@ where
 }
 
 fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
-    fs::create_dir_all(out_dir)?;
-
     let descriptor =
         chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").expect("registry handle available");
 
@@ -635,7 +638,8 @@ fn write_binary(
     bytes: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path = out_dir.join(name);
-    fs::write(path, bytes)?;
+    let mut file = open_output_file(&path, "binary fixture")?;
+    file.write_all(bytes)?;
     Ok(())
 }
 
@@ -643,7 +647,8 @@ fn write_json(out_dir: &Path, name: &str, value: Value) -> Result<(), Box<dyn st
     let mut json_string = to_string_pretty(&value)?;
     json_string.push('\n');
     let path = out_dir.join(name);
-    fs::write(path, json_string)?;
+    let mut file = open_output_file(&path, "JSON fixture")?;
+    file.write_all(json_string.as_bytes())?;
     Ok(())
 }
 
@@ -659,8 +664,148 @@ end-to-end.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",
     );
     content.push('\n');
-    fs::write(path, content)?;
+    let mut file = open_output_file(&path, "README fixture")?;
+    file.write_all(content.as_bytes())?;
     Ok(())
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<fs::File, Box<dyn std::error::Error>> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open {label} `{}`: {err}", path.display()))?;
+    let metadata = file.metadata().map_err(|err| {
+        format!(
+            "failed to inspect {label} `{}` after open: {err}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write {label} `{}`: output must be a regular file",
+            path.display()
+        )
+        .into());
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create output parent `{}`: {err}",
+                parent.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("output `{}` must not be a symlink", path.display()).into());
+            }
+            if metadata.is_dir() {
+                return Err(format!("output `{}` must not be a directory", path.display()).into());
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!("failed to inspect output `{}`: {err}", path.display()).into());
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        )
+                        .into());
+                    }
+                    if !metadata.is_dir() {
+                        return Err(format!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        )
+                        .into());
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect output parent `{}`: {err}",
+                        ancestor.display()
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 fn decode_hex_array(input: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
@@ -725,33 +870,94 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
 
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
+
     #[test]
     fn generate_fixtures_produces_expected_artifacts() {
-        let dir = TempDir::new().expect("tmp dir");
-        let summary = generate_fixtures(dir.path()).expect("fixtures");
+        let (_dir, dir_path) = canonical_tempdir();
+        let summary = generate_fixtures(&dir_path).expect("fixtures");
 
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "2bc1b6aa4269d8a1201064a935efedbe0b92dd29ad4de10b38507081ccc2d076"
+            "75ae7423ac495a9417be3b7a3ec3ef641a51632fbfa46833a3c68b43c9d1025a"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "49a04ef708e0ac41e9c1a0dd7c44d5f264470425c5686cb6a00645d4d7374afc"
+            "80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "5b5a18be046e3e0ed9af8be4fd6e718226c0c4481177f340c7e890fbb3bebcdd"
+            "e838cc856d1b70a34c8503154dd0f858328365a1b3f1c36f1560f002ee9494b1"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "d524070c2162a6f4666be911a632afce7ead28f484c071c00d062296e2a08539"
+            "9c04ca10c8573ab653000a83388871beeb90b9b9f53f1208bc3b695521eda5c3"
         );
 
-        let proposal_path = dir.path().join("proposal_v1.to");
+        let proposal_path = dir_path.join("proposal_v1.to");
         assert!(proposal_path.exists(), "proposal fixture missing");
+    }
+
+    #[test]
+    fn write_binary_creates_parent_and_writes_all_bytes() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let out_dir = temp_path.join("nested");
+
+        write_binary(&out_dir, "payload.to", b"provider-admission").expect("write binary fixture");
+
+        assert_eq!(
+            fs::read(out_dir.join("payload.to")).expect("read output"),
+            b"provider-admission"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_json_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("metadata.json");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_json(&temp_path, "metadata.json", Value::Object(Map::new()))
+            .expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_readme_rejects_symlink_parent() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+
+        let err = write_readme(&linked_dir).expect_err("reject symlink parent");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join("README.md").exists(),
+            "symlink parent should not receive output"
+        );
     }
 }

@@ -44,6 +44,7 @@ def route(name: str, *, authz: bool = True) -> dict:
 
 
 def with_context(payload: dict) -> dict:
+    payload.setdefault("generated_at_unix", GENERATED_AT)
     payload["deployment_id"] = DEPLOYMENT_ID
     payload["environment"] = ENVIRONMENT
     payload["deployment_context_reviewed"] = True
@@ -343,6 +344,8 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["multi_peer_reconciliation"]["valid"] is True
     assert payload["valid_multi_peer_runs"] == [
         {
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": ENVIRONMENT,
             "generated_at_unix": GENERATED_AT,
             "peer_count": 4,
             "validator_count": 4,

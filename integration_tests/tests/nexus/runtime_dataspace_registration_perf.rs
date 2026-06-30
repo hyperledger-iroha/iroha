@@ -58,8 +58,10 @@ const TOTAL_PEERS: usize = 4;
 const BENCH_ITERATIONS: usize = 5;
 const BENCH_ITERATIONS_ENV: &str = "IROHA_NEXUS_RUNTIME_BENCH_ITERATIONS";
 const BASE_LANE_ID: u32 = 10;
-const NEXUS_ALIAS: &str = "nexus";
+const NEXUS_ALIAS: &str = "universal";
 const BENCH_MANIFEST_DATASPACE: DataSpaceId = DataSpaceId::new(4_096);
+const BENCH_MANIFEST_DATASPACE_HASH: &str =
+    "0010000000000000000000000000000000000000000000000000000000000000";
 const BENCH_MANIFEST_ACTIVATION_EPOCH: u64 = 4_096;
 const BENCH_NETWORK_BASE_SEED: &str = "runtime-registration-benchmark";
 const BENCH_MANIFEST_LANE_ALIAS: &str = "runtime-benchmark-lane";
@@ -205,6 +207,10 @@ fn runtime_registration_builder() -> NetworkBuilder {
                     i64::try_from(BENCH_MANIFEST_DATASPACE.as_u64())
                         .expect("benchmark dataspace id fits i64"),
                 ),
+            );
+            ds_benchmark.insert(
+                "manifest_hash".into(),
+                TomlValue::String(BENCH_MANIFEST_DATASPACE_HASH.to_owned()),
             );
             ds_benchmark.insert(
                 "description".into(),
@@ -1185,6 +1191,12 @@ fn run_registration_iteration(
 }
 
 #[test]
+fn runtime_registration_genesis_preexecution_smoke() {
+    let _guard = sandbox::serial_guard();
+    let _network = runtime_registration_builder().build();
+}
+
+#[test]
 fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let context = stringify!(runtime_nexus_registration_reports_lane_lifecycle_costs);
     let Some((network, rt)) =
@@ -1373,11 +1385,32 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, Algorithm, KeyPair, PeerId, benchmark_lane_manifest_peer_bindings,
+        ALICE_ID, Algorithm, BENCH_MANIFEST_DATASPACE, BENCH_MANIFEST_DATASPACE_HASH, KeyPair,
+        NEXUS_ALIAS, PeerId, benchmark_lane_manifest_peer_bindings,
         benchmark_lane_manifest_peer_seed, duration_min_avg_max, format_duration,
         parse_positive_usize_override,
     };
+    use iroha::data_model::nexus::DataSpaceId;
     use std::time::Duration;
+
+    fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
+        assert_eq!(raw.len(), 64);
+        let mut hash = [0_u8; 32];
+        for (idx, chunk) in raw.as_bytes().chunks_exact(2).enumerate() {
+            let pair = std::str::from_utf8(chunk).expect("hex pair");
+            hash[idx] = u8::from_str_radix(pair, 16).expect("manifest hash hex");
+        }
+        hash
+    }
+
+    #[test]
+    fn benchmark_dataspace_manifest_hash_derives_config_id() {
+        let hash = decode_manifest_hash_fixture(BENCH_MANIFEST_DATASPACE_HASH);
+
+        assert_eq!(NEXUS_ALIAS, "universal");
+        assert_eq!(DataSpaceId::from_hash(&hash), BENCH_MANIFEST_DATASPACE);
+        assert_ne!(BENCH_MANIFEST_DATASPACE, DataSpaceId::UNIVERSAL);
+    }
 
     #[test]
     fn duration_min_avg_max_reports_expected_values() {

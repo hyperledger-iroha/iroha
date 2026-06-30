@@ -439,6 +439,37 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert str(missing) not in captured.err
 
 
+def test_torii_url_rejects_secret_bearing_url_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    url = "https://torii.example/path?bearer_token=secret"
+    args[args.index("--torii-url") + 1] = url
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner URL arguments must not contain" in captured.err
+    assert "bearer_token" not in captured.err
+    assert "bearer_token=secret" not in captured.err
+    assert captured.out == ""
+
+
+def test_iroha_arg_rejects_secret_bearing_value_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--iroha-arg", "--private-key=/runtime/signing.key"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner passthrough arguments must not contain" in captured.err
+    assert "private-key" not in captured.err
+    assert "signing.key" not in captured.err
+    assert captured.out == ""
+
+
 def test_unreviewed_deployment_context_fails_before_plan(
     tmp_path: Path, capsys
 ) -> None:

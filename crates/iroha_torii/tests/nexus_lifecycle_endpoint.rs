@@ -54,6 +54,7 @@ async fn post_lifecycle(harness: &NexusHarness, body: &str) -> Response {
 struct NexusHarness {
     app: Router,
     key_pair: KeyPair,
+    queue: Arc<Queue>,
     state: Arc<State>,
 }
 
@@ -124,7 +125,7 @@ fn build_app_with_nexus(
             iroha_data_model::ChainId::from("test-chain"),
             kiso,
             cfg.torii.clone(),
-            queue,
+            Arc::clone(&queue),
             events_sender,
             LiveQueryStore::start_test(),
             kura,
@@ -140,7 +141,7 @@ fn build_app_with_nexus(
         iroha_data_model::ChainId::from("test-chain"),
         kiso,
         cfg.torii.clone(),
-        queue,
+        Arc::clone(&queue),
         events_sender,
         LiveQueryStore::start_test(),
         kura,
@@ -152,6 +153,7 @@ fn build_app_with_nexus(
     NexusHarness {
         app: torii.api_router_for_tests(),
         key_pair,
+        queue,
         state,
     }
 }
@@ -264,6 +266,248 @@ async fn nexus_lifecycle_applies_plan_and_reports_lane_count() {
 }
 
 #[tokio::test]
+async fn nexus_lifecycle_refreshes_queue_limits_for_add_and_retire() {
+    let harness = build_app(true);
+    let lane_id = LaneId::new(1);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let add_body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"capacity-beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"654321"}}],"retire":[]}"#;
+
+    let add_resp = post_lifecycle(&harness, add_body).await;
+    assert_eq!(add_resp.status(), StatusCode::ACCEPTED);
+    let bytes = add_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(2));
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        654_321,
+        "accepted endpoint add must refresh queue limits from committed Nexus metadata"
+    );
+
+    let retire_body = r#"{"additions":[],"retire":[1]}"#;
+    let retire_resp = post_lifecycle(&harness, retire_body).await;
+    assert_eq!(retire_resp.status(), StatusCode::ACCEPTED);
+    let bytes = retire_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "accepted endpoint retire must clear stale lane-specific queue limits"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_malformed_json_without_mutating_catalog_or_queue() {
+    let harness = build_app(true);
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let malformed_body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"malformed-json","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"424242"}}],"retire":[]"#;
+
+    let resp = post_lifecycle(&harness, malformed_body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "malformed signed lifecycle JSON must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "malformed signed lifecycle JSON must not refresh queue limits from rejected metadata"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_invalid_topology_without_mutating_catalog_or_queue() {
+    let harness = build_app(true);
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":42,"alias":"unknown-dataspace-capacity","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"525252"}}],"retire":[]}"#;
+
+    let resp = post_lifecycle(&harness, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane lifecycle plan references unknown dataspace 42"),
+        "expected unknown-dataspace error, got {:?}",
+        payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "invalid-topology lifecycle request must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "invalid-topology lifecycle request must not refresh queue limits from rejected metadata"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_unsigned_request_without_mutating_catalog_or_queue() {
+    let harness = build_app(true);
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"unsigned-lane","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"777777"}}],"retire":[]}"#;
+    let req = Request::builder()
+        .method("POST")
+        .uri(NEXUS_LANE_LIFECYCLE)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = harness.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("decode auth error payload");
+    assert_eq!(payload["code"].as_str(), Some("operator_signature_missing"));
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "unsigned lifecycle request must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "unsigned lifecycle request must not refresh queue limits"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_body_mismatched_signature_without_mutating_catalog_or_queue() {
+    let harness = build_app(true);
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let signed_body = r#"{"additions":[],"retire":[]}"#;
+    let sent_body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"body-mismatch-lane","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"888888"}}],"retire":[]}"#;
+    let req = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(sent_body))
+            .unwrap(),
+        signed_body.as_bytes(),
+    );
+
+    let resp = harness.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("decode auth error payload");
+    assert_eq!(payload["code"].as_str(), Some("operator_signature_bad"));
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "body-mismatched lifecycle request must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "body-mismatched lifecycle request must not refresh queue limits"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_replayed_signature_without_second_mutation() {
+    let harness = build_app(true);
+    let lane_id = LaneId::new(1);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"replay-lane","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"999999"}}],"retire":[]}"#;
+    let signed = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap(),
+        body.as_bytes(),
+    );
+    let replay_headers = signed.headers().clone();
+
+    let first = harness.app.clone().oneshot(signed).await.unwrap();
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let before_replay_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_replay_limits = harness.queue.queue_limits().for_lane(lane_id);
+    assert_eq!(
+        before_replay_limits.teu_capacity, 999_999,
+        "setup must install lane-specific queue limits before replay"
+    );
+
+    let mut replay = Request::builder()
+        .method("POST")
+        .uri(NEXUS_LANE_LIFECYCLE)
+        .body(Body::from(body))
+        .unwrap();
+    *replay.headers_mut() = replay_headers;
+
+    let resp = harness.app.clone().oneshot(replay).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("decode replay error payload");
+    assert_eq!(payload["code"].as_str(), Some("operator_signature_replay"));
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_replay_catalog,
+        "replayed lifecycle request must not mutate the committed lane catalog again"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_replay_limits,
+        "replayed lifecycle request must not refresh queue limits again"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_non_node_operator_key_without_mutating_catalog_or_queue() {
+    let harness = build_app(true);
+    let outsider = KeyPair::try_random().expect("generate checked lifecycle outsider keypair");
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"outsider-lane","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"555555"}}],"retire":[]}"#;
+    let req = fixtures::operator_signed_request(
+        &outsider,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap(),
+        body.as_bytes(),
+    );
+
+    let resp = harness.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("decode outsider-key error payload");
+    assert_eq!(payload["code"].as_str(), Some("operator_key_not_allowed"));
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "outsider-key lifecycle request must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "outsider-key lifecycle request must not refresh queue limits"
+    );
+}
+
+#[tokio::test]
 async fn nexus_lifecycle_rejects_when_disabled() {
     let harness = build_app(false);
     let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -341,6 +585,69 @@ async fn nexus_lifecycle_rejects_unknown_retire_without_mutating_catalog() {
 }
 
 #[tokio::test]
+async fn nexus_lifecycle_rejects_default_lane_retire_without_mutating_catalog() {
+    let harness = build_app(true);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let body = r#"{"additions":[],"retire":[0]}"#;
+
+    let resp = post_lifecycle(&harness, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload.message.contains("lane catalog cannot be empty"),
+        "expected default-lane retire error, got {:?}",
+        payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected default-lane retire plan must not mutate the committed lane catalog"
+    );
+
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let valid_resp = post_lifecycle(&harness, valid_add).await;
+    assert_eq!(valid_resp.status(), StatusCode::ACCEPTED);
+    let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(2));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_duplicate_retires_without_mutating_catalog() {
+    let harness = build_app(true);
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let add_resp = post_lifecycle(&harness, valid_add).await;
+    assert_eq!(add_resp.status(), StatusCode::ACCEPTED);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+
+    let duplicate_retire = r#"{"additions":[],"retire":[1,1]}"#;
+    let resp = post_lifecycle(&harness, duplicate_retire).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload.message.contains("duplicate retire lane 1"),
+        "expected duplicate-retire error, got {:?}",
+        payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected duplicate-retire plan must not mutate the committed lane catalog"
+    );
+
+    let valid_retire = r#"{"additions":[],"retire":[1]}"#;
+    let valid_resp = post_lifecycle(&harness, valid_retire).await;
+    assert_eq!(valid_resp.status(), StatusCode::ACCEPTED);
+    let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+}
+
+#[tokio::test]
 async fn nexus_lifecycle_rejects_unknown_dataspace_without_mutating_catalog() {
     let harness = build_app(true);
     let body = r#"{"additions":[{"id":1,"dataspace_id":42,"alias":"unknown-dataspace","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -356,6 +663,38 @@ async fn nexus_lifecycle_rejects_unknown_dataspace_without_mutating_catalog() {
             .contains("lane lifecycle plan references unknown dataspace 42"),
         "expected unknown-dataspace error, got {:?}",
         payload.message
+    );
+
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let valid_resp = post_lifecycle(&harness, valid_add).await;
+    assert_eq!(valid_resp.status(), StatusCode::ACCEPTED);
+    let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(2));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_same_plan_default_lane_replacement_without_mutating_catalog() {
+    let harness = build_app(true);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let body = r#"{"additions":[{"id":0,"dataspace_id":0,"alias":"fresh-default-route","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[0]}"#;
+
+    let resp = post_lifecycle(&harness, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane lifecycle plan cannot replace routing default lane 0"),
+        "expected default-lane replacement error, got {:?}",
+        payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected default-route replacement must not mutate the committed lane catalog"
     );
 
     let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;

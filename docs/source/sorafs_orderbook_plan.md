@@ -76,7 +76,10 @@ bundle-validation selectors exist locally.
 fail-closed SFM-2 rollout evidence gate for deployed orderbook and
 streaming-settlement promotion packets, and
 `scripts/run_sorafs_orderbook_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner. Matcher, settlement, API gateway,
+reviewed evidence collection planner/runner. The checker exports its required
+  top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
+  dry-run emits the checker-backed `evidence_contract` map for selected SFM-2
+  evidence kinds. Matcher, settlement, API gateway,
 event stream, SDK release, observability, and reconciliation artifacts must
 carry a `contract_digest_hex` that matches a valid contract-surface artifact in
 the same bundle. Contract-digest mismatches are recorded on the offending
@@ -433,7 +436,7 @@ thresholds, reconciliation covers at least four peers, governance is bound to
 `iroha_config`, and matcher, settlement, API, stream, SDK, observability, and
 reconciliation artifacts carry a `contract_digest_hex` that matches a valid
 contract-surface artifact in the same rollout bundle. The collection planner's
-dry-run JSON also includes an `evidence_contract` map so operators can inspect
+dry-run JSON also includes the checker-backed `evidence_contract` map so operators can inspect
 the exact required fields for each requested evidence kind before collecting or
 submitting live orderbook artifacts.
 
