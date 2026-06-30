@@ -15240,9 +15240,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-mobile-confidential-note-coverage",
     "--negative-control-mobile-confidential-witness-codecs",
     "--negative-control-mobile-offline-readiness-coverage",
+    "--negative-control-mobile-bearer-cash-policy-validation",
     "--negative-control-kotlin-offline-cash-settlement-coverage",
     "--negative-control-kotlin-offline-wallet-compact-certificate-profile",
     "--negative-control-kotlin-offline-wallet-amount-normalization",
+    "--negative-control-kotlin-offline-wallet-max-inputs-strictness",
     "--negative-control-kotlin-offline-wallet-input-claim-strictness",
     "--negative-control-offline-readiness-artifact-contract",
     "--negative-control-offline-cash-issuer-key-exactness",
@@ -15261,6 +15263,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-mobile-classic-offline-note-fixture-labels",
     "--negative-control-mobile-wallet-note-retired-state-migration",
     "--negative-control-mobile-offline-note-draft-proof-replacement",
+    "--negative-control-mobile-offline-note-wallet-input-cap",
+    "--negative-control-mobile-offline-note-wallet-positive-amounts",
     "--negative-control-jvm-offline-note-v2-decoder-placeholder",
     "--negative-control-jvm-offline-note-v2-instruction-wrapper",
     "--negative-control-jvm-offline-note-v2-instruction-decoder",
@@ -15492,6 +15496,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobileOfflineNoteDraftProofReplacementBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-offline-note-draft-proof-replacement":'),
+    guard.indexOf('if mode == "--negative-control-mobile-offline-note-wallet-input-cap":'),
+  );
+  const mobileOfflineNoteWalletInputCapBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-offline-note-wallet-input-cap":'),
+    guard.indexOf('if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":'),
+  );
+  const mobileOfflineNoteWalletPositiveAmountsBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":'),
     guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
   );
   assert.match(
@@ -15531,8 +15543,29 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /check_mobile_sccp_runner_coverage\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_issuers\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_submitters\(texts, errors\)[\s\S]*?check_swift_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_bridge_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_mobile_classic_offline_note_fixture_labels\(texts, errors\)[\s\S]*?check_mobile_wallet_note_state_strictness\(texts, errors\)[\s\S]*?check_mobile_offline_note_draft_proof_replacement\(texts, errors\)[\s\S]*?check_javascript_torii_runner_coverage\(texts, errors\)/u,
-    "SDK parity guard must run retired Offline Note issuer, submitter, Swift builder, bridge builder, fixture-label, wallet-note state, and draft-proof checks with the mobile coverage checks",
+    /def check_mobile_offline_note_wallet_input_cap\(texts, errors\):[\s\S]*?Swift Offline Note wallet input cap source[\s\S]*?Swift Offline Note wallet input cap tests[\s\S]*?Kotlin Offline Note wallet input cap source[\s\S]*?Kotlin Offline Note wallet input cap tests[\s\S]*?Android Java Offline Note wallet input cap source[\s\S]*?Android Java Offline Note wallet input cap tests/u,
+    "SDK parity guard must pin mobile Offline Note wallet input cap source and tests across SDKs",
+  );
+  assert.match(
+    guard,
+    /def check_mobile_offline_note_wallet_positive_amounts\(texts, errors\):[\s\S]*?Swift Offline Note wallet positive amount source[\s\S]*?Swift Offline Note wallet positive amount tests[\s\S]*?Kotlin Offline Note wallet positive amount source[\s\S]*?Kotlin Offline Note wallet positive amount tests[\s\S]*?Android Java Offline Note wallet positive amount source[\s\S]*?Android Java Offline Note wallet positive amount tests/u,
+    "SDK parity guard must pin mobile Offline Note wallet positive amount source and tests across SDKs",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "testOfflineNoteWalletRejectsNonPositiveLoadAmounts",
+      "walletRejectsNonPositiveLoadAmounts",
+      "assertEquals(0, issuerClient.prepareLoadCount)",
+      "assertEquals(0L, issuerClient.prepareLoadCount",
+      "assertTrue(issuerClient.lastIssueRequest == null",
+    ],
+    "SDK parity guard must pin mobile Offline Note wallet positive load amount coverage",
+  );
+  assert.match(
+    guard,
+    /check_mobile_sccp_runner_coverage\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_issuers\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_submitters\(texts, errors\)[\s\S]*?check_swift_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_bridge_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_mobile_classic_offline_note_fixture_labels\(texts, errors\)[\s\S]*?check_mobile_wallet_note_state_strictness\(texts, errors\)[\s\S]*?check_mobile_offline_note_draft_proof_replacement\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_input_cap\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_positive_amounts\(texts, errors\)[\s\S]*?check_javascript_torii_runner_coverage\(texts, errors\)/u,
+    "SDK parity guard must run retired Offline Note issuer, submitter, Swift builder, bridge builder, fixture-label, wallet-note state, draft-proof, input-cap, and positive-amount checks with the mobile coverage checks",
   );
   assert.match(
     mobileRetiredOfflineNoteIssuersBranch,
@@ -15712,6 +15745,58 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileOfflineNoteDraftProofReplacementBranch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
     "Mobile Offline Note draft proof replacement negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    mobileOfflineNoteWalletInputCapBranch,
+    /Swift Offline Note wallet input cap source[\s\S]*?Kotlin Offline Note wallet input cap source[\s\S]*?Android Java Offline Note wallet input cap source[\s\S]*?Swift Offline Note wallet input cap tests[\s\S]*?Kotlin Offline Note wallet input cap tests[\s\S]*?Android Java Offline Note wallet input cap tests/u,
+    "Mobile Offline Note wallet input cap negative control must require exact Swift, Kotlin, and Android source/test diagnostics",
+  );
+  assert.match(
+    mobileOfflineNoteWalletInputCapBranch,
+    /guard selected\.count < 4 else[\s\S]*?guard selected\.count < 5 else[\s\S]*?require\(selected\.size < 4\)[\s\S]*?require\(selected\.size < 5\)[\s\S]*?if \(selected\.size\(\) >= 4\) \{[\s\S]*?if \(selected\.size\(\) >= 5\) \{[\s\S]*?RejectsPaymentsNeedingMoreThanFourInputs[\s\S]*?AllowsPaymentsNeedingMoreThanFourInputs/u,
+    "Mobile Offline Note wallet input cap negative control must relax source caps and mutate test names",
+  );
+  assert.match(
+    mobileOfflineNoteWalletInputCapBranch,
+    /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
+    "Mobile Offline Note wallet input cap negative control must restore each target snapshot between mutations",
+  );
+  assert.match(
+    mobileOfflineNoteWalletInputCapBranch,
+    /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "Mobile Offline Note wallet input cap negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    mobileOfflineNoteWalletPositiveAmountsBranch,
+    /Swift Offline Note wallet positive amount source[\s\S]*?Kotlin Offline Note wallet positive amount source[\s\S]*?Android Java Offline Note wallet positive amount source[\s\S]*?Swift Offline Note wallet positive amount tests[\s\S]*?Kotlin Offline Note wallet positive amount tests[\s\S]*?Android Java Offline Note wallet positive amount tests/u,
+    "Mobile Offline Note wallet positive amount negative control must require exact Swift, Kotlin, and Android source/test diagnostics",
+  );
+  assert.match(
+    mobileOfflineNoteWalletPositiveAmountsBranch,
+    /guard !parsed\.isNegative && parsed\.digits != "0" else[\s\S]*?guard !parsed\.isNegative else[\s\S]*?require\(value\.signum\(\) > 0\)[\s\S]*?require\(value\.signum\(\) >= 0\)[\s\S]*?if \(value\.signum\(\) <= 0\) \{[\s\S]*?if \(value\.signum\(\) < 0\) \{[\s\S]*?RejectsNonPositiveReceiveAndPaymentAmounts[\s\S]*?AllowsNonPositiveReceiveAndPaymentAmounts/u,
+    "Mobile Offline Note wallet positive amount negative control must weaken source comparisons and mutate test names",
+  );
+  assertContainsAll(
+    mobileOfflineNoteWalletPositiveAmountsBranch,
+    [
+      "testOfflineNoteWalletRejectsNonPositiveLoadAmounts",
+      "testOfflineNoteWalletAllowsNonPositiveLoadAmounts",
+      "walletRejectsNonPositiveLoadAmounts",
+      "walletAllowsNonPositiveLoadAmounts",
+      "private static void walletRejectsNonPositiveLoadAmounts",
+      "private static void walletAllowsNonPositiveLoadAmounts",
+    ],
+    "Mobile Offline Note wallet positive amount negative control must mutate load source and test coverage",
+  );
+  assert.match(
+    mobileOfflineNoteWalletPositiveAmountsBranch,
+    /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
+    "Mobile Offline Note wallet positive amount negative control must restore each target snapshot between mutations",
+  );
+  assert.match(
+    mobileOfflineNoteWalletPositiveAmountsBranch,
+    /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
+    "Mobile Offline Note wallet positive amount negative control must print diagnostics for every mutated surface",
   );
   const jvmOfflineNoteV2DecoderPlaceholderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":'),
@@ -26327,7 +26412,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobileOfflineReadinessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-offline-readiness-coverage":'),
-    guard.indexOf('if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-bearer-cash-policy-validation":'),
   );
   assert.match(
     mobileOfflineReadinessBranch,
@@ -26369,6 +26454,38 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile offline readiness negative control must not unconditionally pass after run_checks",
   );
+  const mobileBearerCashPolicyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-bearer-cash-policy-validation":'),
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":'),
+  );
+  assertContainsAll(
+    guard,
+    [
+      "def check_mobile_bearer_cash_policy_validation(texts, errors):",
+      "check_mobile_bearer_cash_policy_validation(texts, errors)",
+      "Swift Offline Bearer Cash policy validation source",
+      "Kotlin Offline Bearer Cash policy validation source",
+      "Android Java Offline Bearer Cash policy validation source",
+      "Swift Offline Bearer Cash policy validation tests",
+      "Kotlin Offline Bearer Cash policy validation tests",
+      "Android Java Offline Bearer Cash policy validation tests",
+      "func testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface() throws",
+      "fun offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits",
+      "private static void offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits()",
+      "--negative-control-mobile-bearer-cash-policy-validation",
+    ],
+    "SDK parity guard must run mobile Offline Bearer Cash policy validation checks",
+  );
+  assert.match(
+    mobileBearerCashPolicyBranch,
+    /mutations\s*=\s*\([\s\S]*?OfflineBearerCashWallet\.swift[\s\S]*?precondition\(payloadByteCount > 0[\s\S]*?precondition\(payloadByteCount >= 0[\s\S]*?OfflineBearerCashWallet\.kt[\s\S]*?require\(payloadByteCount > 0\)[\s\S]*?require\(payloadByteCount >= 0\)[\s\S]*?OfflineBearerCashPolicyV1\.java[\s\S]*?requirePositive\(payloadByteCount, "payloadByteCount"\);[\s\S]*?payloadByteCount < 0[\s\S]*?IllegalArgumentException\("payloadByteCount must be positive"\)[\s\S]*?OfflineNoteTests\.swift[\s\S]*?func testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface\(\) throws[\s\S]*?func testOfflineBearerCashPolicyAndPrefixesUseRetiredSurface\(\) throws[\s\S]*?OfflineNoteTest\.kt[\s\S]*?fun offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits[\s\S]*?fun offlineBearerCashPolicyCoercesNonPositiveAndInvertedLimits[\s\S]*?OfflineNoteTest\.java[\s\S]*?private static void offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits\(\)[\s\S]*?private static void offlineBearerCashPolicyCoercesNonPositiveAndInvertedLimits\(\)/u,
+    "Mobile Offline Bearer Cash policy validation negative control must mutate Swift, Kotlin, and Android source/test markers",
+  );
+  assert.match(
+    mobileBearerCashPolicyBranch,
+    /detect_negative_control\([\s\S]*?mobile Offline Bearer Cash policy validation drift[\s\S]*?negative control rejected mobile Offline Bearer Cash policy validation drift[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Mobile Offline Bearer Cash policy validation negative control must use exact diagnostics and pass only after detected drift",
+  );
   const kotlinOfflineCashSettlementBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":'),
     guard.indexOf('if mode == "--negative-control-kotlin-offline-wallet-compact-certificate-profile":'),
@@ -26379,6 +26496,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const kotlinOfflineWalletAmountNormalizationBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kotlin-offline-wallet-amount-normalization":'),
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-wallet-max-inputs-strictness":'),
+  );
+  const kotlinOfflineWalletMaxInputsStrictnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-wallet-max-inputs-strictness":'),
     guard.indexOf('if mode == "--negative-control-kotlin-offline-wallet-input-claim-strictness":'),
   );
   const kotlinOfflineWalletInputClaimStrictnessBranch = guard.slice(
@@ -26438,6 +26559,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Kotlin offline wallet amount normalization source",
       "Kotlin offline wallet amount normalization tests",
       "--negative-control-kotlin-offline-wallet-amount-normalization",
+      "def check_kotlin_offline_wallet_max_inputs_strictness(texts, errors):",
+      "check_kotlin_offline_wallet_max_inputs_strictness(texts, errors)",
+      "Kotlin offline wallet spend selection maxInputs source",
+      "Kotlin offline wallet spend selection maxInputs tests",
+      "--negative-control-kotlin-offline-wallet-max-inputs-strictness",
       "def check_kotlin_offline_wallet_input_claim_strictness(texts, errors):",
       "check_kotlin_offline_wallet_input_claim_strictness(texts, errors)",
       "Kotlin offline wallet input-claim strictness source",
@@ -26475,6 +26601,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     kotlinOfflineWalletAmountNormalizationBranch,
     /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Kotlin offline wallet amount normalization drift[\s\S]*?raise\s+SystemExit\(0\)/u,
     "Kotlin offline wallet amount normalization negative control must restore and only pass after detected drift",
+  );
+  assert.match(
+    kotlinOfflineWalletMaxInputsStrictnessBranch,
+    /mutations\s*=\s*\([\s\S]*?BearerOfflineWalletModels\.kt[\s\S]*?require\(maxInputs > 0\) \{ "maxInputs must be positive" \}[\s\S]*?maxInputs\.coerceAtLeast\(1\)[\s\S]*?BearerOfflineWalletModelsTest\.kt[\s\S]*?walletPolicyRejectsNonPositiveSpendSelectionMaxInputs[\s\S]*?walletPolicyCoercesNonPositiveSpendSelectionMaxInputs/u,
+    "Kotlin offline wallet maxInputs negative control must mutate source and test markers",
+  );
+  assert.match(
+    kotlinOfflineWalletMaxInputsStrictnessBranch,
+    /Kotlin offline wallet spend selection maxInputs source[\s\S]*?Kotlin offline wallet spend selection maxInputs tests/u,
+    "Kotlin offline wallet maxInputs negative control must require exact diagnostics",
+  );
+  assert.match(
+    kotlinOfflineWalletMaxInputsStrictnessBranch,
+    /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Kotlin offline wallet maxInputs drift[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Kotlin offline wallet maxInputs negative control must restore and only pass after detected drift",
   );
   assert.match(
     kotlinOfflineWalletInputClaimStrictnessBranch,

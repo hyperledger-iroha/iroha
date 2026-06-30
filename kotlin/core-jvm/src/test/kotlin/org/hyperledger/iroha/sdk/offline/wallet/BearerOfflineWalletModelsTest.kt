@@ -4,6 +4,7 @@ import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.offline.OfflineNote
@@ -157,6 +158,43 @@ class BearerOfflineWalletModelsTest {
         }
     }
 
+    @Test
+    fun walletPolicyRejectsNonPositiveSpendSelectionMaxInputs() {
+        val state = walletState(
+            noteRecords = listOf(
+                noteRecord(noteId = "note-1", amount = "1", updatedAtMs = 1),
+                noteRecord(noteId = "note-2", amount = "2", updatedAtMs = 2),
+            )
+        )
+
+        for (invalidMaxInputs in listOf(0, -1, Int.MIN_VALUE)) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                BearerOfflineWalletPolicy.selectSpendableNoteRecordsForBalance(
+                    state,
+                    "1",
+                    maxInputs = invalidMaxInputs
+                )
+            }
+            assertEquals("maxInputs must be positive", error.message)
+        }
+
+        assertNull(
+            BearerOfflineWalletPolicy.selectSpendableNoteRecordsForBalance(
+                state,
+                "3",
+                maxInputs = 1
+            )
+        )
+        assertEquals(
+            listOf("note-1", "note-2"),
+            BearerOfflineWalletPolicy.selectSpendableNoteRecordsForBalance(
+                state,
+                "3",
+                maxInputs = 2
+            )?.map { it.noteId }
+        )
+    }
+
     private fun compactKeyCertificate(
         platform: String = "android-keymint",
         assertionScheme: String = "android-keymint-ecdsa-p256-usage-limit-v1",
@@ -178,6 +216,7 @@ class BearerOfflineWalletModelsTest {
     private fun walletState(
         localBalance: String = "0",
         assetTransferUsage: List<OfflineAssetTransferUsage> = emptyList(),
+        noteRecords: List<OfflineNoteRecord> = emptyList(),
     ): OfflineWalletState =
         OfflineWalletState(
             accountId = "alice@hbl.sbp",
@@ -185,6 +224,17 @@ class BearerOfflineWalletModelsTest {
             offlinePublicKey = base64(ByteArray(32) { 1 }),
             localBalance = localBalance,
             assetTransferUsage = assetTransferUsage,
+            noteRecords = noteRecords,
+        )
+
+    private fun noteRecord(noteId: String, amount: String, updatedAtMs: Long): OfflineNoteRecord =
+        OfflineNoteRecord(
+            noteId = noteId,
+            commitment = "commitment-$noteId",
+            assetDefinitionId = validAssetDefinitionId(),
+            amount = amount,
+            source = OfflineNoteRecordSource.ISSUED,
+            updatedAtMs = updatedAtMs,
         )
 
     private fun paymentTokenInputClaim(

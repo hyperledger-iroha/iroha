@@ -416,6 +416,11 @@ public final class OfflineNoteWallet {
     if (issuerClient == null) {
       return failedFuture(new IllegalStateException("Offline Note issuer client is required for load"));
     }
+    try {
+      requirePositivePaymentAmount(amount);
+    } catch (final Throwable error) {
+      return failedFuture(error);
+    }
     final String assetId = walletAssetId(assetDefinitionId, accountId);
     final CompletableFuture<OfflineNoteWalletNote> result = new CompletableFuture<>();
     issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
@@ -521,6 +526,7 @@ public final class OfflineNoteWallet {
 
   public OfflineNoteReceiveRequest prepareReceive(
       final String assetDefinitionId, final String amount) {
+    requirePositivePaymentAmount(amount);
     final String paymentRequestId = idGenerator.nextId("payment-request");
     final OfflineNote.KeyCertificate keyCertificate =
         requireOwnerCertificateSigner().freshOwnerCertificate(accountId);
@@ -565,7 +571,7 @@ public final class OfflineNoteWallet {
     requireTrustedOwnerCertificate(receiveRequest.keyCertificate(), receiveRequest.accountId());
     rejectReusedReceiveRequest(receiveRequest.paymentRequestId());
     final long createdAtMs = clock.getAsLong();
-    final BigDecimal requestedAmount = decimal(receiveRequest.canonicalAmount());
+    final BigDecimal requestedAmount = requirePositivePaymentAmount(receiveRequest.canonicalAmount());
     final List<OfflineNoteWalletNote> selected =
         selectSpendableNotes(receiveRequest.assetDefinitionId(), requestedAmount);
     BigDecimal inputAmount = BigDecimal.ZERO;
@@ -1179,6 +1185,14 @@ public final class OfflineNoteWallet {
 
   private static BigDecimal decimal(final String value) {
     return new BigDecimal(value);
+  }
+
+  private static BigDecimal requirePositivePaymentAmount(final String amount) {
+    final BigDecimal value = decimal(amount);
+    if (value.signum() <= 0) {
+      throw new IllegalArgumentException("Offline Note payment amount must be positive");
+    }
+    return value;
   }
 
   private static String canonicalDecimal(final BigDecimal value) {

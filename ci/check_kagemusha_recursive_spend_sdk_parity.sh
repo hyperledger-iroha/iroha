@@ -641,6 +641,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditEntry.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashPolicyV1.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteExplorerInstructionOutcome.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java",
@@ -893,6 +894,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/NativeOfflineNoteProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
@@ -2540,6 +2542,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage",
     ),
     (
+        "Mobile Offline Bearer Cash policy validation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bearer-cash-policy-validation",
+    ),
+    (
         "Kotlin offline cash settlement coverage negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage",
     ),
@@ -2550,6 +2556,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Kotlin offline wallet amount normalization negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-amount-normalization",
+    ),
+    (
+        "Kotlin offline wallet max-inputs strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-max-inputs-strictness",
     ),
     (
         "Kotlin offline wallet input-claim strictness negative control",
@@ -2622,6 +2632,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Mobile Offline Note draft proof replacement negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-draft-proof-replacement",
+    ),
+    (
+        "Mobile Offline Note wallet input cap negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-wallet-input-cap",
+    ),
+    (
+        "Mobile Offline Note wallet positive amount negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-wallet-positive-amounts",
     ),
     (
         "JVM Offline Note V2 decoder placeholder negative control",
@@ -8751,6 +8769,107 @@ def check_offline_readiness_artifact_contract(texts, errors):
     )
 
 
+def check_mobile_bearer_cash_policy_validation(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    android_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "OfflineBearerCashPolicyV1.java"
+    )
+    android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_contains(
+        texts,
+        swift_source,
+        (
+            'precondition(maxCustodyHops > 0, "maxCustodyHops must be positive")',
+            'precondition(maxLineageSteps > 0, "maxLineageSteps must be positive")',
+            'precondition(maxSingleQrPayloadBytes > 0, "maxSingleQrPayloadBytes must be positive")',
+            '"stream payload limit must cover static QR"',
+            'precondition(androidKeyPoolReplenishBelow > 0, "androidKeyPoolReplenishBelow must be positive")',
+            '"android key pool target must cover replenish threshold"',
+            '"android key pool cap must cover target"',
+            'precondition(payloadByteCount > 0, "payloadByteCount must be positive")',
+        ),
+        "Swift Offline Bearer Cash policy validation source",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_source,
+        (
+            'require(maxCustodyHops > 0) { "maxCustodyHops must be positive" }',
+            'require(maxLineageSteps > 0) { "maxLineageSteps must be positive" }',
+            'require(maxSingleQrPayloadBytes > 0) { "maxSingleQrPayloadBytes must be positive" }',
+            '"maxStreamPayloadBytes must cover maxSingleQrPayloadBytes"',
+            'require(androidKeyPoolReplenishBelow > 0) { "androidKeyPoolReplenishBelow must be positive" }',
+            '"androidKeyPoolTarget must cover androidKeyPoolReplenishBelow"',
+            '"androidKeyPoolCap must cover androidKeyPoolTarget"',
+            'require(payloadByteCount > 0) { "payloadByteCount must be positive" }',
+        ),
+        "Kotlin Offline Bearer Cash policy validation source",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_source,
+        (
+            'requirePositive(maxCustodyHops, "maxCustodyHops");',
+            'requirePositive(maxLineageSteps, "maxLineageSteps");',
+            'requirePositive(maxSingleQrPayloadBytes, "maxSingleQrPayloadBytes");',
+            '"maxStreamPayloadBytes must cover maxSingleQrPayloadBytes"',
+            'requirePositive(androidKeyPoolReplenishBelow, "androidKeyPoolReplenishBelow");',
+            '"androidKeyPoolTarget must cover androidKeyPoolReplenishBelow"',
+            '"androidKeyPoolCap must cover androidKeyPoolTarget"',
+            'requirePositive(payloadByteCount, "payloadByteCount");',
+        ),
+        "Android Java Offline Bearer Cash policy validation source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "func testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface() throws",
+            "XCTAssertEqual(policy.maxCustodyHops, 5)",
+            "XCTAssertEqual(policy.maxLineageSteps, 32)",
+            "XCTAssertEqual(policy.androidKeyPoolReplenishBelow, 8)",
+            "XCTAssertEqual(policy.recommendedTransport(payloadByteCount: 2_048), .staticQr)",
+            "XCTAssertEqual(policy.recommendedTransport(payloadByteCount: 12_289), .framedByteTransport)",
+        ),
+        "Swift Offline Bearer Cash policy validation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "fun offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits",
+            "maxCustodyHops = Int.MIN_VALUE",
+            "maxStreamPayloadBytes must cover maxSingleQrPayloadBytes",
+            "androidKeyPoolTarget = 7, androidKeyPoolReplenishBelow = 8",
+            "listOf(0, -1, Int.MIN_VALUE)",
+            '"payloadByteCount must be positive"',
+        ),
+        "Kotlin Offline Bearer Cash policy validation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_test,
+        (
+            "private static void offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits()",
+            "Integer.MIN_VALUE, 32, 2048, 12288, 20, 8, 40",
+            "maxStreamPayloadBytes must cover maxSingleQrPayloadBytes",
+            "new int[] {0, -1, Integer.MIN_VALUE}",
+            '"payloadByteCount must be positive"',
+        ),
+        "Android Java Offline Bearer Cash policy validation tests",
+        errors,
+    )
+
+
 def check_kotlin_offline_cash_settlement_coverage(texts, errors):
     require_contains(
         texts,
@@ -8917,6 +9036,41 @@ def check_kotlin_offline_wallet_amount_normalization(texts, errors):
             "BearerOfflineWalletPolicy.challengeHashHex(",
         ),
         "Kotlin offline wallet amount normalization tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_wallet_max_inputs_strictness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            'require(maxInputs > 0) { "maxInputs must be positive" }',
+            "if (selectedRecords.size >= maxInputs) return@forEach",
+        ),
+        "Kotlin offline wallet spend selection maxInputs source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        source,
+        r"maxInputs\.coerceAtLeast\(1\)",
+        "Kotlin offline wallet spend selection maxInputs source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "walletPolicyRejectsNonPositiveSpendSelectionMaxInputs",
+            "listOf(0, -1, Int.MIN_VALUE)",
+            '"maxInputs must be positive"',
+            "maxInputs = 1",
+            "maxInputs = 2",
+        ),
+        "Kotlin offline wallet spend selection maxInputs tests",
         errors,
     )
 
@@ -12350,6 +12504,196 @@ def check_mobile_offline_note_draft_proof_replacement(texts, errors):
         r"if \(!proofVerifier\.verifyRedeem\(redemption\)\) \{[\s\S]*?"
         r"Offline Note recursive redeem proof verification failed",
         "Android Java Offline Note wallet draft redeem proof replacement",
+        errors,
+    )
+
+
+def check_mobile_offline_note_wallet_input_cap(texts, errors):
+    swift = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+    android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_regex(
+        texts,
+        swift,
+        r"guard selected\.count < 4 else \{\s*throw OfflineNoteWalletError\.insufficientBalance\s*\}",
+        "Swift Offline Note wallet input cap source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "func testOfflineNoteWalletRejectsPaymentsNeedingMoreThanFourInputs() throws",
+            "derivedIssuerSourceWalletNote(",
+            "randomSource: QueueRandomSource(values: [])",
+            'amount: "5"',
+            "XCTAssertEqual(error as? OfflineNoteWalletError, .insufficientBalance)",
+        ),
+        "Swift Offline Note wallet input cap tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin,
+        (
+            'require(selected.size < 4) { "Offline Note payments support at most 4 input notes" }',
+        ),
+        "Kotlin Offline Note wallet input cap source",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "fun walletRejectsPaymentsNeedingMoreThanFourInputs()",
+            "issuerSourceWalletNote(",
+            "randomSource = QueueRandomSource(emptyList())",
+            'amount = "5"',
+            'assertIllegalArgumentContains("Offline Note payments support at most 4 input notes")',
+        ),
+        "Kotlin Offline Note wallet input cap tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        android,
+        r"if \(selected\.size\(\) >= 4\) \{\s*throw new IllegalArgumentException\(\"Offline Note payments support at most 4 input notes\"\);",
+        "Android Java Offline Note wallet input cap source",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_test,
+        (
+            "walletRejectsPaymentsNeedingMoreThanFourInputs();",
+            "private static void walletRejectsPaymentsNeedingMoreThanFourInputs()",
+            "issuerSourceWalletNote(",
+            "new QueueRandomSource(Collections.emptyList())",
+            'recipientWallet.prepareReceive(assetDefinitionId, "5")',
+            '"Offline Note payments support at most 4 input notes"',
+        ),
+        "Android Java Offline Note wallet input cap tests",
+        errors,
+    )
+
+
+def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
+    swift = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+    android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_contains(
+        texts,
+        swift,
+        (
+            "private func requirePositivePaymentAmount(_ amount: String) throws -> OfflineCanonicalNumeric",
+            'guard !parsed.isNegative && parsed.digits != "0" else',
+            'throw OfflineNoteWalletError.invalidField("amount")',
+            "try requirePositivePaymentAmount(amount)",
+            "try requirePositivePaymentAmount(receiveRequest.amount)",
+        ),
+        "Swift Offline Note wallet positive amount source",
+        errors,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"public func load\(assetDefinitionId: String, amount: String\) async throws -> OfflineNoteWalletNote \{[\s\S]*?guard let issuerClient else \{[\s\S]*?\}[\s\S]*?_ = try requirePositivePaymentAmount\(amount\)[\s\S]*?issuerClient\.prepareLoad",
+        "Swift Offline Note wallet positive amount source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "func testOfflineNoteWalletRejectsNonPositiveLoadAmounts() async throws",
+            "func testOfflineNoteWalletRejectsNonPositiveReceiveAndPaymentAmounts() throws",
+            'for invalidAmount in ["0", "-1"]',
+            'XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))',
+            "XCTAssertEqual(issuerClient.prepareLoadCount, 0)",
+            "XCTAssertNil(issuerClient.lastIssueRequest)",
+            "senderWallet.pay(forgedRequest)",
+            "XCTAssertEqual(try senderStore.listNotes().first?.state, .spendable)",
+        ),
+        "Swift Offline Note wallet positive amount tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin,
+        (
+            "private fun requirePositivePaymentAmount(amount: String): BigDecimal",
+            "require(value.signum() > 0) { \"Offline Note payment amount must be positive\" }",
+            "requirePositivePaymentAmount(amount)",
+            "requirePositivePaymentAmount(receiveRequest.canonicalAmount)",
+        ),
+        "Kotlin Offline Note wallet positive amount source",
+        errors,
+    )
+    require_regex(
+        texts,
+        kotlin,
+        r"fun load\(assetDefinitionId: String, amount: String\): CompletableFuture<OfflineNoteWalletNote> \{[\s\S]*?try \{\s*requirePositivePaymentAmount\(amount\)\s*\} catch \(error: Throwable\) \{\s*return failedFuture\(error\)\s*\}[\s\S]*?issuer\.prepareLoad",
+        "Kotlin Offline Note wallet positive amount source",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "fun walletRejectsNonPositiveLoadAmounts()",
+            "fun walletRejectsNonPositiveReceiveAndPaymentAmounts()",
+            'listOf("0", "-1").forEach { invalidAmount ->',
+            'assertIllegalArgumentContains("Offline Note payment amount must be positive")',
+            "assertEquals(0, issuerClient.prepareLoadCount)",
+            "assertNull(issuerClient.lastIssueRequest)",
+            "senderWallet.pay(forgedRequest)",
+            "assertEquals(OfflineNoteWalletNoteState.SPENDABLE, senderStore.listNotes().single().state)",
+        ),
+        "Kotlin Offline Note wallet positive amount tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        android,
+        (
+            "private static BigDecimal requirePositivePaymentAmount(final String amount)",
+            "if (value.signum() <= 0) {",
+            'throw new IllegalArgumentException("Offline Note payment amount must be positive");',
+            "requirePositivePaymentAmount(amount);",
+            "requirePositivePaymentAmount(receiveRequest.canonicalAmount())",
+        ),
+        "Android Java Offline Note wallet positive amount source",
+        errors,
+    )
+    require_regex(
+        texts,
+        android,
+        r"public CompletableFuture<OfflineNoteWalletNote> load\([\s\S]*?if \(issuerClient == null\) \{[\s\S]*?\}[\s\S]*?try \{\s*requirePositivePaymentAmount\(amount\);\s*\} catch \(final Throwable error\) \{\s*return failedFuture\(error\);\s*\}[\s\S]*?issuerClient\.prepareLoad",
+        "Android Java Offline Note wallet positive amount source",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_test,
+        (
+            "walletRejectsNonPositiveLoadAmounts();",
+            "private static void walletRejectsNonPositiveLoadAmounts()",
+            "walletRejectsNonPositiveReceiveAndPaymentAmounts();",
+            "private static void walletRejectsNonPositiveReceiveAndPaymentAmounts()",
+            'for (final String invalidAmount : Arrays.asList("0", "-1"))',
+            '"Offline Note payment amount must be positive"',
+            "assertEquals(0L, issuerClient.prepareLoadCount",
+            "assertTrue(issuerClient.lastIssueRequest == null",
+            "senderWallet.pay(forgedRequest)",
+            "OfflineNoteWalletNoteState.SPENDABLE",
+        ),
+        "Android Java Offline Note wallet positive amount tests",
         errors,
     )
 
@@ -30493,9 +30837,11 @@ def run_checks(texts):
     check_mobile_confidential_note_coverage(texts, errors)
     check_mobile_offline_readiness_coverage(texts, errors)
     check_offline_readiness_artifact_contract(texts, errors)
+    check_mobile_bearer_cash_policy_validation(texts, errors)
     check_kotlin_offline_cash_settlement_coverage(texts, errors)
     check_kotlin_offline_wallet_compact_certificate_profile(texts, errors)
     check_kotlin_offline_wallet_amount_normalization(texts, errors)
+    check_kotlin_offline_wallet_max_inputs_strictness(texts, errors)
     check_kotlin_offline_wallet_input_claim_strictness(texts, errors)
     check_offline_cash_issuer_key_exactness(texts, errors)
     check_mobile_offline_retired_qr_prefix_wording(texts, errors)
@@ -30514,6 +30860,8 @@ def run_checks(texts):
     check_mobile_classic_offline_note_fixture_labels(texts, errors)
     check_mobile_wallet_note_state_strictness(texts, errors)
     check_mobile_offline_note_draft_proof_replacement(texts, errors)
+    check_mobile_offline_note_wallet_input_cap(texts, errors)
+    check_mobile_offline_note_wallet_positive_amounts(texts, errors)
     check_mobile_offline_note_v2_retired_ios_app_attest_profile(texts, errors)
     check_javascript_torii_runner_coverage(texts, errors)
     check_javascript_connect_runner_coverage(texts, errors)
@@ -35505,6 +35853,69 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-mobile-bearer-cash-policy-validation":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift",
+            'precondition(payloadByteCount > 0, "payloadByteCount must be positive")',
+            'precondition(payloadByteCount >= 0, "payloadByteCount must be positive")',
+            "Swift Offline Bearer Cash policy validation source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt",
+            'require(payloadByteCount > 0) { "payloadByteCount must be positive" }',
+            'require(payloadByteCount >= 0) { "payloadByteCount must be positive" }',
+            "Kotlin Offline Bearer Cash policy validation source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashPolicyV1.java",
+            'requirePositive(payloadByteCount, "payloadByteCount");',
+            'if (payloadByteCount < 0) {\n      throw new IllegalArgumentException("payloadByteCount must be positive");\n    }',
+            "Android Java Offline Bearer Cash policy validation source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineBearerCashPolicyAndPrefixesUseSingleAppSurface() throws",
+            "func testOfflineBearerCashPolicyAndPrefixesUseRetiredSurface() throws",
+            "Swift Offline Bearer Cash policy validation tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "fun offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits",
+            "fun offlineBearerCashPolicyCoercesNonPositiveAndInvertedLimits",
+            "Kotlin Offline Bearer Cash policy validation tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits()",
+            "private static void offlineBearerCashPolicyCoercesNonPositiveAndInvertedLimits()",
+            "Android Java Offline Bearer Cash policy validation tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Bearer Cash policy validation for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "mobile Offline Bearer Cash policy validation drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected mobile Offline Bearer Cash policy validation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
     mutated_texts = dict(texts)
     targets = (
@@ -35676,6 +36087,56 @@ if mode == "--negative-control-kotlin-offline-wallet-amount-normalization":
     if not detected_messages:
         raise SystemExit("negative control failed: Kotlin offline wallet amount normalization drift was not detected")
     print("negative control rejected Kotlin offline wallet amount normalization drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-wallet-max-inputs-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'require(maxInputs > 0) { "maxInputs must be positive" }',
+            "val boundedMaxInputs = maxInputs.coerceAtLeast(1)",
+            "Kotlin offline wallet spend selection maxInputs source",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "walletPolicyRejectsNonPositiveSpendSelectionMaxInputs",
+            "walletPolicyCoercesNonPositiveSpendSelectionMaxInputs",
+            "Kotlin offline wallet spend selection maxInputs tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline wallet maxInputs coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline wallet maxInputs drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet maxInputs drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Kotlin offline wallet maxInputs drift was not detected")
+    print("negative control rejected Kotlin offline wallet maxInputs drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -38141,6 +38602,194 @@ if mode == "--negative-control-mobile-offline-note-draft-proof-replacement":
             "negative control failed: mobile Offline Note draft proof replacement drift was not detected"
         )
     print("negative control rejected mobile Offline Note draft proof replacement drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-offline-note-wallet-input-cap":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "guard selected.count < 4 else",
+            "guard selected.count < 5 else",
+            "Swift Offline Note wallet input cap source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            'require(selected.size < 4) { "Offline Note payments support at most 4 input notes" }',
+            'require(selected.size < 5) { "Offline Note payments support at most 4 input notes" }',
+            "Kotlin Offline Note wallet input cap source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+            "if (selected.size() >= 4) {",
+            "if (selected.size() >= 5) {",
+            "Android Java Offline Note wallet input cap source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineNoteWalletRejectsPaymentsNeedingMoreThanFourInputs() throws",
+            "func testOfflineNoteWalletAllowsPaymentsNeedingMoreThanFourInputs() throws",
+            "Swift Offline Note wallet input cap tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "fun walletRejectsPaymentsNeedingMoreThanFourInputs()",
+            "fun walletAllowsPaymentsNeedingMoreThanFourInputs()",
+            "Kotlin Offline Note wallet input cap tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void walletRejectsPaymentsNeedingMoreThanFourInputs()",
+            "private static void walletAllowsPaymentsNeedingMoreThanFourInputs()",
+            "Android Java Offline Note wallet input cap tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Note wallet input cap coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile Offline Note wallet input cap drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile Offline Note wallet input cap drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile Offline Note wallet input cap drift was not detected"
+        )
+    print("negative control rejected mobile Offline Note wallet input cap drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            'guard !parsed.isNegative && parsed.digits != "0" else',
+            "guard !parsed.isNegative else",
+            "Swift Offline Note wallet positive amount source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            'require(value.signum() > 0) { "Offline Note payment amount must be positive" }',
+            'require(value.signum() >= 0) { "Offline Note payment amount must be positive" }',
+            "Kotlin Offline Note wallet positive amount source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+            "if (value.signum() <= 0) {",
+            "if (value.signum() < 0) {",
+            "Android Java Offline Note wallet positive amount source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "        _ = try requirePositivePaymentAmount(amount)\n        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)",
+            "        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)",
+            "Swift Offline Note wallet positive amount source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "        try {\n            requirePositivePaymentAmount(amount)\n        } catch (error: Throwable) {\n            return failedFuture(error)\n        }\n        val assetId = walletAssetId(assetDefinitionId, accountId)",
+            "        val assetId = walletAssetId(assetDefinitionId, accountId)",
+            "Kotlin Offline Note wallet positive amount source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+            "    try {\n      requirePositivePaymentAmount(amount);\n    } catch (final Throwable error) {\n      return failedFuture(error);\n    }\n    final String assetId = walletAssetId(assetDefinitionId, accountId);",
+            "    final String assetId = walletAssetId(assetDefinitionId, accountId);",
+            "Android Java Offline Note wallet positive amount source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineNoteWalletRejectsNonPositiveLoadAmounts() async throws",
+            "func testOfflineNoteWalletAllowsNonPositiveLoadAmounts() async throws",
+            "Swift Offline Note wallet positive amount tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "fun walletRejectsNonPositiveLoadAmounts()",
+            "fun walletAllowsNonPositiveLoadAmounts()",
+            "Kotlin Offline Note wallet positive amount tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void walletRejectsNonPositiveLoadAmounts()",
+            "private static void walletAllowsNonPositiveLoadAmounts()",
+            "Android Java Offline Note wallet positive amount tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineNoteWalletRejectsNonPositiveReceiveAndPaymentAmounts() throws",
+            "func testOfflineNoteWalletAllowsNonPositiveReceiveAndPaymentAmounts() throws",
+            "Swift Offline Note wallet positive amount tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "fun walletRejectsNonPositiveReceiveAndPaymentAmounts()",
+            "fun walletAllowsNonPositiveReceiveAndPaymentAmounts()",
+            "Kotlin Offline Note wallet positive amount tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void walletRejectsNonPositiveReceiveAndPaymentAmounts()",
+            "private static void walletAllowsNonPositiveReceiveAndPaymentAmounts()",
+            "Android Java Offline Note wallet positive amount tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Note wallet positive amount coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile Offline Note wallet positive amount drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile Offline Note wallet positive amount drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile Offline Note wallet positive amount drift was not detected"
+        )
+    print("negative control rejected mobile Offline Note wallet positive amount drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)

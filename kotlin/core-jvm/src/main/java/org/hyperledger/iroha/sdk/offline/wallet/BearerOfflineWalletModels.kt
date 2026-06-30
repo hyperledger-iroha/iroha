@@ -763,6 +763,7 @@ object BearerOfflineWalletPolicy {
         balance: String,
         maxInputs: Int = 4
     ): List<OfflineNoteRecord>? {
+        require(maxInputs > 0) { "maxInputs must be positive" }
         val target = balanceAmount(balance)
         if (target <= BigDecimal.ZERO) return emptyList()
         val spendableRecords = state.noteRecords
@@ -777,13 +778,12 @@ object BearerOfflineWalletPolicy {
             return listOf(record)
         }
 
-        val boundedMaxInputs = maxInputs.coerceAtLeast(1)
         val selectionsByAmount = LinkedHashMap<String, List<OfflineNoteRecord>>()
         selectionsByAmount[normalizeAmountString(BigDecimal.ZERO.toPlainString())] = emptyList()
         spendableRecords.forEach { (record, amount) ->
             val snapshot = selectionsByAmount.toList()
             snapshot.forEach { (sumKey, selectedRecords) ->
-                if (selectedRecords.size >= boundedMaxInputs) return@forEach
+                if (selectedRecords.size >= maxInputs) return@forEach
                 val sum = balanceAmount(sumKey)
                 val nextSum = sum.add(amount)
                 if (nextSum > target) return@forEach

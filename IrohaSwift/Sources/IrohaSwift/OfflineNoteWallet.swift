@@ -1619,6 +1619,7 @@ public final class OfflineNoteWallet {
         guard let issuerClient else {
             throw OfflineNoteWalletError.missingIssuerClient
         }
+        _ = try requirePositivePaymentAmount(amount)
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
         // Pass the full `name#domain` assetDefinitionId to Torii — the
         // internal `assetId` is the SDK's 2-part `name#account` form
@@ -1680,6 +1681,7 @@ public final class OfflineNoteWallet {
     }
 
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteReceiveRequest {
+        _ = try requirePositivePaymentAmount(amount)
         let paymentRequestId = idGenerator.nextId(prefix: "payment-request")
         // Receive output certs must be owner-self-signed (chain #5589); mint a fresh
         // one on demand rather than reusing the issuer-attested attestation cert.
@@ -1735,7 +1737,7 @@ public final class OfflineNoteWallet {
         try requireTrustedOwnerCertificate(receiveRequest.keyCertificate, expectedAccountId: receiveRequest.accountId)
         try rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
         let createdAtMs = clock()
-        let requestedAmount = try OfflineNorito.parseCanonicalNumeric(receiveRequest.amount)
+        let requestedAmount = try requirePositivePaymentAmount(receiveRequest.amount)
         let selected = try selectSpendableNotes(
             assetDefinitionId: receiveRequest.assetDefinitionId,
             requestedAmount: requestedAmount
@@ -2274,6 +2276,14 @@ public final class OfflineNoteWallet {
             throw OfflineNoteWalletError.randomLength(expected: 32, actual: bytes.count)
         }
         return bytes
+    }
+
+    private func requirePositivePaymentAmount(_ amount: String) throws -> OfflineCanonicalNumeric {
+        let parsed = try OfflineNorito.parseCanonicalNumeric(amount)
+        guard !parsed.isNegative && parsed.digits != "0" else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        return parsed
     }
 }
 

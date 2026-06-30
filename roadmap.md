@@ -29,7 +29,17 @@ and completed history lives in [`status.md`](./status.md).
   Swift and Java Android wallet-note JSON decoders must reject retired
   `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
   state spellings instead of migrating them, with Kotlin docs mirroring the
-  same first-release storage contract;
+  same first-release storage contract; Kotlin/JVM spendable-note selection must
+  reject nonpositive `maxInputs` instead of coercing them to one; Swift,
+  Kotlin/JVM, and Java Android Offline Note wallets must retain the four-input
+  payment cap and reject five-note payments before token construction or note
+  state mutation, and must reject zero or negative load, receive, and payment
+  amounts before issuer refill preparation, pending receive notes, or
+  payment-token construction can touch randomness or stored note state;
+  Swift, Kotlin/JVM, and Java Android Offline Bearer Cash policies must reject
+  nonpositive and inverted custody-hop, lineage-step, QR/stream payload,
+  Android key-pool, and transport payload-byte limits instead of accepting
+  zero-boundary drift;
   mobile QR stream tests must describe the rejected `iroha:qr-old:` prefix as a
   retired versioned prefix, and mobile route/scheme comments and diagnostics
   must use retired terminology;
@@ -59,17 +69,24 @@ and completed history lives in [`status.md`](./status.md).
   `--negative-control-mobile-retired-offline-note-issuers` plus
   `--negative-control-mobile-retired-qr-prefix-wording` plus
   `--negative-control-mobile-wallet-note-retired-state-migration` plus
+  `--negative-control-mobile-offline-note-wallet-input-cap` plus
+  `--negative-control-mobile-offline-note-wallet-positive-amounts` plus
   `--negative-control-kotlin-offline-wallet-compact-certificate-profile` plus
   `--negative-control-kotlin-offline-wallet-amount-normalization` plus
+  `--negative-control-kotlin-offline-wallet-max-inputs-strictness` plus
+  `--negative-control-mobile-bearer-cash-policy-validation` plus
   `--negative-control-kotlin-offline-wallet-input-claim-strictness` modes
   prove that
   zero-signature synthesis, non-canonical base64 aliases, retired
   assertion-profile spellings, malformed wallet amount zero-coercion, passive
   Kotlin/JVM input-claim amount/hash drift, retired wallet-note state
   migrations, retired QR prefix wording drift, substring platform matching,
-  fake registration certificates, old Swift canonical-auth test naming, and
-  `app_attest_key_id` or retired issuer-device-binding assertion-key aliases
-  cannot return.
+  fake registration certificates, old Swift canonical-auth test naming,
+  nonpositive spend-selection input coercion, mobile Offline Note wallet
+  input-cap relaxation, nonpositive Offline Note load/receive/payment amount
+  acceptance, and `app_attest_key_id` or retired
+  issuer-device-binding assertion-key aliases, plus mobile Bearer Cash policy
+  zero-boundary and inverted-limit drift, cannot return.
 
 - Keep Torii Offline V2 Kagemusha OpenAPI endpoint descriptions in
   first-release terminology: Torii source plus both checked-in portal OpenAPI

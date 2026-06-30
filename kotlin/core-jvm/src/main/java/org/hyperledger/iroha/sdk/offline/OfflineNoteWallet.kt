@@ -1402,6 +1402,11 @@ class OfflineNoteWallet @JvmOverloads constructor(
         val issuer = issuerClient ?: return failedFuture(
             IllegalStateException("Offline Note issuer client is required for load")
         )
+        try {
+            requirePositivePaymentAmount(amount)
+        } catch (error: Throwable) {
+            return failedFuture(error)
+        }
         val assetId = walletAssetId(assetDefinitionId, accountId)
         val result = CompletableFuture<OfflineNoteWalletNote>()
         issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
@@ -1500,6 +1505,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
     }
 
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteReceiveRequest {
+        requirePositivePaymentAmount(amount)
         val paymentRequestId = idGenerator.nextId("payment-request")
         val keyCertificate = requireOwnerCertificateSigner().freshOwnerCertificate(accountId)
         requireTrustedOwnerCertificate(keyCertificate, accountId)
@@ -1547,7 +1553,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
         requireTrustedOwnerCertificate(receiveRequest.keyCertificate, receiveRequest.accountId)
         rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
         val createdAtMs = clock.getAsLong()
-        val requestedAmount = decimal(receiveRequest.canonicalAmount)
+        val requestedAmount = requirePositivePaymentAmount(receiveRequest.canonicalAmount)
         val selected = selectSpendableNotes(receiveRequest.assetDefinitionId, requestedAmount)
         val inputAmount = selected.fold(BigDecimal.ZERO) { acc, note -> acc.add(decimal(note.canonicalAmount)) }
         val changeAmount = inputAmount.subtract(requestedAmount)
@@ -2115,6 +2121,12 @@ private fun assetAccount(assetId: String): String? {
 }
 
 private fun decimal(value: String): BigDecimal = BigDecimal(value)
+
+private fun requirePositivePaymentAmount(amount: String): BigDecimal {
+    val value = decimal(amount)
+    require(value.signum() > 0) { "Offline Note payment amount must be positive" }
+    return value
+}
 
 private fun canonicalDecimal(value: BigDecimal): String {
     var normalized = value.stripTrailingZeros()

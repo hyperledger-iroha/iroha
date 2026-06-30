@@ -78,6 +78,7 @@ public final class OfflineNoteTest {
     qrFixtureUsesSdkTextPrefix();
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
     offlineBearerCashPolicyAndPrefixesUseSingleAppSurface();
+    offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits();
     receiveRequestCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRejectsNonPositiveAcceptedAtDecode();
@@ -96,6 +97,7 @@ public final class OfflineNoteTest {
     walletNoteJsonCodecRoundTripsFixtureNote();
     walletNoteScopeIdsRejectSurroundingWhitespace();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
+    walletRejectsNonPositiveLoadAmounts();
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
     toriiIssuerClientBodySignsRefillAndRetiresNoteIssue();
@@ -103,6 +105,8 @@ public final class OfflineNoteTest {
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletRejectsAuditWhenRecursiveVerifierFails();
+    walletRejectsPaymentsNeedingMoreThanFourInputs();
+    walletRejectsNonPositiveReceiveAndPaymentAmounts();
     walletRejectsRedeemWhenRecursiveVerifierFails();
     offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
@@ -1644,6 +1648,40 @@ public final class OfflineNoteTest {
         "unknown prefix");
   }
 
+  private static void offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits() {
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(0, 32, 2048, 12288, 20, 8, 40),
+        "maxCustodyHops must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(Integer.MIN_VALUE, 32, 2048, 12288, 20, 8, 40),
+        "maxCustodyHops must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 0, 2048, 12288, 20, 8, 40),
+        "maxLineageSteps must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 0, 12288, 20, 8, 40),
+        "maxSingleQrPayloadBytes must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2, 1, 20, 8, 40),
+        "maxStreamPayloadBytes must cover maxSingleQrPayloadBytes");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2048, 12288, 20, 0, 40),
+        "androidKeyPoolReplenishBelow must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2048, 12288, 7, 8, 40),
+        "androidKeyPoolTarget must cover androidKeyPoolReplenishBelow");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2048, 12288, 20, 8, 19),
+        "androidKeyPoolCap must cover androidKeyPoolTarget");
+
+    final OfflineBearerCashPolicyV1 policy = OfflineBearerCashPolicyV1.DEFAULT;
+    for (final int payloadByteCount : new int[] {0, -1, Integer.MIN_VALUE}) {
+      assertIllegalArgumentContains(
+          () -> policy.recommendedTransportForPayloadByteCount(payloadByteCount),
+          "payloadByteCount must be positive");
+    }
+  }
+
   private static void receiveRequestCodecRoundTripsNoritoTextAndQrFrames() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNoteReceiveRequest request = receiveRequestFixture(fixture);
@@ -3172,6 +3210,53 @@ public final class OfflineNoteTest {
         "loaded note state");
   }
 
+  private static void walletRejectsNonPositiveLoadAmounts() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> issue = obj(chain, "issue");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteLoadContext loadContext =
+        new OfflineNoteLoadContext(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            longValue(derivation, "issuer_load_local_revision"),
+            senderCertificate);
+    final RecordingIssuerClient issuerClient = new RecordingIssuerClient(loadContext);
+    final InMemoryOfflineNoteStore store = new InMemoryOfflineNoteStore();
+    final OfflineNoteWallet wallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountFromAssetId(string(issue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            store,
+            issuerClient,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-positive-load"),
+            () -> 1_700_000_012_180L);
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(issue, "asset_id"));
+
+    for (final String invalidAmount : Arrays.asList("0", "-1")) {
+      final Throwable cause =
+          assertFutureFailsWithin(
+              wallet.load(assetDefinitionId, invalidAmount), "nonpositive load should fail");
+      assertTrue(
+          cause instanceof IllegalArgumentException,
+          "nonpositive load should fail with IllegalArgumentException");
+      assertTrue(
+          cause.getMessage().contains("Offline Note payment amount must be positive"),
+          "nonpositive load failure message");
+      assertEquals(0L, issuerClient.prepareLoadCount, "nonpositive load issuer prepare count");
+      assertTrue(issuerClient.lastIssueRequest == null, "nonpositive load issue request");
+      assertEquals(0L, store.listNotes().size(), "nonpositive load note count");
+    }
+  }
+
   private static void toriiIssuerClientBodySignsRefillAndRetiresNoteIssue()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
@@ -3724,6 +3809,167 @@ public final class OfflineNoteTest {
         senderStore.findNote(hexBytes(string(derivation, "source_note_commitment"))).state().name(),
         "source note state after rejected audit proof");
     assertEquals(1L, senderStore.listNotes().size(), "note count after rejected audit proof");
+  }
+
+  private static void walletRejectsPaymentsNeedingMoreThanFourInputs() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final String chainId = string(derivation, "chain_id");
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"));
+    final String senderAccountId = accountFromAssetId(string(chainIssue, "asset_id"));
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteStore senderStore = new InMemoryOfflineNoteStore();
+    for (int index = 0; index < 5; index++) {
+      senderStore.upsert(
+          issuerSourceWalletNote(
+              chainId,
+              senderAccountId,
+              assetDefinitionId,
+              "1",
+              senderCertificate,
+              filledBytes(32, 0x40 + index),
+              "input-cap-" + index,
+              1_700_000_012_000L + index));
+    }
+    final OfflineNoteWallet senderWallet =
+        new OfflineNoteWallet(
+            chainId,
+            senderAccountId,
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-input-cap"),
+            () -> 1_700_000_012_100L,
+            new StaticOwnerCertificateSigner(senderCertificate));
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            chainId,
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            new InMemoryOfflineNoteStore(),
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.singletonList(filledBytes(32, 0x50))),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-input-cap"),
+            () -> 1_700_000_012_050L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(assetDefinitionId, "5");
+
+    assertIllegalArgumentContains(
+        () -> senderWallet.pay(receiveRequest),
+        "Offline Note payments support at most 4 input notes");
+    assertEquals(5L, senderStore.listNotes().size(), "input-cap note count");
+    long spendableCount = 0;
+    for (final OfflineNoteWalletNote note : senderStore.listNotes()) {
+      if (note.state() == OfflineNoteWalletNoteState.SPENDABLE) {
+        spendableCount++;
+      }
+    }
+    assertEquals(5L, spendableCount, "input-cap spendable note count");
+  }
+
+  private static void walletRejectsNonPositiveReceiveAndPaymentAmounts() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final String chainId = string(derivation, "chain_id");
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"));
+    final String senderAccountId = accountFromAssetId(string(chainIssue, "asset_id"));
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteStore recipientStore = new InMemoryOfflineNoteStore();
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            chainId,
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            recipientStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(
+                Arrays.asList(filledBytes(32, 0x60), filledBytes(32, 0x61))),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-positive-amount"),
+            () -> 1_700_000_012_150L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
+
+    for (final String invalidAmount : Arrays.asList("0", "-1")) {
+      assertIllegalArgumentContains(
+          () -> recipientWallet.prepareReceive(assetDefinitionId, invalidAmount),
+          "Offline Note payment amount must be positive");
+      assertEquals(0L, recipientStore.listNotes().size(), "nonpositive receive note count");
+    }
+
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(assetDefinitionId, "1");
+    final InMemoryOfflineNoteStore senderStore = new InMemoryOfflineNoteStore();
+    senderStore.upsert(
+        issuerSourceWalletNote(
+            chainId,
+            senderAccountId,
+            assetDefinitionId,
+            "2",
+            senderCertificate,
+            filledBytes(32, 0x70),
+            "positive-amount",
+            1_700_000_012_160L));
+    final OfflineNoteWallet senderWallet =
+        new OfflineNoteWallet(
+            chainId,
+            senderAccountId,
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-positive-amount"),
+            () -> 1_700_000_012_170L,
+            new StaticOwnerCertificateSigner(senderCertificate));
+
+    for (final String invalidAmount : Arrays.asList("0", "-1")) {
+      final OfflineNoteReceiveRequest forgedRequest =
+          new OfflineNoteReceiveRequest(
+              receiveRequest.chainId(),
+              receiveRequest.paymentRequestId() + "-" + invalidAmount,
+              receiveRequest.accountId(),
+              receiveRequest.assetDefinitionId(),
+              receiveRequest.assetId(),
+              invalidAmount,
+              receiveRequest.keyCertificate(),
+              receiveRequest.outputCommitment());
+      assertIllegalArgumentContains(
+          () -> senderWallet.pay(forgedRequest),
+          "Offline Note payment amount must be positive");
+      assertEquals(1L, senderStore.listNotes().size(), "nonpositive pay note count");
+      assertEquals(
+          OfflineNoteWalletNoteState.SPENDABLE.name(),
+          senderStore.listNotes().get(0).state().name(),
+          "nonpositive pay note state");
+    }
   }
 
   private static void walletRejectsRedeemWhenRecursiveVerifierFails() throws Exception {
@@ -5199,6 +5445,37 @@ public final class OfflineNoteTest {
         1_700_000_000_000L);
   }
 
+  private static OfflineNoteWalletNote issuerSourceWalletNote(
+      final String chainId,
+      final String accountId,
+      final String assetDefinitionId,
+      final String amount,
+      final OfflineNote.KeyCertificate certificate,
+      final byte[] noteSecret,
+      final String operationSuffix,
+      final long createdAtMs) {
+    final String assetId = assetDefinitionId + "#" + accountId;
+    final OfflineNote.CommitmentOrigin.IssuerLoad origin =
+        new OfflineNote.CommitmentOrigin.IssuerLoad(
+            "operation-" + operationSuffix, "lineage-" + operationSuffix, 1L);
+    final byte[] noteCommitment =
+        OfflineNote.deriveNoteCommitment(
+            new OfflineNote.NoteCommitmentPreimage(
+                chainId, certificate.payloadHash(), assetId, amount, noteSecret, origin));
+    return new OfflineNoteWalletNote(
+        chainId,
+        accountId,
+        assetId,
+        amount,
+        certificate,
+        noteCommitment,
+        noteSecret,
+        origin,
+        OfflineNoteWalletNoteState.SPENDABLE,
+        createdAtMs,
+        createdAtMs);
+  }
+
   private static final class StaticAttestationProvider implements OfflineNoteAttestationProvider {
     private final OfflineNote.KeyCertificate certificate;
 
@@ -5417,6 +5694,7 @@ public final class OfflineNoteTest {
 
   private static final class RecordingIssuerClient implements OfflineNoteIssuerClient {
     private final OfflineNoteLoadContext loadContext;
+    private long prepareLoadCount;
     private OfflineNoteIssueRequest lastIssueRequest;
 
     private RecordingIssuerClient(final OfflineNoteLoadContext loadContext) {
@@ -5429,6 +5707,7 @@ public final class OfflineNoteTest {
         final String accountId,
         final String assetDefinitionId,
         final String amount) {
+      prepareLoadCount++;
       return CompletableFuture.completedFuture(loadContext);
     }
 
