@@ -97,7 +97,12 @@ public final class OfflineNoteWalletNote {
     this.chainId = requireExactNonBlank(chainId, "chainId");
     this.accountId = requireExactNonBlank(accountId, "accountId");
     this.assetId = Objects.requireNonNull(assetId, "assetId");
-    this.amount = Objects.requireNonNull(amount, "amount");
+    final String canonicalAssetId = OfflineNote.canonicalAssetId(this.assetId);
+    if (!this.assetId.equals(canonicalAssetId)) {
+      throw new IllegalArgumentException("asset_id must be canonical");
+    }
+    this.canonicalAmount = OfflineNote.canonicalAmountString(amount);
+    this.amount = this.canonicalAmount;
     this.keyCertificate = Objects.requireNonNull(keyCertificate, "keyCertificate");
     this.noteCommitment = Arrays.copyOf(noteCommitment, noteCommitment.length);
     this.noteSecret = Arrays.copyOf(noteSecret, noteSecret.length);
@@ -110,10 +115,6 @@ public final class OfflineNoteWalletNote {
     this.createdAtMs = createdAtMs;
     this.updatedAtMs = updatedAtMs;
     this.spentPaymentRequestId = requireOptionalExactNonBlank(spentPaymentRequestId);
-    this.canonicalAmount =
-        new OfflineNote.IssuedClaim(
-                this.noteCommitment, keyCertificate.payloadHash(), assetId, amount)
-            .canonicalAmount();
   }
 
   public String chainId() {

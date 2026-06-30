@@ -3207,11 +3207,23 @@ lowercase only, and the id must be canonical unsigned decimal (`0`, or no
 leading zero). Empty ids, signs, leading zeros, fractional values, uppercase
 `DATASPACE:`, and out-of-range values fail before Norito asset state, wallet
 state, or Swift transaction asset-definition scope handling can normalize them.
-Swift and Kotlin/JVM payment-token input-claim DTOs apply that same exact asset
+Swift and Kotlin/JVM payment-token input-claim DTOs, plus Swift, Kotlin/JVM,
+and Android Java Offline Note issued-claim models, apply that same exact
 identity rule at the JSON/request boundary: `asset_id` must already match the
-canonical issued-claim asset id, including the canonical I105 account sentinel,
-before the DTO stores it or compares an optional `claim_hash` to the canonical
-issued-claim hash.
+canonical issued-claim asset id, including the canonical I105 account sentinel.
+Direct issued-claim `amount` strings in Swift, Kotlin/JVM, and Android Java must
+already match the canonical Norito numeric spelling before the DTO stores them
+or compares an optional `claim_hash` to the canonical issued-claim hash.
+Swift, Kotlin/JVM, and Android Java wallet load/receive paths canonicalize
+positive amount text before issuer preparation, commitment derivation, request
+creation, or pending-note storage. Direct receive-request constructors in all
+three SDKs require canonical positive amount text and canonical asset ids, so
+peer-facing request DTOs fail instead of normalizing padded amounts or alternate
+asset-id spellings. Swift direct and persisted wallet-note fields also require
+canonical asset ids and amount text, so malformed scoped asset ids and padded
+amount strings fail instead of being normalized during note construction or JSON
+decode. Android Java persisted wallet-note JSON applies the same exact amount
+rule instead of silently normalizing padded amount text during decode.
 Swift transfer and validation-fee transfer paths also treat optional
 `feeSponsor` values as exact account ids. Blank, padded, alias-shaped, or
 reserved-separator-bearing fee sponsors fail before native transaction encoding

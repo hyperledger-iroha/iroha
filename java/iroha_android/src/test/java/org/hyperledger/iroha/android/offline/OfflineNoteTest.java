@@ -24,6 +24,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.SigningException;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
@@ -62,6 +63,8 @@ public final class OfflineNoteTest {
     commitmentOriginIdsRejectSurroundingWhitespace();
     derivationPreimageIdsRejectSurroundingWhitespace();
     assetScopeDataspaceIdsRejectNonCanonicalForms();
+    issuedClaimsRejectNonCanonicalAssetIds();
+    issuedClaimsRejectNonCanonicalAmounts();
     offlineNoteDomainsRejectSubstitutionAndPadding();
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
@@ -97,6 +100,7 @@ public final class OfflineNoteTest {
     walletAcceptsCanonicalSdkInteropPaymentToken();
     walletRejectsBearerCashCustodyPolicyOverflow();
     walletNoteJsonCodecRoundTripsFixtureNote();
+    walletNoteJsonCodecRejectsNonCanonicalAmount();
     walletNoteJsonCodecRejectsNonExactCommitmentHex();
     walletNoteJsonCodecRejectsNonExactIntegerFields();
     walletNoteScopeIdsRejectSurroundingWhitespace();
@@ -724,6 +728,50 @@ public final class OfflineNoteTest {
                   chainId, hash, assetId + "#" + rejected, "1", hash, origin),
           "non-canonical dataspace scope should reject: " + rejected);
     }
+  }
+
+  private static void issuedClaimsRejectNonCanonicalAssetIds() throws Exception {
+    final OfflineNote.IssuedClaim claim = audit(loadFixture()).inputClaims().get(0);
+    final String accountId = accountFromAssetId(claim.assetId());
+    final String alternateAccountId =
+        AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.toI105(1);
+    final String nonCanonicalAssetId =
+        assetDefinitionFromAssetId(claim.assetId()) + "#" + alternateAccountId;
+    assertTrue(
+        !claim.assetId().equals(nonCanonicalAssetId),
+        "alternate account discriminant must produce a distinct asset id");
+    assertEquals(
+        claim.assetId(),
+        OfflineNote.canonicalAssetId(nonCanonicalAssetId),
+        "canonical issued-claim asset id");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNote.IssuedClaim(
+                claim.noteCommitment(),
+                claim.keyCertificatePayloadHash(),
+                nonCanonicalAssetId,
+                claim.amount()),
+        "asset_id must be canonical");
+  }
+
+  private static void issuedClaimsRejectNonCanonicalAmounts() throws Exception {
+    final OfflineNote.IssuedClaim claim = audit(loadFixture()).inputClaims().get(0);
+    final String nonCanonicalAmount = "0" + claim.amount();
+    assertTrue(
+        !claim.amount().equals(nonCanonicalAmount),
+        "padded amount must produce a distinct amount string");
+    assertEquals(
+        claim.amount(),
+        OfflineNote.canonicalAmountString(nonCanonicalAmount),
+        "canonical issued-claim amount");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNote.IssuedClaim(
+                claim.noteCommitment(),
+                claim.keyCertificatePayloadHash(),
+                claim.assetId(),
+                nonCanonicalAmount),
+        "amount must be canonical");
   }
 
   private static void offlineNoteDomainsRejectSubstitutionAndPadding() throws Exception {
@@ -3247,6 +3295,23 @@ public final class OfflineNoteTest {
     }
   }
 
+  private static void walletNoteJsonCodecRejectsNonCanonicalAmount() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    final String encoded =
+        new String(OfflineNoteWalletNoteJsonCodec.encode(note), StandardCharsets.UTF_8);
+    final String canonicalField = "\"amount\":\"" + note.canonicalAmount() + "\"";
+    final String replacementField = "\"amount\":\"0" + note.canonicalAmount() + "\"";
+    assertTrue(encoded.contains(canonicalField), "encoded wallet-note amount must be present");
+    assertIllegalArgumentContains(
+        () ->
+            OfflineNoteWalletNoteJsonCodec.decode(
+                encoded.replace(canonicalField, replacementField).getBytes(StandardCharsets.UTF_8)),
+        "amount must be canonical");
+  }
+
   private static void walletNoteJsonCodecRejectsNonExactCommitmentHex() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNote.KeyCertificate senderCertificate =
@@ -3534,6 +3599,46 @@ public final class OfflineNoteTest {
     assertEquals("10", receiveRequest.amount(), "canonical receive request amount");
     assertEquals("10", receiveRequest.canonicalAmount(), "canonical receive request amount accessor");
     assertEquals("10", receiveStore.listNotes().get(0).amount(), "canonical pending receive amount");
+
+    for (final String nonCanonicalAmount : Arrays.asList("010", "+10")) {
+      assertIllegalArgumentContains(
+          () ->
+              new OfflineNoteReceiveRequest(
+                  receiveRequest.chainId(),
+                  receiveRequest.paymentRequestId() + "-" + nonCanonicalAmount,
+                  receiveRequest.accountId(),
+                  receiveRequest.assetDefinitionId(),
+                  receiveRequest.assetId(),
+                  nonCanonicalAmount,
+                  receiveRequest.keyCertificate(),
+                  receiveRequest.outputCommitment()),
+          "amount must be canonical");
+    }
+    final String alternateAccountId =
+        AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId(), null)
+            .address
+            .toI105(1);
+    final String nonCanonicalAssetId =
+        assetDefinitionFromAssetId(receiveRequest.assetId()) + "#" + alternateAccountId;
+    assertTrue(
+        !receiveRequest.assetId().equals(nonCanonicalAssetId),
+        "receive request noncanonical asset id differs");
+    assertEquals(
+        receiveRequest.assetId(),
+        OfflineNote.canonicalAssetId(nonCanonicalAssetId),
+        "receive request noncanonical asset id canonicalizes");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNoteReceiveRequest(
+                receiveRequest.chainId(),
+                receiveRequest.paymentRequestId() + "-asset",
+                receiveRequest.accountId(),
+                receiveRequest.assetDefinitionId(),
+                nonCanonicalAssetId,
+                receiveRequest.amount(),
+                receiveRequest.keyCertificate(),
+                receiveRequest.outputCommitment()),
+        "asset_id must be canonical");
 
     for (final String invalidAmount : Arrays.asList(" 1", "1\n", "1e3", ".", "")) {
       assertIllegalArgumentContains(
