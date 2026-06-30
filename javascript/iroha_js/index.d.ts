@@ -228,6 +228,14 @@ export interface CryptoKeyPair {
   distid?: string | null;
 }
 
+export type RecoveryPhraseWordCount = 12 | 24;
+
+export interface RecoveryPhrase {
+  readonly phrase: string;
+  readonly words: readonly string[];
+  readonly wordCount: RecoveryPhraseWordCount;
+}
+
 export interface KeyPair extends CryptoKeyPair {
   algorithm: "ed25519";
 }
@@ -17300,9 +17308,7 @@ export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
   rho?: BinaryLike;
-  diversifierHex?: string;
-  diversifier_hex?: string;
-  diversifier?: BinaryLike;
+  diversifierHex: string;
   leafIndex?: number;
   leaf_index?: number;
 }
@@ -19165,6 +19171,26 @@ export function normalizeCryptoAlgorithm(
   algorithm?: string | null,
 ): CryptoAlgorithm;
 
+export function generateRecoveryPhrase(options?: {
+  wordCount?: RecoveryPhraseWordCount;
+}): RecoveryPhrase;
+
+export function normalizeRecoveryPhrase(phrase: string): string;
+
+export function validateRecoveryPhrase(phrase: string): boolean;
+
+export function entropyToRecoveryPhrase(
+  entropy: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
+
+export function recoveryPhraseToEntropy(phrase: string): Buffer;
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase: string): Buffer;
+
+export function ed25519SeedToRecoveryPhrase(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
+
 export function generateKeyPair(options?: {
   seed?: ArrayBufferView | ArrayBuffer | Buffer;
   algorithm?: string | null;
@@ -19339,9 +19365,8 @@ export function deriveConfidentialKeysetFromHex(
 
 export function deriveConfidentialOwnerTagV2(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: {
-    diversifierHex?: string;
-    diversifier?: ArrayBufferView | ArrayBuffer | Buffer;
+  options: {
+    diversifierHex: string;
   },
 ): Buffer;
 

@@ -157,13 +157,14 @@ Assets (FT)
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
 - 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
 - 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
-- 0x24 TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
+- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
 
 NFTs
 - 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
 - 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Name, r12=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
+- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer from `AssetId::with_scope(asset_definition, from, Dataspace(dataspace))`.
 
 Zero‑knowledge (verification/state‑read)
 - 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
@@ -309,7 +310,7 @@ Native asset escrow
 - 0xAE ANONYMOUS_ESCROW_CANCEL — Args: `r10=&NoritoBytes(CancelAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow cancellation ISI.
 - 0xAF ANONYMOUS_ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAnonymousEscrowDispute`.
 - 0xBF ANONYMOUS_ESCROW_RESOLVE_DISPUTE — Args: `r10=&NoritoBytes(ResolveAnonymousEscrowDispute)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow dispute-resolution ISI.
-- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and generic `TRANSFER_ASSET` remains unable to drain active escrow custody accounts.
+- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and `TRANSFER_ASSET_SCOPED` always addresses an explicit dataspace balance.
 
 Soracloud runtime host surface
 - 0xC0 SORACLOUD_READ_COMMITTED_STATE — Args: `r10=&SoracloudRequest(ReadCommittedState)` → `r10=&SoracloudResponse(ReadCommittedState)`. Returns committed service-state metadata for one declared binding/key pair.
@@ -418,7 +419,7 @@ node enforces that policy unconditionally.
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
 | 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v2 |
 | 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v2 |
-| 0x24 | TRANSFER_ASSET | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x24 | TRANSFER_V1 | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric); batch-internal only | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
 | 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
 | 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
@@ -426,6 +427,7 @@ node enforces that policy unconditionally.
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
+| 0x2C | TRANSFER_ASSET_SCOPED | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
 | 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |

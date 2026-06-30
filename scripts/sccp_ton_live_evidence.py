@@ -8,7 +8,6 @@ import base64
 import binascii
 import hashlib
 import json
-import stat
 import sys
 import urllib.error
 import urllib.parse
@@ -23,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from path_safety import first_symlinked_existing_path_component  # noqa: E402
 import sccp_ton_destination_evidence as evidence  # noqa: E402
 
 
@@ -144,16 +144,8 @@ def _account_states_url(api_url: str) -> str:
 
 
 def _reject_runtime_file_symlink_path(path: Path) -> None:
-    current = Path(path.anchor) if path.is_absolute() else Path(".")
-    parts = path.parts[1:] if path.is_absolute() else path.parts
-    for part in parts:
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            break
-        if stat.S_ISLNK(mode):
-            raise ValueError("runtime file must not be a symlink")
+    if first_symlinked_existing_path_component(path) is not None:
+        raise ValueError("runtime file must not be a symlink")
 
 
 def _read_runtime_text_file(path: Path, *, error_message: str) -> str:

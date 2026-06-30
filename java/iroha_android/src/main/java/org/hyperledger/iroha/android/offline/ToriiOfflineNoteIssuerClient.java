@@ -31,6 +31,8 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient {
   private static final String KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill";
   private static final String HEADER_WITNESS = "X-Iroha-Witness";
+  private static final String DEVICE_PROOF_PLATFORM_IOS = "ios";
+  private static final String DEVICE_PROOF_PLATFORM_ANDROID = "android";
   public static final String RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE =
       "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows.";
 
@@ -249,11 +251,12 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
         body,
         payload -> {
           final Map<String, Object> response = expectObject(parseJson(payload), "keys refill response");
-          notifyIssuerResponse(KEYS_REFILL_PATH, response);
           final Map<String, Object> lineageState =
               expectObject(requiredValue(response, "lineage_state"), "lineage_state");
+          validateLineageState(lineageState);
           final OfflineNote.KeyCertificate keyCertificate =
               parseKeyCertificate(expectObject(requiredValue(response, "key_certificate"), "key_certificate"));
+          notifyIssuerResponse(KEYS_REFILL_PATH, response);
           final PendingLoad pending =
               new PendingLoad(
                   requiredString(response, "operation_id"),
@@ -376,7 +379,50 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     final Map<String, Object> proof =
         deviceProofProvider.currentDeviceProof(
             chainId, accountId, assetDefinitionId, operation, lineageId, amount);
+    validateDeviceProof(proof);
     body.put("device_proof", OfflineNoteIssuerDeviceBinding.deepCopyObject(proof));
+  }
+
+  private static void validateDeviceProof(final Map<String, Object> proof) {
+    if (proof == null) {
+      throw new IllegalStateException("device_proof must be a JSON object");
+    }
+    rejectUnexpectedDeviceProofFields(proof);
+    final String platform = requiredString(proof, "platform");
+    if (!isSupportedDeviceProofPlatform(platform)) {
+      throw new IllegalStateException("platform must be a supported first-release value");
+    }
+    requiredExactNonEmptyString(proof, "attestation_key_id");
+    requireLowerHex32(requiredString(proof, "challenge_hash_hex"), "challenge_hash_hex");
+    decodeExactBase64(requiredString(proof, "assertion_base64"), "assertion_base64");
+    if (proof.containsKey("counter")) {
+      final long counter = requiredDeviceProofCounter(proof.get("counter"));
+      if (counter < 0L) {
+        throw new IllegalStateException("counter must be non-negative");
+      }
+    }
+  }
+
+  private static void rejectUnexpectedDeviceProofFields(final Map<String, Object> proof) {
+    for (final String field : proof.keySet()) {
+      if (!isDeviceProofField(field)) {
+        throw new IllegalStateException("device_proof." + field + " is not supported");
+      }
+    }
+  }
+
+  private static boolean isDeviceProofField(final String field) {
+    return "platform".equals(field)
+        || "attestation_key_id".equals(field)
+        || "challenge_hash_hex".equals(field)
+        || "assertion_base64".equals(field)
+        || "counter".equals(field);
+  }
+
+  private static boolean isSupportedDeviceProofPlatform(final String platform) {
+    return DEVICE_PROOF_PLATFORM_IOS.equals(platform)
+        || DEVICE_PROOF_PLATFORM_ANDROID.equals(platform)
+        || OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform);
   }
 
   private URI resolvePath(final String path) {
@@ -436,6 +482,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
       final Map<String, Object> lineageState,
       final OfflineNote.KeyCertificate keyCertificate,
       final Long keyCertificateExpiresAtMs) {
+    validateLineageState(lineageState);
     final Map<String, Object> authorization = optionalObject(lineageState.get("authorization"));
     return new StoredLineageState(
         requiredString(lineageState, "lineage_id"),
@@ -445,6 +492,72 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
         keyCertificateExpiresAtMs,
         keyCertificate,
         lineageState);
+  }
+
+  private static void validateLineageState(final Map<String, Object> lineageState) {
+    requiredExactNonEmptyString(lineageState, "lineage_id");
+    requiredExactNonEmptyString(lineageState, "account_id");
+    requiredExactNonEmptyString(lineageState, "device_id");
+    requiredExactNonEmptyString(lineageState, "offline_public_key");
+    requiredExactNonEmptyString(lineageState, "asset_definition_id");
+    requireNonNegativeAmountString(lineageState, "balance");
+    requireNonNegativeAmountString(lineageState, "locked_balance");
+    requireNonNegativeLong(requiredLong(lineageState, "server_revision"), "server_revision");
+    requireLowerHex32(requiredString(lineageState, "server_state_hash"), "server_state_hash");
+    requireNonNegativeLong(
+        requiredLong(lineageState, "pending_local_revision"), "pending_local_revision");
+    validateSpendAuthorization(
+        expectObject(requiredValue(lineageState, "authorization"), "authorization"));
+    requireCanonicalSignatureBase64(
+        requiredString(lineageState, "issuer_signature_base64"), "issuer_signature_base64");
+  }
+
+  private static void validateSpendAuthorization(final Map<String, Object> authorization) {
+    requiredExactNonEmptyString(authorization, "authorization_id");
+    requiredExactNonEmptyString(authorization, "lineage_id");
+    requiredExactNonEmptyString(authorization, "account_id");
+    optionalExactNonEmptyString(authorization, "device_id");
+    optionalExactNonEmptyString(authorization, "offline_public_key");
+    requiredExactNonEmptyString(authorization, "verdict_id");
+    requireNonNegativeAmountString(authorization, "max_balance");
+    requireNonNegativeAmountString(authorization, "max_tx_value");
+    final long issuedAtMs = requiredLong(authorization, "issued_at_ms");
+    final long refreshAtMs = requiredLong(authorization, "refresh_at_ms");
+    final long expiresAtMs = requiredLong(authorization, "expires_at_ms");
+    requireNonNegativeLong(issuedAtMs, "issued_at_ms");
+    if (refreshAtMs < issuedAtMs) {
+      throw new IllegalStateException("refresh_at_ms must be at or after issued_at_ms");
+    }
+    if (expiresAtMs <= issuedAtMs) {
+      throw new IllegalStateException("expires_at_ms must be after issued_at_ms");
+    }
+    if (authorization.containsKey("device_binding")) {
+      validateLineageDeviceBinding(
+          expectObject(requiredValue(authorization, "device_binding"), "authorization.device_binding"));
+    }
+    requireCanonicalSignatureBase64(
+        requiredString(authorization, "issuer_signature_base64"), "issuer_signature_base64");
+  }
+
+  private static void validateLineageDeviceBinding(final Map<String, Object> deviceBinding) {
+    if (deviceBinding.containsKey("platform")) {
+      final String platform = requiredString(deviceBinding, "platform");
+      if (!isSupportedDeviceProofPlatform(platform)) {
+        throw new IllegalStateException("device_binding.platform must be a supported first-release value");
+      }
+    }
+    requiredExactNonEmptyString(deviceBinding, "attestation_key_id");
+    requiredExactNonEmptyString(deviceBinding, "device_id");
+    requiredExactNonEmptyString(deviceBinding, "offline_public_key");
+    optionalExactNonEmptyString(deviceBinding, "assertion_public_key");
+    optionalExactNonEmptyString(deviceBinding, "ios_team_id");
+    optionalExactNonEmptyString(deviceBinding, "ios_bundle_id");
+    if (deviceBinding.containsKey("ios_environment")) {
+      final String environment = requiredString(deviceBinding, "ios_environment");
+      if (!"production".equals(environment) && !"development".equals(environment)) {
+        throw new IllegalStateException("device_binding.ios_environment must be production or development");
+      }
+    }
   }
 
   private static Object parseJson(final byte[] payload) {
@@ -483,6 +596,56 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
       throw new IllegalStateException(field + " must be a string");
     }
     return string;
+  }
+
+  private static String requiredExactNonEmptyString(
+      final Map<String, Object> value, final String field) {
+    final String string = requiredString(value, field);
+    if (string.isEmpty() || !string.equals(string.trim())) {
+      throw new IllegalStateException(field + " must be an exact non-empty string");
+    }
+    return string;
+  }
+
+  private static void optionalExactNonEmptyString(
+      final Map<String, Object> value, final String field) {
+    if (value.containsKey(field)) {
+      requiredExactNonEmptyString(value, field);
+    }
+  }
+
+  private static void requireNonNegativeLong(final long value, final String field) {
+    if (value < 0L) {
+      throw new IllegalStateException(field + " must be non-negative");
+    }
+  }
+
+  private static void requireNonNegativeAmountString(
+      final Map<String, Object> value, final String field) {
+    final String amount = requiredString(value, field);
+    if (amount.isEmpty() || !amount.equals(amount.trim())) {
+      throw new IllegalStateException(field + " must be an exact non-negative amount");
+    }
+    boolean seenDigit = false;
+    boolean seenDot = false;
+    for (int index = 0; index < amount.length(); index++) {
+      final char ch = amount.charAt(index);
+      if (index == 0 && ch == '+') {
+        continue;
+      }
+      if (ch >= '0' && ch <= '9') {
+        seenDigit = true;
+        continue;
+      }
+      if (ch == '.' && !seenDot) {
+        seenDot = true;
+        continue;
+      }
+      throw new IllegalStateException(field + " must be a non-negative amount");
+    }
+    if (!seenDigit) {
+      throw new IllegalStateException(field + " must be a non-negative amount");
+    }
   }
 
   private static String optionalString(final Object value) {
@@ -593,6 +756,29 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     throw new IllegalStateException("value must be an integer");
   }
 
+  private static long requiredDeviceProofCounter(final Object value) {
+    if (value instanceof Long longValue) {
+      return longValue.longValue();
+    }
+    if (value instanceof Integer intValue) {
+      return intValue.longValue();
+    }
+    if (value instanceof Short shortValue) {
+      return shortValue.longValue();
+    }
+    if (value instanceof Byte byteValue) {
+      return byteValue.longValue();
+    }
+    if (value instanceof java.math.BigInteger bigInteger) {
+      try {
+        return bigInteger.longValueExact();
+      } catch (ArithmeticException ex) {
+        throw new IllegalStateException("counter must be an integer", ex);
+      }
+    }
+    throw new IllegalStateException("counter must be an integer");
+  }
+
   private static byte[] decodeExactBase64(final String value, final String field) {
     try {
       if (value.isEmpty() || !value.equals(value.trim())) {
@@ -605,6 +791,25 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
       return decoded;
     } catch (IllegalArgumentException ex) {
       throw new IllegalStateException(field + " must be canonical base64", ex);
+    }
+  }
+
+  private static void requireCanonicalSignatureBase64(final String value, final String field) {
+    final byte[] signature = decodeExactBase64(value, field);
+    if (signature.length != 64) {
+      throw new IllegalStateException(field + " must be 64 bytes");
+    }
+  }
+
+  private static void requireLowerHex32(final String value, final String field) {
+    if (value.length() != 64) {
+      throw new IllegalStateException(field + " must be 32-byte lowercase hex");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+        throw new IllegalStateException(field + " must be 32-byte lowercase hex");
+      }
     }
   }
 

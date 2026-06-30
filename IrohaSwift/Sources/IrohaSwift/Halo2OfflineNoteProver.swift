@@ -338,8 +338,8 @@ public enum Halo2OfflineNoteProver {
     }
 
     public static func verifyOpenVerifyEnvelope(_ envelope: Data, publicInputsHashHex: String) throws -> Bool {
-        let normalized = publicInputsHashHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalized.count == 64, let expectedPublicInputsHash = Data(hexString: normalized) else {
+        guard isExactLowerHex(publicInputsHashHex, byteCount: 32),
+              let expectedPublicInputsHash = Data(hexString: publicInputsHashHex) else {
             return false
         }
         let proofPayload = try proofPayload(fromOpenVerifyEnvelope: envelope)
@@ -348,6 +348,19 @@ public enum Halo2OfflineNoteProver {
             return false
         }
         return try verifyZK1Payload(proofPayload, publicValues: publicValues)
+    }
+
+    private static func isExactLowerHex(_ value: String, byteCount: Int) -> Bool {
+        guard value.utf8.count == byteCount * 2 else {
+            return false
+        }
+        for byte in value.utf8 {
+            if (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102) {
+                continue
+            }
+            return false
+        }
+        return true
     }
 
     public static func publicValues(fromOpenVerifyEnvelope envelope: Data) throws -> [UInt64] {

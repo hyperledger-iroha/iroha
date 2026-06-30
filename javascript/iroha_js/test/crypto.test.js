@@ -2,15 +2,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SUPPORTED_CRYPTO_ALGORITHMS,
+  deriveEd25519SeedFromRecoveryPhrase,
+  ed25519SeedToRecoveryPhrase,
+  entropyToRecoveryPhrase,
+  generateRecoveryPhrase,
   generateKeyPair,
   loadKeyPair,
+  normalizeRecoveryPhrase,
   normalizeCryptoAlgorithm,
   privateKeyMultihash,
   publicKeyFromPrivate,
   publicKeyMultihash,
+  recoveryPhraseToEntropy,
   sign,
   signEd25519,
   supportedCryptoAlgorithms,
+  validateRecoveryPhrase,
   verify,
   verifyEd25519,
   deriveConfidentialKeyset,
@@ -93,6 +100,59 @@ test("generateKeyPair hashes non-32 seed material", () => {
   assert.equal(kp1.privateKey.length, 32);
   assert.deepEqual(kp1.privateKey, kp2.privateKey);
   assert.deepEqual(kp1.publicKey, kp2.publicKey);
+});
+
+test("recovery phrase helpers derive Ed25519 seeds from BIP39 phrases", () => {
+  const phrase = normalizeRecoveryPhrase(
+    "abandon  abandon abandon   abandon abandon abandon  abandon abandon abandon abandon abandon ABOUT",
+  );
+
+  assert.equal(
+    phrase,
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  );
+  assert.equal(validateRecoveryPhrase(phrase), true);
+  assert.equal(
+    deriveEd25519SeedFromRecoveryPhrase(phrase).toString("hex").toUpperCase(),
+    "5EB00BBDDCF069084889A8AB9155568165F5C453CCB85E70811AAED6F6DA5FC1",
+  );
+  assert.equal(validateRecoveryPhrase("abandon ".repeat(12).trim()), false);
+  assert.equal(validateRecoveryPhrase("abandon abandon abandon"), false);
+  assert.throws(() => deriveEd25519SeedFromRecoveryPhrase("abandon abandon abandon"), /word count/);
+});
+
+test("recovery phrase helpers export stored Ed25519 seed entropy", () => {
+  const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+  const keyPair = generateKeyPair({ seed });
+
+  const recovery = ed25519SeedToRecoveryPhrase(seed);
+  assert.equal(recovery.wordCount, 24);
+  assert.equal(recovery.words.length, 24);
+  assert.equal(recovery.phrase, recovery.words.join(" "));
+  assert.equal(validateRecoveryPhrase(recovery.phrase), true);
+  assert.deepEqual(recoveryPhraseToEntropy(recovery.phrase), seed);
+
+  const fromExpandedPrivateKey = ed25519SeedToRecoveryPhrase(
+    Buffer.concat([seed, keyPair.publicKey]),
+  );
+  assert.deepEqual(recoveryPhraseToEntropy(fromExpandedPrivateKey.phrase), seed);
+
+  const twelveWordRecovery = entropyToRecoveryPhrase(Buffer.alloc(16));
+  assert.equal(twelveWordRecovery.wordCount, 12);
+  assert.equal(validateRecoveryPhrase(twelveWordRecovery.phrase), true);
+  assert.deepEqual(recoveryPhraseToEntropy(twelveWordRecovery.phrase), Buffer.alloc(16));
+  assert.throws(() => entropyToRecoveryPhrase(Buffer.alloc(24)), /16 or 32 bytes/);
+});
+
+test("generateRecoveryPhrase creates valid 12 and 24 word phrases", () => {
+  for (const wordCount of [12, 24]) {
+    const recovery = generateRecoveryPhrase({ wordCount });
+    assert.equal(recovery.wordCount, wordCount);
+    assert.equal(recovery.words.length, wordCount);
+    assert.equal(validateRecoveryPhrase(recovery.phrase), true);
+    assert.equal(recoveryPhraseToEntropy(recovery.phrase).length, wordCount === 12 ? 16 : 32);
+  }
+  assert.throws(() => generateRecoveryPhrase({ wordCount: 18 }), /12 or 24/);
 });
 
 test("signEd25519 and verifyEd25519 round-trip", () => {

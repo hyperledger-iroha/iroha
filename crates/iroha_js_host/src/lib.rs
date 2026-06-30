@@ -2342,7 +2342,7 @@ pub fn derive_confidential_owner_tag_v2(
         ));
     }
     let diversifier =
-        parse_optional_confidential_diversifier_hex("diversifier_hex", diversifier_hex.as_deref())?;
+        parse_required_confidential_diversifier_hex("diversifier_hex", diversifier_hex.as_deref())?;
     Ok(Buffer::from(
         confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, diversifier)
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?
@@ -13949,7 +13949,7 @@ pub struct JsConfidentialTransferInputV2 {
     pub amount: String,
     /// Note rho rendered as 32-byte hexadecimal.
     pub rho_hex: String,
-    /// Note diversifier rendered as 32-byte hexadecimal; omitted legacy notes use the default tag.
+    /// Required note diversifier rendered as 32-byte hexadecimal.
     pub diversifier_hex: Option<String>,
     /// Current note leaf index inside the confidential tree.
     pub leaf_index: u32,
@@ -14231,14 +14231,26 @@ fn parse_fixed_32_hex_list(context: &str, values: Vec<String>) -> napi::Result<V
         .collect()
 }
 
-fn parse_optional_confidential_diversifier_hex(
+fn parse_required_confidential_diversifier_hex(
     context: &str,
     value: Option<&str>,
 ) -> napi::Result<[u8; 32]> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => parse_fixed_32_hex(context, value),
-        None => Ok(confidential_v2::default_confidential_diversifier_v2()),
+    let value = value.ok_or_else(|| {
+        napi::Error::new(napi::Status::InvalidArg, format!("{context} is required"))
+    })?;
+    if value.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} is required"),
+        ));
     }
+    if value.trim() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must not contain surrounding whitespace"),
+        ));
+    }
+    parse_fixed_32_hex(context, value)
 }
 
 fn parse_confidential_transfer_inputs_v2(
@@ -14254,7 +14266,7 @@ fn parse_confidential_transfer_inputs_v2(
                     &input.amount,
                 )?,
                 rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
-                diversifier: parse_optional_confidential_diversifier_hex(
+                diversifier: parse_required_confidential_diversifier_hex(
                     &format!("inputs[{index}].diversifier_hex"),
                     input.diversifier_hex.as_deref(),
                 )?,
@@ -14282,7 +14294,7 @@ fn parse_confidential_unshield_inputs_v2(
                     &input.amount,
                 )?,
                 rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
-                diversifier: parse_optional_confidential_diversifier_hex(
+                diversifier: parse_required_confidential_diversifier_hex(
                     &format!("inputs[{index}].diversifier_hex"),
                     input.diversifier_hex.as_deref(),
                 )?,

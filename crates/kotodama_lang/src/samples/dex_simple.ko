@@ -22,8 +22,8 @@ seiyaku DexSimple {
                   reserve_out: int) -> int permission(Admin) {
     let out = quote_sell(reserve_in, reserve_out, amount_in);
     // move input from trader to pool, and output from pool to trader
-    transfer_asset(trader, pool_account, input_asset, amount_in);
-    transfer_asset(pool_account, trader, output_asset, out);
+    transfer_asset(trader, pool_account, input_asset, amount_in, dataspace_id("0"));
+    transfer_asset(pool_account, trader, output_asset, out, dataspace_id("0"));
     return out;
   }
 

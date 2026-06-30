@@ -28,12 +28,12 @@ public final class OfflineNoteReceiveRequest {
     this.accountId = accountId;
     this.assetDefinitionId = assetDefinitionId;
     this.assetId = assetId;
-    this.amount = amount;
+    this.amount = OfflineNoteWallet.canonicalPositivePaymentAmountString(amount);
     this.keyCertificate = keyCertificate;
     this.outputCommitment = Arrays.copyOf(outputCommitment, outputCommitment.length);
     this.canonicalAmount =
         new OfflineNote.AuditOutputClaim(
-                this.outputCommitment, keyCertificate, assetId, amount)
+                this.outputCommitment, keyCertificate, assetId, this.amount)
             .canonicalAmount();
   }
 

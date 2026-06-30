@@ -89,6 +89,7 @@ export PATH="${VENV_DIR}/bin:${PATH}"
 
 cd "${ROOT_DIR}/python/iroha_python"
 cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture
+cargo test -p iroha_python_rs python_confidential_transfer_input_requires_canonical_diversifier -- --nocapture
 "${VENV_DIR}/bin/python" -m maturin develop --release
 export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python${PYTHONPATH:+:${PYTHONPATH}}"
 "${VENV_DIR}/bin/python" -m pytest -q \

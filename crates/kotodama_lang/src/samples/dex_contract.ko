@@ -15,8 +15,8 @@ seiyaku DexContract {
                   reserve_in: int,
                   reserve_out: int) -> int permission(Admin) {
     let out = quote_sell(reserve_in, reserve_out, amount_in);
-    transfer_asset(trader, pool, input_asset, amount_in);
-    transfer_asset(pool, trader, output_asset, out);
+    transfer_asset(trader, pool, input_asset, amount_in, dataspace_id("0"));
+    transfer_asset(pool, trader, output_asset, out, dataspace_id("0"));
     return out;
   }
 }

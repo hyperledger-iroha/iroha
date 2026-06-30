@@ -9,13 +9,17 @@ import importlib.util
 import json
 import os
 import shutil
-import stat
 import sys
 import tempfile
 from html import unescape as html_unescape
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote
+
+try:
+    from scripts.path_safety import first_symlinked_existing_path_component
+except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    from path_safety import first_symlinked_existing_path_component
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -252,16 +256,8 @@ def _public_text_contains_sensitive_marker(
 
 
 def _reject_release_artifact_symlink_path(path: Path) -> None:
-    current = Path(path.anchor) if path.is_absolute() else Path(".")
-    parts = path.parts[1:] if path.is_absolute() else path.parts
-    for part in parts:
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            break
-        if stat.S_ISLNK(mode):
-            raise ValueError("release artifact path must not be a symlink")
+    if first_symlinked_existing_path_component(path) is not None:
+        raise ValueError("release artifact path must not be a symlink")
 
 
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
@@ -7854,20 +7850,10 @@ def _reject_symlink_sources(paths: list[Path]) -> None:
         )
         if path.is_symlink():
             raise ValueError("release bundle source path must not be a symlink")
-        current = Path(path.anchor) if path.is_absolute() else Path(".")
-        parts = path.parts[1:] if path.is_absolute() else path.parts
-        for part in parts:
-            current = current / part
-            try:
-                mode = current.lstat().st_mode
-            except FileNotFoundError:
-                break
-            if stat.S_ISLNK(mode):
-                if path.is_absolute() and current.parent == Path(path.anchor):
-                    continue
-                raise ValueError(
-                    "release bundle source path ancestor must not be a symlink"
-                )
+        if first_symlinked_existing_path_component(path) is not None:
+            raise ValueError(
+                "release bundle source path ancestor must not be a symlink"
+            )
         if path.exists() and not path.is_file():
             raise ValueError("release bundle source path must be a regular file")
         _reject_sensitive_source_filename(path.name)
@@ -7895,22 +7881,14 @@ def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
 
 
 def _reject_symlinked_existing_output_path(path: Path) -> None:
-    current = Path(path.anchor) if path.is_absolute() else Path(".")
-    parts = path.parts[1:] if path.is_absolute() else path.parts
-    for part in parts:
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            return
-        if stat.S_ISLNK(mode):
-            if path.is_absolute() and current.parent == Path(path.anchor):
-                continue
-            if current == path:
-                raise ValueError("release bundle output directory must not be a symlink")
-            raise ValueError(
-                "release bundle output directory ancestor must not be a symlink"
-            )
+    symlink_component = first_symlinked_existing_path_component(path)
+    if symlink_component is None:
+        return
+    if symlink_component == path:
+        raise ValueError("release bundle output directory must not be a symlink")
+    raise ValueError(
+        "release bundle output directory ancestor must not be a symlink"
+    )
 
 
 def _reject_existing_output_non_directory(path: Path) -> None:

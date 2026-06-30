@@ -1614,6 +1614,33 @@ final class TxBuilderTests: XCTestCase {
         }
     }
 
+    func testBuildSignedTransferWithValidationFeeRejectsMalformedFeeSponsor() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let malformedFeeSponsor = " \(authority)"
+        let principal = TransferRequest(chainId: Self.fixtureChainId,
+                                        authority: authority,
+                                        assetDefinitionId: Self.fixtureAssetDefinition,
+                                        quantity: "1",
+                                        destination: authority,
+                                        description: nil,
+                                        feeSponsor: malformedFeeSponsor,
+                                        ttlMs: 120_000)
+        let request = ValidationFeeTransferRequest(
+            principal: principal,
+            feeQuantity: "0.10",
+            treasuryAccountId: authority,
+            policyVersion: 1,
+            policyHashHex: String(repeating: "ab", count: 32)
+        )
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+
+        XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "feeSponsor", value: malformedFeeSponsor))
+        }
+    }
+
     func testBuildSignedTransferWithValidationFeeRejectsMutableTreasuryAlias() throws {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)

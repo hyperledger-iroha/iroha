@@ -51,6 +51,20 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
     let proof_artifact_hash = hex32(0x4c);
     let source_event_transaction_id = hex32(0x4b);
     let route_canary_transaction_id = hex32(0x4d);
+    let source_deployment_receipt_hash = hex32(0x51);
+    let source_material = Json::new(norito::json!({
+        "version": 1,
+        "source_domain": 2,
+        "target_domain": 0,
+        "source_chain": "bsc"
+    }));
+    let source_deployment = Json::new(norito::json!({
+        "version": 1,
+        "source_domain": 2,
+        "target_domain": 0,
+        "source_chain": "bsc",
+        "deployment_receipt_hash": source_deployment_receipt_hash
+    }));
     SccpRouteManifest {
         version: 1,
         route_id: "taira_bsc_xor".to_owned(),
@@ -81,9 +95,9 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
             "routeId": "taira_bsc_xor",
             "assetKey": "xor"
         }))),
-        source_verifier_material: None,
-        source_adapter_engine_deployment: None,
-        source_adapter_engine: None,
+        source_verifier_material: Some(source_material.clone()),
+        source_adapter_engine_deployment: Some(source_deployment),
+        source_adapter_engine: Some(source_material),
         destination_browser_prover: Some(browser_prover_ref(
             0x60,
             &destination_binding_hash,
@@ -221,6 +235,32 @@ fn production_bsc_route_manifest_isi_rejects_incomplete_or_foreign_payloads() {
         "unexpected error: {err:?}"
     );
 
+    let mut replayed_deployment_hash = production_bsc_route_manifest();
+    replayed_deployment_hash.deployment_evidence_sha256 =
+        Some(replayed_deployment_hash.verifier_code_hash.clone());
+    let err = UpsertSccpRouteManifest::new(replayed_deployment_hash)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("deployment evidence hash must not replay verifier code hash");
+    assert!(
+        format!("{err:?}").contains("deployment_evidence_sha256 must not equal verifier_code_hash"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut replayed_post_deploy_hash = production_bsc_route_manifest();
+    replayed_post_deploy_hash.post_deploy_route_canary_evidence_hash = replayed_post_deploy_hash
+        .post_deploy_source_bridge_config_hash
+        .clone();
+    let err = UpsertSccpRouteManifest::new(replayed_post_deploy_hash)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("route canary evidence hash must not replay source bridge config hash");
+    assert!(
+        format!("{err:?}").contains(
+            "post_deploy_route_canary_evidence_hash must not equal \
+             post_deploy_source_bridge_config_hash"
+        ),
+        "unexpected error: {err:?}"
+    );
+
     assert!(
         stx.zk.sccp_route_manifests.is_empty(),
         "rejected route manifests must not mutate state transaction"
@@ -301,6 +341,20 @@ fn production_bsc_route_manifest_isi_rejects_untrusted_browser_prover_material_w
         "unexpected error: {err:?}"
     );
 
+    let mut padded_specifier = manifest.clone();
+    padded_specifier
+        .destination_browser_prover
+        .as_mut()
+        .expect("destination prover")
+        .module_specifier = Some(" @sora/sccp-bsc-destination-prover ".to_owned());
+    let err = UpsertSccpRouteManifest::new(padded_specifier)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("padded browser prover module specifiers must be rejected");
+    assert!(
+        format!("{err:?}").contains("module_specifier must be a non-empty canonical string"),
+        "unexpected error: {err:?}"
+    );
+
     let mut wrong_route_binding = manifest.clone();
     wrong_route_binding
         .destination_browser_prover
@@ -326,6 +380,22 @@ fn production_bsc_route_manifest_isi_rejects_untrusted_browser_prover_material_w
         .expect_err("browser prover proof binding must match the route manifest");
     assert!(
         format!("{err:?}").contains("bound_proof_hash must match proof_artifact_hash"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut replayed_module_hash = manifest.clone();
+    let replay_hash = replayed_module_hash.verifier_code_hash.clone();
+    replayed_module_hash
+        .destination_browser_prover
+        .as_mut()
+        .expect("destination prover")
+        .module_hash = replay_hash;
+    let err = UpsertSccpRouteManifest::new(replayed_module_hash)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("browser prover module hash must not replay verifier code hash");
+    assert!(
+        format!("{err:?}")
+            .contains("destination_browser_prover.module_hash must not equal verifier_code_hash"),
         "unexpected error: {err:?}"
     );
 

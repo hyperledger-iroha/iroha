@@ -203,16 +203,35 @@ public enum OfflineBearerCashTextCodec {
     }
 
     public static func payloadKind(_ text: String) -> OfflineBearerCashPayloadKindV1? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix(receiveRequestTextPrefix) {
+        if hasExactUnpaddedBase64UrlPayload(text, prefix: receiveRequestTextPrefix) {
             return .receiveRequest
         }
-        if trimmed.hasPrefix(paymentTextPrefix) {
+        if hasExactUnpaddedBase64UrlPayload(text, prefix: paymentTextPrefix) {
             return .payment
         }
-        if trimmed.hasPrefix(ackTextPrefix) {
+        if hasExactUnpaddedBase64UrlPayload(text, prefix: ackTextPrefix) {
             return .ack
         }
         return nil
+    }
+
+    private static func hasExactUnpaddedBase64UrlPayload(_ text: String, prefix: String) -> Bool {
+        guard text.hasPrefix(prefix) else {
+            return false
+        }
+        let payload = String(text.dropFirst(prefix.count))
+        return !payload.isEmpty
+            && payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload
+            && !payload.contains("=")
+            && payload.unicodeScalars.allSatisfy(isBase64UrlCharacter)
+    }
+
+    private static func isBase64UrlCharacter(_ scalar: UnicodeScalar) -> Bool {
+        let byte = scalar.value
+        return (65...90).contains(byte)
+            || (97...122).contains(byte)
+            || (48...57).contains(byte)
+            || byte == 45
+            || byte == 95
     }
 }

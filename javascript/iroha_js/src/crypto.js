@@ -10,10 +10,23 @@ import {
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
+import {
+  entropyToMnemonic,
+  generateMnemonic,
+  mnemonicToEntropy,
+  mnemonicToSeedSync,
+  validateMnemonic,
+} from "@scure/bip39";
+import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
 const ED25519_PRIVATE_KEY_LENGTH = 64;
+const RECOVERY_PHRASE_ENTROPY_LENGTHS = Object.freeze(new Set([16, 32]));
+const RECOVERY_PHRASE_STRENGTH_BY_WORD_COUNT = Object.freeze({
+  12: 128,
+  24: 256,
+});
 
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
@@ -214,6 +227,75 @@ export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) 
     throw new Error(`unsupported crypto algorithm: ${algorithm}`);
   }
   return normalized;
+}
+
+function recoveryPhraseDetails(phrase) {
+  const normalized = normalizeRecoveryPhrase(phrase);
+  const words = Object.freeze(normalized.split(" "));
+  return Object.freeze({
+    phrase: normalized,
+    words,
+    wordCount: words.length,
+  });
+}
+
+function assertRecoveryPhraseWordCount(wordCount) {
+  const strength = RECOVERY_PHRASE_STRENGTH_BY_WORD_COUNT[wordCount];
+  if (!strength) {
+    throw new Error("recovery phrase word count must be 12 or 24");
+  }
+  return strength;
+}
+
+function assertValidRecoveryPhrase(phrase) {
+  const normalized = normalizeRecoveryPhrase(phrase);
+  assertRecoveryPhraseWordCount(normalized.split(" ").length);
+  if (!validateMnemonic(normalized, englishWordlist)) {
+    throw new Error("Invalid recovery phrase");
+  }
+  return normalized;
+}
+
+export function normalizeRecoveryPhrase(phrase) {
+  if (typeof phrase !== "string") {
+    throw new TypeError("recovery phrase must be a string");
+  }
+  return phrase.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function validateRecoveryPhrase(phrase) {
+  try {
+    assertValidRecoveryPhrase(phrase);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function generateRecoveryPhrase(options = {}) {
+  const wordCount = options.wordCount ?? 24;
+  const strength = assertRecoveryPhraseWordCount(wordCount);
+  return recoveryPhraseDetails(generateMnemonic(englishWordlist, strength));
+}
+
+export function entropyToRecoveryPhrase(entropy) {
+  const buffer = toBuffer(entropy, "entropy");
+  if (!RECOVERY_PHRASE_ENTROPY_LENGTHS.has(buffer.length)) {
+    throw new Error("recovery phrase entropy must be 16 or 32 bytes");
+  }
+  return recoveryPhraseDetails(entropyToMnemonic(buffer, englishWordlist));
+}
+
+export function recoveryPhraseToEntropy(phrase) {
+  return Buffer.from(mnemonicToEntropy(assertValidRecoveryPhrase(phrase), englishWordlist));
+}
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
+  return Buffer.from(mnemonicToSeedSync(assertValidRecoveryPhrase(phrase)).subarray(0, ED25519_SEED_LENGTH));
+}
+
+export function ed25519SeedToRecoveryPhrase(privateKey) {
+  return entropyToRecoveryPhrase(extractSeed(privateKey));
 }
 
 function ensureGenericCryptoNative(native, operation) {
@@ -689,10 +771,10 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
 /**
  * Derive the confidential v2 owner tag from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
- * @param {{diversifierHex?: string, diversifier?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
+ * @param {{diversifierHex: string}} options
  * @returns {Buffer}
  */
-export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {
+export function deriveConfidentialOwnerTagV2(spendKey, options) {
   const native = ensureConfidentialV2Native(
     resolveNativeBinding(),
     "deriveConfidentialOwnerTagV2",
@@ -701,13 +783,13 @@ export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {
   if (spendKeyBuffer.length !== 32) {
     throw new Error("confidential spend key must be 32 bytes");
   }
-  const diversifierHex =
-    options?.diversifierHex !== undefined || options?.diversifier !== undefined
-      ? normalizeFixed32HexInput(
-          options.diversifierHex ?? options.diversifier,
-          "diversifier",
-        )
-      : undefined;
+  if (options?.diversifier !== undefined) {
+    throw new Error("diversifier must use canonical diversifierHex");
+  }
+  if (options?.diversifierHex === undefined) {
+    throw new Error("diversifier is required");
+  }
+  const diversifierHex = normalizeFixed32HexInput(options.diversifierHex, "diversifier");
   return Buffer.from(native.deriveConfidentialOwnerTagV2(spendKeyBuffer, diversifierHex));
 }
 

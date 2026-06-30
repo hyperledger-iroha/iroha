@@ -2378,6 +2378,17 @@ function normalizeFixed32HexInput(value, context) {
   return Buffer.from(buffer).toString("hex");
 }
 
+function normalizeConfidentialInputDiversifierHex(input, index) {
+  const context = `inputs[${index}].diversifier`;
+  if (input?.diversifier_hex !== undefined || input?.diversifier !== undefined) {
+    throw new TypeError(`${context} must use canonical diversifierHex`);
+  }
+  if (input?.diversifierHex === undefined) {
+    throw new TypeError(`${context} is required`);
+  }
+  return normalizeFixed32HexInput(input.diversifierHex, context);
+}
+
 function toNamedBuffer(value, context) {
   if (Buffer.isBuffer(value)) {
     return value;
@@ -2491,17 +2502,7 @@ export function buildConfidentialTransferProofV2({
           input?.rhoHex ?? input?.rho,
           `inputs[${index}].rho`,
         ),
-        diversifierHex:
-          input?.diversifierHex !== undefined ||
-          input?.diversifier_hex !== undefined ||
-          input?.diversifier !== undefined
-            ? normalizeFixed32HexInput(
-                input?.diversifierHex ??
-                  input?.diversifier_hex ??
-                  input?.diversifier,
-                `inputs[${index}].diversifier`,
-              )
-            : undefined,
+        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
         leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
       }))
     : [];
@@ -2672,17 +2673,7 @@ export function buildConfidentialUnshieldProofV2({
           input?.rhoHex ?? input?.rho,
           `inputs[${index}].rho`,
         ),
-        diversifierHex:
-          input?.diversifierHex !== undefined ||
-          input?.diversifier_hex !== undefined ||
-          input?.diversifier !== undefined
-            ? normalizeFixed32HexInput(
-                input?.diversifierHex ??
-                  input?.diversifier_hex ??
-                  input?.diversifier,
-                `inputs[${index}].diversifier`,
-              )
-            : undefined,
+        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
         leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
       }))
     : [];
@@ -2756,17 +2747,7 @@ export function buildConfidentialUnshieldProofV3({
           input?.rhoHex ?? input?.rho,
           `inputs[${index}].rho`,
         ),
-        diversifierHex:
-          input?.diversifierHex !== undefined ||
-          input?.diversifier_hex !== undefined ||
-          input?.diversifier !== undefined
-            ? normalizeFixed32HexInput(
-                input?.diversifierHex ??
-                  input?.diversifier_hex ??
-                  input?.diversifier,
-                `inputs[${index}].diversifier`,
-              )
-            : undefined,
+        diversifierHex: normalizeConfidentialInputDiversifierHex(input, index),
         leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
       }))
     : [];

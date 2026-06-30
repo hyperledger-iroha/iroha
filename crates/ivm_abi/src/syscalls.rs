@@ -52,15 +52,16 @@ pub const SYSCALL_REGISTER_ASSET: u32 = 0x20;
 pub const SYSCALL_UNREGISTER_ASSET: u32 = 0x21;
 pub const SYSCALL_MINT_ASSET: u32 = 0x22;
 pub const SYSCALL_BURN_ASSET: u32 = 0x23;
-pub const SYSCALL_TRANSFER_ASSET: u32 = 0x24;
-/// Alias for the canonical FASTPQ transfer gadget syscall.
-pub const SYSCALL_TRANSFER_V1: u32 = SYSCALL_TRANSFER_ASSET;
+/// Batch-internal FASTPQ transfer gadget syscall.
+pub const SYSCALL_TRANSFER_V1: u32 = 0x24;
 /// Begin a FASTPQ transfer batch; subsequent `transfer_v1` calls are coalesced.
 pub const SYSCALL_TRANSFER_V1_BATCH_BEGIN: u32 = 0x29;
 /// End the current FASTPQ transfer batch scope.
 pub const SYSCALL_TRANSFER_V1_BATCH_END: u32 = 0x2A;
 /// Submit a pre-baked FASTPQ batch via a Norito-encoded [`TransferAssetBatch`].
 pub const SYSCALL_TRANSFER_V1_BATCH_APPLY: u32 = 0x2B;
+/// Transfer a numeric asset balance within an explicit dataspace scope.
+pub const SYSCALL_TRANSFER_ASSET_SCOPED: u32 = 0x2C;
 
 /// Non‑fungible asset (NFT) operations (canonical names).
 pub const SYSCALL_NFT_MINT_ASSET: u32 = 0x25;
@@ -743,10 +744,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_UNREGISTER_ASSET);
         v.push(SYSCALL_MINT_ASSET);
         v.push(SYSCALL_BURN_ASSET);
-        v.push(SYSCALL_TRANSFER_ASSET);
-        v.push(SYSCALL_TRANSFER_V1_BATCH_BEGIN);
-        v.push(SYSCALL_TRANSFER_V1_BATCH_END);
-        v.push(SYSCALL_TRANSFER_V1_BATCH_APPLY);
+        v.push(SYSCALL_TRANSFER_V1);
         // NFT
         v.extend_from_slice(&[
             SYSCALL_NFT_MINT_ASSET,
@@ -754,6 +752,10 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_NFT_SET_METADATA,
             SYSCALL_NFT_BURN_ASSET,
         ]);
+        v.push(SYSCALL_TRANSFER_V1_BATCH_BEGIN);
+        v.push(SYSCALL_TRANSFER_V1_BATCH_END);
+        v.push(SYSCALL_TRANSFER_V1_BATCH_APPLY);
+        v.push(SYSCALL_TRANSFER_ASSET_SCOPED);
         // Durable state (smart contract)
         v.push(SYSCALL_STATE_GET);
         v.push(SYSCALL_STATE_SET);
@@ -937,7 +939,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_UNREGISTER_ASSET => "UNREGISTER_ASSET",
         SYSCALL_MINT_ASSET => "MINT_ASSET",
         SYSCALL_BURN_ASSET => "BURN_ASSET",
-        SYSCALL_TRANSFER_ASSET => "TRANSFER_ASSET",
+        SYSCALL_TRANSFER_V1 => "TRANSFER_V1",
+        SYSCALL_TRANSFER_ASSET_SCOPED => "TRANSFER_ASSET_SCOPED",
         SYSCALL_TRANSFER_V1_BATCH_BEGIN => "TRANSFER_V1_BATCH_BEGIN",
         SYSCALL_TRANSFER_V1_BATCH_END => "TRANSFER_V1_BATCH_END",
         SYSCALL_TRANSFER_V1_BATCH_APPLY => "TRANSFER_V1_BATCH_APPLY",

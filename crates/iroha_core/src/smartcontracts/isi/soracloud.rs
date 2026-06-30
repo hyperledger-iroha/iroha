@@ -76,6 +76,7 @@ use iroha_crypto::{
         validate_bfv_full_bootstrap_circuit_artifact_bundle_v1,
         validate_bfv_full_bootstrap_execution_artifacts_preflight_v1,
         validate_bfv_full_bootstrap_material_proof_profile_v1,
+        validate_bfv_full_bootstrap_proof_key_material_envelope_bytes_for_key_v1,
         validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1,
         validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1,
         validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1,
@@ -4100,9 +4101,12 @@ fn governed_full_bootstrap_execution_verifier_key(
             "FHE full-bootstrap execution verifier-key artifact failed validation: {err}"
         ))
     })?;
-    let verifier_key_material:
-        iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
-        norito::decode_from_bytes(&verifier_key.key_material).map_err(|err| {
+    let verifier_key_material =
+        validate_bfv_full_bootstrap_proof_key_material_envelope_bytes_for_key_v1(
+            &verifier_key,
+            &verifier_key.key_material,
+        )
+        .map_err(|err| {
             invalid_parameter(format!(
                 "FHE full-bootstrap execution verifier-key artifact material envelope failed validation: {err}"
             ))
@@ -17176,14 +17180,16 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material
 fn full_bootstrap_execution_prover_input_material_verifier_key(
     prover_input_material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<iroha_data_model::proof::VerifyingKeyBox, InstructionExecutionError> {
-    let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
-        norito::decode_from_bytes(&prover_input_material.verifier_key.key_material).map_err(
-            |err| {
-                invalid_parameter(format!(
-                    "FHE full-bootstrap execution prover input verifier key material envelope failed validation: {err}"
-                ))
-            },
-        )?;
+    let material_envelope =
+        validate_bfv_full_bootstrap_proof_key_material_envelope_bytes_for_key_v1(
+            &prover_input_material.verifier_key,
+            &prover_input_material.verifier_key.key_material,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution prover input verifier key material envelope failed validation: {err}"
+            ))
+        })?;
     let native_verifier_key_material = decode_bfv_full_bootstrap_native_proof_key_material_v1(
         &material_envelope.native_key_material,
     )
@@ -31777,6 +31783,52 @@ mod tests {
 
     #[cfg(feature = "zk-stark")]
     #[test]
+    fn governed_full_bootstrap_execution_verifier_key_rejects_material_metadata_before_wrong_circuit_diagnostic()
+     {
+        let mut wrong_circuit_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let mut wrong_circuit_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+            norito::decode_from_bytes(&wrong_circuit_vk_box.bytes)
+                .expect("decode sample full-bootstrap execution STARK VK");
+        wrong_circuit_payload.circuit_id =
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1.to_owned();
+        wrong_circuit_vk_box.bytes =
+            norito::to_bytes(&wrong_circuit_payload).expect("encode wrong-circuit STARK VK");
+
+        let (params, evaluation_keys, _transcript, mut artifacts, _job, _input, _output, _, _) =
+            sample_full_bootstrap_execution_verification_case_with_verifier_key(
+                &wrong_circuit_vk_box,
+            );
+        let mut artifact: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1 =
+            norito::decode_from_bytes(&artifacts.verifier_key)
+                .expect("decode sample full-bootstrap verifier-key artifact envelope");
+        let mut key: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1 =
+            norito::decode_from_bytes(&artifact.payload)
+                .expect("decode sample full-bootstrap verifier-key artifact payload");
+        let mut material_envelope:
+            iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+            norito::decode_from_bytes(&key.key_material)
+                .expect("decode sample full-bootstrap verifier-key material envelope");
+        material_envelope.statement_material_field_count = material_envelope
+            .statement_material_field_count
+            .checked_add(1)
+            .expect("sample statement material field count can be incremented");
+        key.key_material = norito::to_bytes(&material_envelope)
+            .expect("encode drifted verifier-key material envelope");
+        artifact.payload =
+            norito::to_bytes(&key).expect("encode drifted verifier-key artifact payload");
+        artifacts.verifier_key =
+            norito::to_bytes(&artifact).expect("encode drifted verifier-key artifact envelope");
+
+        let Err(err) =
+            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
+        else {
+            panic!("drifted verifier-key material metadata must fail before circuit diagnostics");
+        };
+        assert_invalid_parameter_contains(err, "statement material field count");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
     fn governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_native_payload() {
         let mut wrong_circuit_vk_box = sample_fhe_full_bootstrap_execution_native_vk_box();
         let mut wrong_circuit_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
@@ -34799,6 +34851,49 @@ mod tests {
         )
         .expect_err("stale verifier key must fail before proof generation");
         assert_invalid_parameter_contains(err, "material commitment");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_prover_rejects_verifier_key_material_metadata_drift()
+    {
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            _job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let mut prover_input_material = sample_full_bootstrap_execution_prover_input_material(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            input_bound,
+            output_bound,
+        );
+        let mut material_envelope:
+            iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+            norito::decode_from_bytes(&prover_input_material.verifier_key.key_material)
+                .expect("decode sample full-bootstrap verifier-key material envelope");
+        material_envelope.statement_material_field_count = material_envelope
+            .statement_material_field_count
+            .checked_add(1)
+            .expect("sample statement material field count can be incremented");
+        prover_input_material.verifier_key.key_material = norito::to_bytes(&material_envelope)
+            .expect("encode drifted verifier-key material envelope");
+
+        let err =
+            full_bootstrap_execution_prover_input_material_verifier_key(&prover_input_material)
+                .expect_err("drifted verifier-key material metadata must fail before extraction");
+        assert_invalid_parameter_contains(err, "statement material field count");
     }
 
     #[cfg(feature = "zk-stark")]

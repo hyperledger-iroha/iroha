@@ -264,24 +264,43 @@ public struct IosOfflineProofVerifier {
     }
 
     private func requireMetadata(_ binding: ToriiOfflineDeviceBinding) throws -> IosMetadata {
-        let teamId = binding.iosTeamId?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
-        let bundleId = binding.iosBundleId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let environment = binding.iosEnvironment?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        guard !teamId.isEmpty, !bundleId.isEmpty else {
-            throw OfflineProofVerifierError.invalidBinding(
-                "Offline device binding iOS metadata is incomplete."
-            )
-        }
-        let normalizedEnvironment: String
+        let teamId = try requireExactMetadataValue(
+            binding.iosTeamId,
+            missingError: "Offline device binding iOS metadata is incomplete.",
+            invalidError: "Offline device binding iOS team id is invalid."
+        )
+        let bundleId = try requireExactMetadataValue(
+            binding.iosBundleId,
+            missingError: "Offline device binding iOS metadata is incomplete.",
+            invalidError: "Offline device binding iOS bundle id is invalid."
+        )
+        let environment = try requireExactMetadataValue(
+            binding.iosEnvironment,
+            missingError: "Offline device binding iOS environment is invalid.",
+            invalidError: "Offline device binding iOS environment is invalid."
+        )
         switch environment {
         case Self.environmentDevelopment, Self.environmentProduction:
-            normalizedEnvironment = environment
+            return IosMetadata(teamId: teamId, bundleId: bundleId, environment: environment)
         default:
             throw OfflineProofVerifierError.invalidBinding(
                 "Offline device binding iOS environment is invalid."
             )
         }
-        return IosMetadata(teamId: teamId, bundleId: bundleId, environment: normalizedEnvironment)
+    }
+
+    private func requireExactMetadataValue(
+        _ value: String?,
+        missingError: String,
+        invalidError: String
+    ) throws -> String {
+        guard let value, !value.isEmpty else {
+            throw OfflineProofVerifierError.invalidBinding(missingError)
+        }
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw OfflineProofVerifierError.invalidBinding(invalidError)
+        }
+        return value
     }
 
     private func decodeAttestationObject(_ value: String) throws -> AttestationObject {
@@ -820,6 +839,15 @@ public struct AndroidOfflineProofVerifier {
                 binding.offlinePublicKey,
                 error: "Offline device binding public key is invalid."
             )
+            guard attestationKeyIdMatches(
+                binding.attestationKeyId,
+                expectedPublicKey: publicKey,
+                platform: proof.platform
+            ) else {
+                throw OfflineProofVerifierError.invalidProof(
+                    "Offline device proof does not match the device binding."
+                )
+            }
             guard try OfflineProofVerifierSupport.verifyEd25519Signature(
                 payload: challengeBytes,
                 signature: signatureBytes,
@@ -885,13 +913,8 @@ public struct AndroidOfflineProofVerifier {
         )
     }
 
-    private func attestationKeyIdsMatch(_ lhs: String, _ rhs: String, platform: String) -> Bool {
-        switch platform {
-        case Self.keyMintPlatform:
-            return lhs == rhs
-        default:
-            return lhs.caseInsensitiveCompare(rhs) == .orderedSame
-        }
+    private func attestationKeyIdsMatch(_ lhs: String, _ rhs: String, platform _: String) -> Bool {
+        lhs == rhs
     }
 
     private func decodeCertificateChain(_ value: String) throws -> [Data] {
@@ -1191,21 +1214,38 @@ private enum OfflineProofVerifierSupport {
     }
 
     static func decodeHexDigest(_ value: String, error: String) throws -> Data {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard trimmed.count == 64 else {
+        guard value.count == 64 else {
             throw OfflineProofVerifierError.invalidProof(error)
         }
         var bytes = Data(capacity: 32)
-        var index = trimmed.startIndex
-        while index < trimmed.endIndex {
-            let next = trimmed.index(index, offsetBy: 2)
-            guard let byte = UInt8(trimmed[index ..< next], radix: 16) else {
+        var index = value.startIndex
+        while index < value.endIndex {
+            let high = value[index]
+            let lowIndex = value.index(after: index)
+            let low = value[lowIndex]
+            guard let highNibble = lowercaseHexNibble(high),
+                  let lowNibble = lowercaseHexNibble(low) else {
                 throw OfflineProofVerifierError.invalidProof(error)
             }
-            bytes.append(byte)
-            index = next
+            bytes.append((highNibble << 4) | lowNibble)
+            index = value.index(after: lowIndex)
         }
         return bytes
+    }
+
+    private static func lowercaseHexNibble(_ value: Character) -> UInt8? {
+        guard let scalar = value.unicodeScalars.first,
+              value.unicodeScalars.count == 1 else {
+            return nil
+        }
+        switch scalar.value {
+        case 48 ... 57:
+            return UInt8(scalar.value - 48)
+        case 97 ... 102:
+            return UInt8(scalar.value - 97 + 10)
+        default:
+            return nil
+        }
     }
 
     static func readUInt16(_ data: Data, offset: Int) throws -> Int {

@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -208,7 +207,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
               requiredString(item, "kind"),
               requiredString(item, "transaction_status"),
               item.get("transaction_hash") instanceof String ? (String) item.get("transaction_hash") : null,
-              hexBytes(encoded, "encoded")));
+              exactLowerHexBytes(encoded, "encoded")));
     }
     return outcomes;
   }
@@ -238,24 +237,26 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
     return text;
   }
 
-  private byte[] hexBytes(final String value, final String field) {
-    final String trimmed = value.trim();
-    final String withoutPrefix =
-        trimmed.regionMatches(true, 0, "0x", 0, 2) ? trimmed.substring(2) : trimmed;
-    final String normalized = withoutPrefix.toLowerCase(Locale.ROOT);
-    if ((normalized.length() & 1) != 0) {
-      throw new IllegalArgumentException(field + " must have an even hex length");
+  private byte[] exactLowerHexBytes(final String value, final String field) {
+    if (value.isEmpty() || (value.length() & 1) != 0) {
+      throw new IllegalArgumentException(field + " must be non-empty even lowercase hex");
     }
-    final byte[] out = new byte[normalized.length() / 2];
+    final byte[] out = new byte[value.length() / 2];
     for (int index = 0; index < out.length; index++) {
-      final int hi = Character.digit(normalized.charAt(index * 2), 16);
-      final int lo = Character.digit(normalized.charAt(index * 2 + 1), 16);
-      if (hi < 0 || lo < 0) {
-        throw new IllegalArgumentException(field + " must be hex");
+      final char high = value.charAt(index * 2);
+      final char low = value.charAt(index * 2 + 1);
+      if (!isLowerHexCharacter(high) || !isLowerHexCharacter(low)) {
+        throw new IllegalArgumentException(field + " must be lowercase hex");
       }
+      final int hi = Character.digit(high, 16);
+      final int lo = Character.digit(low, 16);
       out[index] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private boolean isLowerHexCharacter(final char value) {
+    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
   }
 
   private String rejectCode(final Map<String, List<String>> headers) {

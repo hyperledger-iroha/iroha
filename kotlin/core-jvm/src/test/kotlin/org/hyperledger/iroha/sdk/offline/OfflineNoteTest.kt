@@ -961,9 +961,18 @@ class OfflineNoteTest {
         )
 
         assertTrue(token.containsOutputNoteCommitmentHex(string(derivation, "recipient_output_commitment")))
-        assertTrue(token.containsOutputNoteCommitmentHex(
+        assertFalse(token.containsOutputNoteCommitmentHex(
             " 0x${string(derivation, "change_output_commitment").uppercase(Locale.ROOT)} "
         ))
+        assertFalse(token.containsOutputNoteCommitmentHex(
+            string(derivation, "change_output_commitment").uppercase(Locale.ROOT)
+        ))
+        assertFailsWith<IllegalArgumentException> {
+            token.outputClaimForNoteCommitmentHex("0x${string(derivation, "change_output_commitment")}")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            token.outputClaimForNoteCommitmentHex("${string(derivation, "change_output_commitment")} ")
+        }
         assertEquals(
             string(changeOutput, "amount"),
             token.outputClaimForNoteCommitmentHex(string(derivation, "change_output_commitment"))?.amount,
@@ -1205,6 +1214,59 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun assetScopeDataspaceIdsRejectNonCanonicalForms() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainId = string(derivation, "chain_id")
+        val assetId = string(obj(chain, "issue"), "asset_id")
+        val hash = ByteArray(32) { 0x11.toByte() }
+        val origin = OfflineNote.CommitmentOrigin.IssuerLoad(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            0,
+        )
+
+        OfflineNote.NoteCommitmentPreimage(
+            chainId = chainId,
+            ownerKeyCertificatePayloadHash = hash,
+            assetId = "$assetId#dataspace:0",
+            amount = "1",
+            noteSecret = hash,
+            origin = origin,
+        )
+        OfflineNote.NoteCommitmentPreimage(
+            chainId = chainId,
+            ownerKeyCertificatePayloadHash = hash,
+            assetId = "$assetId#dataspace:1",
+            amount = "1",
+            noteSecret = hash,
+            origin = origin,
+        )
+
+        for (rejected in listOf(
+            "dataspace:",
+            "dataspace:+1",
+            "dataspace:01",
+            "dataspace:-1",
+            "dataspace:1.0",
+            "DATASPACE:1",
+            "dataspace:9223372036854775808",
+        )) {
+            assertFailsWith<IllegalArgumentException>("non-canonical dataspace scope should reject: $rejected") {
+                OfflineNote.NoteCommitmentPreimage(
+                    chainId = chainId,
+                    ownerKeyCertificatePayloadHash = hash,
+                    assetId = "$assetId#$rejected",
+                    amount = "1",
+                    noteSecret = hash,
+                    origin = origin,
+                )
+            }
+        }
+    }
+
+    @Test
     fun offlineNoteDomainsRejectSubstitutionAndPadding() {
         val fixture = loadFixture()
         val certificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
@@ -1353,6 +1415,17 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding() {
+        val canonicalHash = "ab".repeat(32)
+        for (rejectedHash in nonExactPublicInputHashes(canonicalHash)) {
+            assertFalse(
+                OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(ByteArray(0), rejectedHash),
+                "OpenVerifyEnvelope must reject non-exact public input hash before decoding",
+            )
+        }
+    }
+
+    @Test
     fun nativeHalo2ProverProducesVerifyingPayloadWhenRequested() {
         if (System.getenv("IROHA_JVM_OFFLINE_PROVER_TEST") != "1") {
             return
@@ -1373,7 +1446,11 @@ class OfflineNoteTest {
         val envelope = OfflineNoteHalo2Prover.proveOpenVerifyEnvelope(values)
         assertTrue(envelope.isNotEmpty())
         assertTrue(OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), values.publicValues()))
-        assertTrue(OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), hex(proof.publicInputsHash())))
+        val publicInputsHashHex = hex(proof.publicInputsHash())
+        assertTrue(OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), publicInputsHashHex))
+        for (rejectedHash in nonExactPublicInputHashes(publicInputsHashHex)) {
+            assertFalse(OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), rejectedHash))
+        }
         assertFalse(
             OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
                 proof.proof.bytes(),
@@ -1414,8 +1491,19 @@ class OfflineNoteTest {
     @Test
     fun qrTextCodecRejectsRetiredVersionedPrefix() {
         val payload = ByteArray(64) { index -> (index * 31 + 7).toByte() }
+        val encoded = OfflineQrStream.TextCodec.encode(payload, OfflineQrStream.FrameEncoding.BASE64)
         val retiredPrefix = "iroha:qr-old:" + Base64.getEncoder().encodeToString(payload)
 
+        assertContentEquals(
+            payload,
+            OfflineQrStream.TextCodec.decode(encoded, OfflineQrStream.FrameEncoding.BASE64),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.TextCodec.decode(" $encoded", OfflineQrStream.FrameEncoding.BASE64)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.TextCodec.decode("$encoded\n", OfflineQrStream.FrameEncoding.BASE64)
+        }
         assertFailsWith<IllegalArgumentException> {
             OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64)
         }
@@ -1454,10 +1542,21 @@ class OfflineNoteTest {
         assertEquals(OfflineBearerCashTextCodec.PAYMENT_TEXT_PREFIX, OfflineNotePaymentTokenCodec.TEXT_PREFIX)
         assertEquals(token.tokenIdHex(), OfflineNotePaymentTokenCodec.decodeText(text).tokenIdHex())
         assertEquals(token.tokenIdHex(), OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex())
+        assertEquals(OfflineBearerCashPayloadKindV1.PAYMENT, OfflineBearerCashTextCodec.payloadKind(text))
         assertEquals(
             token.tokenIdHex(),
             OfflineNotePaymentTokenCodec.decodeText(string(sdkInterop, "payment_token_text")).tokenIdHex(),
         )
+        assertNull(OfflineBearerCashTextCodec.payloadKind(" $text"))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNotePaymentTokenCodec.decodeText(" $text")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNotePaymentTokenCodec.decodeText("$text\n")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodePaymentText("\t$text")
+        }
         assertFailsWith<IllegalArgumentException> {
             OfflineNotePaymentTokenCodec.decodeText(
                 "wallet-offline-bearer-cash-payment-invalid:${text.substringAfter(':')}",
@@ -1534,6 +1633,50 @@ class OfflineNoteTest {
         assertEquals("wallet-offline-bearer-cash-payment:", OfflineNotePaymentTokenCodec.TEXT_PREFIX)
         assertEquals("wallet-offline-bearer-cash-ack:", OfflineNoteReceiptAckCodec.TEXT_PREFIX)
         assertNull(OfflineBearerCashTextCodec.payloadKind("wallet-offline-bearer-cash-unknown:AAAA"))
+        assertNull(OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA"))
+    }
+
+    @Test
+    fun offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits() {
+        fun expectPolicyError(expectedMessage: String, build: () -> OfflineBearerCashPolicyV1) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                build()
+            }
+            assertEquals(expectedMessage, error.message)
+        }
+
+        expectPolicyError("maxCustodyHops must be positive") {
+            OfflineBearerCashPolicyV1(maxCustodyHops = 0)
+        }
+        expectPolicyError("maxCustodyHops must be positive") {
+            OfflineBearerCashPolicyV1(maxCustodyHops = Int.MIN_VALUE)
+        }
+        expectPolicyError("maxLineageSteps must be positive") {
+            OfflineBearerCashPolicyV1(maxLineageSteps = 0)
+        }
+        expectPolicyError("maxSingleQrPayloadBytes must be positive") {
+            OfflineBearerCashPolicyV1(maxSingleQrPayloadBytes = 0)
+        }
+        expectPolicyError("maxStreamPayloadBytes must cover maxSingleQrPayloadBytes") {
+            OfflineBearerCashPolicyV1(maxSingleQrPayloadBytes = 2, maxStreamPayloadBytes = 1)
+        }
+        expectPolicyError("androidKeyPoolReplenishBelow must be positive") {
+            OfflineBearerCashPolicyV1(androidKeyPoolReplenishBelow = 0)
+        }
+        expectPolicyError("androidKeyPoolTarget must cover androidKeyPoolReplenishBelow") {
+            OfflineBearerCashPolicyV1(androidKeyPoolTarget = 7, androidKeyPoolReplenishBelow = 8)
+        }
+        expectPolicyError("androidKeyPoolCap must cover androidKeyPoolTarget") {
+            OfflineBearerCashPolicyV1(androidKeyPoolTarget = 20, androidKeyPoolCap = 19)
+        }
+
+        val policy = OfflineBearerCashPolicyV1.DEFAULT
+        for (payloadByteCount in listOf(0, -1, Int.MIN_VALUE)) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                policy.recommendedTransportForPayloadByteCount(payloadByteCount)
+            }
+            assertEquals("payloadByteCount must be positive", error.message)
+        }
     }
 
     @Test
@@ -1557,6 +1700,17 @@ class OfflineNoteTest {
             request.outputCommitmentHex(),
             OfflineNoteReceiveRequestCodec.decodeText(text).outputCommitmentHex(),
         )
+        assertEquals(
+            OfflineBearerCashPayloadKindV1.RECEIVE_REQUEST,
+            OfflineBearerCashTextCodec.payloadKind(text),
+        )
+        assertNull(OfflineBearerCashTextCodec.payloadKind("$text "))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeText(" $text")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodeReceiveRequestText("$text\n")
+        }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteReceiveRequestCodec.decodeText("$text=")
         }
@@ -1603,6 +1757,14 @@ class OfflineNoteTest {
         val text = OfflineNoteReceiptAckCodec.encodeText(ack)
         assertTrue(text.startsWith(OfflineNoteReceiptAckCodec.TEXT_PREFIX))
         assertEquals(ack.tokenIdHex(), OfflineNoteReceiptAckCodec.decodeText(text).tokenIdHex())
+        assertEquals(OfflineBearerCashPayloadKindV1.ACK, OfflineBearerCashTextCodec.payloadKind(text))
+        assertNull(OfflineBearerCashTextCodec.payloadKind("\n$text"))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAckCodec.decodeText(" $text")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodeAckText("$text\t")
+        }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteReceiptAckCodec.decodeText("$text=")
         }
@@ -2427,7 +2589,7 @@ class OfflineNoteTest {
             recipientAccountId = string(obj(fixture, "payment_token"), "recipient_account_id"),
             acceptedAtMs = long(obj(fixture, "receipt_ack"), "accepted_at_ms"),
         )
-        val challenge = OfflineNoteNearbyPairingChallenge(" nearby_pairing_bird ")
+        val challenge = OfflineNoteNearbyPairingChallenge("nearby_pairing_bird")
         val challengeEnvelope = OfflineNoteNearbyEnvelope(
             kind = OfflineNoteNearbyMessageKind.RECEIVE_REQUEST,
             payload = OfflineNoteTransferHandoff.rawReceiveRequestBytes(receiveRequest),
@@ -2443,6 +2605,24 @@ class OfflineNoteTest {
         )
 
         assertEquals(challenge, OfflineNoteNearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge)
+        val challengeEnvelopeText = String(challengeEnvelope.encoded(), StandardCharsets.UTF_8)
+        assertTrue(challengeEnvelopeText.contains("\"pairingChallenge\":\"nearby_pairing_bird\""))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteNearbyEnvelope.decode(
+                challengeEnvelopeText.replace(
+                    "\"pairingChallenge\":\"nearby_pairing_bird\"",
+                    "\"pairingChallenge\":\" nearby_pairing_bird\"",
+                ).toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteNearbyEnvelope.decode(
+                challengeEnvelopeText.replace(
+                    "\"pairingChallenge\":\"nearby_pairing_bird\"",
+                    "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird \"}",
+                ).toByteArray(StandardCharsets.UTF_8),
+            )
+        }
         assertEquals(
             receiveRequest.outputCommitmentHex(),
             OfflineNoteNearbyEnvelope.decode(challengeEnvelope.encoded()).receiveRequest().outputCommitmentHex(),
@@ -2472,6 +2652,8 @@ class OfflineNoteTest {
         val tokenPayload = base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64"))
         val pairing = OfflineNoteNearbyPairingChallenge("nearby_pairing_mask")
 
+        assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyPairingChallenge(" nearby_pairing_mask") }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyPairingChallenge("nearby_pairing_mask\n") }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyPairingChallenge("nearby_pairing_mask<script>") }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteNearbyEnvelope(
@@ -2774,6 +2956,51 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun walletRejectsNonPositiveLoadAmounts() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val issue = obj(chain, "issue")
+        val senderCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val loadContext = OfflineNoteLoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val issuerClient = RecordingIssuerClient(loadContext)
+        val store = InMemoryOfflineNoteStore()
+        val wallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(issue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            ownerCertificateSigner = TestOwnerCertificateSigner(),
+            store = store,
+            issuerClient = issuerClient,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(emptyList()),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-positive-load"),
+            clock = { 1_700_000_012_180L },
+        )
+        val assetDefinitionId = assetDefinitionFromAssetId(string(issue, "asset_id"))
+
+        listOf("0", "-1").forEach { invalidAmount ->
+            val failure = assertFailsWith<ExecutionException> {
+                wallet.load(assetDefinitionId, invalidAmount).get(5, TimeUnit.SECONDS)
+            }
+            val cause = failure.cause
+            assertTrue(cause is IllegalArgumentException)
+            assertTrue(cause.message.orEmpty().contains("Offline Note payment amount must be positive"))
+            assertEquals(0, issuerClient.prepareLoadCount)
+            assertNull(issuerClient.lastIssueRequest)
+            assertTrue(store.listNotes().isEmpty())
+        }
+    }
+
+    @Test
     fun walletLoadDoesNotBlockIssuerCompletionThread() {
         val fixture = loadFixture()
         val token = obj(fixture, "payment_token")
@@ -2992,6 +3219,68 @@ class OfflineNoteTest {
                 failure.message,
             )
         }
+    }
+
+    @Test
+    fun toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields() {
+        val offlinePublicKey = "a5".repeat(32)
+
+        fun binding(
+            deviceId: String = "device-1",
+            offlinePublicKeyValue: String = offlinePublicKey,
+            bindingDeviceId: Any? = "device-1",
+            bindingOfflinePublicKey: Any? = offlinePublicKey,
+            attestationKeyId: Any? = "attestation-key-1",
+        ): OfflineNoteIssuerDeviceBinding = OfflineNoteIssuerDeviceBinding(
+            deviceId = deviceId,
+            offlinePublicKey = offlinePublicKeyValue,
+            deviceBinding = linkedMapOf(
+                "device_id" to bindingDeviceId,
+                "attestation_key_id" to attestationKeyId,
+                "offline_public_key" to bindingOfflinePublicKey,
+            ),
+        )
+
+        assertEquals("attestation-key-1", binding().attestationKeyId())
+        assertEquals(
+            "deviceId must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> {
+                binding(deviceId = " device-1")
+            }.message,
+        )
+        assertEquals(
+            "offlinePublicKey must be exact non-empty text",
+            assertFailsWith<IllegalArgumentException> {
+                binding(offlinePublicKeyValue = "$offlinePublicKey ")
+            }.message,
+        )
+        assertEquals(
+            "device_binding.device_id must match deviceId",
+            assertFailsWith<IllegalArgumentException> {
+                binding(bindingDeviceId = "device-1 ")
+            }.message,
+        )
+        assertEquals(
+            "device_binding.offline_public_key must match offlinePublicKey",
+            assertFailsWith<IllegalArgumentException> {
+                binding(bindingOfflinePublicKey = " $offlinePublicKey")
+            }.message,
+        )
+
+        val paddedAttestation = binding(attestationKeyId = " attestation-key-1")
+        assertEquals(
+            "device_binding.attestation_key_id must be exact non-empty text",
+            assertFailsWith<IllegalStateException> {
+                paddedAttestation.attestationKeyId()
+            }.message,
+        )
+        val emptyAttestation = binding(attestationKeyId = "")
+        assertEquals(
+            "device_binding.attestation_key_id is required",
+            assertFailsWith<IllegalStateException> {
+                emptyAttestation.attestationKeyId()
+            }.message,
+        )
     }
 
     @Test
@@ -3262,6 +3551,168 @@ class OfflineNoteTest {
         }
         assertEquals(OfflineNoteWalletNoteState.SPENDABLE, senderStore.findNote(sourceNote.noteCommitment())?.state)
         assertEquals(1, senderStore.listNotes().size)
+    }
+
+    @Test
+    fun walletRejectsPaymentsNeedingMoreThanFourInputs() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val recipientSigner = TestOwnerCertificateSigner()
+        val senderCertificate = testIssuer.issuerCertificate(senderSigner.accountId)
+        val senderStore = InMemoryOfflineNoteStore()
+        repeat(5) { index ->
+            senderStore.upsert(
+                issuerSourceWalletNote(
+                    chainId = chainId,
+                    accountId = senderSigner.accountId,
+                    assetDefinitionId = assetDefinitionId,
+                    amount = "1",
+                    issuerCertificate = senderCertificate,
+                    noteSecret = ByteArray(32) { (0x40 + index).toByte() },
+                    operationSuffix = "input-cap-$index",
+                    createdAtMs = 1_700_000_012_000L + index,
+                )
+            )
+        }
+        val senderWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            ownerCertificateSigner = senderSigner,
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-input-cap"),
+            clock = { 1_700_000_012_100L },
+        )
+        val recipientWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = recipientSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(recipientSigner.accountId)),
+            ownerCertificateSigner = recipientSigner,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(listOf(ByteArray(32) { 0x50.toByte() })),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-input-cap"),
+            clock = { 1_700_000_012_050L },
+        )
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionId,
+            amount = "5",
+        )
+
+        assertIllegalArgumentContains("Offline Note payments support at most 4 input notes") {
+            senderWallet.pay(receiveRequest)
+        }
+        assertEquals(5, senderStore.listNotes().size)
+        assertEquals(5, senderStore.listNotes().count { it.state == OfflineNoteWalletNoteState.SPENDABLE })
+    }
+
+    @Test
+    fun walletRejectsNonPositiveReceiveAndPaymentAmounts() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val recipientSigner = TestOwnerCertificateSigner()
+        val senderCertificate = testIssuer.issuerCertificate(senderSigner.accountId)
+        val recipientStore = InMemoryOfflineNoteStore()
+        val recipientWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = recipientSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(recipientSigner.accountId)),
+            store = recipientStore,
+            ownerCertificateSigner = recipientSigner,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(
+                listOf(
+                    ByteArray(32) { 0x60.toByte() },
+                    ByteArray(32) { 0x61.toByte() },
+                )
+            ),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-positive-amount"),
+            clock = { 1_700_000_012_150L },
+        )
+
+        listOf("0", "-1").forEach { invalidAmount ->
+            assertIllegalArgumentContains("Offline Note payment amount must be positive") {
+                recipientWallet.prepareReceive(
+                    assetDefinitionId = assetDefinitionId,
+                    amount = invalidAmount,
+                )
+            }
+            assertTrue(recipientStore.listNotes().isEmpty())
+        }
+
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionId,
+            amount = "1",
+        )
+        val senderStore = InMemoryOfflineNoteStore()
+        senderStore.upsert(
+            issuerSourceWalletNote(
+                chainId = chainId,
+                accountId = senderSigner.accountId,
+                assetDefinitionId = assetDefinitionId,
+                amount = "2",
+                issuerCertificate = senderCertificate,
+                noteSecret = ByteArray(32) { 0x70.toByte() },
+                operationSuffix = "positive-amount",
+                createdAtMs = 1_700_000_012_160L,
+            )
+        )
+        val senderWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            ownerCertificateSigner = senderSigner,
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(emptyList()),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-positive-amount"),
+            clock = { 1_700_000_012_170L },
+        )
+
+        listOf("0", "-1").forEach { invalidAmount ->
+            val forgedRequest = OfflineNoteReceiveRequest(
+                chainId = receiveRequest.chainId,
+                paymentRequestId = "${receiveRequest.paymentRequestId}-$invalidAmount",
+                accountId = receiveRequest.accountId,
+                assetDefinitionId = receiveRequest.assetDefinitionId,
+                assetId = receiveRequest.assetId,
+                amount = invalidAmount,
+                keyCertificate = receiveRequest.keyCertificate,
+                outputCommitment = receiveRequest.outputCommitment(),
+            )
+            assertIllegalArgumentContains("Offline Note payment amount must be positive") {
+                senderWallet.pay(forgedRequest)
+            }
+            assertEquals(1, senderStore.listNotes().size)
+            assertEquals(OfflineNoteWalletNoteState.SPENDABLE, senderStore.listNotes().single().state)
+        }
     }
 
     @Test
@@ -4532,10 +4983,79 @@ class OfflineNoteTest {
         assertEquals(null, committed.resolve(sourceWalletNote(fixture, certificate(obj(payment, "sender_key_certificate")))))
         assertEquals(OfflineNoteWalletNoteState.REDEEMED, committed.resolve(redeemPending)?.state)
 
+        val permissiveCaseDrift = OfflineNoteOutcomeIndex.fromExplorerOutcomes(
+            listOf(
+                OfflineNoteExplorerInstructionOutcome(
+                    kind = "RedeemOfflineNote",
+                    transactionStatus = "committed",
+                    transactionHashHex = "lower-status",
+                    encodedInstruction = byteArrayOf(1),
+                ),
+                OfflineNoteExplorerInstructionOutcome(
+                    kind = "redeemofflinenote",
+                    transactionStatus = OfflineNoteOutcomeIndex.STATUS_COMMITTED,
+                    transactionHashHex = "lower-kind",
+                    encodedInstruction = byteArrayOf(1),
+                ),
+            )
+        )
+        assertNull(permissiveCaseDrift.resolve(redeemPending))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteExplorerInstructionOutcome(
+                kind = " ${OfflineNoteOutcomeIndex.KIND_REDEEM}",
+                transactionStatus = OfflineNoteOutcomeIndex.STATUS_COMMITTED,
+                encodedInstruction = byteArrayOf(1),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteExplorerInstructionOutcome(
+                kind = OfflineNoteOutcomeIndex.KIND_REDEEM,
+                transactionStatus = "${OfflineNoteOutcomeIndex.STATUS_COMMITTED} ",
+                encodedInstruction = byteArrayOf(1),
+            )
+        }
+
         val rejected = OfflineNoteOutcomeIndex()
             .recordRejectedAudit(audit, "audit-rejected")
             .recordRejectedRedeem(redeem, "redeem-rejected")
         assertEquals(OfflineNoteWalletNoteState.SPENDABLE, rejected.resolve(redeemPending)?.state)
+    }
+
+    @Test
+    fun outcomeProviderRequiresExactEncodedInstructionHex() {
+        assertContentEquals(
+            byteArrayOf(0xbe.toByte(), 0xef.toByte()),
+            outcomeProviderEncodedInstruction("beef", nested = false),
+        )
+        assertContentEquals(
+            byteArrayOf(0xca.toByte(), 0xfe.toByte()),
+            outcomeProviderEncodedInstruction("cafe", nested = true),
+        )
+
+        for ((encoded, nested) in listOf(
+            " beef" to false,
+            "beef\n" to false,
+            "0xbeef" to false,
+            "BEEF" to true,
+            "" to true,
+            "abc" to true,
+            "gg" to true,
+        )) {
+            assertFailsWith<ExecutionException> {
+                outcomeProviderEncodedInstruction(encoded, nested)
+            }
+        }
+    }
+
+    private fun outcomeProviderEncodedInstruction(encoded: String, nested: Boolean): ByteArray {
+        val outcomes = ToriiOfflineNoteOutcomeProvider(
+            executor = ExplorerOutcomeExecutor(encoded, nested),
+            baseUri = URI.create("https://example.test"),
+            timeout = null,
+            perPage = 25,
+        ).listOutcomes().get(5, TimeUnit.SECONDS)
+        assertEquals(3, outcomes.size)
+        return outcomes.first().encodedInstruction()
     }
 
     private fun issue(fixture: Map<String, Any?>): OfflineNote.Issue {
@@ -5337,6 +5857,40 @@ class OfflineNoteTest {
         }
     }
 
+    private class ExplorerOutcomeExecutor(
+        private val encoded: String,
+        private val nested: Boolean,
+    ) : HttpTransportExecutor {
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            val json = if (nested) {
+                linkedMapOf<String, Any?>("encoded" to encoded)
+            } else {
+                linkedMapOf<String, Any?>()
+            }
+            val box = linkedMapOf<String, Any?>("json" to json)
+            if (!nested) {
+                box["encoded"] = encoded
+            }
+            val item = linkedMapOf<String, Any?>(
+                "authority" to "authority",
+                "created_at" to "2025-01-01T00:00:00Z",
+                "kind" to OfflineNoteOutcomeIndex.KIND_ISSUE,
+                "r#box" to box,
+                "transaction_hash" to "hash",
+                "transaction_status" to OfflineNoteOutcomeIndex.STATUS_COMMITTED,
+                "block" to 1L,
+                "index" to 0L,
+            )
+            val page = linkedMapOf<String, Any?>("items" to listOf(item))
+            return CompletableFuture.completedFuture(
+                TransportResponse.builder()
+                    .setStatusCode(200)
+                    .setBody(JsonEncoder.encode(page).toByteArray(StandardCharsets.UTF_8))
+                    .build()
+            )
+        }
+    }
+
     private inner class OfflineIssuerExecutor(
         private val certificateJson: Map<String, Any?>,
         private val serverStateHash: String? = null,
@@ -5450,6 +6004,7 @@ class OfflineNoteTest {
     private class RecordingIssuerClient(
         private val loadContext: OfflineNoteLoadContext,
     ) : OfflineNoteIssuerClient {
+        var prepareLoadCount = 0
         var lastIssueRequest: OfflineNoteIssueRequest? = null
 
         override fun prepareLoad(
@@ -5457,7 +6012,10 @@ class OfflineNoteTest {
             accountId: String,
             assetDefinitionId: String,
             amount: String,
-        ): CompletableFuture<OfflineNoteLoadContext> = CompletableFuture.completedFuture(loadContext)
+        ): CompletableFuture<OfflineNoteLoadContext> {
+            prepareLoadCount += 1
+            return CompletableFuture.completedFuture(loadContext)
+        }
 
         override fun issueNote(request: OfflineNoteIssueRequest): CompletableFuture<OfflineNoteIssueResponse> {
             lastIssueRequest = request
@@ -5752,6 +6310,17 @@ class OfflineNoteTest {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun nonExactPublicInputHashes(canonicalHash: String): List<String> =
+        listOf(
+            " $canonicalHash",
+            "$canonicalHash\n",
+            canonicalHash.uppercase(Locale.ROOT),
+            "0x$canonicalHash",
+            canonicalHash.dropLast(1),
+            canonicalHash.dropLast(2) + "zz",
+            "",
+        )
 
     private fun mutatedHeaderFrame(
         header: OfflineQrStream.Frame,

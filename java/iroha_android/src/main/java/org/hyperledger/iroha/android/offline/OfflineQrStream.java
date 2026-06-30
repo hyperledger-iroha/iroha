@@ -92,15 +92,14 @@ public final class OfflineQrStream {
     public static byte[] decode(final String value, final FrameEncoding encoding) {
       Objects.requireNonNull(value, "value");
       Objects.requireNonNull(encoding, "encoding");
-      final String trimmed = value.trim();
       final String payload;
       if (encoding == FrameEncoding.BASE64) {
-        if (!trimmed.startsWith(PREFIX)) {
+        if (!value.startsWith(PREFIX)) {
           throw new IllegalArgumentException("QR text prefix missing");
         }
-        payload = trimmed.substring(PREFIX.length());
+        payload = value.substring(PREFIX.length());
       } else {
-        payload = trimmed;
+        payload = value;
       }
       return java.util.Base64.getDecoder().decode(payload);
     }

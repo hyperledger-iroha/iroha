@@ -23,7 +23,8 @@ enum OfflineNoteTextPayloadEncoding {
     }
 
     static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains("="),
               value.unicodeScalars.allSatisfy({ scalar in
                   let byte = scalar.value
@@ -63,11 +64,10 @@ enum OfflineNoteTextPayloadEncoding {
     }
 
     static func textPayload(_ text: String, prefix: String) throws -> Data {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(prefix) else {
+        guard text.hasPrefix(prefix) else {
             throw OfflineNoteTransferTextPayloadCodecError.unknownPrefix
         }
-        guard let data = base64UrlDecode(String(trimmed.dropFirst(prefix.count))), !data.isEmpty else {
+        guard let data = base64UrlDecode(String(text.dropFirst(prefix.count))), !data.isEmpty else {
             throw OfflineNoteTransferTextPayloadCodecError.invalidPayload
         }
         return data
@@ -570,13 +570,17 @@ public struct OfflinePaymentTokenInputClaim: Codable, Equatable, Sendable {
             keyCertificatePayloadHash,
             field: "key_certificate_payload_hash"
         )
-        let computedClaimHash = try OfflineNoteIssuedClaim(
+        let issuedClaim = try OfflineNoteIssuedClaim(
             domain: domain,
             noteCommitment: noteCommitmentData,
             keyCertificatePayloadHash: keyCertificatePayloadHashData,
             assetId: assetId,
             amount: canonicalAmount
-        ).claimHash().hexLowercased()
+        )
+        guard assetId == issuedClaim.assetId else {
+            throw OfflineNotePayloadError.invalidField("asset_id")
+        }
+        let computedClaimHash = try issuedClaim.claimHash().hexLowercased()
         if let claimHash {
             guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(claimHash) else {
                 throw OfflineNotePayloadError.invalidField("claim_hash")
@@ -588,7 +592,7 @@ public struct OfflinePaymentTokenInputClaim: Codable, Equatable, Sendable {
         self.domain = domain
         self.noteCommitment = noteCommitment
         self.keyCertificatePayloadHash = keyCertificatePayloadHash
-        self.assetId = assetId
+        self.assetId = issuedClaim.assetId
         self.amount = canonicalAmount
         self.claimHash = claimHash ?? computedClaimHash
     }
@@ -858,10 +862,11 @@ public struct OfflinePaymentToken: Codable, Equatable, Sendable {
     }
 
     public func outputClaim(matchingNoteCommitment noteCommitment: String) -> OfflinePaymentTokenOutputClaim? {
-        let normalized = Self.normalizedNoteCommitmentHex(noteCommitment)
-        guard !normalized.isEmpty else { return nil }
+        guard Self.isExactNoteCommitmentHex(noteCommitment) else {
+            return nil
+        }
         return outputClaims.first {
-            Self.normalizedNoteCommitmentHex($0.noteCommitment) == normalized
+            $0.noteCommitment == noteCommitment
         }
     }
 
@@ -885,12 +890,8 @@ public struct OfflinePaymentToken: Codable, Equatable, Sendable {
         )
     }
 
-    private static func normalizedNoteCommitmentHex(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasPrefix("0x") {
-            return String(trimmed.dropFirst(2))
-        }
-        return trimmed
+    private static func isExactNoteCommitmentHex(_ value: String) -> Bool {
+        OfflineNoteTextPayloadEncoding.isCanonicalHashHex(value)
     }
 
     private enum CodingKeys: String, CodingKey {

@@ -1924,25 +1924,59 @@ function normalizeBrowserProverRefRecord(record, label) {
   }
   return {
     moduleUrl: normalizeBrowserProverModuleUrl(
-      readFirstString(source, "moduleUrl", "module_url", "browserModuleUrl", "browser_module_url"),
+      readRequiredString(
+        source,
+        ["moduleUrl", "module_url", "browserModuleUrl", "browser_module_url"],
+        `${label}.moduleUrl`,
+      ),
       `${label}.moduleUrl`,
     ),
     moduleSpecifier: moduleSpecifier || null,
     moduleHash: normalizeCanonicalHex32(
-      readFirstString(source, "moduleHash", "module_hash", "moduleSha256", "module_sha256", "sha256"),
+      readRequiredString(
+        source,
+        ["moduleHash", "module_hash", "moduleSha256", "module_sha256", "sha256"],
+        `${label}.moduleHash`,
+      ),
       `${label}.moduleHash`,
     ),
     manifestHash: normalizeCanonicalHex32(
-      readFirstString(source, "manifestHash", "manifest_hash", "manifestSha256", "manifest_sha256"),
+      readRequiredString(
+        source,
+        ["manifestHash", "manifest_hash", "manifestSha256", "manifest_sha256"],
+        `${label}.manifestHash`,
+      ),
       `${label}.manifestHash`,
     ),
     expectedExports,
     boundRouteHash: normalizeCanonicalHex32(
-      readFirstString(source, "boundRouteHash", "bound_route_hash", "routeHash", "route_hash", "destinationBindingHash", "destination_binding_hash"),
+      readRequiredString(
+        source,
+        [
+          "boundRouteHash",
+          "bound_route_hash",
+          "routeHash",
+          "route_hash",
+          "destinationBindingHash",
+          "destination_binding_hash",
+        ],
+        `${label}.boundRouteHash`,
+      ),
       `${label}.boundRouteHash`,
     ),
     boundProofHash: normalizeCanonicalHex32(
-      readFirstString(source, "boundProofHash", "bound_proof_hash", "proofHash", "proof_hash", "proofArtifactHash", "proof_artifact_hash"),
+      readRequiredString(
+        source,
+        [
+          "boundProofHash",
+          "bound_proof_hash",
+          "proofHash",
+          "proof_hash",
+          "proofArtifactHash",
+          "proof_artifact_hash",
+        ],
+        `${label}.boundProofHash`,
+      ),
       `${label}.boundProofHash`,
     ),
   };

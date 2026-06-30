@@ -1587,20 +1587,22 @@ impl IVMHost for DefaultHost {
                 Self::expect_tlv(vm, 12, PointerType::AccountId)?;
                 Ok(Self::mutation_gas(0))
             }
-            crate::syscalls::SYSCALL_TRANSFER_ASSET => {
+            crate::syscalls::SYSCALL_TRANSFER_V1 => {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)
-                    Self::expect_tlv(vm, 10, PointerType::AccountId)?;
-                    Self::expect_tlv(vm, 11, PointerType::AccountId)?;
-                    Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-                    let amount_ptr = vm.register(13);
-                    if amount_ptr != 0 {
-                        Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
-                    }
-                    Ok(Self::mutation_gas(0))
+                    Err(crate::VMError::PermissionDenied)
                 }
+            }
+            crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
+                // r13=&NoritoBytes(Numeric), r14=&DataSpaceId
+                Self::expect_tlv(vm, 10, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 11, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
+                Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
+                Self::expect_tlv(vm, 14, PointerType::DataSpaceId)?;
+                Ok(Self::mutation_gas(0))
             }
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),

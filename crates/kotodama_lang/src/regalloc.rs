@@ -489,11 +489,13 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             to,
             asset,
             amount,
+            dataspace,
         } => {
             f(*from);
             f(*to);
             f(*asset);
             f(*amount);
+            f(*dataspace);
         }
         EscrowOpenOffer {
             escrow,

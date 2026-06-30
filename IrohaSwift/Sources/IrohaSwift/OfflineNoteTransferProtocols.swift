@@ -1208,11 +1208,10 @@ public struct OfflineNoteNearbyPairingChallenge: Codable, Equatable, Hashable, S
     public let assetName: String
 
     public init(assetName: String) throws {
-        let trimmed = assetName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.allAssetNames.contains(trimmed) else {
+        guard Self.allAssetNames.contains(assetName) else {
             throw OfflineNoteNearbyError.invalidMessage
         }
-        self.assetName = trimmed
+        self.assetName = assetName
     }
 
     public init(from decoder: Decoder) throws {

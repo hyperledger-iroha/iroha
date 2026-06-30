@@ -51,28 +51,22 @@ public struct OfflineNoteIssuerDeviceBinding {
     public init(deviceId: String,
                 offlinePublicKey: String,
                 deviceBinding: [String: Any]) throws {
-        let trimmedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPublicKey = offlinePublicKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDeviceId.isEmpty else {
-            throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_id")
-        }
-        guard !trimmedPublicKey.isEmpty else {
-            throw ToriiOfflineNoteIssuerClientError.invalidJSON("offline_public_key")
-        }
+        let exactDeviceId = try Self.requiredExactNonEmptyText(deviceId, "device_id")
+        let exactPublicKey = try Self.requiredExactNonEmptyText(offlinePublicKey, "offline_public_key")
         if let bindingDeviceId = deviceBinding["device_id"] as? String,
-           bindingDeviceId != trimmedDeviceId {
+           bindingDeviceId != exactDeviceId {
             throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.device_id")
         }
         if let bindingPublicKey = deviceBinding["offline_public_key"] as? String,
-           bindingPublicKey != trimmedPublicKey {
+           bindingPublicKey != exactPublicKey {
             throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.offline_public_key")
         }
         for retiredKey in Self.retiredAssertionPublicKeyAliasFields
             where deviceBinding.keys.contains(retiredKey) {
             throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.\(retiredKey)")
         }
-        self.deviceId = trimmedDeviceId
-        self.offlinePublicKey = trimmedPublicKey
+        self.deviceId = exactDeviceId
+        self.offlinePublicKey = exactPublicKey
         self.binding = try Self.deepCopyObject(deviceBinding)
     }
 
@@ -81,11 +75,18 @@ public struct OfflineNoteIssuerDeviceBinding {
     }
 
     public func attestationKeyId() throws -> String {
-        guard let value = binding["attestation_key_id"] as? String,
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let value = binding["attestation_key_id"] as? String else {
             throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.attestation_key_id")
         }
-        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try Self.requiredExactNonEmptyText(value, "device_binding.attestation_key_id")
+    }
+
+    private static func requiredExactNonEmptyText(_ value: String, _ field: String) throws -> String {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw ToriiOfflineNoteIssuerClientError.invalidJSON(field)
+        }
+        return value
     }
 
     fileprivate static func deepCopyObject(_ value: [String: Any]) throws -> [String: Any] {

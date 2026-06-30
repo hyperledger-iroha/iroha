@@ -2,7 +2,6 @@ package org.hyperledger.iroha.android.offline;
 
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /** Outcome index that maps committed/rejected Offline Note instructions to note states. */
@@ -10,6 +9,8 @@ public final class OfflineNoteOutcomeIndex {
   public static final String KIND_ISSUE = "IssueOfflineNote";
   public static final String KIND_REDEEM = "RedeemOfflineNote";
   public static final String KIND_AUDIT = "AuditOfflineNote";
+  public static final String STATUS_COMMITTED = "Committed";
+  public static final String STATUS_REJECTED = "Rejected";
 
   private final Map<String, String> committedIssues = new LinkedHashMap<>();
   private final Map<String, String> rejectedIssues = new LinkedHashMap<>();
@@ -96,13 +97,12 @@ public final class OfflineNoteOutcomeIndex {
       final List<OfflineNoteExplorerInstructionOutcome> outcomes) {
     final OfflineNoteOutcomeIndex index = new OfflineNoteOutcomeIndex();
     for (final OfflineNoteExplorerInstructionOutcome outcome : outcomes) {
-      final String normalized = outcome.transactionStatus().toLowerCase(Locale.ROOT);
-      final boolean committed = "committed".equals(normalized);
-      final boolean rejected = "rejected".equals(normalized);
+      final boolean committed = STATUS_COMMITTED.equals(outcome.transactionStatus());
+      final boolean rejected = STATUS_REJECTED.equals(outcome.transactionStatus());
       if (!committed && !rejected) {
         continue;
       }
-      if (KIND_ISSUE.equalsIgnoreCase(outcome.kind())) {
+      if (KIND_ISSUE.equals(outcome.kind())) {
         final OfflineNote.Issue issue =
             OfflineNote.decodeIssueInstruction(outcome.encodedInstruction());
         if (committed) {
@@ -110,7 +110,7 @@ public final class OfflineNoteOutcomeIndex {
         } else {
           index.recordRejectedIssue(issue, outcome.transactionHashHex());
         }
-      } else if (KIND_AUDIT.equalsIgnoreCase(outcome.kind())) {
+      } else if (KIND_AUDIT.equals(outcome.kind())) {
         final OfflineNote.AuditBundle audit =
             OfflineNote.decodeAuditInstruction(outcome.encodedInstruction());
         if (committed) {
@@ -118,7 +118,7 @@ public final class OfflineNoteOutcomeIndex {
         } else {
           index.recordRejectedAudit(audit, outcome.transactionHashHex());
         }
-      } else if (KIND_REDEEM.equalsIgnoreCase(outcome.kind())) {
+      } else if (KIND_REDEEM.equals(outcome.kind())) {
         final OfflineNote.Redeem redeem =
             OfflineNote.decodeRedeemInstruction(outcome.encodedInstruction());
         if (committed) {

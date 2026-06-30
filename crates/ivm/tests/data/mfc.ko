@@ -5,13 +5,13 @@
 fn send_mfc(from_account: AccountId, to_account: AccountId, amount: int) {
     // Use constant asset id 1 representing the Makoto Free Cash token
     let mfc = mfc_asset();
-    transfer_asset(from_account, to_account, mfc, amount);
+    transfer_asset(from_account, to_account, mfc, amount, dataspace_id("0"));
 }
 
 fn loop_mfc(from_account: AccountId, to_account: AccountId) {
     let mfc = mfc_asset();
     for let qty = 369; qty <= 1337; qty++ {
-        transfer_asset(from_account, to_account, mfc, qty);
+        transfer_asset(from_account, to_account, mfc, qty, dataspace_id("0"));
     }
 }
 

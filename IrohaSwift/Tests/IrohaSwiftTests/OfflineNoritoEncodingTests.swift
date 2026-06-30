@@ -13,9 +13,11 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAssetIdAcceptsCanonicalPublicLiteral() throws {
-        let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try makeI105(seed: 1))"
-        let encoded = try OfflineNorito.encodeAssetId(assetId)
-        XCTAssertFalse(encoded.isEmpty)
+        let account = try makeI105(seed: 1)
+        let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(account)"
+        XCTAssertFalse(try OfflineNorito.encodeAssetId(assetId).isEmpty)
+        XCTAssertFalse(try OfflineNorito.encodeAssetId("\(assetId)#dataspace:0").isEmpty)
+        XCTAssertFalse(try OfflineNorito.encodeAssetId("\(assetId)#dataspace:1").isEmpty)
     }
 
     func testEncodeAssetIdRejectsTextualForms() {
@@ -27,7 +29,13 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     func testEncodeAssetIdRejectsMalformedPublicLiterals() throws {
         assertInvalidAssetId("not:an-asset")
         assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#")
-        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try makeI105(seed: 9))#dataspace:")
+        let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try makeI105(seed: 9))"
+        assertInvalidAssetId("\(assetId)#dataspace:")
+        assertInvalidAssetId("\(assetId)#dataspace:+1")
+        assertInvalidAssetId("\(assetId)#dataspace:01")
+        assertInvalidAssetId("\(assetId)#dataspace:-1")
+        assertInvalidAssetId("\(assetId)#DATASPACE:1")
+        assertInvalidAssetId("\(assetId)#dataspace:18446744073709551616")
     }
 
     func testEncodeAccountIdAcceptsI105() throws {

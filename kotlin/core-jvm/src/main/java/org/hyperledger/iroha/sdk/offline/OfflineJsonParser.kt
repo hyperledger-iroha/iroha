@@ -20,11 +20,15 @@ object OfflineJsonParser {
         val obj = expectObject(root, "root")
         rejectRemovedKagemushaAbi7ReadinessFields(obj)
         return OfflineReadiness(
-            asOptionalBoolean(obj["offline_note"], false),
-            asOptionalBoolean(obj["offline_one_use_keys"], false),
-            asOptionalBoolean(obj["offline_recursive_note_proof"], false),
-            asOptionalBoolean(obj["offline_fountain_qr"], false),
-            asOptionalBoolean(obj["offline_sync_optional"], false),
+            asOptionalBoolean(obj["offline_note"], "offline_note", false),
+            asOptionalBoolean(obj["offline_one_use_keys"], "offline_one_use_keys", false),
+            asOptionalBoolean(
+                obj["offline_recursive_note_proof"],
+                "offline_recursive_note_proof",
+                false,
+            ),
+            asOptionalBoolean(obj["offline_fountain_qr"], "offline_fountain_qr", false),
+            asOptionalBoolean(obj["offline_sync_optional"], "offline_sync_optional", false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
             asBoolean(
                 obj["offline_kagemusha_recursive_compact_available"],
@@ -464,8 +468,10 @@ object OfflineJsonParser {
         return value
     }
 
-    private fun asOptionalBoolean(value: Any?, default: Boolean): Boolean {
-        return if (value is Boolean) value else default
+    private fun asOptionalBoolean(value: Any?, path: String, default: Boolean): Boolean {
+        if (value == null) return default
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
     }
 
     private fun rejectRemovedKagemushaAbi7ReadinessFields(obj: Map<String, Any>) {
@@ -489,7 +495,7 @@ object OfflineJsonParser {
     }
 
     private fun decodeHexBytes(hex: String, path: String): ByteArray {
-        check(hex.length % 2 == 0) { "$path must be a hex string of even length" }
+        check(hex.length % 2 == 0) { "$path must be a lowercase hex string of even length" }
         val out = ByteArray(hex.length / 2)
         for (i in out.indices) {
             val hi = hexDigit(hex[2 * i], path, 2 * i)
@@ -503,8 +509,7 @@ object OfflineJsonParser {
         return when (c) {
             in '0'..'9' -> c - '0'
             in 'a'..'f' -> c - 'a' + 10
-            in 'A'..'F' -> c - 'A' + 10
-            else -> error("invalid hex digit `$c` at $path[$index]")
+            else -> error("invalid lowercase hex digit `$c` at $path[$index]")
         }
     }
 }

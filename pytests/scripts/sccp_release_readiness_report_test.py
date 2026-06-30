@@ -9,8 +9,11 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +45,11 @@ class HostilePublicKey:
 
     def __repr__(self):
         return "secret-token-hostile-key"
+
+
+def skip_unless_system_temp_is_symlink() -> None:
+    if not Path("/tmp").is_symlink():
+        pytest.skip("/tmp is not a symlink on this platform")
 
 
 JS_CALLBACK_HOOK_SYMBOLS = ("witnessProvider", "proveFn", "consensusProvider")
@@ -14471,6 +14479,29 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "## Blocking Items\n\n- None" in completed.stdout
 
 
+def test_release_readiness_report_accepts_phase_evidence_under_system_temp_symlink_prefix() -> None:
+    """System temp aliases such as macOS /tmp must not block phase artifacts."""
+
+    skip_unless_system_temp_is_symlink()
+    report = load_report_module()
+    with tempfile.TemporaryDirectory(
+        prefix="iroha-release-readiness-",
+        dir="/tmp",
+    ) as directory:
+        tmp_root = Path(directory)
+        corridor_log = tmp_root / "sccp-corridor.log"
+        corridor_payload = complete_corridor_log()
+        corridor_log.write_text(corridor_payload, encoding="utf-8")
+
+        artifact = report._artifact(corridor_log)
+
+        assert artifact["path"] == str(corridor_log)
+        assert artifact["bytes"] == len(corridor_payload.encode("utf-8"))
+        assert artifact["sha256"] == hashlib.sha256(
+            corridor_payload.encode("utf-8")
+        ).hexdigest()
+
+
 def test_release_readiness_report_passes_with_only_active_launch_lane(
     tmp_path: Path,
 ) -> None:
@@ -14743,6 +14774,14 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         "`UnitTest`"
         in markdown
     )
+    assert "requires every `UnitTestResult` row to be a leaf element" in markdown
+    assert (
+        "requires every `UnitTest` definition to contain only direct "
+        "`Execution` and `TestMethod` children"
+        in markdown
+    )
+    assert "requires every `TestMethod` definition to be a leaf element" in markdown
+    assert "requires every `Execution` definition to be a leaf element" in markdown
     assert (
         "requires each `UnitTest` definition to contain exactly one direct "
         "`TestMethod`"
@@ -17869,6 +17908,26 @@ def test_release_readiness_report_classifies_malformed_active_lane_blockers(
             "domain 1 (eth): route canary operator launch hold",
         ),
         (
+            ["Route Canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): Route Canary operator launch hold",
+        ),
+        (
+            ["route%20canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): route%20canary operator launch hold",
+        ),
+        (
+            ["Route%20Allowlist operator launch hold"],
+            ("route_allowlist_binding",),
+            "domain 1 (eth): Route%20Allowlist operator launch hold",
+        ),
+        (
+            ["Source%20Adapter operator launch hold"],
+            ("governed_deployment_evidence",),
+            "domain 1 (eth): Source%20Adapter operator launch hold",
+        ),
+        (
             [duplicate_lane_blocker, duplicate_lane_blocker],
             (*category_item_ids, "no_unresolved_blockers"),
             "domain 1 (eth): active launch lane blockers must not contain duplicate strings",
@@ -18027,6 +18086,38 @@ def test_release_readiness_report_numbers_repeated_active_launch_duplicate_group
         assert rendered.count(f"{error} #") == 2
     for copied_blocker in (*evidence_blockers, *lane_blockers):
         assert copied_blocker not in rendered
+
+
+def test_release_readiness_report_decodes_active_launch_blocker_domain_prefixes(
+) -> None:
+    """Encoded active-domain blockers must scope before active launch filtering."""
+
+    report = load_report_module()
+    prefix = f"domain {report.ACTIVE_LAUNCH_DOMAIN} ({report.ACTIVE_LAUNCH_CHAIN}): "
+    active_root = "domain%201%20(eth): route canary encoded active evidence hold"
+    active_lane = "Domain%201%20(ETH): route canary encoded active lane hold"
+    other_root = "domain%202%20(bsc): route canary encoded other evidence hold"
+    other_lane = "Domain%202%20(BSC): route canary encoded other lane hold"
+    unscoped_lane = "route canary unscoped active lane hold"
+    evidence_summary = {
+        "blockers": [active_root, other_root],
+        "lanes": [
+            {
+                "domain": report.ACTIVE_LAUNCH_DOMAIN,
+                "blockers": [active_lane, other_lane, unscoped_lane],
+            }
+        ],
+    }
+
+    blockers = report._active_launch_blockers(evidence_summary)
+    rendered = "\n".join(blockers)
+
+    assert active_root in blockers
+    assert active_lane in blockers
+    assert f"{prefix}{unscoped_lane}" in blockers
+    assert other_root not in rendered
+    assert other_lane not in rendered
+    assert f"{prefix}{other_lane}" not in rendered
 
 
 def test_release_readiness_report_blocks_malformed_native_prover_blockers(

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline.wallet
 import java.math.BigDecimal
 import java.security.MessageDigest
 import java.time.Instant
+import java.util.Base64
 import java.util.Locale
 import org.hyperledger.iroha.sdk.offline.OfflineNote
 import org.hyperledger.iroha.sdk.offline.OfflineNoteV2
@@ -45,28 +46,36 @@ data class OfflineCompactKeyCertificate(
     @SerialName("issuer_signature_payload_base64") val issuerSignaturePayloadBase64: String? = null
 ) {
     init {
+        require(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION) {
+            "version must be ${OfflineNoteV2.KEY_CERTIFICATE_VERSION}"
+        }
+        require(appAttestPublicKeyBase64 == null) {
+            "app_attest_public_key_base64 is retired; use assertion_public_key"
+        }
         require(assertionScheme == expectedAssertionScheme(platform)) {
             "assertion_scheme must be ${expectedAssertionScheme(platform)}"
         }
         require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform)) {
             "assertion_key_algorithm must be ${expectedAssertionKeyAlgorithm(platform)}"
         }
-    }
-
-    private companion object {
-        fun expectedAssertionScheme(platform: String): String =
-            when (platform) {
-                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
-                OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
-                else -> throw IllegalArgumentException("platform must be a supported first-release value")
-            }
-
-        fun expectedAssertionKeyAlgorithm(platform: String): String =
-            when (platform) {
-                OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
-                OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
-                else -> throw IllegalArgumentException("platform must be a supported first-release value")
-            }
+        require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform)) {
+            "assertion_usage_count_limit must be ${expectedAssertionUsageCountLimit(platform) ?: "absent"}"
+        }
+        val decodedPublicKey = requireCanonicalNonEmptyBase64(publicKey, "public_key")
+        require(decodedPublicKey.size == 32) {
+            "public_key must be 32 bytes"
+        }
+        val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKey, "assertion_public_key")
+        require(decodedAssertionPublicKey.size == 65) {
+            "assertion_public_key must be 65 bytes"
+        }
+        val issuerSignature = requireCanonicalNonEmptyBase64(issuerSignatureBase64, "issuer_signature_base64")
+        require(issuerSignature.size == 64) {
+            "issuer_signature_base64 must be 64 bytes"
+        }
+        issuerSignaturePayloadBase64?.let {
+            requireCanonicalNonEmptyBase64(it, "issuer_signature_payload_base64")
+        }
     }
 }
 
@@ -79,7 +88,112 @@ data class OfflineRecursiveProof(
     @SerialName("proof_backend") val proofBackend: String = verifierKeyBackend,
     @SerialName("public_inputs_hash_hex") val publicInputsHashHex: String,
     @SerialName("proof_bytes_base64") val proofBytesBase64: String
-)
+) {
+    init {
+        require(verifierKeyBackend == OfflineNote.RECURSIVE_BACKEND) {
+            "verifier_key_backend must be ${OfflineNote.RECURSIVE_BACKEND}"
+        }
+        require(verifierKeyId == OfflineNote.RECURSIVE_VERIFIER_NAME) {
+            "verifier_key_id must be ${OfflineNote.RECURSIVE_VERIFIER_NAME}"
+        }
+        require(proofBackend == OfflineNote.RECURSIVE_BACKEND) {
+            "proof_backend must be ${OfflineNote.RECURSIVE_BACKEND}"
+        }
+        require(publicInputsHashHex.isLowerHex32()) {
+            "public_inputs_hash_hex must be 32-byte lowercase hex"
+        }
+        requireCanonicalNonEmptyBase64(proofBytesBase64, "proof_bytes_base64")
+    }
+}
+
+private fun expectedAssertionScheme(platform: String): String =
+    when (platform) {
+        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
+        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
+        else -> throw IllegalArgumentException("platform must be a supported first-release value")
+    }
+
+private fun expectedAssertionKeyAlgorithm(platform: String): String =
+    when (platform) {
+        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
+        else -> throw IllegalArgumentException("platform must be a supported first-release value")
+    }
+
+private fun expectedAssertionUsageCountLimit(platform: String): Int? =
+    when (platform) {
+        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> 1
+        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> null
+        else -> throw IllegalArgumentException("platform must be a supported first-release value")
+    }
+
+private fun isSupportedFirstReleasePlatform(platform: String): Boolean =
+    platform == OfflineNoteV2.ANDROID_KEYMINT_PLATFORM || platform == OfflineNoteV2.IOS_APP_ATTEST_PLATFORM
+
+private fun String.isExactNonEmptyProtocolString(): Boolean =
+    isNotEmpty() && trim() == this
+
+private fun requireCanonicalSignatureBase64(value: String, field: String) {
+    val signature = requireCanonicalNonEmptyBase64(value, field)
+    require(signature.size == 64) {
+        "$field must be 64 bytes"
+    }
+}
+
+private fun requireNonNegativeAmountString(value: String, field: String) {
+    require(BearerOfflineWalletPolicy.isNonNegativeAmountString(value)) {
+        "$field must be a non-negative amount"
+    }
+}
+
+private fun requireOptionalExactNonEmptyString(value: String?, field: String) {
+    if (value != null) {
+        require(value.isExactNonEmptyProtocolString()) {
+            "$field must be an exact non-empty string"
+        }
+    }
+}
+
+private fun requireOptionalCanonicalNonEmptyBase64(value: String?, field: String) {
+    if (value != null) {
+        requireCanonicalNonEmptyBase64(value, field)
+    }
+}
+
+private fun requireOptionalNonNegative(value: Long?, field: String) {
+    if (value != null) {
+        require(value >= 0) {
+            "$field must be non-negative"
+        }
+    }
+}
+
+private fun requireOptionalNonNegative(value: Int?, field: String) {
+    if (value != null) {
+        require(value >= 0) {
+            "$field must be non-negative"
+        }
+    }
+}
+
+private fun requireEmptyOrLowerHex32(value: String, field: String) {
+    require(value.isEmpty() || value.isLowerHex32()) {
+        "$field must be empty or 32-byte lowercase hex"
+    }
+}
+
+private fun requireCanonicalNonEmptyBase64(value: String, field: String): ByteArray {
+    require(value.isNotEmpty() && value.trim() == value) { "$field must be canonical base64" }
+    val decoded = try {
+        Base64.getDecoder().decode(value)
+    } catch (e: IllegalArgumentException) {
+        throw IllegalArgumentException("$field must be canonical base64", e)
+    }
+    require(decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == value) {
+        "$field must be canonical base64"
+    }
+    return decoded
+}
 
 private object OfflineVerifierKeyIdSerializer : KSerializer<String> {
     override val descriptor: SerialDescriptor =
@@ -91,25 +205,10 @@ private object OfflineVerifierKeyIdSerializer : KSerializer<String> {
 
     override fun deserialize(decoder: Decoder): String {
         val jsonDecoder = decoder as? JsonDecoder
-            ?: return normalize(decoder.decodeString())
+            ?: return decoder.decodeString()
         return when (val element = jsonDecoder.decodeJsonElement()) {
-            is JsonPrimitive -> normalize(element.content)
-            is JsonObject -> {
-                val name = element["name"] as? JsonPrimitive
-                    ?: throw SerializationException("verifier_key_id object must contain name")
-                normalize(name.content)
-            }
-            else -> throw SerializationException("verifier_key_id must be a string or object")
-        }
-    }
-
-    private fun normalize(value: String): String {
-        val trimmed = value.trim()
-        val separator = trimmed.indexOf(':')
-        return if (separator >= 0 && separator < trimmed.lastIndex) {
-            trimmed.substring(separator + 1)
-        } else {
-            trimmed
+            is JsonPrimitive -> element.content
+            else -> throw SerializationException("verifier_key_id must be a string")
         }
     }
 }
@@ -124,11 +223,13 @@ data class OfflinePaymentTokenInputClaim(
     @SerialName("claim_hash") val claimHash: String? = null
 ) {
     init {
+        val canonicalAssetId = OfflineNote.canonicalAssetId(assetId)
+        require(assetId == canonicalAssetId) { "asset_id must be canonical" }
         val computedClaimHash = OfflineNote.IssuedClaim(
             domain = domain,
             noteCommitment = hexBytes32(noteCommitment, "note_commitment"),
             keyCertificatePayloadHash = hexBytes32(keyCertificatePayloadHash, "key_certificate_payload_hash"),
-            assetId = assetId,
+            assetId = canonicalAssetId,
             amount = amount,
         ).claimHash().hexLower()
         if (claimHash != null) {
@@ -175,6 +276,7 @@ data class OfflineDeviceBinding(
     @SerialName("attestation_receipt") val attestationReceipt: OfflineAttestationReceipt? = null,
     @SerialName("device_key_algorithm") val deviceKeyAlgorithm: String? = null,
     @SerialName("device_public_key") val devicePublicKey: String? = null,
+    @SerialName("app_attest_public_key_base64") val appAttestPublicKeyBase64: String? = null,
     @SerialName("device_attestation_report_base64") val deviceAttestationReportBase64: String? = null,
     @SerialName("assertion_scheme") val assertionScheme: String? = null,
     @SerialName("assertion_key_id") val assertionKeyId: String? = null,
@@ -186,7 +288,16 @@ data class OfflineDeviceBinding(
     @SerialName("ios_team_id") val iosTeamId: String? = null,
     @SerialName("ios_bundle_id") val iosBundleId: String? = null,
     @SerialName("ios_environment") val iosEnvironment: String? = null
-)
+) {
+    init {
+        require(devicePublicKey == null) {
+            "device_public_key is retired; use assertion_public_key"
+        }
+        require(appAttestPublicKeyBase64 == null) {
+            "app_attest_public_key_base64 is retired; use assertion_public_key"
+        }
+    }
+}
 
 @Serializable
 data class OfflineAttestationReceipt(
@@ -198,13 +309,59 @@ data class OfflineAttestationReceipt(
     @SerialName("assertion_public_key_base64") val assertionPublicKeyBase64: String,
     @SerialName("assertion_scheme") val assertionScheme: String,
     @SerialName("assertion_key_algorithm") val assertionKeyAlgorithm: String,
+    @SerialName("assertion_usage_count_limit") val assertionUsageCountLimit: Int? = null,
     @SerialName("attestation_key_id") val attestationKeyId: String,
     @SerialName("hardware_one_use") val hardwareOneUse: Boolean,
     @SerialName("attestation_report_hash_hex") val attestationReportHashHex: String,
     @SerialName("issued_at_ms") val issuedAtMs: Long,
     @SerialName("expires_at_ms") val expiresAtMs: Long,
     @SerialName("signature_base64") val signatureBase64: String
-)
+) {
+    init {
+        require(version == 1L) {
+            "version must be 1"
+        }
+        require(accountId.isExactNonEmptyProtocolString()) {
+            "account_id must be an exact non-empty string"
+        }
+        require(deviceId.isExactNonEmptyProtocolString()) {
+            "device_id must be an exact non-empty string"
+        }
+        require(attestationKeyId.isExactNonEmptyProtocolString()) {
+            "attestation_key_id must be an exact non-empty string"
+        }
+        require(assertionScheme == expectedAssertionScheme(platform)) {
+            "assertion_scheme must be ${expectedAssertionScheme(platform)}"
+        }
+        require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform)) {
+            "assertion_key_algorithm must be ${expectedAssertionKeyAlgorithm(platform)}"
+        }
+        require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform)) {
+            "assertion_usage_count_limit must be ${expectedAssertionUsageCountLimit(platform) ?: "absent"}"
+        }
+        require(hardwareOneUse) {
+            "hardware_one_use must be true"
+        }
+        val offlinePublicKey = requireCanonicalNonEmptyBase64(offlinePublicKeyBase64, "offline_public_key_base64")
+        require(offlinePublicKey.size == 32) {
+            "offline_public_key_base64 must be 32 bytes"
+        }
+        val assertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKeyBase64, "assertion_public_key_base64")
+        require(assertionPublicKey.size == 65) {
+            "assertion_public_key_base64 must be 65 bytes"
+        }
+        require(attestationReportHashHex.isLowerHex32()) {
+            "attestation_report_hash_hex must be 32-byte lowercase hex"
+        }
+        require(issuedAtMs >= 0 && expiresAtMs > issuedAtMs) {
+            "receipt validity window must be increasing"
+        }
+        val signature = requireCanonicalNonEmptyBase64(signatureBase64, "signature_base64")
+        require(signature.size == 64) {
+            "signature_base64 must be 64 bytes"
+        }
+    }
+}
 
 @Serializable
 data class OfflineDeviceProof(
@@ -213,7 +370,23 @@ data class OfflineDeviceProof(
     @SerialName("challenge_hash_hex") val challengeHashHex: String,
     @SerialName("assertion_base64") val assertionBase64: String,
     val counter: Long? = null
-)
+) {
+    init {
+        require(isSupportedFirstReleasePlatform(platform)) {
+            "platform must be a supported first-release value"
+        }
+        require(attestationKeyId.isExactNonEmptyProtocolString()) {
+            "attestation_key_id must be an exact non-empty string"
+        }
+        require(challengeHashHex.isLowerHex32()) {
+            "challenge_hash_hex must be 32-byte lowercase hex"
+        }
+        requireCanonicalNonEmptyBase64(assertionBase64, "assertion_base64")
+        require(counter == null || counter >= 0) {
+            "counter must be non-negative"
+        }
+    }
+}
 
 @Serializable
 data class OfflineSpendAuthorization(
@@ -230,7 +403,28 @@ data class OfflineSpendAuthorization(
     @SerialName("key_certificate") val keyCertificate: OfflineCompactKeyCertificate? = null,
     @SerialName("next_key_certificate") val nextKeyCertificate: OfflineCompactKeyCertificate? = null,
     @SerialName("issuer_signature_base64") val issuerSignatureBase64: String
-)
+) {
+    init {
+        require(authorizationId.isExactNonEmptyProtocolString()) {
+            "authorization_id must be an exact non-empty string"
+        }
+        require(lineageId.isExactNonEmptyProtocolString()) {
+            "lineage_id must be an exact non-empty string"
+        }
+        require(accountId.isExactNonEmptyProtocolString()) {
+            "account_id must be an exact non-empty string"
+        }
+        require(verdictId.isExactNonEmptyProtocolString()) {
+            "verdict_id must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(policyMaxBalance, "max_balance")
+        requireNonNegativeAmountString(policyMaxTxValue, "max_tx_value")
+        require(issuedAtMs >= 0 && refreshAtMs >= issuedAtMs && expiresAtMs > issuedAtMs) {
+            "authorization validity window must be increasing"
+        }
+        requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")
+    }
+}
 
 @Serializable
 data class OfflineCashStatePayload(
@@ -246,7 +440,37 @@ data class OfflineCashStatePayload(
     @SerialName("pending_local_revision") val pendingLocalRevision: Long,
     val authorization: OfflineSpendAuthorization,
     @SerialName("issuer_signature_base64") val issuerSignatureBase64: String
-)
+) {
+    init {
+        require(lineageId.isExactNonEmptyProtocolString()) {
+            "lineage_id must be an exact non-empty string"
+        }
+        require(accountId.isExactNonEmptyProtocolString()) {
+            "account_id must be an exact non-empty string"
+        }
+        require(deviceId.isExactNonEmptyProtocolString()) {
+            "device_id must be an exact non-empty string"
+        }
+        require(offlinePublicKey.isExactNonEmptyProtocolString()) {
+            "offline_public_key must be an exact non-empty string"
+        }
+        require(assetDefinitionId.isExactNonEmptyProtocolString()) {
+            "asset_definition_id must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(balance, "balance")
+        requireNonNegativeAmountString(lockedBalance, "locked_balance")
+        require(serverRevision >= 0) {
+            "server_revision must be non-negative"
+        }
+        require(serverStateHash.isLowerHex32()) {
+            "server_state_hash must be 32-byte lowercase hex"
+        }
+        require(pendingLocalRevision >= 0) {
+            "pending_local_revision must be non-negative"
+        }
+        requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")
+    }
+}
 
 @Serializable
 data class OfflineRevocationBundlePayload(
@@ -256,14 +480,35 @@ data class OfflineRevocationBundlePayload(
     @SerialName("blacklisted_account_ids") val blacklistedAccountIds: List<String> = emptyList(),
     @SerialName("asset_send_limits") val assetSendLimits: List<OfflineAssetSendLimit> = emptyList(),
     @SerialName("issuer_signature_base64") val issuerSignatureBase64: String
-)
+) {
+    init {
+        require(issuedAtMs >= 0 && expiresAtMs > issuedAtMs) {
+            "revocation bundle validity window must be increasing"
+        }
+        require(verdictIds.all { it.isExactNonEmptyProtocolString() }) {
+            "verdict_ids must be exact non-empty strings"
+        }
+        require(blacklistedAccountIds.all { it.isExactNonEmptyProtocolString() }) {
+            "blacklisted_account_ids must be exact non-empty strings"
+        }
+        requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")
+    }
+}
 
 @Serializable
 data class OfflineAssetSendLimit(
     @SerialName("asset_definition_id") val assetDefinitionId: String,
     @SerialName("daily_send_limit") val dailySendLimit: String,
     @SerialName("monthly_send_limit") val monthlySendLimit: String
-)
+) {
+    init {
+        require(assetDefinitionId.isExactNonEmptyProtocolString()) {
+            "asset_definition_id must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(dailySendLimit, "daily_send_limit")
+        requireNonNegativeAmountString(monthlySendLimit, "monthly_send_limit")
+    }
+}
 
 @Serializable
 data class OfflineTransferReceipt(
@@ -290,7 +535,61 @@ data class OfflineTransferReceipt(
     @SerialName("device_proof") val deviceProof: OfflineDeviceProof,
     @SerialName("sender_signature_base64") val senderSignatureBase64: String,
     @SerialName("created_at_ms") val createdAtMs: Long
-)
+) {
+    init {
+        require(version == 1) {
+            "version must be 1"
+        }
+        require(direction == "incoming" || direction == "outgoing") {
+            "direction must be incoming or outgoing"
+        }
+        require(transferId.isExactNonEmptyProtocolString()) {
+            "transfer_id must be an exact non-empty string"
+        }
+        require(lineageId.isExactNonEmptyProtocolString()) {
+            "lineage_id must be an exact non-empty string"
+        }
+        require(accountId.isExactNonEmptyProtocolString()) {
+            "account_id must be an exact non-empty string"
+        }
+        require(deviceId.isExactNonEmptyProtocolString()) {
+            "device_id must be an exact non-empty string"
+        }
+        require(offlinePublicKey.isExactNonEmptyProtocolString()) {
+            "offline_public_key must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(preBalance, "pre_balance")
+        requireNonNegativeAmountString(postBalance, "post_balance")
+        requireNonNegativeAmountString(preLockedBalance, "pre_locked_balance")
+        requireNonNegativeAmountString(postLockedBalance, "post_locked_balance")
+        require(preStateHash.isLowerHex32()) {
+            "pre_state_hash must be 32-byte lowercase hex"
+        }
+        require(postStateHash.isLowerHex32()) {
+            "post_state_hash must be 32-byte lowercase hex"
+        }
+        require(localRevision >= 0) {
+            "local_revision must be non-negative"
+        }
+        require(counterpartyLineageId.isExactNonEmptyProtocolString()) {
+            "counterparty_lineage_id must be an exact non-empty string"
+        }
+        require(counterpartyAccountId.isExactNonEmptyProtocolString()) {
+            "counterparty_account_id must be an exact non-empty string"
+        }
+        require(counterpartyDeviceId.isExactNonEmptyProtocolString()) {
+            "counterparty_device_id must be an exact non-empty string"
+        }
+        require(counterpartyOfflinePublicKey.isExactNonEmptyProtocolString()) {
+            "counterparty_offline_public_key must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(amount, "amount")
+        requireCanonicalSignatureBase64(senderSignatureBase64, "sender_signature_base64")
+        require(createdAtMs >= 0) {
+            "created_at_ms must be non-negative"
+        }
+    }
+}
 
 @Serializable
 data class OfflineTransferJournalEntry(
@@ -305,7 +604,26 @@ data class OfflineTransferJournalEntry(
     @SerialName("receipt_ack_payload") val receiptAckPayload: String? = null,
     @SerialName("receipt_ack_received_at_ms") val receiptAckReceivedAtMs: Long? = null,
     @SerialName("synced_at_ms") val syncedAtMs: Long? = null
-)
+) {
+    init {
+        require(transferId.isExactNonEmptyProtocolString()) {
+            "transfer_id must be an exact non-empty string"
+        }
+        require(counterpartyAccountId.isExactNonEmptyProtocolString()) {
+            "counterparty_account_id must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(amount, "amount")
+        require(payload.isExactNonEmptyProtocolString()) {
+            "payload must be an exact non-empty string"
+        }
+        require(createdAtMs >= 0) {
+            "created_at_ms must be non-negative"
+        }
+        requireOptionalExactNonEmptyString(receiptAckPayload, "receipt_ack_payload")
+        requireOptionalNonNegative(receiptAckReceivedAtMs, "receipt_ack_received_at_ms")
+        requireOptionalNonNegative(syncedAtMs, "synced_at_ms")
+    }
+}
 
 @Serializable
 data class OfflineCashMutationHistoryEntry(
@@ -316,7 +634,29 @@ data class OfflineCashMutationHistoryEntry(
     @SerialName("entry_hash") val entryHash: String,
     @SerialName("block_height") val blockHeight: Long,
     @SerialName("created_at_ms") val createdAtMs: Long
-)
+) {
+    init {
+        require(operationId.isExactNonEmptyProtocolString()) {
+            "operation_id must be an exact non-empty string"
+        }
+        require(kind.isExactNonEmptyProtocolString()) {
+            "kind must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(amount, "amount")
+        require(chainTxHash.isLowerHex32()) {
+            "chain_tx_hash must be 32-byte lowercase hex"
+        }
+        require(entryHash.isLowerHex32()) {
+            "entry_hash must be 32-byte lowercase hex"
+        }
+        require(blockHeight >= 0) {
+            "block_height must be non-negative"
+        }
+        require(createdAtMs >= 0) {
+            "created_at_ms must be non-negative"
+        }
+    }
+}
 
 @Serializable
 data class OfflineAssetTransferUsage(
@@ -324,7 +664,20 @@ data class OfflineAssetTransferUsage(
     @SerialName("window_kind") val windowKind: String,
     @SerialName("window_key") val windowKey: String,
     val amount: String
-)
+) {
+    init {
+        require(assetDefinitionId.isExactNonEmptyProtocolString()) {
+            "asset_definition_id must be an exact non-empty string"
+        }
+        require(windowKind == "daily" || windowKind == "monthly") {
+            "window_kind must be daily or monthly"
+        }
+        require(windowKey.isExactNonEmptyProtocolString()) {
+            "window_key must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(amount, "amount")
+    }
+}
 
 @Serializable
 enum class OfflineNoteRecordSource {
@@ -387,7 +740,38 @@ data class OfflineNoteRecord(
     @SerialName("origin_payment_request_id") val originPaymentRequestId: String? = null,
     @SerialName("origin_output_index") val originOutputIndex: Int? = null,
     @SerialName("native_issuer_payment_token_norito_base64") val nativeIssuerPaymentTokenNoritoBase64: String? = null
-)
+) {
+    init {
+        require(noteId.isExactNonEmptyProtocolString()) {
+            "note_id must be an exact non-empty string"
+        }
+        require(commitment.isExactNonEmptyProtocolString()) {
+            "commitment must be an exact non-empty string"
+        }
+        require(assetDefinitionId.isExactNonEmptyProtocolString()) {
+            "asset_definition_id must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(amount, "amount")
+        require(issuedAtMs >= 0) {
+            "issued_at_ms must be non-negative"
+        }
+        require(updatedAtMs >= 0) {
+            "updated_at_ms must be non-negative"
+        }
+        requireOptionalExactNonEmptyString(tokenId, "token_id")
+        requireOptionalExactNonEmptyString(lineageId, "lineage_id")
+        requireOptionalCanonicalNonEmptyBase64(noteSecretBase64, "note_secret_base64")
+        requireOptionalExactNonEmptyString(originOperationId, "origin_operation_id")
+        requireOptionalExactNonEmptyString(originLineageId, "origin_lineage_id")
+        requireOptionalNonNegative(originLocalRevision, "origin_local_revision")
+        requireOptionalExactNonEmptyString(originPaymentRequestId, "origin_payment_request_id")
+        requireOptionalNonNegative(originOutputIndex, "origin_output_index")
+        requireOptionalCanonicalNonEmptyBase64(
+            nativeIssuerPaymentTokenNoritoBase64,
+            "native_issuer_payment_token_norito_base64"
+        )
+    }
+}
 
 @Serializable
 data class OfflineOneUseKeyPoolState(
@@ -396,7 +780,35 @@ data class OfflineOneUseKeyPoolState(
     @SerialName("available_key_ids") val availableKeyIds: List<String> = emptyList(),
     @SerialName("consumed_key_ids") val consumedKeyIds: List<String> = emptyList(),
     @SerialName("last_refill_at_ms") val lastRefillAtMs: Long? = null
-)
+) {
+    init {
+        require(capacity >= 0) {
+            "capacity must be non-negative"
+        }
+        require(remainingCapacity >= 0) {
+            "remaining_capacity must be non-negative"
+        }
+        require(remainingCapacity <= capacity) {
+            "remaining_capacity must not exceed capacity"
+        }
+        require(availableKeyIds.all { it.isExactNonEmptyProtocolString() }) {
+            "available_key_ids must be exact non-empty strings"
+        }
+        require(consumedKeyIds.all { it.isExactNonEmptyProtocolString() }) {
+            "consumed_key_ids must be exact non-empty strings"
+        }
+        require((availableKeyIds + consumedKeyIds).distinct().size == availableKeyIds.size + consumedKeyIds.size) {
+            "one-use key ids must be unique"
+        }
+        require(availableKeyIds.size == remainingCapacity) {
+            "remaining_capacity must match available_key_ids size"
+        }
+        require(availableKeyIds.size + consumedKeyIds.size <= capacity) {
+            "one-use key ids must not exceed capacity"
+        }
+        requireOptionalNonNegative(lastRefillAtMs, "last_refill_at_ms")
+    }
+}
 
 @Serializable
 data class OfflinePendingOutboxEntry(
@@ -408,7 +820,28 @@ data class OfflinePendingOutboxEntry(
     @SerialName("created_at_ms") val createdAtMs: Long,
     @SerialName("receipt_ack_payload") val receiptAckPayload: String? = null,
     @SerialName("receipt_ack_received_at_ms") val receiptAckReceivedAtMs: Long? = null
-)
+) {
+    init {
+        require(tokenId.isExactNonEmptyProtocolString()) {
+            "token_id must be an exact non-empty string"
+        }
+        require(recipientAccountId.isExactNonEmptyProtocolString()) {
+            "recipient_account_id must be an exact non-empty string"
+        }
+        require(assetDefinitionId.isExactNonEmptyProtocolString()) {
+            "asset_definition_id must be an exact non-empty string"
+        }
+        requireNonNegativeAmountString(amount, "amount")
+        require(payload.isExactNonEmptyProtocolString()) {
+            "payload must be an exact non-empty string"
+        }
+        require(createdAtMs >= 0) {
+            "created_at_ms must be non-negative"
+        }
+        requireOptionalExactNonEmptyString(receiptAckPayload, "receipt_ack_payload")
+        requireOptionalNonNegative(receiptAckReceivedAtMs, "receipt_ack_received_at_ms")
+    }
+}
 
 @Serializable
 data class OfflinePendingAuditReceipt(
@@ -418,14 +851,44 @@ data class OfflinePendingAuditReceipt(
     @SerialName("bearer_settlement_batch_norito_base64") val bearerSettlementBatchNoritoBase64: String? = null,
     @SerialName("created_at_ms") val createdAtMs: Long,
     @SerialName("synced_at_ms") val syncedAtMs: Long? = null
-)
+) {
+    init {
+        require(receiptId.isExactNonEmptyProtocolString()) {
+            "receipt_id must be an exact non-empty string"
+        }
+        require(tokenId.isExactNonEmptyProtocolString()) {
+            "token_id must be an exact non-empty string"
+        }
+        require(paymentTokenNoritoBase64 != null || bearerSettlementBatchNoritoBase64 != null) {
+            "pending audit receipt must carry a payment token or settlement batch"
+        }
+        requireOptionalCanonicalNonEmptyBase64(paymentTokenNoritoBase64, "payment_token_norito_base64")
+        requireOptionalCanonicalNonEmptyBase64(
+            bearerSettlementBatchNoritoBase64,
+            "bearer_settlement_batch_norito_base64"
+        )
+        require(createdAtMs >= 0) {
+            "created_at_ms must be non-negative"
+        }
+        requireOptionalNonNegative(syncedAtMs, "synced_at_ms")
+    }
+}
 
 @Serializable
 data class OfflineRestoreQuarantineState(
     val reason: String,
     @SerialName("created_at_ms") val createdAtMs: Long = System.currentTimeMillis(),
     @SerialName("requires_offline_setup") val requiresOfflineSetup: Boolean = true
-)
+) {
+    init {
+        require(reason.isExactNonEmptyProtocolString()) {
+            "reason must be an exact non-empty string"
+        }
+        require(createdAtMs >= 0) {
+            "created_at_ms must be non-negative"
+        }
+    }
+}
 
 @Serializable
 enum class OfflineTransferDirection {
@@ -464,7 +927,40 @@ data class OfflineWalletState(
     @SerialName("restore_quarantine_state") val restoreQuarantineState: OfflineRestoreQuarantineState? = null,
     @SerialName("revocation_bundle") val revocationBundle: OfflineRevocationBundlePayload? = null,
     @SerialName("frozen_reason") val frozenReason: String? = null
-)
+) {
+    init {
+        require(schemaVersion == OFFLINE_WALLET_STATE_SCHEMA_VERSION) {
+            "schema_version must be $OFFLINE_WALLET_STATE_SCHEMA_VERSION"
+        }
+        require(accountId.isExactNonEmptyProtocolString()) {
+            "account_id must be an exact non-empty string"
+        }
+        require(deviceId.isExactNonEmptyProtocolString()) {
+            "device_id must be an exact non-empty string"
+        }
+        require(offlinePublicKey.isExactNonEmptyProtocolString()) {
+            "offline_public_key must be an exact non-empty string"
+        }
+        requireOptionalExactNonEmptyString(attestationKeyId, "attestation_key_id")
+        requireOptionalExactNonEmptyString(androidDeviceKeyAlias, "android_device_key_alias")
+        requireNonNegativeAmountString(localBalance, "local_balance")
+        requireNonNegativeAmountString(lockedBalance, "locked_balance")
+        require(localRevision >= 0) {
+            "local_revision must be non-negative"
+        }
+        requireEmptyOrLowerHex32(localStateHash, "local_state_hash")
+        require(attestationCounter >= 0) {
+            "attestation_counter must be non-negative"
+        }
+        require(receivedTransferIds.all { it.isExactNonEmptyProtocolString() }) {
+            "received_transfer_ids must be exact non-empty strings"
+        }
+        require(sourceNullifiers.all { it.isLowerHex32() }) {
+            "source_nullifiers must be 32-byte lowercase hex strings"
+        }
+        requireOptionalExactNonEmptyString(frozenReason, "frozen_reason")
+    }
+}
 
 const val OFFLINE_WALLET_STATE_SCHEMA_VERSION: Int = 5
 
@@ -518,6 +1014,7 @@ object BearerOfflineWalletPolicy {
 
     private fun parseNonNegativeAsciiDecimal(value: String): BigDecimal? {
         val trimmed = value.trim()
+        if (trimmed != value) return null
         if (trimmed.isBlank() || trimmed.none { it in '0'..'9' }) return null
         if (trimmed.any { it !in '0'..'9' && it != '.' }) return null
         if (trimmed.count { it == '.' } > 1) return null
@@ -545,87 +1042,64 @@ object BearerOfflineWalletPolicy {
             else -> 0L
         }
         val normalizedStateHash = when {
-            state.localStateHash.trim().isNotBlank() -> state.localStateHash.trim().lowercase(Locale.ROOT)
-            anchor != null -> anchor.serverStateHash.trim().lowercase(Locale.ROOT)
+            state.localStateHash.isNotEmpty() -> state.localStateHash
+            anchor != null -> anchor.serverStateHash
             else -> ""
         }
         val normalizedUsage = state.assetTransferUsage
-            .map { usage ->
-                usage.copy(
-                    assetDefinitionId = usage.assetDefinitionId.trim(),
-                    windowKind = usage.windowKind.trim().lowercase(Locale.ROOT),
-                    windowKey = usage.windowKey.trim(),
-                    amount = normalizeAmountString(usage.amount)
-                )
-            }
-            .filter { usage ->
-                usage.assetDefinitionId.isNotBlank() &&
-                    usage.windowKind.isNotBlank() &&
-                    usage.windowKey.isNotBlank()
-            }
             .distinctBy { usage -> Triple(usage.assetDefinitionId, usage.windowKind, usage.windowKey) }
         val normalizedOneUseKeys = state.oneUseKeyPoolState.let { pool ->
-            val available = pool.availableKeyIds.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-            val consumed = pool.consumedKeyIds.map { it.trim() }.filter { it.isNotBlank() }.distinct()
             pool.copy(
-                capacity = maxOf(pool.capacity, available.size + consumed.size),
-                remainingCapacity = available.size,
-                availableKeyIds = available,
-                consumedKeyIds = consumed
+                capacity = pool.capacity,
+                remainingCapacity = pool.remainingCapacity,
+                availableKeyIds = pool.availableKeyIds.distinct(),
+                consumedKeyIds = pool.consumedKeyIds.distinct()
             )
         }
         val activeCertificateIds = listOfNotNull(
             authorization?.keyCertificate?.keyId,
             authorization?.nextKeyCertificate?.keyId
         )
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
+            .filter { it.isNotEmpty() }
             .toSet()
         val consumedCertificateIds = normalizedOneUseKeys.consumedKeyIds.toSet()
         val normalizedReserve = state.keyCertificateReserve
             .filter { certificate ->
-                val keyId = certificate.keyId.trim()
-                keyId.isNotBlank() &&
+                val keyId = certificate.keyId
+                keyId.isNotEmpty() &&
                     keyId !in activeCertificateIds &&
                     keyId !in consumedCertificateIds &&
                     accountIdsMatchForOffline(certificate.accountId, state.accountId) &&
                     certificate.deviceId == state.deviceId &&
                     certificate.publicKey == state.offlinePublicKey
             }
-            .distinctBy { it.keyId.trim() }
+            .distinctBy { it.keyId }
             .takeLast(64)
         return state.copy(
             schemaVersion = OFFLINE_WALLET_STATE_SCHEMA_VERSION,
-            attestationKeyId = state.attestationKeyId?.trim()?.takeIf { it.isNotBlank() }
-                ?: authorization?.deviceBinding?.attestationKeyId?.trim()?.takeIf { it.isNotBlank() },
-            androidDeviceKeyAlias = state.androidDeviceKeyAlias?.trim()?.takeIf { it.isNotBlank() },
+            attestationKeyId = state.attestationKeyId ?: authorization?.deviceBinding?.attestationKeyId,
+            androidDeviceKeyAlias = state.androidDeviceKeyAlias,
             authorization = authorization,
             localBalance = normalizedBalance,
             lockedBalance = normalizedLockedBalance,
             localRevision = normalizedRevision,
             localStateHash = normalizedStateHash,
             receivedTransferIds = state.receivedTransferIds.distinct(),
-            sourceNullifiers = state.sourceNullifiers
-                .map { it.trim().lowercase(Locale.ROOT) }
-                .filter { it.isNotBlank() }
-                .distinct(),
+            sourceNullifiers = state.sourceNullifiers.distinct(),
             mutationHistory = state.mutationHistory
                 .sortedByDescending { it.createdAtMs }
                 .distinctBy { it.operationId }
                 .take(20),
             assetTransferUsage = normalizedUsage,
             noteRecords = state.noteRecords
-                .filter { it.noteId.isNotBlank() && it.commitment.isNotBlank() }
                 .distinctBy { it.noteId }
                 .takeLast(512),
             oneUseKeyPoolState = normalizedOneUseKeys,
             keyCertificateReserve = normalizedReserve,
             pendingOutbox = state.pendingOutbox
-                .filter { it.tokenId.isNotBlank() }
                 .distinctBy { it.tokenId }
                 .takeLast(512),
             pendingAuditReceipts = state.pendingAuditReceipts
-                .filter { it.receiptId.isNotBlank() }
                 .distinctBy { it.receiptId }
                 .takeLast(512)
         )
@@ -639,9 +1113,9 @@ object BearerOfflineWalletPolicy {
         authorization: OfflineSpendAuthorization?,
         revocationBundle: OfflineRevocationBundlePayload?,
     ): Boolean {
-        val verdictId = authorization?.verdictId?.trim().orEmpty()
-        if (verdictId.isBlank()) return false
-        return revocationBundle?.verdictIds.orEmpty().any { it.equals(verdictId, ignoreCase = true) }
+        val verdictId = authorization?.verdictId.orEmpty()
+        if (verdictId.isEmpty()) return false
+        return revocationBundle?.verdictIds.orEmpty().any { it == verdictId }
     }
 
     fun hasFreshRevocationBundle(
@@ -682,8 +1156,8 @@ object BearerOfflineWalletPolicy {
         accountId: String?,
         revocationBundle: OfflineRevocationBundlePayload?
     ): Boolean {
-        val normalized = accountId?.trim().orEmpty()
-        if (normalized.isBlank()) return false
+        val normalized = accountId.orEmpty()
+        if (normalized.isEmpty()) return false
         return revocationBundle?.blacklistedAccountIds.orEmpty().any { it == normalized }
     }
 
@@ -693,8 +1167,8 @@ object BearerOfflineWalletPolicy {
         now: Instant = Instant.now()
     ): OfflineAssetSendLimit? {
         if (!hasFreshRevocationBundle(revocationBundle, now)) return null
-        val normalized = assetDefinitionId?.trim().orEmpty()
-        if (normalized.isBlank()) return null
+        val normalized = assetDefinitionId.orEmpty()
+        if (normalized.isEmpty()) return null
         return revocationBundle?.assetSendLimits.orEmpty().firstOrNull {
             it.assetDefinitionId == normalized
         }
@@ -763,6 +1237,7 @@ object BearerOfflineWalletPolicy {
         balance: String,
         maxInputs: Int = 4
     ): List<OfflineNoteRecord>? {
+        require(maxInputs > 0) { "maxInputs must be positive" }
         val target = balanceAmount(balance)
         if (target <= BigDecimal.ZERO) return emptyList()
         val spendableRecords = state.noteRecords
@@ -777,13 +1252,12 @@ object BearerOfflineWalletPolicy {
             return listOf(record)
         }
 
-        val boundedMaxInputs = maxInputs.coerceAtLeast(1)
         val selectionsByAmount = LinkedHashMap<String, List<OfflineNoteRecord>>()
         selectionsByAmount[normalizeAmountString(BigDecimal.ZERO.toPlainString())] = emptyList()
         spendableRecords.forEach { (record, amount) ->
             val snapshot = selectionsByAmount.toList()
             snapshot.forEach { (sumKey, selectedRecords) ->
-                if (selectedRecords.size >= boundedMaxInputs) return@forEach
+                if (selectedRecords.size >= maxInputs) return@forEach
                 val sum = balanceAmount(sumKey)
                 val nextSum = sum.add(amount)
                 if (nextSum > target) return@forEach
@@ -920,6 +1394,16 @@ object BearerOfflineWalletPolicy {
         postBalance: String,
         postLockedBalance: String
     ): String {
+        require(lineageId.isExactNonEmptyProtocolString()) {
+            "lineage_id must be an exact non-empty string"
+        }
+        requireEmptyOrLowerHex32(previousStateHash, "previous_state_hash")
+        require(direction == "incoming" || direction == "outgoing") {
+            "direction must be incoming or outgoing"
+        }
+        require(localRevision >= 0) {
+            "local_revision must be non-negative"
+        }
         val payload = buildJsonObject {
             put("amount", JsonPrimitive(normalizeAmountString(amount)))
             put("counterparty_lineage_id", JsonPrimitive(counterpartyLineageId))
@@ -928,7 +1412,7 @@ object BearerOfflineWalletPolicy {
             put("local_revision", JsonPrimitive(localRevision))
             put("post_balance", JsonPrimitive(normalizeAmountString(postBalance)))
             put("post_locked_balance", JsonPrimitive(normalizeAmountString(postLockedBalance)))
-            put("previous_state_hash", JsonPrimitive(previousStateHash.lowercase(Locale.ROOT)))
+            put("previous_state_hash", JsonPrimitive(previousStateHash))
             put("transfer_id", JsonPrimitive(transferId))
         }
         return sha256Hex(canonicalJsonBytes(payload))
@@ -942,6 +1426,21 @@ object BearerOfflineWalletPolicy {
         counterpartyLineageId: String,
         accountId: String
     ): String {
+        require(lineageId.isExactNonEmptyProtocolString()) {
+            "lineage_id must be an exact non-empty string"
+        }
+        require(transferId.isExactNonEmptyProtocolString()) {
+            "transfer_id must be an exact non-empty string"
+        }
+        require(direction == "incoming" || direction == "outgoing") {
+            "direction must be incoming or outgoing"
+        }
+        require(counterpartyLineageId.isExactNonEmptyProtocolString()) {
+            "counterparty_lineage_id must be an exact non-empty string"
+        }
+        require(accountId.isExactNonEmptyProtocolString()) {
+            "account_id must be an exact non-empty string"
+        }
         val operation = if (direction == "incoming") "receive" else "send"
         val transferPayload = buildJsonObject {
             put("amount", JsonPrimitive(normalizeAmountString(amount)))
@@ -987,7 +1486,7 @@ object BearerOfflineWalletPolicy {
 }
 
 private fun accountIdsMatchForOffline(lhs: String?, rhs: String?): Boolean {
-    val left = lhs?.trim().orEmpty()
-    val right = rhs?.trim().orEmpty()
-    return left.isNotBlank() && right.isNotBlank() && left == right
+    val left = lhs.orEmpty()
+    val right = rhs.orEmpty()
+    return left.isNotEmpty() && right.isNotEmpty() && left == right
 }

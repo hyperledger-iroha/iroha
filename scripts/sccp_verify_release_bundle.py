@@ -10,13 +10,17 @@ import importlib.util
 import json
 import re
 import shlex
-import stat
 import sys
 import unicodedata
 from html import unescape as html_unescape
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote
+
+try:
+    from scripts.path_safety import first_symlinked_existing_path_component
+except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    from path_safety import first_symlinked_existing_path_component
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -703,6 +707,10 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "`UnitTest` definitions directly under `TestDefinitions`",
     "`TestDefinitions` contains only direct `UnitTest` definitions",
     "keeps `TestMethod` and `Execution` definitions directly under `UnitTest`",
+    "requires every `UnitTestResult` row to be a leaf element",
+    "requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children",
+    "requires every `TestMethod` definition to be a leaf element",
+    "requires every `Execution` definition to be a leaf element",
     "requires each `UnitTest` definition to contain exactly one direct `TestMethod`",
     "requires every `TestMethod` definition to carry `className` and `name`",
     "requires canonical TRX present `UnitTest` definition name values",
@@ -3971,6 +3979,9 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "source adapter gate hash",
             "source adapter gate audit hashes",
             "not built-in template material",
+            "def _release_checklist_route_canary_template_hash_blockers(",
+            "direct release checklist route canary template hashes must be live evidence",
+            "_release_checklist_route_canary_template_hash_blockers(",
             "source_adapter_gate.get(\"blockers\", [])",
             "if not gate_schema_errors and not gate_errors:",
         ),
@@ -3985,6 +3996,8 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_all_lanes_evidence_rejects_route_canary_transcript_hash_template_replays",
             "test_all_lanes_route_canary_transcript_template_loader_failures_are_bounded",
             "test_all_lanes_release_checklist_rejects_source_gate_template_replays",
+            "test_all_lanes_release_checklist_rejects_route_canary_template_hash_replays",
+            "test_all_lanes_release_checklist_bounds_route_canary_template_loader_failures",
             "test_all_lanes_cli_rejects_copied_ready_source_record_template_replay",
             "test_all_lanes_cli_rejects_copied_not_ready_source_record_template_replay",
             "test_all_lanes_cli_rejects_template_loader_failure_without_leaking",
@@ -6556,6 +6569,10 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "function readOptionalCanonicalManifestText(",
             "function normalizeCanonicalHex32(value, label = \"value\")",
             "function normalizeCanonicalEvmAddress(value, label = \"address\")",
+            "[\"moduleHash\", \"module_hash\", \"moduleSha256\", \"module_sha256\", \"sha256\"]",
+            "\"boundRouteHash\"",
+            "\"destinationBindingHash\"",
+            "\"proofArtifactHash\"",
             "const EVM_EMPTY_CODE_KECCAK256 =",
             "const BSC_CONTRACT_CODE_ROLES = Object.freeze([",
             "PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN",
@@ -6663,6 +6680,14 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "settlement\\.contractAlias aliases disagree",
             "settlement_contract_address = \"bsc-settlement-v1\"",
             "settlement_contract_alias = \"taira-bsc-xor\"",
+            "destination browser prover module URL",
+            "source browser prover module specifier",
+            "destination browser prover module hash",
+            "source browser prover manifest hash",
+            "destination browser prover bound route hash",
+            "source browser prover bound proof hash",
+            "destinationBrowserProver\\.moduleHash must not use multiple aliases",
+            "sourceBrowserProver\\.boundProofHash must not use multiple aliases",
             "BSC source event transaction contradictory blockers",
             "/productionReady requires empty postDeployLiveEvidence production blockers.*source_event_transaction_production_blockers: witness seal proof required/u",
             "BSC source event transaction scalar blockers",
@@ -7050,6 +7075,24 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "live route canary evidence source must be a non-empty canonical string",
             "live route canary evidence source must be {expected_evidence_source}",
             "route canary evidence_bound must be boolean",
+            "def _release_checklist_route_canary_proof_context_blockers(",
+            "route canary target_domain must match lane domain",
+            "route canary proof_source_domain must be SORA domain",
+            "route canary transaction_owner_address must be a non-zero TRON address",
+            "route canary solana_programdata_slot must be a canonical positive decimal string",
+            "def _release_checklist_route_canary_transcript_hash_blockers(",
+            "route canary transaction_hash must be a canonical non-zero bytes32",
+            "route canary signature_sha256 must be a canonical non-zero bytes32",
+            "route canary ton_last_transaction_hash must be a canonical non-zero bytes32",
+            "route canary hash role",
+            "def _release_checklist_route_canary_template_hash_blockers(",
+            "direct release checklist route canary template hashes must be live evidence",
+            "canary_route_hash = _hex_bytes(",
+            "route canary route allowlist hash must be a canonical non-zero bytes32",
+            "route canary route allowlist hash must match route_allowlist_hash",
+            "canary_destination_hash = _hex_bytes(",
+            "route canary destination binding hash must be a canonical non-zero bytes32",
+            "route canary destination binding hash must match destination_binding_hash",
             "route canary message_proof_used must be boolean",
             "route canary message proof must be used",
             "route canary receipt_block_finalized must be boolean",
@@ -7068,6 +7111,8 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
             "def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars",
+            "def test_all_lanes_release_checklist_rejects_unexpected_route_canary_fields",
+            "def test_all_lanes_release_checklist_requires_route_canary_hash_bindings",
             "def test_all_lanes_route_canary_evidence_sources_cover_launch_lanes",
             "def test_all_lanes_evidence_redacts_route_allowlist_recompute_failures",
             "module.ROUTE_CANARY_EVIDENCE_SOURCE_BY_DOMAIN[",
@@ -7084,6 +7129,27 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "live route canary evidence source is missing",
             "\" evm_message_proof_accepted_transaction \"",
             "\"evidence_bound\",",
+            "route canary unexpected field blockers",
+            "route canary unexpected field with sensitive name",
+            "route canary unexpected non-string field name",
+            "secret-token-hostile-key",
+            "missing_canary_route_hash",
+            "malformed_canary_route_hash",
+            "drifted_canary_route_hash",
+            "missing_canary_destination_hash",
+            "drifted_canary_destination_hash",
+            "def test_all_lanes_release_checklist_rejects_route_canary_proof_context_drift",
+            "checklist_evm_target_domain_drift",
+            "checklist_solana_programdata_slot_scalar",
+            "checklist_ton_last_transaction_lt_zero",
+            "checklist_tron_recovered_owner_drift",
+            "def test_all_lanes_release_checklist_requires_route_canary_transcript_hashes",
+            "checklist_tron_malformed_signature_sha256",
+            "def test_all_lanes_release_checklist_rejects_route_canary_transcript_hash_role_replay",
+            "checklist_ton_last_transaction_hash_replays_account_state",
+            "def test_all_lanes_release_checklist_rejects_route_canary_template_hash_replays",
+            "checklist_tron_signature_template_replay",
+            "def test_all_lanes_release_checklist_bounds_route_canary_template_loader_failures",
             "missing.evidence_bound",
             "route canary evidence_bound must be boolean",
             "\"message_proof_used\",",
@@ -7454,6 +7520,10 @@ ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
             "def _decoded_public_nested_value_issue(",
             "def _canonical_public_blocker_key(",
             "def _blocker_text_issue(",
+            "def _blocker_mentions(",
+            "token in blocker_key",
+            "def _blocker_mentions_route_canary(",
+            '_blocker_mentions(blocker, ("route canary",))',
             "decoded_issue = _decoded_public_blocker_text_issue(blocker)",
             "normalized_blocker = _decoded_sensitive_public_marker_text(blocker)",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
@@ -7610,6 +7680,10 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "all-lanes summary release_checklist items must be a list",
             "title must match the canonical checklist title",
             "def _canonical_blocker_list(",
+            "def _blocker_mentions(",
+            "lane_deployment_blockers = [",
+            "lane_route_blockers = [",
+            '_blocker_mentions(item, ("route allowlist",))',
             "blockers must not contain duplicate strings",
             "blockers must be empty",
             "def _public_nested_lane_value_errors(",
@@ -7721,12 +7795,15 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "for lane_index, lane in enumerate(lanes):",
             "lane summary must be an object",
             "def _release_checklist_lane_metadata_blockers(",
+            "known_chains = {profile.chain for profile in LANE_PROFILES.values()}",
+            "chain in known_chains",
             "lane domain must be an integer",
             "lane domain must be a production remote domain",
             "lane chain must be a non-empty canonical string",
             "live route canary evidence source cannot be validated for malformed lane domain",
             "def _check_route_canary_evidence(",
             "route canary evidence hash must be live evidence, ",
+            "route canary evidence is not bound",
             "source_adapter_gate hash role",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
             'label=f"{lane_label}: source adapter gate hash role"',
@@ -7740,6 +7817,32 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "source adapter gate hash",
             "source adapter gate audit hashes",
             "not built-in template material",
+            "source verifier material hash must be a canonical non-zero bytes32",
+            "source adapter engine deployment hash must be a canonical non-zero bytes32",
+            "source adapter engine deployment hash must not reuse source verifier material hash",
+            "destination binding hash must be a canonical non-zero bytes32",
+            "expected destination binding hash must be a canonical non-zero bytes32",
+            "destination binding hash must match expected destination binding hash",
+            "destination binding hash must not reuse source verifier material hash",
+            "destination binding hash must not reuse source adapter engine deployment hash",
+            "_public_lane_required_true_errors(",
+            "f\"{lane_label}: destination binding\"",
+            "_public_lane_destination_binding_recompute_errors(",
+            "route allowlist hash must be a canonical non-zero bytes32",
+            "expected route allowlist hash must be a canonical non-zero bytes32",
+            "route allowlist hash must match expected route allowlist hash",
+            "route allowlist hash must not reuse source verifier material hash",
+            "route allowlist hash must not reuse source adapter engine deployment hash",
+            "route allowlist hash must not reuse destination binding hash",
+            "_public_lane_route_allowlist_recompute_errors(",
+            'root_blockers, root_blocker_schema_errors = _canonical_blocker_list(',
+            '"all-lanes root"',
+            "def append_unexpected_fields(",
+            "source record hashes summary is malformed",
+            'f"{lane_label}: source adapter gate"',
+            "EVM live metadata summary is malformed",
+            'f"{lane_label}: destination binding"',
+            'f"{lane_label}: route allowlist"',
             "for blockers in (",
             "records_blockers,",
             "deployment_blockers,",
@@ -7767,7 +7870,53 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "domain.unsupported",
             "chain.padded",
             "chain.mismatch",
+            "def test_all_lanes_release_checklist_redacts_lane_label_chain_text",
+            "label_chain.invalid_domain_secret",
+            "label_chain.supported_domain_secret",
             "live route canary evidence source cannot be validated for malformed lane domain",
+            "def test_all_lanes_release_checklist_redacts_top_level_lane_blockers",
+            "lane_blockers.valid_non_route",
+            "lane_blockers.case_route_canary",
+            "lane_blockers.encoded_route_canary",
+            "def test_all_lanes_release_checklist_decodes_lane_blocker_category_keywords",
+            "lane_blockers.encoded_source_adapter",
+            "lane_blockers.encoded_route_allowlist",
+            "lane_blockers.decoded_sensitive",
+            "lane_blockers.encoded_duplicate",
+            "def test_all_lanes_release_checklist_does_not_mask_unbound_route_canary",
+            "route canary pending operator certification",
+            "def test_all_lanes_release_checklist_redacts_root_blockers",
+            "root_blockers.valid",
+            "root_blockers.decoded_sensitive",
+            "root_blockers.encoded_duplicate",
+            "def test_all_lanes_release_checklist_rejects_source_record_hash_role_replay",
+            "def test_all_lanes_release_checklist_requires_bound_route_hashes",
+            "def test_all_lanes_release_checklist_requires_destination_and_route_recompute",
+            "destination_hash_not_recomputed",
+            "def test_all_lanes_release_checklist_rejects_destination_hash_source_replay",
+            "destination_replays_source_material_hash",
+            "destination_replays_source_deployment_hash",
+            "def test_all_lanes_release_checklist_rejects_route_hash_governed_replay",
+            "route_replays_source_material_hash",
+            "route_replays_source_deployment_hash",
+            "route_replays_destination_binding_hash",
+            "route_hash_not_recomputed",
+            "def test_all_lanes_release_checklist_bounds_route_allowlist_recompute_failures",
+            "missing_destination_hash",
+            "zero_expected_destination_hash",
+            "drifted_expected_destination_hash",
+            "missing_route_hash",
+            "zero_expected_route_hash",
+            "drifted_expected_route_hash",
+            "def test_all_lanes_release_checklist_rejects_copied_lane_schema_drift",
+            "source_record_hashes_scalar",
+            "source_gate_extra",
+            "evm_live_extra",
+            "route_extra",
+            "def test_all_lanes_release_checklist_requires_source_record_hashes",
+            "missing_hash_container",
+            "zero_source_material_hash",
+            "malformed_source_deployment_hash",
             'items["no_unresolved_blockers"]["ready"] is False',
             'expected_record_blocker in items["no_unresolved_blockers"]["blockers"]',
             'expected_canary_blocker in items["no_unresolved_blockers"]["blockers"]',
@@ -7997,6 +8146,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_transcript_replay",
             "def test_all_lanes_evidence_rejects_route_canary_evidence_hash_template_replays",
             "def test_all_lanes_evidence_rejects_route_canary_transcript_hash_template_replays",
+            "def test_all_lanes_release_checklist_rejects_route_canary_evidence_hash_role_replay",
+            "route canary evidence hash must be distinct from {role}",
+            "checklist_route_canary_gate_audit_hash_replay",
             "EVM route canary transcript hash evm_route_canary_message_id",
             "TON route canary transcript hash ton_route_canary_account_state_hash",
             "TRON route canary transcript hash tron_route_canary_message_id",
@@ -8436,6 +8588,11 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "blockers[{blocker_index}] contains {issue}",
             "def _public_blocker_list_duplicate_error(",
             "def _public_blocker_text_issue(",
+            "def _active_launch_blocker_mentions(",
+            "token in blocker_key",
+            "def _active_launch_scoped_blocker(",
+            "prefix_unscoped",
+            "blocker_key.startswith(prefix.lower())",
             "def _active_launch_blockers(",
             "SCCP evidence blocker must be a non-empty canonical string",
             "SCCP evidence blocker contains {issue}",
@@ -8522,6 +8679,11 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "release_checklist contains unknown field name with non-ASCII character",
             "id contains sensitive name",
             "def _public_blocker_text_issue(",
+            "def _active_launch_blocker_mentions(",
+            "token in blocker_key",
+            "def _active_launch_scoped_blocker(",
+            "prefix_unscoped",
+            "blocker_key.startswith(prefix.lower())",
             "def _active_launch_blockers(",
             "SCCP evidence blocker must be a non-empty canonical string",
             "SCCP evidence blocker contains {issue}",
@@ -8739,8 +8901,14 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active launch lane blockers[0] contains Markdown-unsafe character",
             "active launch lane blockers[0] contains non-ASCII character",
             "active launch lane blockers[0] contains sensitive name",
+            "Route Canary operator launch hold",
+            "route%20canary operator launch hold",
+            "Route%20Allowlist operator launch hold",
+            "Source%20Adapter operator launch hold",
             "route canary safe duplicated active lane blocker",
             "active launch lane blockers must not contain duplicate strings",
+            "def test_release_readiness_report_decodes_active_launch_blocker_domain_prefixes",
+            "domain%202%20(bsc): route canary encoded other evidence hold",
         ),
     ),
     (
@@ -8851,8 +9019,14 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active launch lane blockers[0] contains Markdown-unsafe character",
             "active launch lane blockers[0] contains non-ASCII character",
             "active launch lane blockers[0] contains sensitive name",
+            "Route Canary operator launch hold",
+            "route%20canary operator launch hold",
+            "Route%20Allowlist operator launch hold",
+            "Source%20Adapter operator launch hold",
             "route canary safe duplicated active lane blocker",
             "active launch lane blockers must not contain duplicate strings",
+            "def test_release_bundle_verifier_decodes_active_launch_blocker_domain_prefixes",
+            "Domain%202%20(BSC): route canary encoded other lane hold",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
@@ -10636,7 +10810,7 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "phase evidence path contains Markdown-unsafe character",
             "phase evidence path contains sensitive name",
             "phase evidence path contains percent-encoded traversal segment",
-            "stat.S_ISLNK",
+            "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
             "def _phase_evidence_directory_path_error(",
             "phase evidence directory path must not contain surrounding whitespace",
@@ -11482,6 +11656,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "unit_test_executions",
             "requires every TRX TestMethod definition to appear directly under a VSTest UnitTest definition",
             "requires every TRX Execution definition to appear directly under a VSTest UnitTest definition",
+            "requires every TRX UnitTestResult row to be a leaf element",
+            "requires every TRX UnitTest definition to contain only direct Execution and TestMethod children",
+            "requires every TRX TestMethod definition to be a leaf element",
+            "requires every TRX Execution definition to be a leaf element",
             "requires exactly one VSTest Results section",
             "requires exactly one VSTest TestDefinitions section",
             "direct_test_methods",
@@ -12253,7 +12431,7 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
             "release bundle source path must not be a symlink",
             "release bundle source path ancestor must not be a symlink",
             "release bundle source path must be a regular file",
-            "stat.S_ISLNK",
+            "first_symlinked_existing_path_component",
             "_reject_symlink_sources(protected_paths)",
             "_reject_symlink_sources([source for _, source in native_payload_sources])",
             "def _reject_duplicate_evidence_inputs(",
@@ -12709,7 +12887,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _public_text_contains_sensitive_marker(",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "def _reject_release_artifact_symlink_path(",
-            "stat.S_ISLNK",
+            "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
             "release artifact path contains Markdown-unsafe character",
             "release artifact path contains non-ASCII character",
@@ -12743,7 +12921,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _public_text_contains_sensitive_marker(",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "def _reject_release_artifact_symlink_path(",
-            "stat.S_ISLNK",
+            "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
             "def _native_evm_markdown_path_is_safe(",
             "_decoded_public_blocker_text_issue(value) is not None",
@@ -12773,7 +12951,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _public_text_contains_sensitive_marker(",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "def _reject_release_artifact_symlink_path(",
-            "stat.S_ISLNK",
+            "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
             "def _readiness_native_evm_markdown_path_is_safe(",
             "_decoded_public_blocker_text_issue(value) is not None",
@@ -16296,6 +16474,10 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "`UnitTest` definitions directly under `TestDefinitions`",
             "`TestDefinitions` contains only direct `UnitTest` definitions",
             "keeps `TestMethod` and `Execution` definitions directly under `UnitTest`",
+            "requires every `UnitTestResult` row to be a leaf element",
+            "requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children",
+            "requires every `TestMethod` definition to be a leaf element",
+            "requires every `Execution` definition to be a leaf element",
             "requires each `UnitTest` definition to contain exactly one direct `TestMethod`",
             "requires every `TestMethod` definition to carry `className` and `name`",
             "requires canonical TRX `TestMethod className` and `TestMethod name` values",
@@ -16468,6 +16650,10 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "`UnitTest` definitions directly under `TestDefinitions`",
             "`TestDefinitions` contains only direct `UnitTest` definitions",
             "keeps `TestMethod` and `Execution` definitions directly under `UnitTest`",
+            "requires every `UnitTestResult` row to be a leaf element",
+            "requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children",
+            "requires every `TestMethod` definition to be a leaf element",
+            "requires every `Execution` definition to be a leaf element",
             "requires each `UnitTest` definition to contain exactly one direct `TestMethod`",
             "requires every `TestMethod` definition to carry `className` and `name`",
             "requires canonical TRX `TestMethod className` and `TestMethod name` values",
@@ -18032,16 +18218,8 @@ def _sha256(path: Path) -> str:
 
 
 def _reject_release_artifact_symlink_path(path: Path) -> None:
-    current = Path(path.anchor) if path.is_absolute() else Path(".")
-    parts = path.parts[1:] if path.is_absolute() else path.parts
-    for part in parts:
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            break
-        if stat.S_ISLNK(mode):
-            raise ValueError("release artifact path must not be a symlink")
+    if first_symlinked_existing_path_component(path) is not None:
+        raise ValueError("release artifact path must not be a symlink")
 
 
 def _artifact(path: Path) -> dict[str, Any]:
@@ -22439,6 +22617,11 @@ def _canonical_public_blocker_key(value: str) -> str:
     return _decoded_public_blocker_text(value).lower()
 
 
+def _active_launch_blocker_mentions(blocker: str, tokens: tuple[str, ...]) -> bool:
+    blocker_key = _canonical_public_blocker_key(blocker)
+    return any(token in blocker_key for token in tokens)
+
+
 def _public_text_contains_sensitive_marker(value: str) -> bool:
     normalized_value = _decoded_sensitive_public_marker_text(value)
     return any(marker in normalized_value for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS)
@@ -22487,6 +22670,22 @@ def _active_launch_blocker_numbering_key(blocker: str, prefix: str) -> str | Non
     return None
 
 
+def _active_launch_scoped_blocker(
+    blocker: str,
+    prefix: str,
+    *,
+    prefix_unscoped: bool,
+) -> str | None:
+    blocker_key = _canonical_public_blocker_key(blocker)
+    if blocker_key.startswith(prefix.lower()):
+        return blocker
+    if blocker_key.startswith("domain "):
+        return None
+    if prefix_unscoped:
+        return f"{prefix}{blocker}"
+    return blocker
+
+
 def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
     prefix = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN}): "
     blockers: list[str] = []
@@ -22526,11 +22725,12 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
             if issue is not None:
                 add(f"SCCP evidence blocker contains {issue}")
                 continue
-            if blocker.startswith(prefix):
-                canonical_blocker = blocker
-            elif not blocker.startswith("domain "):
-                canonical_blocker = blocker
-            else:
+            canonical_blocker = _active_launch_scoped_blocker(
+                blocker,
+                prefix,
+                prefix_unscoped=False,
+            )
+            if canonical_blocker is None:
                 continue
             canonical_blocker_key = _canonical_public_blocker_key(canonical_blocker)
             if canonical_blocker_key in seen_evidence_blockers:
@@ -22568,11 +22768,12 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         if issue is not None:
             add(f"{prefix}active launch lane blocker contains {issue}")
             continue
-        if blocker.startswith(prefix):
-            canonical_blocker = blocker
-        elif not blocker.startswith("domain "):
-            canonical_blocker = f"{prefix}{blocker}"
-        else:
+        canonical_blocker = _active_launch_scoped_blocker(
+            blocker,
+            prefix,
+            prefix_unscoped=True,
+        )
+        if canonical_blocker is None:
             continue
         canonical_blocker_key = _canonical_public_blocker_key(canonical_blocker)
         if canonical_blocker_key in seen_lane_blockers:
@@ -25934,16 +26135,16 @@ def _active_launch_release_checklist(
     deployment_blockers = [
         f"{lane_label}: {blocker}"
         for blocker in lane_blockers
-        if any(
-            token in blocker
-            for token in (
+        if _active_launch_blocker_mentions(
+            blocker,
+            (
                 "source adapter",
                 "deployment",
                 "destination",
                 "binding",
                 "verifier",
                 "rollout",
-            )
+            ),
         )
     ]
     deployment_blockers.extend(lane_blocker_schema_errors)
@@ -25957,7 +26158,7 @@ def _active_launch_release_checklist(
     route_blockers = [
         f"{lane_label}: {blocker}"
         for blocker in lane_blockers
-        if "route allowlist" in blocker
+        if _active_launch_blocker_mentions(blocker, ("route allowlist",))
     ]
     route_blockers.extend(lane_blocker_schema_errors)
     if lane:
@@ -25967,7 +26168,7 @@ def _active_launch_release_checklist(
     canary_blockers = [
         f"{lane_label}: {blocker}"
         for blocker in lane_blockers
-        if "route canary" in blocker
+        if _active_launch_blocker_mentions(blocker, ("route canary",))
     ]
     canary_blockers.extend(lane_blocker_schema_errors)
     route_summary = lane.get("route_allowlist")
@@ -27152,11 +27353,11 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, and requires every present `UnitTestResult` `isExecuted` flag to be `true`. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, and requires every present `UnitTestResult` `isExecuted` flag to be `true`. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
-            "- Direct `.NET` TRX XML section children must stay canonical: `Results` contains only direct `UnitTestResult` rows and `TestDefinitions` contains only direct `UnitTest` definitions; extra direct XML children remain forged evidence.",
+            "- Direct `.NET` TRX XML section children must stay canonical: `Results` contains only direct `UnitTestResult` rows whose rows are leaf elements, `TestDefinitions` contains only direct `UnitTest` definitions, each `UnitTest` contains only direct leaf `Execution` and `TestMethod` children, and extra or nested XML children remain forged evidence.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -27170,7 +27371,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
-            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, browser-prover duplicate-alias rejection, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",

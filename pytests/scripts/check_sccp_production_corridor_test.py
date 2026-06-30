@@ -1020,6 +1020,13 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
         "requires every TRX UnitTest definition to contain exactly one direct TestMethod"
         in script
     )
+    assert (
+        "requires every TRX UnitTest definition to contain only direct Execution and TestMethod children"
+        in script
+    )
+    assert "requires every TRX UnitTestResult row to be a leaf element" in script
+    assert "requires every TRX TestMethod definition to be a leaf element" in script
+    assert "requires every TRX Execution definition to be a leaf element" in script
     assert "direct_executions" in script
     assert (
         "requires every TRX UnitTest definition to contain at most one direct Execution"
@@ -3424,6 +3431,20 @@ esac
             "requires VSTest Results section to contain only direct UnitTestResult rows",
         ),
         (
+            "unit-result-nested-output-error",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed"><Output><ErrorInfo><Message>hidden failure'
+                '</Message></ErrorInfo></Output></UnitTestResult></Results>'
+                '<TestDefinitions><UnitTest id="sccp-test">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires every TRX UnitTestResult row to be a leaf element",
+        ),
+        (
             "testdefinitions-extra-direct-child",
             (
                 '<TestRun><Results><UnitTestResult testId="sccp-test" '
@@ -3436,6 +3457,19 @@ esac
                 "</TestDefinitions></TestRun>\n"
             ),
             "requires VSTest TestDefinitions section to contain only direct UnitTest definitions",
+        ),
+        (
+            "unit-definition-extra-direct-child",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" /></Results><TestDefinitions>'
+                '<UnitTest id="sccp-test"><Properties />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires every TRX UnitTest definition to contain only direct Execution and TestMethod children",
         ),
         (
             "testmethod-outside-unit-definition",
@@ -3455,6 +3489,20 @@ esac
             "requires every TRX TestMethod definition to appear directly under a VSTest UnitTest definition",
         ),
         (
+            "testmethod-nested-metadata",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" /></Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes"><Properties /></TestMethod>'
+                "</UnitTest></TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX TestMethod definition to be a leaf element",
+        ),
+        (
             "execution-outside-unit-definition",
             (
                 '<TestRun><Results><UnitTestResult executionId="exec-sccp" '
@@ -3470,6 +3518,21 @@ esac
                 "</TestDefinitions></TestRun>\n"
             ),
             "requires every TRX Execution definition to appear directly under a VSTest UnitTest definition",
+        ),
+        (
+            "execution-nested-metadata",
+            (
+                '<TestRun><Results><UnitTestResult executionId="exec-sccp" '
+                'testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" /></Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<Execution id="exec-sccp"><Properties /></Execution>'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires every TRX Execution definition to be a leaf element",
         ),
         (
             "no-passed-result",

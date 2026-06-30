@@ -490,7 +490,79 @@ refreshes can start from an aliased slot bundle. The shared Android device-lab
 signing path also validates the preserved `attestation/harness-result.json`
 against the slot challenge, copied certificate-chain count, exact StrongBox
 level labels, and canonical lowercase challenge hex before producing or binding
-signed evidence. The slot assembler and scanner apply the same exact-string
+signed evidence. The Swift counterparty proof verifier applies the same
+canonical challenge-hash rule to offline device proofs: `challenge_hash_hex`
+must be exactly 64 lowercase hex characters, with no surrounding whitespace or
+case normalization, and Android legacy proof key ids must match the exact
+lowercase SHA-256 digest of the bound public key before signature verification
+runs. The Swift App Attest verifier also requires exact iOS team id, bundle id,
+and `production`/`development` environment strings, so case-changed or
+whitespace-normalized metadata cannot select the wrong RP ID or AAGUID. Swift
+`OfflineDeviceAttestationRegistration` and the Kotlin/JVM plus Android Java
+`DeviceAttestationRegistrationV2` models expose unsigned key-certificate
+payload helpers for registration hash derivation. Registration code must derive
+`key_certificate_payload_hash` from the canonical payload bytes and must not
+synthesize fake `KeyCertificateV2` values with all-zero issuer signatures.
+Swift
+and Kotlin/JVM Torii Offline Cash `device_proof` request models, plus Android
+Java issuer-client proof-provider output, enforce the same boundary before
+canonical request encoding, JSON decoding, or request signing can preserve
+malformed proofs: proof platforms are limited to the first-release labels,
+challenge hashes must be exact lowercase 32-byte hex, attestation key ids must
+be non-empty and unpadded, assertions must use canonical base64, and Android
+Java proof-provider maps reject unexpected metadata fields. Swift and Kotlin/JVM
+cash-route `device_binding` models also preserve only exact non-empty platform,
+device, offline-key, and attestation-key identity text, with exact iOS metadata
+labels when present. Swift key-refill request DTOs now apply the same exact
+top-level operation/account/device/offline-key/attestation-key/asset boundary;
+`existing_lineage_id` must be exact when present, and `local_state_hash` must be
+empty for first refill or exact lowercase 32-byte hex. Swift and Kotlin/JVM
+cash-route spend authorizations and lineage-state snapshots reject padded or
+empty identity fields, negative balance or policy-limit amounts, non-hash
+`server_state_hash` values, non-increasing authorization validity windows, and
+non-canonical or non-64-byte issuer signatures before decoded Torii state can be
+cached or re-signed; Android Java issuer-client refill responses now enforce the
+same raw `lineage_state` and nested authorization boundary before notifying
+listeners, caching state, or re-signing it into later refill bodies. Swift
+cash-route settlement proofs also
+require exact operation/account/device/asset identifiers, non-negative
+amount/balance fields, exact lowercase 32-byte entry and transaction hashes,
+and canonical 64-byte issuer signatures before request or response DTOs can
+preserve issuer-signed settlement evidence. Swift issue and redeem settlement
+requests now enforce the same exact signed-boundary fields during direct
+construction and JSON decode: operation, account, device, lineage, offline-key,
+and asset identifiers must be unpadded and non-empty; `amount` and
+`local_balance` must be non-negative canonical amounts; and `local_state_hash`
+must be exact lowercase 32-byte hex. Swift redemption proofs additionally
+require a non-empty exact-hash nullifier set, exact recipient/account asset
+text, and non-negative amounts before redeem request payloads can embed them.
+Swift audit requests also reject padded operation/account/device/lineage ids and
+malformed `local_state_hash` values during construction and JSON decode before
+sync payloads are submitted. Swift cash-route response DTOs mirror those checks
+for optional operation ids, balances, state hashes, and accepted receipt ids, so
+decoded Torii responses cannot carry padded ids, negative balances, malformed
+state hashes, or empty receipt ids into cached wallet state.
+Kotlin/JVM typed cash-route setup, load, refresh, sync, and redeem request DTOs
+apply the same top-level exact text boundary before canonical body emission:
+operation, lineage, account, and asset identifiers must be unpadded and
+non-empty where present, while load/redeem amounts are canonicalized through the
+shared Offline Cash numeric codec and rejected when malformed or negative.
+Android Java Offline Note wallet load and receive request paths also
+canonicalize positive decimal amount text before issuer preparation, commitment
+derivation, receive-request construction, or pending-note storage. Whitespace,
+exponent notation, malformed decimals, and nonpositive values fail before those
+paths can touch issuer or wallet state.
+Swift and Kotlin/JVM cash-route transfer receipts apply the same boundary to
+receipt version, participant ids, balances, pre/post state hashes, optional
+source payloads, and sender signatures before sync or redeem requests can
+preserve malformed peer evidence. Swift cash-route revocation bundle
+construction, lookups, and unsigned revocation payload construction also compare
+blacklist account ids, verdict ids, and asset-send-limit asset ids exactly;
+padded or case-drifted caller values no longer persist, match, or sign stored
+revocation policy entries. Revocation validity windows must be increasing, send
+limits must be non-negative, and issuer signatures must be canonical 64-byte
+base64. The slot
+assembler and scanner apply the same exact-string
 harness policy, so whitespace-normalized harness aliases or level labels cannot
 become signed production evidence. Signed slot metadata must also keep
 `keymint_security_level` as an exact accepted StrongBox label instead of relying
@@ -2233,10 +2305,11 @@ Swift, Kotlin/JVM, and Java Android wallet validation require the canonical
 `halo2/ipa:offline-note-recursive` verifier-key id and `halo2/ipa` proof backend
 before `validateProofBinding` accepts a recursive proof. A valid embedded
 envelope therefore cannot be replayed under a trusted-setup or wrong verifier
-label in SDK-side Offline Note flows. Kotlin/JVM and Java Android also trim
-Offline recursive verifier/proof backend metadata at construction and reject
-colon separators in verifier-key backend/name fields, matching the Swift
-validator surface. Wallet and redeem-planner draft bundles use the explicit
+label in SDK-side Offline Note flows. Kotlin/JVM and Java Android also require
+Offline recursive verifier/proof backend metadata to match exact first-release
+strings at construction and reject padded metadata plus colon separators in
+verifier-key backend/name fields, matching the Swift validator surface. Wallet
+and redeem-planner draft bundles use the explicit
 unsupported `offline-note/draft-placeholder` backend until a real proof provider
 replaces them, so draft placeholders do not pass proof-binding validation.
 
@@ -3120,10 +3193,78 @@ literals also reject whitespace normalization before dispatch: exact raw hex
 and uppercase `UAID:` literals are canonicalized, but padded literals or
 `uaid:` values with padded hex portions fail before a Torii request is
 constructed.
+Kotlin/JVM and Android Java offline readiness parsers keep absent legacy
+optional booleans defaulting to `false`, but present optional fields such as
+`offline_note` and `offline_sync_optional` must be JSON booleans. Quoted or
+numeric optional readiness flags fail instead of being silently defaulted.
 Kotlin/JVM and Android Java offline transfer-list query parameters use the
 same fail-closed selector rule for optional `asset_id` filters: exact non-empty
 values are preserved, while padded or blank values fail before query
 serialization instead of being trimmed into a different selector.
+Swift, Kotlin/JVM, and Android Java Offline Note asset identifiers also require
+optional dataspace scopes to use exact `#dataspace:<id>` text. The prefix is
+lowercase only, and the id must be canonical unsigned decimal (`0`, or no
+leading zero). Empty ids, signs, leading zeros, fractional values, uppercase
+`DATASPACE:`, and out-of-range values fail before Norito asset state, wallet
+state, or Swift transaction asset-definition scope handling can normalize them.
+Swift and Kotlin/JVM payment-token input-claim DTOs apply that same exact asset
+identity rule at the JSON/request boundary: `asset_id` must already match the
+canonical issued-claim asset id, including the canonical I105 account sentinel,
+before the DTO stores it or compares an optional `claim_hash` to the canonical
+issued-claim hash.
+Swift transfer and validation-fee transfer paths also treat optional
+`feeSponsor` values as exact account ids. Blank, padded, alias-shaped, or
+reserved-separator-bearing fee sponsors fail before native transaction encoding
+or validation-fee metadata assembly instead of being trimmed or omitted.
+Swift, Kotlin/JVM, and Android Java Offline Note `OpenVerifyEnvelope` public
+input hash helpers also require exact lowercase 32-byte hex. Padded,
+uppercase, `0x`-prefixed, odd-length, empty, and non-hex public-input hash
+strings return `false` before envelope parsing instead of being normalized into
+a verifier selector.
+Swift Torii Offline Cash API models apply the same exact-text rule to
+`note_commitment` fields owned by issue settlement requests and settlement
+proofs, to issue response `issued_note_commitment`, and to redemption proof
+`source_note_commitment` and `input_nullifiers` entries. Whitespace-padded,
+uppercase, `0x`-prefixed, odd-length, empty, or non-hex hash strings throw
+`OfflineNotePayloadError.invalidField` instead of being trimmed, lowercased, or
+preserved before canonical JSON encoding or proof decoding.
+Swift and Kotlin/JVM Torii Offline Cash `device_proof` DTOs also reject
+unsupported proof platform aliases, padded or empty `attestation_key_id` text,
+non-canonical `challenge_hash_hex`, non-canonical `assertion_base64`, and
+negative counters during direct construction or JSON decode, before refill,
+issue, redeem, or sync request payloads can embed malformed device evidence.
+Android Java issuer-client proof-provider output applies the same field checks
+before request signing and rejects unexpected `device_proof` metadata such as
+provider operation labels instead of preserving it in the body.
+Swift and Kotlin/JVM Torii Offline Cash `device_binding` DTOs reject unsupported
+platform aliases, padded or empty `device_id`, `offline_public_key`, and
+`attestation_key_id` fields, and case-changed or padded iOS environment metadata
+before cash-route request maps, decoded requests, or parsed spend authorizations
+can preserve them.
+Swift and Kotlin/JVM Torii Offline Cash `authorization` and `lineage_state` DTOs
+reject padded ids, negative balances or limits, malformed `server_state_hash`,
+non-increasing authorization windows, and non-canonical issuer signatures during
+construction or JSON decode. Android Java issuer-client `lineage_state` parsing
+applies the same checks to raw Torii refill responses before response listeners
+or cached refill state can observe them.
+Swift and Kotlin/JVM Torii Offline Cash transfer-receipt DTOs reject unsupported
+receipt versions, padded participant ids, negative balances or transfer amounts,
+malformed pre/post state hashes, empty source payloads, and non-canonical sender
+signatures before sync or redeem request encoding can carry them.
+Kotlin/JVM wallet state hash helpers also reject malformed previous
+`local_state_hash` text and non-exact transfer directions before deriving
+post-state hashes or device challenge hashes, instead of lowercasing or treating
+unknown directions as outgoing sends.
+Kotlin/JVM STARK proof JSON byte fields also require lowercase even-length hex
+when encoded as strings; uppercase proof roots, Merkle siblings, public digests,
+or composition roots fail parsing instead of decoding to equivalent bytes.
+Android Java persisted Offline Note wallet-note JSON also treats
+`note_commitment_hex` as exact lowercase 32-byte hex. Whitespace-padded,
+uppercase, `0x`-prefixed, odd-length, empty, or non-hex commitment strings fail
+decode instead of being lowercased into stored note state. Its persisted integer
+fields (`version`, timestamps, and origin counters) must also be JSON integer
+numbers; quoted, fractional, or signed-64-overflow values fail instead of being
+coerced into trusted wallet-note state.
 JavaScript/Node, Swift, Kotlin/JVM, Java Android, and Python multisig response
 parsers also reject padded, alias-shaped, or otherwise non-canonical returned
 `resolved_multisig_account_id` values before proposal or spec state is trusted

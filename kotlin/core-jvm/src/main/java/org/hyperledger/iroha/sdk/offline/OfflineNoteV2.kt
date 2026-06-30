@@ -683,7 +683,7 @@ object OfflineNoteV2 {
             expiresAtMs = expiresAtMs,
         )
 
-        fun keyCertificate(): KeyCertificateV2 = KeyCertificateV2(
+        fun keyCertificatePayload(): KeyCertificatePayloadV2 = KeyCertificatePayloadV2(
             version = KEY_CERTIFICATE_VERSION,
             platform = platform,
             keyId = keyId,
@@ -695,10 +695,9 @@ object OfflineNoteV2 {
             assertionPublicKey = assertionPublicKey(),
             assertionUsageCountLimit = assertionUsageCountLimit,
             oneUse = oneUse,
-            issuerSignature = ByteArray(64),
         )
 
-        fun keyCertificatePayloadHash(): ByteArray = keyCertificate().payloadHash()
+        fun keyCertificatePayloadHash(): ByteArray = keyCertificatePayload().payloadHash()
         fun noritoEncoded(): ByteArray = encodeDeviceAttestationRegistration(this)
 
         private fun computeChallengeHash(): ByteArray =
@@ -1891,12 +1890,28 @@ object OfflineNoteV2 {
         val dataspaceId = if (parts.size == 3) {
             val scope = parts[2]
             require(scope.startsWith("dataspace:")) { "asset scope must use dataspace:<id>" }
-            scope.substring("dataspace:".length).toLong()
+            parseDataspaceId(scope.substring("dataspace:".length))
         } else {
             null
         }
         return ParsedAssetId(parts[1], definitionBytes, dataspaceId)
     }
+
+    private fun parseDataspaceId(value: String): Long {
+        require(isCanonicalUnsignedDecimal(value)) {
+            "asset scope must use canonical dataspace:<id>"
+        }
+        return try {
+            value.toLong()
+        } catch (ex: NumberFormatException) {
+            throw IllegalArgumentException("asset scope dataspace id must fit in signed 64-bit range", ex)
+        }
+    }
+
+    private fun isCanonicalUnsignedDecimal(value: String): Boolean =
+        value.isNotEmpty() &&
+            (value == "0" || !value.startsWith("0")) &&
+            value.all { it in '0'..'9' }
 
     private fun parseNumeric(value: String): NumericValue {
         val decimal = BigDecimal(value)
