@@ -338,8 +338,7 @@ fn main() -> Result<()> {
         blake3::hash(
             payload
                 .as_ref()
-                .map(iroha_primitives::json::Json::get)
-                .unwrap_or("")
+                .map_or("", |json| json.get().as_str())
                 .as_bytes(),
         )
         .as_bytes(),
