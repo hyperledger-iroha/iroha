@@ -39,6 +39,7 @@ use iroha_data_model::soracloud::{
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
     account::rekey::AccountAlias,
+    asset::AssetBalanceScope,
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     escrow::EscrowId,
     events::time::Schedule,
@@ -7010,21 +7011,31 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let instr = InstructionBox::from(BurnBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
-            ivm::syscalls::SYSCALL_TRANSFER_ASSET => {
+            ivm::syscalls::SYSCALL_TRANSFER_V1 => {
                 if self.fastpq_batch_entries.is_some() {
                     return self.push_fastpq_batch_entry(vm);
+                }
+                Err(ivm::VMError::PermissionDenied)
+            }
+            ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                if self.fastpq_batch_entries.is_some() {
+                    return Err(ivm::VMError::PermissionDenied);
                 }
                 let from_ptr = vm.register(10);
                 let to_ptr = vm.register(11);
                 let asset_def_ptr = vm.register(12);
                 let amount_ptr = vm.register(13);
+                let dataspace_ptr = vm.register(14);
                 let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
                 let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
                 let amount: Numeric =
                     Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
-                let asset_id = AssetId::of(asset_def, from);
+                let dataspace: DataSpaceId =
+                    Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
+                let asset_id =
+                    AssetId::with_scope(asset_def, from, AssetBalanceScope::Dataspace(dataspace));
                 let isi = Transfer::asset_numeric(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -11861,7 +11872,7 @@ seiyaku AliasPayout {{
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {{
     let merchant = {recipient_expr};
-    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    transfer_asset(authority(), merchant, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }}
 }}
@@ -13780,7 +13791,7 @@ seiyaku RecordFromPayload {
         vm.set_register(13, ivm::Memory::INPUT_START + amount_offset);
 
         let gas = host
-            .syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
+            .syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("batch entry");
         let asset_id = AssetId::of(asset_def, from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount, to);
@@ -14982,7 +14993,7 @@ seiyaku Callee {
   kotoage fn pull_into_vault(target: AccountId,
                              asset: AssetDefinitionId,
                              amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), target, asset, amount);
+    transfer_asset(authority(), target, asset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15023,11 +15034,17 @@ seiyaku Callee {
             PointerType::NoritoBytes,
             &norito::to_bytes(&amount).expect("encode amount"),
         );
+        let dataspace_ptr = store_tlv(
+            &mut vm,
+            PointerType::DataSpaceId,
+            &norito::to_bytes(&DataSpaceId::UNIVERSAL).expect("encode dataspace"),
+        );
         vm.set_register(10, from_ptr);
         vm.set_register(11, to_ptr);
         vm.set_register(12, asset_ptr);
         vm.set_register(13, amount_ptr);
-        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
+        vm.set_register(14, dataspace_ptr);
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("root transfer should enqueue");
 
         let nested_target = callee_contract.to_string();
@@ -15119,7 +15136,7 @@ seiyaku Caller {
   }
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -15143,7 +15160,7 @@ seiyaku Vault {
   }
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15293,7 +15310,7 @@ seiyaku AliasPayout {
   }
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), account_id("merchant@paynet"), SettlementAsset, amount);
+    transfer_asset(authority(), account_id("merchant@paynet"), SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15469,7 +15486,7 @@ seiyaku AliasPayout {
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     let merchant = resolve_account_alias("merchant@paynet");
-    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    transfer_asset(authority(), merchant, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15840,7 +15857,7 @@ seiyaku AliasPayout {
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     let merchant = resolve_account_alias("merchant@paynet");
-    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    transfer_asset(authority(), merchant, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -17406,7 +17423,7 @@ seiyaku AliasPayout {
   }
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), account_id("merchant@bank.paynet"), SettlementAsset, amount);
+    transfer_asset(authority(), account_id("merchant@bank.paynet"), SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -17544,7 +17561,7 @@ seiyaku Caller {
   }
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(ForwarderContract, "forward", payload));
@@ -17571,7 +17588,7 @@ seiyaku Forwarder {
   }
 
   kotoage fn forward(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), ForwarderAccount, SettlementAsset, amount);
+    transfer_asset(authority(), ForwarderAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -17595,7 +17612,7 @@ seiyaku Vault {
   }
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -20606,7 +20623,7 @@ seiyaku Vault {
         code.extend_from_slice(
             &encoding::wide::encode_sys(
                 instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET).expect("syscall id fits in u8"),
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).expect("syscall id fits in u8"),
             )
             .to_le_bytes(),
         );

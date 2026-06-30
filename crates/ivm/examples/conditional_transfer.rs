@@ -33,7 +33,7 @@ impl IVMHost for AssetHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         let mut state = self.state.lock().expect("state mutex poisoned");
         match number {
-            syscalls::SYSCALL_TRANSFER_ASSET => {
+            syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 let from = vm.register(10);
                 let to = vm.register(11);
                 let amount = vm.register(12);
@@ -69,7 +69,7 @@ fn build_program() -> Vec<u8> {
     prog.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            syscalls::SYSCALL_TRANSFER_ASSET as u8,
+            syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8,
         )
         .to_le_bytes(),
     );

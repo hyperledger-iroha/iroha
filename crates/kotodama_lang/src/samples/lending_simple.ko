@@ -31,7 +31,7 @@ seiyaku LendingSimple {
                    vault_account: AccountId,
                    debt_asset: AssetDefinitionId,
                    amount: int) permission(Admin) {
-    transfer_asset(user, vault_account, debt_asset, amount);
+    transfer_asset(user, vault_account, debt_asset, amount, dataspace_id("0"));
     burn_asset(vault_account, debt_asset, amount);
   }
 }

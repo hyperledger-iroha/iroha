@@ -1118,7 +1118,7 @@ fn is_entrypoint_hint_safe_syscall(number: u32) -> bool {
             | ivm::syscalls::SYSCALL_UNREGISTER_ASSET
             | ivm::syscalls::SYSCALL_MINT_ASSET
             | ivm::syscalls::SYSCALL_BURN_ASSET
-            | ivm::syscalls::SYSCALL_TRANSFER_ASSET
+            | ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED
             | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN
             | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END
             | ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY
@@ -3017,7 +3017,7 @@ mod tests {
         code.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
                 ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_TRANSFER_ASSET)
+                u8::try_from(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
                     .expect("syscall identifier fits in 8 bits"),
             )
             .to_le_bytes(),
@@ -3093,7 +3093,7 @@ mod tests {
         code.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
                 ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm::syscalls::SYSCALL_TRANSFER_ASSET)
+                u8::try_from(ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED)
                     .expect("syscall identifier fits in 8 bits"),
             )
             .to_le_bytes(),

@@ -70,7 +70,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET).unwrap(),
+            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
         )
         .to_le_bytes(),
     );
@@ -215,7 +215,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET).unwrap(),
+            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
         )
         .to_le_bytes(),
     );

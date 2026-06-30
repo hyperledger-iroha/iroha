@@ -1679,15 +1679,16 @@ pub fn is_pointer_type(ty: &Type) -> bool {
 }
 
 const TRANSFER_BATCH_SIGNATURE: &str =
-    "(AccountId, AccountId, AssetDefinitionId, int) tuple entries";
+    "(AccountId, AccountId, AssetDefinitionId, int, DataSpaceId) tuple entries";
 
 fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
     match ty {
-        Type::Tuple(fields) if fields.len() == 4 => {
+        Type::Tuple(fields) if fields.len() == 5 => {
             matches!(resolve_struct_type(&fields[0]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[1]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[2]), Type::AssetDefinitionId)
                 && is_int_like(&fields[3])
+                && matches!(resolve_struct_type(&fields[4]), Type::DataSpaceId)
         }
         _ => false,
     }
@@ -4029,15 +4030,16 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::TransferAsset => {
-            if arg_typed.len() != 4
+            if arg_typed.len() != 5
                 || !(arg_typed[0].ty == Type::AccountId
                     && arg_typed[1].ty == Type::AccountId
                     && arg_typed[2].ty == Type::AssetDefinitionId
-                    && is_int_like(&arg_typed[3].ty))
+                    && is_int_like(&arg_typed[3].ty)
+                    && arg_typed[4].ty == Type::DataSpaceId)
             {
                 return Err(SemanticError {
                     message:
-                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)"
+                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId)"
                             .into(),
                 });
             }
