@@ -6593,6 +6593,12 @@ pub fn bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
     max_abs_residual_multiple: u128,
 ) -> Result<(BfvPublicKey, BfvCiphertext, Hash), BfvError> {
     let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        max_abs_residual_multiple,
+        "BFV ciphertext proof statement exact residual caller-declared bound",
+    )?;
     let ciphertext = decode_bfv_ciphertext_bytes_v1(params, ciphertext_bytes)?;
     let digest = bfv_ciphertext_exact_residual_proof_statement_digest(
         params,
@@ -6661,6 +6667,12 @@ pub fn bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
     max_abs_noise: u128,
 ) -> Result<(BfvPublicKey, BfvCiphertext, Hash), BfvError> {
     let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        max_abs_noise,
+        "BFV ciphertext proof statement bounded-noise caller-declared bound",
+    )?;
     let ciphertext = decode_bfv_ciphertext_bytes_v1(params, ciphertext_bytes)?;
     let digest = bfv_bounded_noise_ciphertext_proof_statement_digest(
         params,
@@ -7676,6 +7688,7 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_dig
 > {
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
     let (material, proof_input_digest) =
         bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
             params,
@@ -7871,6 +7884,7 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_dige
 > {
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let (material, proof_input_digest) =
         bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
             params,
@@ -8097,16 +8111,30 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_dig
 > {
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
-    let (ciphertext, ciphertext_digest) =
-        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        declared_bound,
+        "exact-residual BFV ciphertext proof input caller-declared bound",
+    )?;
     let (material, proof_input_digest) =
-        bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
-            params,
-            &public_key,
-            &ciphertext,
-            declared_bound,
+        bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1(
             proof_input_material_bytes,
         )?;
+    let (ciphertext, ciphertext_digest) =
+        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
+    validate_bfv_admission_ciphertext_proof_input_material_context_v1(
+        "exact-residual BFV ciphertext proof input material bytes",
+        BfvRefreshTranscriptMode::Exact,
+        &material.params,
+        &material.public_key,
+        &material.ciphertext,
+        material.declared_bound,
+        params,
+        &public_key,
+        &ciphertext,
+        declared_bound,
+    )?;
     Ok((
         public_key,
         ciphertext,
@@ -8346,16 +8374,30 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_dige
 > {
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
-    let (ciphertext, ciphertext_digest) =
-        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        declared_bound,
+        "bounded-noise BFV ciphertext proof input caller-declared bound",
+    )?;
     let (material, proof_input_digest) =
-        bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
-            params,
-            &public_key,
-            &ciphertext,
-            declared_bound,
+        bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1(
             proof_input_material_bytes,
         )?;
+    let (ciphertext, ciphertext_digest) =
+        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
+    validate_bfv_admission_ciphertext_proof_input_material_context_v1(
+        "bounded-noise BFV ciphertext proof input material bytes",
+        BfvRefreshTranscriptMode::BoundedNoise,
+        &material.params,
+        &material.public_key,
+        &material.ciphertext,
+        material.declared_bound,
+        params,
+        &public_key,
+        &ciphertext,
+        declared_bound,
+    )?;
     Ok((
         public_key,
         ciphertext,
@@ -14032,6 +14074,7 @@ pub fn validate_bfv_full_bootstrap_proof_public_input_schema_v1(
     validate_bfv_full_bootstrap_proof_public_input_schema_statement_bindings_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_claim_bindings_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_witness_bindings_v1(schema)?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_digest_aliases_v1(schema)?;
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap proof public-input schema arithmetic trace profile digest",
         &schema.arithmetic_trace_profile_digest,
@@ -14045,6 +14088,24 @@ pub fn validate_bfv_full_bootstrap_proof_public_input_schema_v1(
     validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_bindings_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_hash_shape_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_capabilities_v1(schema)
+}
+
+fn validate_bfv_full_bootstrap_proof_public_input_schema_digest_aliases_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap proof public-input schema",
+        &[
+            (
+                "arithmetic trace profile digest",
+                &schema.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &schema.arithmetic_air_constraint_system_digest,
+            ),
+        ],
+    )
 }
 
 fn validate_bfv_full_bootstrap_proof_public_input_schema_identity_v1(
@@ -15536,6 +15597,7 @@ fn validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
         "BFV full-bootstrap proof key material commitment",
         &key.key_material_commitment,
     )?;
+    validate_bfv_full_bootstrap_proof_key_advertised_material_commitment_preflight_v1(key)?;
     let expected_commitment = bfv_full_bootstrap_proof_key_material_commitment_v1(key)?;
     if key.key_material_commitment != expected_commitment {
         return Err(BfvError::InvalidParameters(format!(
@@ -15543,6 +15605,36 @@ fn validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
         )));
     }
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_proof_key_advertised_material_commitment_preflight_v1(
+    key: &BfvFullBootstrapProofKeyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap proof key profile",
+        &[
+            ("parameter digest", &key.parameter_digest),
+            ("RNS modulus-chain digest", &key.rns_modulus_chain_digest),
+            (
+                "key-switch decomposition-chain digest",
+                &key.key_switch_decomposition_chain_digest,
+            ),
+            (
+                "centered scale-round source-chain digest",
+                &key.centered_scale_round_source_chain_digest,
+            ),
+            (
+                "public-input schema digest",
+                &key.public_input_schema_digest,
+            ),
+            (
+                "evaluator artifact set digest",
+                &key.evaluator_artifact_set_digest,
+            ),
+            ("proof-key pair commitment", &key.proof_key_pair_commitment),
+            ("key material commitment", &key.key_material_commitment),
+        ],
+    )
 }
 
 /// Decode proof-key material envelope bytes and bind them to a proof key.
@@ -16726,10 +16818,9 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bun
 
 /// Validate canonical release audit evidence and artifact-bundle bytes together.
 ///
-/// This raw-byte admission helper rejects alternate framing or placeholder
-/// bytes on either side, decodes the governed artifact bundle, then checks the
-/// decoded evidence against those artifacts before returning both decoded
-/// objects.
+/// This raw-byte admission helper admits supplied evidence bytes before
+/// governed artifact bytes, then checks the decoded evidence against those
+/// artifacts before returning both decoded objects.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, evidence
@@ -16759,10 +16850,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bun
 
 /// Validate and digest canonical release audit evidence/artifact-bundle bytes together.
 ///
-/// This raw-byte admission helper decodes the governed artifact bundle and
-/// evidence from canonical bytes, verifies that the evidence matches those
-/// artifacts, and returns the evidence digest derived from the admitted
-/// evidence byte stream.
+/// This raw-byte admission helper admits supplied evidence bytes before
+/// governed artifact bytes, verifies that the evidence matches those artifacts,
+/// and returns the evidence digest derived from the admitted evidence byte
+/// stream.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, evidence
@@ -16793,10 +16884,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_a
 
 /// Validate and digest canonical release audit evidence/artifact-bundle bytes together.
 ///
-/// This raw-byte admission helper decodes the governed artifact bundle and
-/// evidence from canonical bytes, verifies that the evidence matches those
-/// artifacts, and returns both the artifact-bundle digest and evidence digest
-/// derived from the admitted byte streams.
+/// This raw-byte admission helper admits supplied evidence bytes before
+/// governed artifact bytes, verifies that the evidence matches those artifacts,
+/// and returns both the artifact-bundle digest and evidence digest derived from
+/// the admitted byte streams.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, evidence
@@ -16816,14 +16907,14 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_
     ),
     BfvError,
 > {
+    let (evidence, evidence_digest) =
+        bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(evidence_bytes)?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
         )?;
-    let (evidence, evidence_digest) =
-        bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(evidence_bytes)?;
     let expected_evidence =
         bfv_full_bootstrap_release_audit_evidence_v1(params, material, &artifacts)?;
     if evidence != expected_evidence {
@@ -17218,9 +17309,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_e
 
 /// Validate canonical release audit signoff bytes against artifact-bundle bytes.
 ///
-/// This byte-level handoff rejects non-canonical artifact-bundle or signoff
-/// framing, derives release-audit evidence from the governed artifacts, and
-/// then verifies that the signed payload binds that derived evidence.
+/// This byte-level handoff admits canonical signoff bytes before
+/// artifact-bundle framing, derives release-audit evidence from the governed
+/// artifacts, and then verifies that the signed payload binds that derived
+/// evidence.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, signoff byte
@@ -17251,8 +17343,8 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bund
 
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
-/// This byte-level handoff decodes governed artifacts and signed signoff from
-/// canonical bytes, derives release-audit evidence from the artifacts, verifies
+/// This byte-level handoff admits signed signoff bytes before governed
+/// artifact bytes, derives release-audit evidence from the artifacts, verifies
 /// the signoff binding, and returns the digest of the admitted signoff bytes.
 ///
 /// # Errors
@@ -17285,8 +17377,8 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_ar
 
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
-/// This byte-level handoff decodes governed artifacts and signed signoff from
-/// canonical bytes, derives release-audit evidence from the artifacts, verifies
+/// This byte-level handoff admits signed signoff bytes before governed
+/// artifact bytes, derives release-audit evidence from the artifacts, verifies
 /// the signoff binding, and returns both the derived evidence digest and the
 /// admitted signoff digest.
 ///
@@ -17328,8 +17420,8 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_a
 
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
-/// This byte-level handoff decodes governed artifacts and signed signoff from
-/// canonical bytes, derives release-audit evidence from the artifacts, verifies
+/// This byte-level handoff admits signed signoff bytes before governed
+/// artifact bytes, derives release-audit evidence from the artifacts, verifies
 /// the signoff binding, and returns the admitted artifact-bundle digest, derived
 /// evidence digest, and admitted signoff digest.
 ///
@@ -17354,14 +17446,14 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_f
     ),
     BfvError,
 > {
+    let (signoff, signoff_digest) =
+        bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(signoff_bytes)?;
     let (artifacts, evidence, artifact_bundle_digest, evidence_digest) =
         bfv_full_bootstrap_release_audit_evidence_and_digests_from_artifact_bundle_bytes_decoded_v1(
             params,
             material,
             artifact_bundle_bytes,
         )?;
-    let (signoff, signoff_digest) =
-        bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(signoff_bytes)?;
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(&signoff, &evidence)?;
     Ok((
         artifacts,
@@ -17464,6 +17556,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_e
     ),
     BfvError,
 > {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     let (evidence, signoff, evidence_digest, signoff_digest) =
         validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_v1(
             evidence_bytes,
@@ -17683,8 +17779,9 @@ pub fn bfv_full_bootstrap_release_audit_record_v1(
 
 /// Build a publishable BFV full-bootstrap release audit record from artifact bytes.
 ///
-/// This byte-level construction path rejects non-canonical artifact-bundle
-/// framing before deriving evidence and signing the release-audit record.
+/// This byte-level construction path rejects malformed reviewer material and
+/// external audit digests before non-canonical artifact-bundle framing, then
+/// derives evidence and signs the release-audit record.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, reviewer
@@ -17825,6 +17922,16 @@ pub fn bfv_full_bootstrap_release_audit_record_and_all_digests_for_artifact_bund
     ),
     BfvError,
 > {
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+        "BFV full-bootstrap release audit record reviewer private key",
+        reviewer_private_key,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+        "signoff",
+        &audit_report_digest,
+        &audit_evidence_archive_digest,
+    )?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
@@ -18032,9 +18139,9 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifacts_v1(
 
 /// Validate canonical artifact-bundle bytes and release audit record bytes together.
 ///
-/// This raw-byte admission helper rejects alternate framing or placeholder bytes
-/// on either side, decodes the governed artifact bundle, then checks the decoded
-/// record against those artifacts before returning both decoded objects.
+/// This raw-byte admission helper admits the signed record bytes before
+/// governed artifact bytes, then checks the decoded record against those
+/// artifacts before returning both decoded objects.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, record byte
@@ -18064,10 +18171,9 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundl
 
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
-/// This raw-byte admission helper decodes governed artifacts and the signed
-/// release-audit record from canonical bytes, verifies the record against those
-/// artifacts, and returns the record digest derived from the admitted record
-/// byte stream.
+/// This raw-byte admission helper admits the signed release-audit record bytes
+/// before governed artifact bytes, verifies the record against those artifacts,
+/// and returns the record digest derived from the admitted record byte stream.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, record byte
@@ -18098,8 +18204,8 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_art
 
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
-/// This richer byte-admission helper decodes governed artifacts and the signed
-/// release-audit record from canonical bytes, verifies the record against those
+/// This richer byte-admission helper admits the signed release-audit record
+/// bytes before governed artifact bytes, verifies the record against those
 /// artifacts, and returns both the artifact-bundle digest and the record digest
 /// derived from their admitted byte streams.
 ///
@@ -18133,10 +18239,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_ar
 
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
-/// This byte-admission helper decodes governed artifacts and the signed
-/// release-audit record from canonical bytes, verifies the record against those
-/// artifacts, and returns the artifact-bundle, evidence, signoff, and record
-/// digests derived from the admitted byte streams and decoded record.
+/// This byte-admission helper admits the signed release-audit record bytes
+/// before governed artifact bytes, verifies the record against those artifacts,
+/// and returns the artifact-bundle, evidence, signoff, and record digests
+/// derived from the admitted byte streams and decoded record.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, record byte
@@ -18158,14 +18264,14 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_fo
     ),
     BfvError,
 > {
+    let (record, evidence_digest, signoff_digest, record_digest) =
+        bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(record_bytes)?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
         )?;
-    let (record, evidence_digest, signoff_digest, record_digest) =
-        bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(record_bytes)?;
     validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1(
         params, material, &artifacts, &record,
     )?;
@@ -18502,8 +18608,9 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_byte
 
 /// Build a BFV full-bootstrap release audit manifest from artifact bytes.
 ///
-/// The artifact bundle is admitted from canonical bytes before evidence is
-/// derived, the release-audit record is signed, and the manifest is generated.
+/// Reviewer material and external audit digests are preflighted before the
+/// artifact bundle is admitted from canonical bytes, evidence is derived, the
+/// release-audit record is signed, and the manifest is generated.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, record
@@ -18725,6 +18832,75 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
             manifest.package_field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1
         )));
     }
+    let signed_commitments = [
+        ("record digest", &manifest.record_digest),
+        (
+            "release evidence digest",
+            &manifest.release_audit_evidence_digest,
+        ),
+        (
+            "centered scale-round source-chain digest",
+            &manifest.centered_scale_round_source_chain_digest,
+        ),
+        ("artifact bundle digest", &manifest.artifact_bundle_digest),
+        (
+            "evaluator artifact set digest",
+            &manifest.evaluator_artifact_set_digest,
+        ),
+        (
+            "proof-key pair commitment",
+            &manifest.proof_key_pair_commitment,
+        ),
+        ("prover-key digest", &manifest.prover_key_digest),
+        ("verifier-key digest", &manifest.verifier_key_digest),
+        (
+            "prover native payload digest",
+            &manifest.prover_native_payload_digest,
+        ),
+        (
+            "verifier native payload digest",
+            &manifest.verifier_native_payload_digest,
+        ),
+        (
+            "native circuit fingerprint",
+            &manifest.native_circuit_fingerprint,
+        ),
+        (
+            "generated circuit body digest",
+            &manifest.generated_circuit_body_digest,
+        ),
+        ("audit report digest", &manifest.audit_report_digest),
+        (
+            "evidence archive digest",
+            &manifest.audit_evidence_archive_digest,
+        ),
+    ];
+    validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
+        "manifest",
+        &signed_commitments,
+    )?;
+    validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
+        "manifest",
+        &signed_commitments,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_digest_aliases_v1(
+        "manifest",
+        &manifest.circuit_id,
+        &[
+            (
+                "prover native payload digest",
+                &manifest.prover_native_payload_digest,
+            ),
+            (
+                "verifier native payload digest",
+                &manifest.verifier_native_payload_digest,
+            ),
+            (
+                "generated circuit body digest",
+                &manifest.generated_circuit_body_digest,
+            ),
+        ],
+    )?;
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit manifest record digest",
         &manifest.record_digest,
@@ -18792,57 +18968,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
                 .to_owned(),
         ));
     }
-    let signed_commitments = [
-        ("record digest", &manifest.record_digest),
-        (
-            "release evidence digest",
-            &manifest.release_audit_evidence_digest,
-        ),
-        (
-            "centered scale-round source-chain digest",
-            &manifest.centered_scale_round_source_chain_digest,
-        ),
-        ("artifact bundle digest", &manifest.artifact_bundle_digest),
-        (
-            "evaluator artifact set digest",
-            &manifest.evaluator_artifact_set_digest,
-        ),
-        (
-            "proof-key pair commitment",
-            &manifest.proof_key_pair_commitment,
-        ),
-        ("prover-key digest", &manifest.prover_key_digest),
-        ("verifier-key digest", &manifest.verifier_key_digest),
-        (
-            "prover native payload digest",
-            &manifest.prover_native_payload_digest,
-        ),
-        (
-            "verifier native payload digest",
-            &manifest.verifier_native_payload_digest,
-        ),
-        (
-            "native circuit fingerprint",
-            &manifest.native_circuit_fingerprint,
-        ),
-        (
-            "generated circuit body digest",
-            &manifest.generated_circuit_body_digest,
-        ),
-        ("audit report digest", &manifest.audit_report_digest),
-        (
-            "evidence archive digest",
-            &manifest.audit_evidence_archive_digest,
-        ),
-    ];
-    validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
-        "manifest",
-        &signed_commitments,
-    )?;
-    validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
-        "manifest",
-        &signed_commitments,
-    )?;
     validate_bfv_full_bootstrap_release_audit_reviewer_id(&manifest.reviewer_id)?;
     validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
         "BFV full-bootstrap release audit manifest reviewer public key",
@@ -19352,10 +19477,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
 
 /// Validate canonical artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
-/// This production admission helper decodes governed artifacts from canonical
-/// bytes, validates the signed record against those artifacts, checks that the
-/// manifest binds the same record, and enforces the caller-trusted reviewer
-/// id/key pair on both signed objects.
+/// This production admission helper admits the signed manifest and record bytes
+/// before governed artifact bytes, validates the signed record against those
+/// artifacts, and enforces the caller-trusted reviewer id/key pair on both
+/// signed objects.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, the record does not match the
@@ -19392,11 +19517,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bun
 
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
-/// This production admission helper decodes governed artifacts, manifest, and
-/// signed record from canonical bytes, validates the record against those
-/// artifacts, checks that the manifest binds the same record, and returns the
-/// manifest digest derived from the admitted manifest bytes before enforcing the
-/// trusted reviewer id/key pair.
+/// This production admission helper admits the signed manifest and record bytes
+/// before governed artifact bytes, validates the record against those artifacts,
+/// and returns the manifest digest derived from the admitted manifest bytes
+/// before enforcing the trusted reviewer id/key pair.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, the record does not match the
@@ -19435,11 +19559,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_a
 
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
-/// This production admission helper decodes governed artifacts, manifest, and
-/// signed record from canonical bytes, validates the record against those
-/// artifacts, checks that the manifest binds the same record, and returns the
-/// record and manifest digests derived from the admitted bytes before enforcing
-/// the trusted reviewer id/key pair.
+/// This production admission helper admits the signed manifest and record bytes
+/// before governed artifact bytes, validates the record against those artifacts,
+/// and returns the record and manifest digests derived from the admitted bytes
+/// before enforcing the trusted reviewer id/key pair.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, the record does not match the
@@ -19479,11 +19602,11 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_
 
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
-/// This richer production admission helper decodes governed artifacts, manifest,
-/// and signed record from canonical bytes, validates the record against those
-/// artifacts, checks that the manifest binds the same record, and returns the
-/// artifact-bundle, evidence, signoff, record, and manifest digests derived from
-/// the admitted bytes before enforcing the trusted reviewer id/key pair.
+/// This richer production admission helper admits the signed manifest and record
+/// bytes before governed artifact bytes, validates the record against those
+/// artifacts, and returns the artifact-bundle, evidence, signoff, record, and
+/// manifest digests derived from the admitted bytes before enforcing the trusted
+/// reviewer id/key pair.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, the record does not match the
@@ -19510,28 +19633,21 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
     ),
     BfvError,
 > {
-    let (
-        artifacts,
-        record,
-        artifact_bundle_digest,
-        evidence_digest,
-        signoff_digest,
-        record_digest,
-    ) = validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
-            params,
-            material,
-            artifact_bundle_bytes,
+    let (manifest, record, record_digest, evidence_digest, signoff_digest, manifest_digest) =
+        validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_record_bytes_trusted_reviewer_v1(
+            manifest_bytes,
             record_bytes,
             reviewer_id,
             reviewer_public_key,
         )?;
-    let (manifest, _, _, manifest_digest) =
-        bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(manifest_bytes)?;
-    validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(&manifest, &record)?;
-    validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1(
-        &manifest,
-        reviewer_id,
-        reviewer_public_key,
+    let (artifacts, artifact_bundle_digest) =
+        bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
+            params,
+            material,
+            artifact_bundle_bytes,
+        )?;
+    validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1(
+        params, material, &artifacts, &record,
     )?;
     Ok((
         artifacts,
@@ -20132,9 +20248,10 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
 
 /// Build a BFV full-bootstrap release audit package from canonical record and manifest bytes.
 ///
-/// This byte-level package handoff rejects non-canonical record or manifest
-/// framing, verifies the manifest/record binding, and then packages the
-/// supplied report/archive bytes whose digests were signed by the record.
+/// This byte-level package handoff rejects malformed report/archive bytes
+/// before non-canonical record or manifest framing, verifies the manifest/record
+/// binding, and then packages the supplied report/archive bytes whose digests
+/// were signed by the record.
 ///
 /// # Errors
 /// Returns [`BfvError`] when record or manifest byte admission fails, the
@@ -20180,6 +20297,10 @@ fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_with_a
     ),
     BfvError,
 > {
+    bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
+        audit_report_bytes,
+        audit_evidence_archive_bytes,
+    )?;
     let (manifest, record, record_digest, evidence_digest, signoff_digest, manifest_digest) =
         validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_record_bytes_v1(
             manifest_bytes,
@@ -20486,13 +20607,14 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_
 
 /// Build an externally reviewed BFV full-bootstrap release audit package from artifact bytes.
 ///
-/// This byte-level production handoff rejects non-canonical artifact-bundle
-/// framing before signing the externally reviewed report/archive bytes. The
-/// returned artifact bundle is the decoded canonical bundle used for package
-/// construction.
+/// This byte-level production handoff rejects malformed reviewer material and
+/// report/archive bytes before non-canonical artifact-bundle framing, then signs
+/// the externally reviewed report/archive bytes. The returned artifact bundle is
+/// the decoded canonical bundle used for package construction.
 ///
 /// # Errors
-/// Returns [`BfvError`] when artifact-bundle byte admission fails or externally
+/// Returns [`BfvError`] when reviewer material is malformed, report/archive
+/// byte admission fails, artifact-bundle byte admission fails, or externally
 /// reviewed package construction fails.
 pub fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_v1(
     params: &BfvParameters,
@@ -20538,6 +20660,15 @@ fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_
     ),
     BfvError,
 > {
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+        "BFV full-bootstrap release audit package reviewer private key",
+        reviewer_private_key,
+    )?;
+    bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
+        audit_report_bytes,
+        audit_evidence_archive_bytes,
+    )?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
@@ -20768,10 +20899,11 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
 
 /// Build a deterministic BFV full-bootstrap release audit package from artifact bytes.
 ///
-/// This byte-level deterministic handoff rejects non-canonical artifact-bundle
-/// framing before generating the machine-checkable report/archive bytes and
-/// signing the resulting structural package. Production runtime contexts must
-/// still pin an externally reviewed package accepted by
+/// This byte-level deterministic handoff rejects malformed reviewer material
+/// before non-canonical artifact-bundle framing, then generates the
+/// machine-checkable report/archive bytes and signs the resulting structural
+/// package. Production runtime contexts must still pin an externally reviewed
+/// package accepted by
 /// [`validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1`].
 ///
 /// # Errors
@@ -20816,6 +20948,11 @@ fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admit
     ),
     BfvError,
 > {
+    validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+        "BFV full-bootstrap release audit package reviewer private key",
+        reviewer_private_key,
+    )?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
@@ -21008,7 +21145,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
             package.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1
         )));
     }
-    validate_bfv_full_bootstrap_release_audit_record_v1(&package.record)?;
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit package record digest",
         &package.record_digest,
@@ -21017,6 +21153,21 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
         "BFV full-bootstrap release audit package record digest",
         &package.record_digest,
     )?;
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap release audit package manifest digest",
+        &package.manifest_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap release audit package manifest digest",
+        &package.manifest_digest,
+    )?;
+    if package.manifest_digest == package.record_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit package manifest digest must be distinct from record digest"
+                .to_owned(),
+        ));
+    }
+    validate_bfv_full_bootstrap_release_audit_record_v1(&package.record)?;
     let expected_record_digest =
         bfv_full_bootstrap_release_audit_record_digest_v1(&package.record)?;
     if package.record_digest != expected_record_digest {
@@ -21033,14 +21184,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
             "BFV full-bootstrap release audit package manifest record digest mismatch".to_owned(),
         ));
     }
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap release audit package manifest digest",
-        &package.manifest_digest,
-    )?;
-    validate_no_full_bootstrap_placeholder_material_digest(
-        "BFV full-bootstrap release audit package manifest digest",
-        &package.manifest_digest,
-    )?;
     let expected_manifest_digest =
         bfv_full_bootstrap_release_audit_manifest_digest_v1(&package.manifest)?;
     if package.manifest_digest != expected_manifest_digest {
@@ -21240,12 +21383,7 @@ fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_revie
     reviewer_public_key: &PublicKey,
     package_digest_source: impl FnOnce() -> Result<Hash, BfvError>,
 ) -> Result<(), BfvError> {
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap release audit caller-pinned package digest",
-        &expected_package_digest,
-    )?;
-    validate_no_full_bootstrap_placeholder_material_digest(
-        "BFV full-bootstrap release audit caller-pinned package digest",
+    validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_preflight_v1(
         &expected_package_digest,
     )?;
     if expected_package_digest == package.record_digest {
@@ -21264,6 +21402,9 @@ fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_revie
         package,
         &expected_package_digest,
     )?;
+    validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distinct_from_generated_body_commitments_v1(
+        &expected_package_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trusted_reviewer_v1(
         params,
         material,
@@ -21280,6 +21421,19 @@ fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_revie
         ));
     }
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_preflight_v1(
+    expected_package_digest: &Hash,
+) -> Result<(), BfvError> {
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap release audit caller-pinned package digest",
+        expected_package_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap release audit caller-pinned package digest",
+        expected_package_digest,
+    )
 }
 
 /// Validate production external-review markers on a BFV full-bootstrap release audit package.
@@ -21700,6 +21854,44 @@ fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distin
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distinct_from_generated_body_commitments_v1(
+    expected_package_digest: &Hash,
+) -> Result<(), BfvError> {
+    let generated_circuit_body =
+        bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)?;
+    let generated_body = validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
+        "BFV full-bootstrap release audit caller-pinned package digest",
+        BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        &generated_circuit_body,
+    )?;
+    let generated_body_commitments = [
+        (
+            "generated circuit body arithmetic trace profile digest",
+            &generated_body.arithmetic_trace_profile_digest,
+        ),
+        (
+            "generated circuit body arithmetic AIR constraint-system digest",
+            &generated_body.arithmetic_air_constraint_system_digest,
+        ),
+        (
+            "generated circuit body proof public-input schema payload digest",
+            &generated_body.proof_public_input_schema_payload_digest,
+        ),
+        (
+            "generated circuit body release-prover contract digest",
+            &generated_body.release_prover_contract_digest,
+        ),
+    ];
+    for (label, digest) in generated_body_commitments {
+        if expected_package_digest == digest {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit caller-pinned package digest must be distinct from {label}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Return the digest of a BFV full-bootstrap release audit package.
 ///
 /// # Errors
@@ -21854,10 +22046,11 @@ pub fn bfv_full_bootstrap_release_audit_package_and_all_digests_from_bytes_v1(
 
 /// Validate canonical BFV full-bootstrap release audit package bytes.
 ///
-/// This byte-level production admission helper rejects non-canonical package
-/// framing before applying artifact binding, trusted-reviewer, external-review
-/// marker, and caller-pinned digest validation. The returned package is the
-/// canonical package represented by `package_bytes`.
+/// This byte-level production admission helper rejects malformed caller-pinned
+/// digests and trusted-reviewer inputs before non-canonical package framing,
+/// then applies artifact binding, external-review marker, and caller-pinned
+/// digest validation. The returned package is the canonical package represented
+/// by `package_bytes`.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, package validation fails, the
@@ -21872,6 +22065,13 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_tru
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<BfvFullBootstrapReleaseAuditPackageV1, BfvError> {
+    validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_preflight_v1(
+        &expected_package_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     let (package, admitted_package_digest) =
         bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(package_bytes)?;
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_with_digest_source_v1(
@@ -21889,11 +22089,11 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_tru
 
 /// Validate canonical BFV full-bootstrap release audit package bytes.
 ///
-/// This byte-level production admission helper derives the caller-pinnable
-/// package digest from the same canonical package bytes it validates, then
-/// enforces artifact binding, trusted-reviewer, external-review marker, and
-/// digest-alias checks. The returned package and digest are both bound to
-/// `package_bytes`.
+/// This byte-level production admission helper rejects malformed
+/// trusted-reviewer inputs before deriving the caller-pinnable package digest
+/// from the same canonical package bytes it validates, then enforces artifact
+/// binding, external-review marker, and digest-alias checks. The returned
+/// package and digest are both bound to `package_bytes`.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, package validation fails, the
@@ -21907,6 +22107,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_tru
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(BfvFullBootstrapReleaseAuditPackageV1, Hash), BfvError> {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
     let (package, package_digest) =
         bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(package_bytes)?;
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_with_digest_source_v1(
@@ -21926,9 +22130,12 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_tru
 ///
 /// This is the raw-byte production admission path for callers that receive both
 /// the governed artifact bundle and an externally reviewed release-audit
-/// package as bytes. It rejects non-canonical artifact or package framing before
-/// enforcing governed artifact binding, trusted-reviewer identity,
-/// external-review markers, and the caller-pinned package digest.
+/// package as bytes. It rejects malformed caller-pinned digests and
+/// trusted-reviewer inputs before non-canonical package or artifact framing,
+/// then enforces governed artifact binding, external-review markers, and the
+/// caller-pinned package digest. Package bytes are admitted before artifact
+/// bytes so a malformed signed trust object is not masked by malformed governed
+/// artifact framing.
 ///
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, package byte
@@ -21950,21 +22157,30 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
     ),
     BfvError,
 > {
+    validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_preflight_v1(
+        &expected_package_digest,
+    )?;
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
+    let (package, admitted_package_digest) =
+        bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(package_bytes)?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
         )?;
-    let package =
-        validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
-            params,
-            material,
-            &artifacts,
-            package_bytes,
-            expected_package_digest,
-            reviewer_id,
-            reviewer_public_key,
+    validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_with_digest_source_v1(
+        params,
+        material,
+        &artifacts,
+        &package,
+        expected_package_digest,
+        reviewer_id,
+        reviewer_public_key,
+        move || Ok(admitted_package_digest),
     )?;
     validate_bfv_full_bootstrap_release_audit_package_matches_admitted_artifact_bundle_digest_v1(
         &package,
@@ -22056,9 +22272,12 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
 
 /// Validate canonical artifact-bundle and release-audit package bytes.
 ///
-/// This raw-byte production admission helper derives the artifact-bundle,
-/// evidence, signoff, record, manifest, and caller-pinnable package digests from
-/// the same canonical byte streams it validates. It returns the decoded
+/// This raw-byte production admission helper rejects malformed trusted-reviewer
+/// inputs before admitting package bytes, then derives the artifact-bundle,
+/// evidence, signoff, record, manifest, and caller-pinnable package digests
+/// from the same canonical byte streams it validates. Package bytes are
+/// admitted before artifact bytes so malformed signed trust objects surface
+/// before malformed governed artifact framing. It returns the decoded
 /// artifacts, decoded package, admitted artifact-bundle digest, admitted
 /// evidence digest, admitted signoff digest, admitted record digest, admitted
 /// manifest digest, and byte-derived package digest together.
@@ -22088,21 +22307,28 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
     ),
     BfvError,
 > {
+    validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+        reviewer_id,
+        reviewer_public_key,
+    )?;
+    let (package, package_digest) =
+        bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(package_bytes)?;
     let (artifacts, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
             material,
             artifact_bundle_bytes,
         )?;
-    let (package, package_digest) =
-        validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_v1(
-            params,
-            material,
-            &artifacts,
-            package_bytes,
-            reviewer_id,
-            reviewer_public_key,
-        )?;
+    validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_with_digest_source_v1(
+        params,
+        material,
+        &artifacts,
+        &package,
+        package_digest,
+        reviewer_id,
+        reviewer_public_key,
+        move || Ok(package_digest),
+    )?;
     validate_bfv_full_bootstrap_release_audit_package_matches_admitted_artifact_bundle_digest_v1(
         &package,
         &artifact_bundle_digest,
@@ -24185,6 +24411,10 @@ fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
         "BFV full-bootstrap release audit proof-key digest",
         &key_digest,
     )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV full-bootstrap release audit proof-key digest",
+        &key_digest,
+    )?;
     let envelope = decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(key)?;
     let native =
         decode_bfv_full_bootstrap_native_proof_key_material_v1(&envelope.native_key_material)?;
@@ -24413,6 +24643,24 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
         "signoff",
         &signed_commitments,
     )?;
+    validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_digest_aliases_v1(
+        "signoff",
+        &payload.circuit_id,
+        &[
+            (
+                "prover native payload digest",
+                &payload.prover_native_payload_digest,
+            ),
+            (
+                "verifier native payload digest",
+                &payload.verifier_native_payload_digest,
+            ),
+            (
+                "generated circuit body digest",
+                &payload.generated_circuit_body_digest,
+            ),
+        ],
+    )?;
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit signoff evidence digest",
         &payload.release_audit_evidence_digest,
@@ -24634,6 +24882,7 @@ fn validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
     digest: &Hash,
 ) -> Result<(), BfvError> {
     validate_nonzero_material_digest(label, digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     validate_no_bfv_full_bootstrap_inert_sha256_digest(
         label,
         &<[u8; Hash::LENGTH]>::from(*digest),
@@ -24653,6 +24902,7 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
     artifact_header: &[u8],
     min_body_bytes: usize,
 ) -> Result<(), BfvError> {
+    validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     if let Some(sentinels) = bfv_full_bootstrap_release_audit_inert_artifact_digests_for_header_v1(
         artifact_header,
         min_body_bytes,
@@ -24745,6 +24995,43 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_digest_aliases_v1(
+    context: &str,
+    circuit_id: &str,
+    raw_commitments: &[(&str, &Hash)],
+) -> Result<(), BfvError> {
+    let generated_circuit_body = bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)?;
+    let body = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+        &generated_circuit_body,
+    )
+    .map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit {context} generated circuit body is invalid: {err}"
+        ))
+    })?;
+    let embedded_commitments = [
+        (
+            "proof public-input schema payload digest",
+            <[u8; Hash::LENGTH]>::from(body.proof_public_input_schema_payload_digest),
+        ),
+        (
+            "release-prover contract digest",
+            <[u8; Hash::LENGTH]>::from(body.release_prover_contract_digest),
+        ),
+    ];
+    for (field_label, field_digest) in raw_commitments {
+        let field_digest_bytes = <[u8; Hash::LENGTH]>::from(**field_digest);
+        for (embedded_label, embedded_digest) in &embedded_commitments {
+            if field_digest_bytes == *embedded_digest {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap release audit {context} {field_label} must be distinct from {embedded_label}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
     context: &str,
     audit_report_digest: &Hash,
@@ -24752,6 +25039,7 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
 ) -> Result<(), BfvError> {
     let report_label = format!("BFV full-bootstrap release audit {context} report digest");
     validate_nonzero_material_digest(&report_label, audit_report_digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(&report_label, audit_report_digest)?;
     validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
         &report_label,
         audit_report_digest,
@@ -24761,6 +25049,10 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
     let archive_label =
         format!("BFV full-bootstrap release audit {context} evidence archive digest");
     validate_nonzero_material_digest(&archive_label, audit_evidence_archive_digest)?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        &archive_label,
+        audit_evidence_archive_digest,
+    )?;
     validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
         &archive_label,
         audit_evidence_archive_digest,
@@ -24956,6 +25248,7 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
         )));
     }
     validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&evidence.proof_profile)?;
+    validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(evidence)?;
     validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         "BFV full-bootstrap release audit prover key",
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
@@ -25087,7 +25380,6 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
         "BFV full-bootstrap release audit proof-key pair commitment",
         &evidence.proof_key_pair_commitment,
     )?;
-    validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(evidence)?;
     validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(evidence)?;
     validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(evidence)
 }
@@ -25717,13 +26009,7 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
             evidence.key_role, expected_role
         )));
     }
-    validate_bfv_full_bootstrap_digest_material_hashes(
-        &format!("{label} release audit key evidence"),
-        &[
-            ("key digest", &evidence.key_digest),
-            ("key material commitment", &evidence.key_material_commitment),
-        ],
-    )?;
+    validate_bfv_full_bootstrap_release_audit_key_evidence_digest_aliases_v1(label, evidence)?;
     validate_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1(
         &format!("{label} release audit key evidence centered scale-round source-chain digest"),
         &evidence.centered_scale_round_source_chain_digest,
@@ -25765,8 +26051,16 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         &format!("{label} release audit generated circuit body digest"),
         &evidence.generated_circuit_body_digest,
     )?;
+    validate_bfv_full_bootstrap_release_audit_key_evidence_distinct_digest_bytes_v1(
+        label, evidence,
+    )?;
     let expected_generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(&evidence.native_payload_circuit_id)?;
+    validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_aliases_v1(
+        label,
+        evidence,
+        &expected_generated_circuit_body,
+    )?;
     if evidence.generated_circuit_body_digest != sha256(&expected_generated_circuit_body) {
         return Err(BfvError::InvalidParameters(format!(
             "{label} release audit generated circuit body digest mismatch"
@@ -25794,11 +26088,139 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_aliases_v1(
+    label: &str,
+    evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
+    expected_generated_circuit_body: &[u8],
+) -> Result<(), BfvError> {
+    let body = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+        expected_generated_circuit_body,
+    )
+    .map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "{label} release audit generated circuit body is invalid: {err}"
+        ))
+    })?;
+    for (field_label, field_digest) in [
+        ("native payload digest", evidence.native_payload_digest),
+        (
+            "generated circuit body digest",
+            evidence.generated_circuit_body_digest,
+        ),
+    ] {
+        for (embedded_label, embedded_digest) in [
+            (
+                "proof public-input schema payload digest",
+                <[u8; Hash::LENGTH]>::from(body.proof_public_input_schema_payload_digest),
+            ),
+            (
+                "release-prover contract digest",
+                <[u8; Hash::LENGTH]>::from(body.release_prover_contract_digest),
+            ),
+        ] {
+            if field_digest == embedded_digest {
+                return Err(BfvError::InvalidParameters(format!(
+                    "{label} release audit key evidence {field_label} must be distinct from {embedded_label}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_release_audit_key_evidence_digest_aliases_v1(
+    label: &str,
+    evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        &format!("{label} release audit key evidence"),
+        &[
+            ("key digest", &evidence.key_digest),
+            ("key material commitment", &evidence.key_material_commitment),
+            (
+                "centered scale-round source-chain digest",
+                &evidence.centered_scale_round_source_chain_digest,
+            ),
+            (
+                "native circuit fingerprint",
+                &evidence.native_circuit_fingerprint,
+            ),
+        ],
+    )
+}
+
+fn validate_bfv_full_bootstrap_release_audit_key_evidence_distinct_digest_bytes_v1(
+    label: &str,
+    evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
+) -> Result<(), BfvError> {
+    let digest_entries = [
+        ("key digest", evidence.key_digest.into()),
+        (
+            "key material commitment",
+            evidence.key_material_commitment.into(),
+        ),
+        (
+            "centered scale-round source-chain digest",
+            evidence.centered_scale_round_source_chain_digest.into(),
+        ),
+        (
+            "native circuit fingerprint",
+            evidence.native_circuit_fingerprint.into(),
+        ),
+        ("native payload digest", evidence.native_payload_digest),
+        (
+            "generated circuit body digest",
+            evidence.generated_circuit_body_digest,
+        ),
+    ];
+    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
+        if let Some((prior_label, _)) = digest_entries[..index]
+            .iter()
+            .find(|(_, prior)| prior == digest)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} release audit key evidence {entry_label} must be distinct from {prior_label}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
     digest_material: &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(digest_material)?;
     let bytes = norito::to_bytes(digest_material).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap circuit artifact bundle digest material encoding failed: {err}"
+        ))
+    })?;
+    Ok(Hash::new_from_chunks(&[
+        BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN,
+        bytes.as_slice(),
+    ]))
+}
+
+fn bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+) -> Result<Hash, BfvError> {
+    let digest_material = BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
+        version: BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1,
+        artifact_digest_count:
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1,
+        coefficient_to_slot_key_digest: Hash::new(&artifacts.coefficient_to_slot_key),
+        slot_to_coefficient_key_digest: Hash::new(&artifacts.slot_to_coefficient_key),
+        blind_rotation_key_digest: Hash::new(&artifacts.blind_rotation_key),
+        sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
+        accumulator_digest: Hash::new(&artifacts.accumulator),
+        proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
+        arithmetic_air_constraint_system_artifact_digest: Hash::new(
+            &artifacts.arithmetic_air_constraint_system,
+        ),
+        prover_key_digest: Hash::new(&artifacts.prover_key),
+        verifier_key_digest: Hash::new(&artifacts.verifier_key),
+    };
+    let bytes = norito::to_bytes(&digest_material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap circuit artifact bundle digest material encoding failed: {err}"
         ))
@@ -25927,6 +26349,21 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_v1(
         "BFV full-bootstrap material proof input statement hash",
         &material.statement_hash,
     )?;
+    let governed_material = material
+        .evaluation_keys
+        .bootstrap_key
+        .as_ref()
+        .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap material proof input requires governed FullBootstrapV1 material"
+                    .to_owned(),
+            )
+        })?;
+    validate_bfv_full_bootstrap_material_proof_input_digest_aliases_v1(
+        material,
+        governed_material,
+    )?;
     let expected_statement_hash = material
         .evaluation_keys
         .full_bootstrap_material_proof_statement_digest(&material.params, &material.public_key)?
@@ -25941,17 +26378,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_v1(
             "BFV full-bootstrap material proof input material statement hash mismatch".to_owned(),
         ));
     }
-    let governed_material = material
-        .evaluation_keys
-        .bootstrap_key
-        .as_ref()
-        .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
-        .ok_or_else(|| {
-            BfvError::InvalidParameters(
-                "BFV full-bootstrap material proof input requires governed FullBootstrapV1 material"
-                    .to_owned(),
-            )
-        })?;
     validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
         &material.params,
         governed_material,
@@ -25963,6 +26389,57 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_v1(
         ))
     })?;
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_material_proof_input_digest_aliases_v1(
+    material: &BfvFullBootstrapMaterialProofInputMaterialV1,
+    governed_material: &BfvFullBootstrapCircuitMaterialV1,
+) -> Result<(), BfvError> {
+    let public_key_digest = bfv_public_key_digest(&material.params, &material.public_key)?;
+    let evaluation_key_bundle_digest = material.evaluation_keys.digest(&material.params)?;
+    let full_bootstrap_material_digest =
+        bfv_full_bootstrap_circuit_material_digest(&material.params, governed_material)?;
+    let artifact_bundle_digest =
+        bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(
+            &material.artifact_bundle,
+        )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap material proof input material",
+        &[
+            ("public-key digest", &public_key_digest),
+            (
+                "evaluation-key bundle digest",
+                &evaluation_key_bundle_digest,
+            ),
+            (
+                "full-bootstrap material digest",
+                &full_bootstrap_material_digest,
+            ),
+            ("artifact bundle digest", &artifact_bundle_digest),
+            (
+                "proof public-input schema digest",
+                &governed_material.proof_public_input_schema_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                &governed_material.proof_key_pair_commitment,
+            ),
+            ("prover-key digest", &governed_material.prover_key_digest),
+            (
+                "prover-key material commitment",
+                &governed_material.prover_key_material_commitment,
+            ),
+            (
+                "verifier-key digest",
+                &governed_material.verifier_key_digest,
+            ),
+            (
+                "verifier-key material commitment",
+                &governed_material.verifier_key_material_commitment,
+            ),
+            ("statement hash", &material.statement_hash),
+        ],
+    )
 }
 
 /// Validate material proof input material against caller-owned governed artifacts.
@@ -26151,15 +26628,20 @@ pub fn bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_fo
     artifact_bundle: &BfvFullBootstrapCircuitArtifactBundleV1,
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapMaterialProofInputMaterialV1, Hash), BfvError> {
-    let (material, material_digest) =
-        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+    let expected_material = bfv_full_bootstrap_material_proof_input_material_v1(
         params,
         public_key,
         evaluation_keys,
         artifact_bundle,
-        &material,
     )?;
+    let (material, material_digest) =
+        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(bytes)?;
+    if material != expected_material {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap material proof input material does not match caller artifacts"
+                .to_owned(),
+        ));
+    }
     Ok((material, material_digest))
 }
 
@@ -26167,9 +26649,9 @@ pub fn bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_fo
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_for_artifacts_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded material
-/// matches the caller-supplied parameters, public key, evaluation keys, and
-/// governed artifact bundle before returning it.
+/// It preflights the caller-supplied parameters, public key, evaluation keys,
+/// and governed artifact bundle before admitting supplied bytes, then verifies
+/// the decoded material matches that context before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails or caller-bound material proof
@@ -26325,6 +26807,10 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_diges
         )
     })?;
     validate_bootstrap_key_public_key_digest(params, &public_key, bootstrap_key)?;
+    let (proof_input, proof_input_digest) =
+        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(
+            proof_input_material_bytes,
+        )?;
     let governed_material = full_bootstrap_material_from_key(bootstrap_key)?;
     let (artifact_bundle, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
@@ -26332,14 +26818,13 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_diges
             governed_material,
             artifact_bundle_bytes,
         )?;
-    let (proof_input, proof_input_digest) =
-        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_for_artifacts_v1(
-            params,
-            &public_key,
-            &evaluation_keys,
-            &artifact_bundle,
-            proof_input_material_bytes,
-        )?;
+    validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+        params,
+        &public_key,
+        &evaluation_keys,
+        &artifact_bundle,
+        &proof_input,
+    )?;
     Ok((
         public_key,
         evaluation_keys,
@@ -26381,6 +26866,58 @@ fn validate_bfv_full_bootstrap_execution_claim_digest_fields_v1(
     validate_bfv_full_bootstrap_digest_material_hashes(
         "BFV full-bootstrap execution proof claim",
         &[
+            ("Galois key set digest", &claim.galois_key_set_digest),
+            ("execution witness digest", &claim.execution_witness_digest),
+        ],
+    )
+}
+
+fn validate_bfv_full_bootstrap_execution_claim_ciphertext_digest_aliases_v1(
+    params: &BfvParameters,
+    claim: &BfvFullBootstrapExecutionProofClaimV1,
+) -> Result<(), BfvError> {
+    let input_ciphertext_digest = bfv_ciphertext_digest(params, &claim.input_ciphertext)?;
+    let output_ciphertext_digest = bfv_ciphertext_digest(params, &claim.output_ciphertext)?;
+    for (claim_label, claim_digest) in [
+        ("Galois key set digest", &claim.galois_key_set_digest),
+        ("execution witness digest", &claim.execution_witness_digest),
+    ] {
+        for (ciphertext_label, ciphertext_digest) in [
+            ("input ciphertext digest", &input_ciphertext_digest),
+            ("output ciphertext digest", &output_ciphertext_digest),
+        ] {
+            if claim_digest == ciphertext_digest {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap execution proof claim {claim_label} must be distinct from {ciphertext_label}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_execution_claim_statement_digest_aliases_v1(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    full_bootstrap_material_digest: &Hash,
+    artifact_bundle_digest: &Hash,
+    evaluator_artifact_set_digest: &Hash,
+    claim: &BfvFullBootstrapExecutionProofClaimV1,
+) -> Result<(), BfvError> {
+    let public_key_digest = bfv_public_key_digest(params, public_key)?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution proof claim",
+        &[
+            ("public-key digest", &public_key_digest),
+            (
+                "full-bootstrap material digest",
+                full_bootstrap_material_digest,
+            ),
+            ("artifact bundle digest", artifact_bundle_digest),
+            (
+                "evaluator artifact set digest",
+                evaluator_artifact_set_digest,
+            ),
             ("Galois key set digest", &claim.galois_key_set_digest),
             ("execution witness digest", &claim.execution_witness_digest),
         ],
@@ -26538,9 +27075,19 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
     let params = &material.params;
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, &material.bootstrap_key)?;
     let full_bootstrap_material = full_bootstrap_material_from_key(&material.bootstrap_key)?;
+    let bootstrap_public_key_digest = material
+        .bootstrap_key
+        .public_key_digest
+        .as_ref()
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "FullBootstrapV1 BFV bootstrap key requires public-key digest".to_owned(),
+            )
+        })?;
     validate_bfv_full_bootstrap_digest_material_hashes(
         "BFV full-bootstrap execution witness digest material",
         &[
+            ("bootstrap public-key digest", bootstrap_public_key_digest),
             (
                 "full-bootstrap material digest",
                 &material.full_bootstrap_material_digest,
@@ -26774,6 +27321,50 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifac
         )));
     }
     Ok(())
+}
+
+fn preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
+    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    validate_bfv_full_bootstrap_circuit_artifact_bundle_envelope_bytes_shape_v1(artifacts)?;
+    let expected_artifact_bundle_digest =
+        bfv_full_bootstrap_circuit_artifact_bundle_digest_from_material_v1(params, material)?;
+    let actual_artifact_bundle_digest =
+        bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(artifacts)?;
+    if actual_artifact_bundle_digest != expected_artifact_bundle_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap execution artifact bundle digest mismatch".to_owned(),
+        ));
+    }
+    validate_bfv_full_bootstrap_execution_artifact_bundle_public_key_digest_aliases_v1(
+        params,
+        bootstrap_key,
+        material,
+        artifacts,
+    )?;
+    bfv_full_bootstrap_galois_key_set_digest_v1(params, galois_keys)?;
+    Ok(())
+}
+
+fn preflight_bfv_full_bootstrap_execution_public_key_artifact_galois_context_v1(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+) -> Result<(), BfvError> {
+    validate_bootstrap_key_public_key_digest(params, public_key, bootstrap_key)?;
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )
 }
 
 fn bfv_full_bootstrap_execution_witness_artifact_mismatch_label_v1(
@@ -27144,6 +27735,12 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_byte
     galois_keys: &[BfvGaloisKey],
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapExecutionWitnessDigestMaterialV1, Hash), BfvError> {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let material = decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(bytes)?;
     let digest = bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1(
         params,
@@ -27159,9 +27756,9 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_byte
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded witness
-/// material matches the caller-supplied full-bootstrap key, governed artifacts,
-/// and Galois keys before returning it.
+/// It preflights the caller-supplied full-bootstrap key, governed artifacts,
+/// and Galois keys before admitting supplied bytes, then verifies the decoded
+/// witness material matches that context before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails or artifact-aware witness
@@ -27253,6 +27850,18 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_from_witness_material
     public_key: &BfvPublicKey,
     witness_material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
+    let (statement_hash, _) =
+        bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_material_v1(
+            public_key,
+            witness_material,
+        )?;
+    Ok(statement_hash)
+}
+
+fn bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_material_v1(
+    public_key: &BfvPublicKey,
+    witness_material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
+) -> Result<(Hash, Hash), BfvError> {
     validate_public_key(&witness_material.params, public_key)?;
     validate_bootstrap_key_public_key_digest(
         &witness_material.params,
@@ -27261,6 +27870,7 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_from_witness_material
     )?;
     let claim =
         bfv_full_bootstrap_execution_proof_claim_from_witness_material_v1(witness_material)?;
+    let execution_witness_digest = claim.execution_witness_digest;
     let statement = BfvFullBootstrapExecutionProofStatementMaterial {
         version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
@@ -27276,10 +27886,11 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_from_witness_material
             "full-bootstrap execution proof statement encoding failed: {err}"
         ))
     })?;
-    Ok(Hash::new_from_chunks(&[
+    let statement_hash = Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN,
         bytes.as_slice(),
-    ]))
+    ]);
+    Ok((statement_hash, execution_witness_digest))
 }
 
 /// Build typed proof input material for a dedicated BFV full-bootstrap prover.
@@ -27329,11 +27940,21 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_v1(
         )));
     }
     validate_bfv_full_bootstrap_execution_proof_input_digest_aliases_v1(material)?;
-    let expected_statement_hash =
-        bfv_full_bootstrap_execution_proof_statement_digest_from_witness_material_v1(
+    let (expected_statement_hash, execution_witness_digest) =
+        bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_material_v1(
             &material.public_key,
             &material.witness_material,
         )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution proof input material",
+        &[
+            ("execution witness digest", &execution_witness_digest),
+            ("statement hash", &material.statement_hash),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_execution_proof_input_governed_material_digest_aliases_v1(
+        material,
+    )?;
     if material.statement_hash != expected_statement_hash {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap execution proof input material statement hash mismatch".to_owned(),
@@ -27345,9 +27966,12 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_v1(
 fn validate_bfv_full_bootstrap_execution_proof_input_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<(), BfvError> {
+    let public_key_digest =
+        bfv_public_key_digest(&material.witness_material.params, &material.public_key)?;
     validate_bfv_full_bootstrap_digest_material_hashes(
         "BFV full-bootstrap execution proof input material",
         &[
+            ("public-key digest", &public_key_digest),
             (
                 "witness full-bootstrap material digest",
                 &material.witness_material.full_bootstrap_material_digest,
@@ -27359,6 +27983,67 @@ fn validate_bfv_full_bootstrap_execution_proof_input_digest_aliases_v1(
             (
                 "witness Galois key set digest",
                 &material.witness_material.galois_key_set_digest,
+            ),
+            ("statement hash", &material.statement_hash),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_execution_proof_input_ciphertext_digest_aliases_v1(material)
+}
+
+fn validate_bfv_full_bootstrap_execution_proof_input_ciphertext_digest_aliases_v1(
+    material: &BfvFullBootstrapExecutionProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    let input_ciphertext_digest = bfv_ciphertext_digest(
+        &material.witness_material.params,
+        &material.witness_material.input_ciphertext,
+    )?;
+    let output_ciphertext_digest = bfv_ciphertext_digest(
+        &material.witness_material.params,
+        &material.witness_material.output_ciphertext,
+    )?;
+    for (ciphertext_label, ciphertext_digest) in [
+        ("input ciphertext digest", &input_ciphertext_digest),
+        ("output ciphertext digest", &output_ciphertext_digest),
+    ] {
+        validate_bfv_full_bootstrap_digest_material_hashes(
+            "BFV full-bootstrap execution proof input material",
+            &[
+                (ciphertext_label, ciphertext_digest),
+                ("statement hash", &material.statement_hash),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_execution_proof_input_governed_material_digest_aliases_v1(
+    material: &BfvFullBootstrapExecutionProofInputMaterialV1,
+) -> Result<(), BfvError> {
+    let governed_material =
+        full_bootstrap_material_from_key(&material.witness_material.bootstrap_key)?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution proof input material",
+        &[
+            (
+                "proof public-input schema digest",
+                &governed_material.proof_public_input_schema_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                &governed_material.proof_key_pair_commitment,
+            ),
+            ("prover-key digest", &governed_material.prover_key_digest),
+            (
+                "prover-key material commitment",
+                &governed_material.prover_key_material_commitment,
+            ),
+            (
+                "verifier-key digest",
+                &governed_material.verifier_key_digest,
+            ),
+            (
+                "verifier-key material commitment",
+                &governed_material.verifier_key_material_commitment,
             ),
             ("statement hash", &material.statement_hash),
         ],
@@ -27618,6 +28303,12 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_f
     galois_keys: &[BfvGaloisKey],
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapExecutionProofInputMaterialV1, Hash), BfvError> {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let (material, material_digest) =
         bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
@@ -27668,6 +28359,13 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_f
     galois_keys: &[BfvGaloisKey],
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapExecutionProofInputMaterialV1, Hash), BfvError> {
+    preflight_bfv_full_bootstrap_execution_public_key_artifact_galois_context_v1(
+        params,
+        public_key,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let (material, material_digest) =
         bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_full_bootstrap_execution_proof_input_material_for_public_key_and_artifacts_v1(
@@ -27685,9 +28383,9 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_f
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_artifacts_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded proof
-/// input material is bound to the caller-supplied full-bootstrap key, governed
-/// artifacts, and Galois keys before returning it.
+/// It preflights the caller-supplied full-bootstrap key, governed artifacts,
+/// and Galois keys before admitting supplied bytes, then verifies the decoded
+/// proof input material is bound to that context before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails or artifact-aware proof-input
@@ -27849,12 +28547,13 @@ struct BfvFullBootstrapExecutionGovernanceBytesV1 {
     galois_keys: Vec<BfvGaloisKey>,
 }
 
-fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_v1(
+fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_preflight_v1<T>(
     params: &BfvParameters,
     public_key_bytes: &[u8],
     evaluation_key_bundle_bytes: &[u8],
     artifact_bundle_bytes: &[u8],
     galois_key_set_bytes: &[u8],
+    key_preflight: impl FnOnce() -> Result<T, BfvError>,
 ) -> Result<
     (
         BfvFullBootstrapExecutionGovernanceBytesV1,
@@ -27862,6 +28561,7 @@ fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_v1(
         Hash,
         Hash,
         Hash,
+        T,
     ),
     BfvError,
 > {
@@ -27875,6 +28575,7 @@ fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_v1(
         )
     })?;
     validate_bootstrap_key_public_key_digest(params, &public_key, bootstrap_key)?;
+    let key_preflight_output = key_preflight()?;
     let governed_material = full_bootstrap_material_from_key(bootstrap_key)?;
     let (artifact_bundle, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
@@ -27895,6 +28596,7 @@ fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_v1(
         evaluation_key_bundle_digest,
         artifact_bundle_digest,
         galois_key_set_digest,
+        key_preflight_output,
     ))
 }
 
@@ -28046,35 +28748,36 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
         evaluation_key_bundle_digest,
         artifact_bundle_digest,
         galois_key_set_digest,
-    ) = decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_v1(
+        (proof_input, proof_input_digest),
+    ) = decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_preflight_v1(
         params,
         public_key_bytes,
         evaluation_key_bundle_bytes,
         artifact_bundle_bytes,
         galois_key_set_bytes,
-    )?;
-    let (proof_input, proof_input_digest) = {
-        let bootstrap_key = governance
-            .evaluation_keys
-            .bootstrap_key
-            .as_ref()
-            .ok_or_else(|| {
-                BfvError::InvalidParameters(
-                    "BFV full-bootstrap execution governance bytes require a bootstrap key"
-                        .to_owned(),
-                )
-            })?;
-        let (proof_input, proof_input_digest) =
-            bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
-                params,
-                &governance.public_key,
-                bootstrap_key,
-                &governance.artifact_bundle,
-                &governance.galois_keys,
+        || {
+            bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(
                 proof_input_material_bytes,
-            )?;
-        (proof_input, proof_input_digest)
-    };
+            )
+        },
+    )?;
+    let bootstrap_key = governance
+        .evaluation_keys
+        .bootstrap_key
+        .as_ref()
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap execution governance bytes require a bootstrap key".to_owned(),
+            )
+        })?;
+    validate_bfv_full_bootstrap_execution_proof_input_material_for_public_key_and_artifacts_v1(
+        params,
+        &governance.public_key,
+        bootstrap_key,
+        &governance.artifact_bundle,
+        &governance.galois_keys,
+        &proof_input,
+    )?;
     Ok((
         governance.public_key,
         governance.evaluation_keys,
@@ -28139,11 +28842,12 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_v1(
             material.field_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_FIELD_COUNT_V1
         )));
     }
+    validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material.proof_input_material)?;
+    validate_bfv_full_bootstrap_arithmetic_trace_material_digest_aliases_v1(material)?;
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap arithmetic trace material profile digest",
         &material.arithmetic_trace_profile_digest,
     )?;
-    validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material.proof_input_material)?;
     if material.row_width != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1 {
         return Err(BfvError::InvalidParameters(format!(
             "BFV full-bootstrap arithmetic trace material row width {} does not match canonical width {}",
@@ -28207,6 +28911,53 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_v1(
         ));
     }
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_arithmetic_trace_material_digest_aliases_v1(
+    material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+) -> Result<(), BfvError> {
+    let proof_input_public_key_digest = bfv_public_key_digest(
+        &material.proof_input_material.witness_material.params,
+        &material.proof_input_material.public_key,
+    )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap arithmetic trace material",
+        &[
+            (
+                "proof input public-key digest",
+                &proof_input_public_key_digest,
+            ),
+            (
+                "proof input statement hash",
+                &material.proof_input_material.statement_hash,
+            ),
+            (
+                "proof input witness full-bootstrap material digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+            ),
+            (
+                "proof input witness artifact bundle digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+            ),
+            (
+                "proof input witness Galois key set digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+            ),
+            (
+                "arithmetic trace profile digest",
+                &material.arithmetic_trace_profile_digest,
+            ),
+        ],
+    )
 }
 
 /// Validate that sampled native AIR openings do not expose private BFV trace rows.
@@ -28769,6 +29520,10 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_
     material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(trace_material)?;
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_trace_digest_aliases_v1(
+        trace_material,
+        material,
+    )?;
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(material)?;
     let expected =
         bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(trace_material)?;
@@ -28779,6 +29534,52 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_
         ));
     }
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_trace_digest_aliases_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+    material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
+) -> Result<(), BfvError> {
+    let proof_input_public_key_digest = bfv_public_key_digest(
+        &trace_material.proof_input_material.witness_material.params,
+        &trace_material.proof_input_material.public_key,
+    )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap arithmetic trace public opening material",
+        &[
+            (
+                "proof input public-key digest",
+                &proof_input_public_key_digest,
+            ),
+            (
+                "proof input witness full-bootstrap material digest",
+                &trace_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+            ),
+            (
+                "proof input witness artifact bundle digest",
+                &trace_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+            ),
+            (
+                "proof input witness Galois key set digest",
+                &trace_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+            ),
+            (
+                "arithmetic trace profile digest",
+                &trace_material.arithmetic_trace_profile_digest,
+            ),
+            ("statement hash", &material.statement_hash),
+            ("trace material digest", &material.trace_material_digest),
+        ],
+    )
 }
 
 /// Hash typed transcript-derived public opening material.
@@ -28917,6 +29718,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_fr
     trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, Hash), BfvError> {
+    validate_bfv_full_bootstrap_arithmetic_trace_material_v1(trace_material)?;
     let (material, material_digest) =
         bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_v1(
             bytes,
@@ -28932,9 +29734,9 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_fr
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded opening
-/// material is the transcript-derived opening material for `trace_material`
-/// before returning it.
+/// It preflights `trace_material` before admitting supplied bytes, then verifies
+/// that the decoded opening material is the transcript-derived opening material
+/// for that trace before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails or trace-bound public-opening
@@ -29091,9 +29893,9 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_pr
     proof_input_material: &BfvFullBootstrapExecutionProofInputMaterialV1,
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapArithmeticTraceMaterialV1, Hash), BfvError> {
+    let expected = bfv_full_bootstrap_arithmetic_trace_material_v1(proof_input_material)?;
     let (material, material_digest) =
         bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1(bytes)?;
-    let expected = bfv_full_bootstrap_arithmetic_trace_material_v1(proof_input_material)?;
     if material != expected {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap arithmetic trace material does not match proof input material"
@@ -29107,8 +29909,9 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_pr
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_for_proof_input_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded trace
-/// is the deterministic trace for `proof_input_material` before returning it.
+/// It preflights `proof_input_material` before admitting supplied bytes, then
+/// verifies that the decoded trace is the deterministic trace for that proof
+/// input before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, deterministic trace
@@ -29331,31 +30134,11 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
 pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
     material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
 ) -> Result<(), BfvError> {
-    if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap arithmetic AIR evaluation material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
-        )));
-    }
-    if material.field_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
-    {
-        return Err(BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap arithmetic AIR evaluation material field count {} does not match canonical count {}",
-            material.field_count,
-            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
-        )));
-    }
+    validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_layout_v1(material)?;
+    validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_aliases_v1(material)?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
         "BFV full-bootstrap arithmetic AIR evaluation material constraint-system digest",
         &material.arithmetic_air_constraint_system_digest,
-    )?;
-    validate_nonzero_material_digest(
-        "BFV full-bootstrap arithmetic AIR evaluation material trace material digest",
-        &material.arithmetic_trace_material_digest,
-    )?;
-    validate_no_full_bootstrap_placeholder_material_digest(
-        "BFV full-bootstrap arithmetic AIR evaluation material trace material digest",
-        &material.arithmetic_trace_material_digest,
     )?;
     let expected_row_count = canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
     if material.trace_row_count != expected_row_count {
@@ -29397,6 +30180,44 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
     Ok(())
 }
 
+fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_layout_v1(
+    material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
+) -> Result<(), BfvError> {
+    if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic AIR evaluation material version {} does not match canonical version {}",
+            material.version, BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
+        )));
+    }
+    if material.field_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap arithmetic AIR evaluation material field count {} does not match canonical count {}",
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_aliases_v1(
+    material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap arithmetic AIR evaluation material",
+        &[
+            (
+                "constraint-system digest",
+                &material.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "trace material digest",
+                &material.arithmetic_trace_material_digest,
+            ),
+        ],
+    )
+}
+
 /// Validate AIR evaluation material against the row-major trace it evaluates.
 ///
 /// # Errors
@@ -29407,6 +30228,11 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_
     evaluation_material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(trace_material)?;
+    validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_layout_v1(evaluation_material)?;
+    validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_cross_layer_digest_aliases_v1(
+        trace_material,
+        evaluation_material,
+    )?;
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(evaluation_material)?;
     let expected_trace_digest =
         bfv_full_bootstrap_arithmetic_trace_material_digest_v1(trace_material)?;
@@ -29437,6 +30263,62 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_
         ));
     }
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_cross_layer_digest_aliases_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+    evaluation_material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
+) -> Result<(), BfvError> {
+    let proof_input_public_key_digest = bfv_public_key_digest(
+        &trace_material.proof_input_material.witness_material.params,
+        &trace_material.proof_input_material.public_key,
+    )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap arithmetic AIR evaluation material",
+        &[
+            (
+                "proof input public-key digest",
+                &proof_input_public_key_digest,
+            ),
+            (
+                "proof input statement hash",
+                &trace_material.proof_input_material.statement_hash,
+            ),
+            (
+                "proof input witness full-bootstrap material digest",
+                &trace_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+            ),
+            (
+                "proof input witness artifact bundle digest",
+                &trace_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+            ),
+            (
+                "proof input witness Galois key set digest",
+                &trace_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+            ),
+            (
+                "arithmetic trace profile digest",
+                &trace_material.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &evaluation_material.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "arithmetic trace material digest",
+                &evaluation_material.arithmetic_trace_material_digest,
+            ),
+        ],
+    )
 }
 
 /// Hash shape-valid typed AIR evaluation material for a BFV full-bootstrap trace.
@@ -29576,6 +30458,7 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_byt
     trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapArithmeticAirEvaluationMaterialV1, Hash), BfvError> {
+    validate_bfv_full_bootstrap_arithmetic_trace_material_v1(trace_material)?;
     let (material, material_digest) =
         bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1(
@@ -29589,9 +30472,9 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_byt
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_for_trace_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded AIR
-/// evaluation material is the canonical zero-composition evaluation for
-/// `trace_material` before returning it.
+/// It preflights `trace_material` before admitting supplied bytes, then verifies
+/// that the decoded AIR evaluation material is the canonical zero-composition
+/// evaluation for that trace before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails or trace-bound AIR evaluation
@@ -29702,9 +30585,42 @@ fn validate_bfv_full_bootstrap_execution_prover_input_layout_and_trace_v1(
 fn validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<(), BfvError> {
+    let proof_input_public_key_digest = bfv_public_key_digest(
+        &material.proof_input_material.witness_material.params,
+        &material.proof_input_material.public_key,
+    )?;
     validate_bfv_full_bootstrap_digest_material_hashes(
         "BFV full-bootstrap execution prover input material",
         &[
+            (
+                "proof input public-key digest",
+                &proof_input_public_key_digest,
+            ),
+            (
+                "proof input statement hash",
+                &material.proof_input_material.statement_hash,
+            ),
+            (
+                "proof input witness full-bootstrap material digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+            ),
+            (
+                "proof input witness artifact bundle digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+            ),
+            (
+                "proof input witness Galois key set digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+            ),
             (
                 "arithmetic trace material digest",
                 &material.arithmetic_trace_material_digest,
@@ -29720,6 +30636,187 @@ fn validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
             (
                 "arithmetic AIR evaluation material digest",
                 &material.arithmetic_air_evaluation_material_digest,
+            ),
+            (
+                "public opening material digest",
+                &material.public_opening_material_digest,
+            ),
+            (
+                "prover key parameter digest",
+                &material.prover_key.parameter_digest,
+            ),
+            (
+                "prover key RNS modulus-chain digest",
+                &material.prover_key.rns_modulus_chain_digest,
+            ),
+            (
+                "prover key key-switch decomposition-chain digest",
+                &material.prover_key.key_switch_decomposition_chain_digest,
+            ),
+            (
+                "prover key centered scale-round source-chain digest",
+                &material.prover_key.centered_scale_round_source_chain_digest,
+            ),
+            (
+                "prover key public-input schema digest",
+                &material.prover_key.public_input_schema_digest,
+            ),
+            (
+                "prover key evaluator artifact set digest",
+                &material.prover_key.evaluator_artifact_set_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                &material.prover_key.proof_key_pair_commitment,
+            ),
+            (
+                "prover key material commitment",
+                &material.prover_key.key_material_commitment,
+            ),
+            (
+                "verifier key material commitment",
+                &material.verifier_key.key_material_commitment,
+            ),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_execution_prover_input_verifier_key_profile_digest_aliases_v1(
+        material,
+        &proof_input_public_key_digest,
+    )
+}
+
+fn validate_bfv_full_bootstrap_execution_prover_input_verifier_key_profile_digest_aliases_v1(
+    material: &BfvFullBootstrapExecutionProverInputMaterialV1,
+    proof_input_public_key_digest: &Hash,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution prover input material",
+        &[
+            (
+                "proof input public-key digest",
+                proof_input_public_key_digest,
+            ),
+            (
+                "proof input statement hash",
+                &material.proof_input_material.statement_hash,
+            ),
+            (
+                "proof input witness full-bootstrap material digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+            ),
+            (
+                "proof input witness artifact bundle digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+            ),
+            (
+                "proof input witness Galois key set digest",
+                &material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+            ),
+            (
+                "arithmetic trace material digest",
+                &material.arithmetic_trace_material_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &material.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "arithmetic AIR artifact digest",
+                &material.arithmetic_air_constraint_system_artifact_digest,
+            ),
+            (
+                "arithmetic AIR evaluation material digest",
+                &material.arithmetic_air_evaluation_material_digest,
+            ),
+            (
+                "public opening material digest",
+                &material.public_opening_material_digest,
+            ),
+            (
+                "verifier key parameter digest",
+                &material.verifier_key.parameter_digest,
+            ),
+            (
+                "verifier key RNS modulus-chain digest",
+                &material.verifier_key.rns_modulus_chain_digest,
+            ),
+            (
+                "verifier key key-switch decomposition-chain digest",
+                &material.verifier_key.key_switch_decomposition_chain_digest,
+            ),
+            (
+                "verifier key centered scale-round source-chain digest",
+                &material
+                    .verifier_key
+                    .centered_scale_round_source_chain_digest,
+            ),
+            (
+                "verifier key public-input schema digest",
+                &material.verifier_key.public_input_schema_digest,
+            ),
+            (
+                "verifier key evaluator artifact set digest",
+                &material.verifier_key.evaluator_artifact_set_digest,
+            ),
+            (
+                "verifier key proof-key pair commitment",
+                &material.verifier_key.proof_key_pair_commitment,
+            ),
+            (
+                "prover key material commitment",
+                &material.prover_key.key_material_commitment,
+            ),
+            (
+                "verifier key material commitment",
+                &material.verifier_key.key_material_commitment,
+            ),
+        ],
+    )
+}
+
+fn validate_bfv_full_bootstrap_execution_prover_input_embedded_material_digest_aliases_v1(
+    material: &BfvFullBootstrapExecutionProverInputMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution prover input AIR evaluation material",
+        &[
+            (
+                "embedded arithmetic AIR constraint-system digest",
+                &material
+                    .arithmetic_air_evaluation_material
+                    .arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "embedded arithmetic trace material digest",
+                &material
+                    .arithmetic_air_evaluation_material
+                    .arithmetic_trace_material_digest,
+            ),
+            (
+                "arithmetic AIR evaluation material digest",
+                &material.arithmetic_air_evaluation_material_digest,
+            ),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap execution prover input public opening material",
+        &[
+            (
+                "embedded statement hash",
+                &material.public_opening_material.statement_hash,
+            ),
+            (
+                "embedded trace material digest",
+                &material.public_opening_material.trace_material_digest,
             ),
             (
                 "public opening material digest",
@@ -29741,6 +30838,9 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
 ) -> Result<(), BfvError> {
     let governed_material =
         validate_bfv_full_bootstrap_execution_prover_input_layout_and_trace_v1(material)?;
+    validate_bfv_full_bootstrap_execution_prover_input_embedded_material_digest_aliases_v1(
+        material,
+    )?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
         "BFV full-bootstrap execution prover input material arithmetic AIR constraint-system digest",
         &material.arithmetic_air_constraint_system_digest,
@@ -30095,6 +31195,12 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_
     galois_keys: &[BfvGaloisKey],
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapExecutionProverInputMaterialV1, Hash), BfvError> {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let (material, material_digest) =
         bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
@@ -30145,6 +31251,13 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_
     galois_keys: &[BfvGaloisKey],
     bytes: &[u8],
 ) -> Result<(BfvFullBootstrapExecutionProverInputMaterialV1, Hash), BfvError> {
+    preflight_bfv_full_bootstrap_execution_public_key_artifact_galois_context_v1(
+        params,
+        public_key,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let (material, material_digest) =
         bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_full_bootstrap_execution_prover_input_material_for_public_key_and_artifacts_v1(
@@ -30162,10 +31275,10 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_artifacts_v1`].
-/// It rejects non-canonical bytes first, then verifies that the decoded prover
-/// input material is bound to the caller-supplied full-bootstrap key, governed
-/// artifacts, Galois keys, and generated proof-key artifacts before returning
-/// it.
+/// It preflights the caller-supplied full-bootstrap key, governed artifacts,
+/// and Galois keys before admitting supplied bytes, then verifies the decoded
+/// prover input material is bound to that context and generated proof-key
+/// artifacts before returning it.
 ///
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails or artifact-aware prover-input
@@ -30470,35 +31583,36 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
         evaluation_key_bundle_digest,
         artifact_bundle_digest,
         galois_key_set_digest,
-    ) = decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_v1(
+        (prover_input, prover_input_digest),
+    ) = decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_preflight_v1(
         params,
         public_key_bytes,
         evaluation_key_bundle_bytes,
         artifact_bundle_bytes,
         galois_key_set_bytes,
-    )?;
-    let (prover_input, prover_input_digest) = {
-        let bootstrap_key = governance
-            .evaluation_keys
-            .bootstrap_key
-            .as_ref()
-            .ok_or_else(|| {
-                BfvError::InvalidParameters(
-                    "BFV full-bootstrap execution governance bytes require a bootstrap key"
-                        .to_owned(),
-                )
-            })?;
-        let (prover_input, prover_input_digest) =
-            bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
-                params,
-                &governance.public_key,
-                bootstrap_key,
-                &governance.artifact_bundle,
-                &governance.galois_keys,
+        || {
+            bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(
                 prover_input_material_bytes,
-            )?;
-        (prover_input, prover_input_digest)
-    };
+            )
+        },
+    )?;
+    let bootstrap_key = governance
+        .evaluation_keys
+        .bootstrap_key
+        .as_ref()
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap execution governance bytes require a bootstrap key".to_owned(),
+            )
+        })?;
+    validate_bfv_full_bootstrap_execution_prover_input_material_for_public_key_and_artifacts_v1(
+        params,
+        &governance.public_key,
+        bootstrap_key,
+        &governance.artifact_bundle,
+        &governance.galois_keys,
+        &prover_input,
+    )?;
     Ok((
         governance.public_key,
         governance.evaluation_keys,
@@ -30883,6 +31997,7 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
         "BFV full-bootstrap execution proof output ciphertext",
         &claim.output_ciphertext,
     )?;
+    validate_bfv_full_bootstrap_execution_claim_ciphertext_digest_aliases_v1(params, claim)?;
     match claim.bound_mode {
         BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
             validate_exact_residual_bound_within_centered_capacity(
@@ -30922,6 +32037,16 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
         bfv_full_bootstrap_circuit_material_digest(params, material)?;
     let artifact_bundle_digest =
         bfv_full_bootstrap_circuit_artifact_bundle_digest(params, material, artifacts)?;
+    let evaluator_artifact_set_digest =
+        bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(params, material)?;
+    validate_bfv_full_bootstrap_execution_claim_statement_digest_aliases_v1(
+        params,
+        public_key,
+        &full_bootstrap_material_digest,
+        &artifact_bundle_digest,
+        &evaluator_artifact_set_digest,
+        claim,
+    )?;
     let statement = BfvFullBootstrapExecutionProofStatementMaterial {
         version: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
@@ -32231,7 +33356,41 @@ fn validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1<'a>(
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
     validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)?;
+    validate_bfv_full_bootstrap_execution_artifact_bundle_public_key_digest_aliases_v1(
+        params,
+        bootstrap_key,
+        material,
+        artifacts,
+    )?;
     Ok(material)
+}
+
+fn validate_bfv_full_bootstrap_execution_artifact_bundle_public_key_digest_aliases_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+) -> Result<(), BfvError> {
+    let public_key_digest = bootstrap_key.public_key_digest.as_ref().ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "FullBootstrapV1 BFV bootstrap key requires public-key digest".to_owned(),
+        )
+    })?;
+    let artifact_bundle_digest =
+        bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(artifacts)?;
+    let evaluator_artifact_set_digest =
+        bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(params, material)?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV artifact-aware full-bootstrap execution preflight",
+        &[
+            ("public-key digest", public_key_digest),
+            ("artifact bundle digest", &artifact_bundle_digest),
+            (
+                "evaluator artifact set digest",
+                &evaluator_artifact_set_digest,
+            ),
+        ],
+    )
 }
 
 fn full_bootstrap_material_from_key(
@@ -32770,8 +33929,11 @@ fn validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
     trusted_reviewer_id: &str,
     trusted_reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
-    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
-    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    let material = validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+    )?;
     validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
         params,
         material,
@@ -37345,9 +38507,99 @@ fn validate_bootstrap_key_admission_shape_metadata(
                     )
                 })?;
             validate_bfv_full_bootstrap_circuit_material_v1(params, material)?;
+            validate_full_bootstrap_key_public_key_digest_aliases_v1(
+                params,
+                bootstrap_key,
+                material,
+            )?;
         }
     }
     Ok(())
+}
+
+fn validate_full_bootstrap_key_public_key_digest_aliases_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+) -> Result<(), BfvError> {
+    let public_key_digest = bootstrap_key.public_key_digest.as_ref().ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "FullBootstrapV1 BFV bootstrap key requires public-key digest".to_owned(),
+        )
+    })?;
+    let artifact_bundle_digest =
+        bfv_full_bootstrap_circuit_artifact_bundle_digest_from_material_v1(params, material)?;
+    let evaluator_artifact_set_digest =
+        bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(params, material)?;
+    let full_bootstrap_material_digest =
+        bfv_full_bootstrap_circuit_material_digest(params, material)?;
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "FullBootstrapV1 BFV bootstrap key",
+        &[
+            ("parameter digest", &material.parameter_digest),
+            (
+                "RNS modulus-chain digest",
+                &material.rns_modulus_chain_digest,
+            ),
+            (
+                "key-switch decomposition-chain digest",
+                &material.key_switch_decomposition_chain_digest,
+            ),
+            (
+                "centered scale-round source-chain digest",
+                &material.centered_scale_round_source_chain_digest,
+            ),
+            (
+                "coefficient-to-slot key digest",
+                &material.coefficient_to_slot_key_digest,
+            ),
+            (
+                "slot-to-coefficient key digest",
+                &material.slot_to_coefficient_key_digest,
+            ),
+            (
+                "blind-rotation key digest",
+                &material.blind_rotation_key_digest,
+            ),
+            (
+                "sample-extraction key digest",
+                &material.sample_extraction_key_digest,
+            ),
+            ("accumulator digest", &material.accumulator_digest),
+            (
+                "proof public-input schema digest",
+                &material.proof_public_input_schema_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system artifact digest",
+                &material.arithmetic_air_constraint_system_artifact_digest,
+            ),
+            (
+                "proof-key pair commitment",
+                &material.proof_key_pair_commitment,
+            ),
+            ("prover-key digest", &material.prover_key_digest),
+            (
+                "prover-key material commitment",
+                &material.prover_key_material_commitment,
+            ),
+            ("verifier-key digest", &material.verifier_key_digest),
+            (
+                "verifier-key material commitment",
+                &material.verifier_key_material_commitment,
+            ),
+            (
+                "full-bootstrap material digest",
+                &full_bootstrap_material_digest,
+            ),
+            ("artifact bundle digest", &artifact_bundle_digest),
+            (
+                "evaluator artifact set digest",
+                &evaluator_artifact_set_digest,
+            ),
+            ("public-key digest", public_key_digest),
+        ],
+    )
 }
 
 fn validate_bootstrap_key_public_key_digest(
@@ -38495,6 +39747,14 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
     generated_circuit_body_digest: &[u8; Hash::LENGTH],
     generated_circuit_body: &[u8],
 ) -> Result<(), BfvError> {
+    validate_nonzero_sha256_digest(
+        &format!("{label} generated circuit body digest"),
+        generated_circuit_body_digest,
+    )?;
+    validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
+        &format!("{label} generated circuit body digest"),
+        generated_circuit_body_digest,
+    )?;
     if generated_circuit_body.is_empty() {
         return Err(BfvError::InvalidParameters(format!(
             "{label} generated circuit body must not be empty"
@@ -38516,18 +39776,15 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
         &format!("{label} generated circuit body"),
         generated_circuit_body,
     )?;
-    validate_nonzero_sha256_digest(
-        &format!("{label} generated circuit body digest"),
-        generated_circuit_body_digest,
-    )?;
-    validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
-        &format!("{label} generated circuit body digest"),
-        generated_circuit_body_digest,
-    )?;
-    validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
+    let body = validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
         label,
         native_payload_circuit_id,
         generated_circuit_body,
+    )?;
+    validate_bfv_full_bootstrap_native_generated_circuit_body_sha256_digest_aliases_v1(
+        label,
+        generated_circuit_body_digest,
+        &body,
     )?;
     if *generated_circuit_body_digest != sha256(generated_circuit_body) {
         return Err(BfvError::InvalidParameters(format!(
@@ -38548,7 +39805,7 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
     label: &str,
     native_payload_circuit_id: &str,
     generated_circuit_body: &[u8],
-) -> Result<(), BfvError> {
+) -> Result<BfvFullBootstrapNativeGeneratedCircuitBodyV1, BfvError> {
     let Ok(body) = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
         generated_circuit_body,
     ) else {
@@ -38620,6 +39877,50 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
         &format!("{label} generated circuit body centered scale-round source-chain digest"),
         &body.centered_scale_round_source_chain_digest,
     )?;
+    Ok(body)
+}
+
+fn validate_bfv_full_bootstrap_native_generated_circuit_body_sha256_digest_aliases_v1(
+    label: &str,
+    generated_circuit_body_digest: &[u8; Hash::LENGTH],
+    body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
+) -> Result<(), BfvError> {
+    let digest_entries = [
+        (
+            "arithmetic trace profile digest",
+            body.arithmetic_trace_profile_digest.into(),
+        ),
+        (
+            "arithmetic AIR constraint-system digest",
+            body.arithmetic_air_constraint_system_digest.into(),
+        ),
+        (
+            "centered scale-round source-chain digest",
+            body.centered_scale_round_source_chain_digest.into(),
+        ),
+        (
+            "proof public-input schema payload digest",
+            body.proof_public_input_schema_payload_digest.into(),
+        ),
+        (
+            "release-prover contract digest",
+            body.release_prover_contract_digest.into(),
+        ),
+        (
+            "generated circuit body digest",
+            *generated_circuit_body_digest,
+        ),
+    ];
+    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
+        if let Some((prior_label, _)) = digest_entries[..index]
+            .iter()
+            .find(|(_, prior)| prior == digest)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} {entry_label} must be distinct from {prior_label}"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -38647,6 +39948,7 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
         body.queries,
         body.merkle_arity,
     )?;
+    validate_bfv_full_bootstrap_native_generated_circuit_body_digest_aliases_v1(label, body)?;
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         &format!("{label} generated circuit body arithmetic trace profile digest"),
         &body.arithmetic_trace_profile_digest,
@@ -38669,6 +39971,37 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
     )?;
     validate_bfv_full_bootstrap_native_generated_circuit_body_public_input_layout_v1(label, body)?;
     validate_bfv_full_bootstrap_native_generated_circuit_body_obligations_v1(label, body)
+}
+
+fn validate_bfv_full_bootstrap_native_generated_circuit_body_digest_aliases_v1(
+    label: &str,
+    body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        &format!("{label} generated circuit body"),
+        &[
+            (
+                "arithmetic trace profile digest",
+                &body.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &body.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "centered scale-round source-chain digest",
+                &body.centered_scale_round_source_chain_digest,
+            ),
+            (
+                "proof public-input schema payload digest",
+                &body.proof_public_input_schema_payload_digest,
+            ),
+            (
+                "release-prover contract digest",
+                &body.release_prover_contract_digest,
+            ),
+        ],
+    )
 }
 
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_text_profile_v1(
@@ -38910,6 +40243,7 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         &payload.field,
         BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1,
     )?;
+    validate_bfv_full_bootstrap_native_stark_fri_prover_payload_digest_aliases_v1(&payload)?;
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap native transparent prover payload arithmetic trace profile digest",
         &payload.arithmetic_trace_profile_digest,
@@ -38945,6 +40279,73 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
             "BFV full-bootstrap native transparent prover payload must use canonical v1 bytes"
                 .to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_native_stark_fri_prover_payload_digest_aliases_v1(
+    payload: &BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap native transparent prover payload",
+        &[
+            (
+                "arithmetic trace profile digest",
+                &payload.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &payload.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "centered scale-round source-chain digest",
+                &payload.centered_scale_round_source_chain_digest,
+            ),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
+        "BFV full-bootstrap native transparent prover payload",
+        &payload.arithmetic_trace_profile_digest,
+        &payload.arithmetic_air_constraint_system_digest,
+        &payload.centered_scale_round_source_chain_digest,
+        &payload.generated_circuit_body_digest,
+    )
+}
+
+fn validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
+    label: &str,
+    arithmetic_trace_profile_digest: &Hash,
+    arithmetic_air_constraint_system_digest: &Hash,
+    centered_scale_round_source_chain_digest: &Hash,
+    generated_circuit_body_digest: &[u8; Hash::LENGTH],
+) -> Result<(), BfvError> {
+    let digest_entries = [
+        (
+            "arithmetic trace profile digest",
+            (*arithmetic_trace_profile_digest).into(),
+        ),
+        (
+            "arithmetic AIR constraint-system digest",
+            (*arithmetic_air_constraint_system_digest).into(),
+        ),
+        (
+            "centered scale-round source-chain digest",
+            (*centered_scale_round_source_chain_digest).into(),
+        ),
+        (
+            "generated circuit body digest",
+            *generated_circuit_body_digest,
+        ),
+    ];
+    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
+        if let Some((prior_label, _)) = digest_entries[..index]
+            .iter()
+            .find(|(_, prior)| prior == digest)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "{label} {entry_label} must be distinct from {prior_label}"
+            )));
+        }
     }
     Ok(())
 }
@@ -39005,6 +40406,7 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
         &payload.field,
         BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1,
     )?;
+    validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_digest_aliases_v1(&payload)?;
     validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
         "BFV full-bootstrap native verifier payload arithmetic trace profile digest",
         &payload.arithmetic_trace_profile_digest,
@@ -39041,6 +40443,35 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
         ));
     }
     Ok(())
+}
+
+fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_digest_aliases_v1(
+    payload: &BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap native verifier payload",
+        &[
+            (
+                "arithmetic trace profile digest",
+                &payload.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &payload.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "centered scale-round source-chain digest",
+                &payload.centered_scale_round_source_chain_digest,
+            ),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
+        "BFV full-bootstrap native verifier payload",
+        &payload.arithmetic_trace_profile_digest,
+        &payload.arithmetic_air_constraint_system_digest,
+        &payload.centered_scale_round_source_chain_digest,
+        &payload.generated_circuit_body_digest,
+    )
 }
 
 #[allow(clippy::too_many_lines)]
@@ -39084,6 +40515,7 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
         "BFV full-bootstrap native proof-key material payload circuit id",
         &material.native_payload_circuit_id,
     )?;
+    validate_bfv_full_bootstrap_native_proof_key_material_digest_aliases_v1(material)?;
     validate_nonzero_material_digest(
         "BFV full-bootstrap native proof circuit fingerprint",
         &material.native_circuit_fingerprint,
@@ -39122,7 +40554,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
         material.queries,
         material.merkle_arity,
     )?;
-    validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(&material.native_payload)?;
     validate_nonzero_sha256_digest(
         "BFV full-bootstrap native proof key payload digest",
         &material.native_payload_digest,
@@ -39130,6 +40561,10 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
     validate_no_bfv_full_bootstrap_inert_sha256_digest(
         "BFV full-bootstrap native proof key payload digest",
         &material.native_payload_digest,
+    )?;
+    validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(&material.native_payload)?;
+    validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest_aliases_v1(
+        material,
     )?;
     if material.native_payload_digest != sha256(&material.native_payload) {
         return Err(BfvError::InvalidParameters(
@@ -39173,6 +40608,135 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
             material.key_role
         ))),
     }
+}
+
+fn validate_bfv_full_bootstrap_native_proof_key_material_digest_aliases_v1(
+    material: &BfvFullBootstrapNativeProofKeyMaterialV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_digest_material_hashes(
+        "BFV full-bootstrap native proof key material",
+        &[
+            (
+                "native circuit fingerprint",
+                &material.native_circuit_fingerprint,
+            ),
+            (
+                "arithmetic trace profile digest",
+                &material.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &material.arithmetic_air_constraint_system_digest,
+            ),
+            (
+                "centered scale-round source-chain digest",
+                &material.centered_scale_round_source_chain_digest,
+            ),
+        ],
+    )?;
+    validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_v1(material)
+}
+
+fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest_aliases_v1(
+    material: &BfvFullBootstrapNativeProofKeyMaterialV1,
+) -> Result<(), BfvError> {
+    match material.key_role {
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => {
+            if let Ok(payload) = norito::decode_from_bytes::<
+                BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
+            >(&material.native_payload)
+            {
+                validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
+                    &material.native_payload_digest,
+                    &payload.generated_circuit_body_digest,
+                    &payload.generated_circuit_body,
+                )?;
+            }
+        }
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
+            if let Ok(payload) = norito::decode_from_bytes::<
+                BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
+            >(&material.native_payload)
+            {
+                validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
+                    &material.native_payload_digest,
+                    &payload.generated_circuit_body_digest,
+                    &payload.generated_circuit_body,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
+    native_payload_digest: &[u8; Hash::LENGTH],
+    generated_circuit_body_digest: &[u8; Hash::LENGTH],
+    generated_circuit_body: &[u8],
+) -> Result<(), BfvError> {
+    if native_payload_digest == generated_circuit_body_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap native proof key material native payload digest must be distinct from generated circuit body digest"
+                .to_owned(),
+        ));
+    }
+    if let Ok(body) = norito::decode_from_bytes::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
+        generated_circuit_body,
+    ) {
+        for (label, digest) in [
+            (
+                "proof public-input schema payload digest",
+                <[u8; Hash::LENGTH]>::from(body.proof_public_input_schema_payload_digest),
+            ),
+            (
+                "release-prover contract digest",
+                <[u8; Hash::LENGTH]>::from(body.release_prover_contract_digest),
+            ),
+        ] {
+            if *native_payload_digest == digest {
+                return Err(BfvError::InvalidParameters(format!(
+                    "BFV full-bootstrap native proof key material native payload digest must be distinct from {label}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_v1(
+    material: &BfvFullBootstrapNativeProofKeyMaterialV1,
+) -> Result<(), BfvError> {
+    let digest_entries = [
+        (
+            "native circuit fingerprint",
+            material.native_circuit_fingerprint.into(),
+        ),
+        (
+            "arithmetic trace profile digest",
+            material.arithmetic_trace_profile_digest.into(),
+        ),
+        (
+            "arithmetic AIR constraint-system digest",
+            material.arithmetic_air_constraint_system_digest.into(),
+        ),
+        (
+            "centered scale-round source-chain digest",
+            material.centered_scale_round_source_chain_digest.into(),
+        ),
+        ("native payload digest", material.native_payload_digest),
+    ];
+    for (index, (entry_label, digest)) in digest_entries.iter().enumerate() {
+        if let Some((prior_label, _)) = digest_entries[..index]
+            .iter()
+            .find(|(_, prior)| prior == digest)
+        {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap native proof key material {entry_label} must be distinct from {prior_label}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_bfv_full_bootstrap_native_proof_key_material_v1(
@@ -39419,6 +40983,14 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_digest_preflight_v1(
             (
                 "evaluator artifact set digest",
                 &envelope.evaluator_artifact_set_digest,
+            ),
+            (
+                "arithmetic trace profile digest",
+                &envelope.arithmetic_trace_profile_digest,
+            ),
+            (
+                "arithmetic AIR constraint-system digest",
+                &envelope.arithmetic_air_constraint_system_digest,
             ),
         ],
     )
@@ -43173,6 +44745,16 @@ mod tests {
             "header-only audit artifact",
             "canonical report digest cache must preserve header-only diagnostics",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
+                "BFV full-bootstrap release audit report digest",
+                &Hash::new(b"placeholder full-bootstrap prover-key commitment"),
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+            ),
+            "placeholder full-bootstrap digest",
+            "canonical report digest cache must reject generic full-bootstrap placeholder material digests before artifact sentinel lookup",
+        );
 
         let whitespace_nested_archive_digest = Hash::new_from_chunks(&[
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
@@ -43238,6 +44820,43 @@ mod tests {
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
         )
         .expect("approved report digest must not match inert or placeholder sentinel cache");
+    }
+
+    #[test]
+    fn release_audit_external_artifact_pair_rejects_full_bootstrap_placeholder_digests() {
+        let approved_report_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"external-review-approved: BFV full-bootstrap report digest pair preflight evidence v1",
+        ]);
+        let approved_archive_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b"external-review-approved: BFV full-bootstrap archive digest pair preflight evidence v1",
+        ]);
+        validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+            "signoff",
+            &approved_report_digest,
+            &approved_archive_digest,
+        )
+        .expect("approved external artifact digest pair validates");
+
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+                "signoff",
+                &Hash::new(b"placeholder full-bootstrap prover-key commitment"),
+                &approved_archive_digest,
+            ),
+            "placeholder full-bootstrap digest",
+            "external audit artifact pair must reject report digests copied from full-bootstrap placeholder material",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
+                "manifest",
+                &approved_report_digest,
+                &Hash::new(b"placeholder full-bootstrap verifier-key commitment"),
+            ),
+            "placeholder full-bootstrap digest",
+            "external audit artifact pair must reject archive digests copied from full-bootstrap placeholder material",
+        );
     }
 
     #[test]
@@ -43393,6 +45012,88 @@ mod tests {
             &key_evidence,
         )
         .expect("canonical key evidence shape passes");
+        let decoded_generated_body: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
+            norito::decode_from_bytes(&generated_circuit_body)
+                .expect("decode canonical release-audit generated body");
+
+        let mut copied_source_chain_key_evidence = key_evidence.clone();
+        copied_source_chain_key_evidence.centered_scale_round_source_chain_digest =
+            copied_source_chain_key_evidence.key_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &copied_source_chain_key_evidence,
+            ),
+            "centered scale-round source-chain digest must be distinct from key digest",
+            "release audit key evidence shape must reject source-chain digests copied from proof-key digests before canonical source-chain mismatch",
+        );
+
+        let mut copied_fingerprint_key_evidence = key_evidence.clone();
+        copied_fingerprint_key_evidence.native_circuit_fingerprint =
+            copied_fingerprint_key_evidence.key_material_commitment;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &copied_fingerprint_key_evidence,
+            ),
+            "native circuit fingerprint must be distinct from key material commitment",
+            "release audit key evidence shape must reject native circuit fingerprints copied from proof-key material commitments before fingerprint mismatch",
+        );
+
+        let mut copied_native_payload_digest_key_evidence = key_evidence.clone();
+        copied_native_payload_digest_key_evidence.native_payload_digest =
+            copied_native_payload_digest_key_evidence.key_digest.into();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &copied_native_payload_digest_key_evidence,
+            ),
+            "native payload digest must be distinct from key digest",
+            "release audit key evidence shape must reject native payload digests copied from proof-key digests before canonical payload mismatch",
+        );
+
+        let mut copied_generated_body_digest_key_evidence = key_evidence.clone();
+        copied_generated_body_digest_key_evidence.generated_circuit_body_digest =
+            copied_generated_body_digest_key_evidence.native_payload_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &copied_generated_body_digest_key_evidence,
+            ),
+            "generated circuit body digest must be distinct from native payload digest",
+            "release audit key evidence shape must reject generated body digests copied from native payload digests before canonical body mismatch",
+        );
+
+        let mut copied_schema_payload_key_evidence = key_evidence.clone();
+        copied_schema_payload_key_evidence.native_payload_digest = decoded_generated_body
+            .proof_public_input_schema_payload_digest
+            .into();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &copied_schema_payload_key_evidence,
+            ),
+            "native payload digest must be distinct from proof public-input schema payload digest",
+            "release audit key evidence shape must reject native payload digests copied from generated-body schema payload digests before canonical payload mismatch",
+        );
+
+        let mut copied_release_contract_key_evidence = key_evidence.clone();
+        copied_release_contract_key_evidence.generated_circuit_body_digest =
+            decoded_generated_body.release_prover_contract_digest.into();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
+                "BFV full-bootstrap release audit prover key",
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &copied_release_contract_key_evidence,
+            ),
+            "generated circuit body digest must be distinct from release-prover contract digest",
+            "release audit key evidence shape must reject generated body digests copied from release-prover contract digests before canonical body mismatch",
+        );
 
         for sentinel in [
             b"t-o-d-o pending BFV full-bootstrap native proof key payload".as_slice(),
@@ -44006,6 +45707,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn release_audit_native_payload_digest_rejects_placeholder_before_mismatch() {
+        let native_prover_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native prover payload");
+        let canonical_native_prover_payload_digest =
+            Hash::prehashed(sha256(&native_prover_payload));
+        validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+            "BFV full-bootstrap release audit manifest prover native payload digest",
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &canonical_native_prover_payload_digest,
+        )
+        .expect("canonical native prover payload digest validates");
+
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+                "BFV full-bootstrap release audit manifest prover native payload digest",
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &Hash::new(b"placeholder BFV full-bootstrap native proof key payload"),
+            ),
+            "placeholder",
+            "release audit native payload digests must reject domain-hashed placeholders before canonical mismatch",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
+                "BFV full-bootstrap release audit manifest prover native payload digest",
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &Hash::prehashed(sha256(
+                    b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD",
+                )),
+            ),
+            "inert native payload digest",
+            "release audit native payload digests must reject raw SHA placeholder sentinels before canonical mismatch",
+        );
+    }
+
     const RELEASE_AUDIT_SEPARATOR_SPELLED_DIGEST_SENTINEL_CASES: &[(&str, bool, &[u8], &[u8])] = &[
         (
             "report",
@@ -44155,6 +45897,69 @@ mod tests {
             .expect("standalone release audit manifest validates");
         bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)
             .expect("standalone release audit manifest digests");
+        let decoded_generated_body: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
+            norito::decode_from_bytes(&generated_circuit_body)
+                .expect("decode canonical manifest generated body");
+
+        let mut aliased_verifier_native_payload_digest = manifest.clone();
+        aliased_verifier_native_payload_digest.verifier_native_payload_digest =
+            aliased_verifier_native_payload_digest.prover_native_payload_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(
+                &aliased_verifier_native_payload_digest,
+            ),
+            "verifier native payload digest must be distinct from prover native payload digest",
+            "standalone release audit manifests must reject verifier native payload digests copied from prover payload digests before canonical mismatch",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(
+                &aliased_verifier_native_payload_digest,
+            ),
+            "verifier native payload digest must be distinct from prover native payload digest",
+            "release audit manifest digesting must reject verifier native payload digests copied from prover payload digests before canonical mismatch",
+        );
+
+        let mut aliased_generated_body_digest = manifest.clone();
+        aliased_generated_body_digest.generated_circuit_body_digest =
+            aliased_generated_body_digest.native_circuit_fingerprint;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(&aliased_generated_body_digest),
+            "generated circuit body digest must be distinct from native circuit fingerprint",
+            "standalone release audit manifests must reject generated body digests copied from native circuit fingerprints before canonical mismatch",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(&aliased_generated_body_digest),
+            "generated circuit body digest must be distinct from native circuit fingerprint",
+            "release audit manifest digesting must reject generated body digests copied from native circuit fingerprints before canonical mismatch",
+        );
+
+        let mut aliased_schema_payload_digest = manifest.clone();
+        aliased_schema_payload_digest.prover_native_payload_digest =
+            decoded_generated_body.proof_public_input_schema_payload_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(&aliased_schema_payload_digest),
+            "prover native payload digest must be distinct from proof public-input schema payload digest",
+            "standalone release audit manifests must reject prover native payload digests copied from generated-body schema payload digests before canonical mismatch",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(&aliased_schema_payload_digest),
+            "prover native payload digest must be distinct from proof public-input schema payload digest",
+            "release audit manifest digesting must reject prover native payload digests copied from generated-body schema payload digests before canonical mismatch",
+        );
+
+        let mut aliased_release_contract_digest = manifest.clone();
+        aliased_release_contract_digest.generated_circuit_body_digest =
+            decoded_generated_body.release_prover_contract_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_v1(&aliased_release_contract_digest),
+            "generated circuit body digest must be distinct from release-prover contract digest",
+            "standalone release audit manifests must reject generated body digests copied from release-prover contract digests before canonical mismatch",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_digest_v1(&aliased_release_contract_digest),
+            "generated circuit body digest must be distinct from release-prover contract digest",
+            "release audit manifest digesting must reject generated body digests copied from release-prover contract digests before canonical mismatch",
+        );
 
         let mut stale_source_chain_manifest = manifest.clone();
         stale_source_chain_manifest.centered_scale_round_source_chain_digest =
@@ -44305,6 +46110,9 @@ mod tests {
         };
         validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(&payload)
             .expect("standalone release audit signoff payload validates");
+        let decoded_generated_body: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
+            norito::decode_from_bytes(&generated_circuit_body)
+                .expect("decode canonical signoff generated body");
 
         let mut aliased_verifier_native_payload_digest = payload.clone();
         aliased_verifier_native_payload_digest.verifier_native_payload_digest =
@@ -44345,6 +46153,28 @@ mod tests {
             ),
             "generated circuit body digest must be distinct from native circuit fingerprint",
             "standalone release audit signoff payloads must reject generated body digests copied from native circuit fingerprints before canonical mismatch",
+        );
+
+        let mut aliased_schema_payload_digest = payload.clone();
+        aliased_schema_payload_digest.verifier_native_payload_digest =
+            decoded_generated_body.proof_public_input_schema_payload_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &aliased_schema_payload_digest,
+            ),
+            "verifier native payload digest must be distinct from proof public-input schema payload digest",
+            "standalone release audit signoff payloads must reject verifier native payload digests copied from generated-body schema payload digests before canonical mismatch",
+        );
+
+        let mut aliased_release_contract_digest = payload.clone();
+        aliased_release_contract_digest.generated_circuit_body_digest =
+            decoded_generated_body.release_prover_contract_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &aliased_release_contract_digest,
+            ),
+            "generated circuit body digest must be distinct from release-prover contract digest",
+            "standalone release audit signoff payloads must reject generated body digests copied from release-prover contract digests before canonical mismatch",
         );
 
         let mut stale_source_chain_payload = payload.clone();
@@ -45753,6 +47583,62 @@ mod tests {
             reviewer_key_pair.public_key(),
         )
         .expect("externally reviewed package validates with its pinned digest");
+        let generated_circuit_body =
+            bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
+                .expect("build canonical generated circuit body");
+        let generated_body = norito::decode_from_bytes::<
+            BfvFullBootstrapNativeGeneratedCircuitBodyV1,
+        >(&generated_circuit_body)
+        .expect("decode canonical generated circuit body");
+        let generated_body_package_digest_aliases = [
+            (
+                generated_body.arithmetic_trace_profile_digest,
+                "generated circuit body arithmetic trace profile digest",
+            ),
+            (
+                generated_body.arithmetic_air_constraint_system_digest,
+                "generated circuit body arithmetic AIR constraint-system digest",
+            ),
+            (
+                generated_body.proof_public_input_schema_payload_digest,
+                "generated circuit body proof public-input schema payload digest",
+            ),
+            (
+                generated_body.release_prover_contract_digest,
+                "generated circuit body release-prover contract digest",
+            ),
+        ];
+        for (digest, expected) in generated_body_package_digest_aliases {
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                    &params,
+                    &material,
+                    &artifacts,
+                    &package,
+                    digest,
+                    reviewer_id,
+                    reviewer_key_pair.public_key(),
+                ),
+                expected,
+                "external-review packages must reject caller-pinned generated-body commitments as package digest aliases",
+            );
+        }
+        let mut stale_package_with_generated_body_commitment_alias = package.clone();
+        stale_package_with_generated_body_commitment_alias.manifest_digest =
+            Hash::new(b"stale-release-audit-package-manifest-behind-generated-body-alias");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &stale_package_with_generated_body_commitment_alias,
+                generated_body.release_prover_contract_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "generated circuit body release-prover contract digest",
+            "caller-pinned generated-body commitment aliases must fail before stale package validation can mask the package-digest diagnostic",
+        );
         let package_bytes = norito::to_bytes(&package).expect("encode external-review package");
         let (decoded_package_from_digest_helper, package_digest_from_bytes) =
             bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(&package_bytes)
@@ -46301,6 +48187,194 @@ mod tests {
         assert_eq!(
             artifact_bundle_digest_from_bytes, package.record.evidence.artifact_bundle_digest,
             "artifact-bundle byte digest helper must return the digest of the admitted artifact bytes"
+        );
+        let malformed_package_bytes =
+            b"not-a-canonical-bfv-full-bootstrap-release-audit-package".to_vec();
+        let zero_package_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &malformed_package_bytes,
+                zero_package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "zero hash",
+            "byte-level production package admission must reject zero caller-pinned package digests before package-byte decoding",
+        );
+        let placeholder_package_digest =
+            Hash::new(BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES[0]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &malformed_package_bytes,
+                placeholder_package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "placeholder",
+            "byte-level production package admission must reject placeholder caller-pinned package digests before package-byte decoding",
+        );
+        let malformed_artifact_bundle_bytes =
+            b"not-a-canonical-bfv-full-bootstrap-artifact-bundle".to_vec();
+        let malformed_reviewer_id = " sora-zk-audit-wg-2026";
+        let all_zero_reviewer_public_key = crate::PublicKey(crate::PublicKeyCompact::new(
+            crate::Algorithm::Ed25519,
+            &[0_u8; 32],
+        ));
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &malformed_package_bytes,
+                package_digest,
+                malformed_reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "byte-level production package admission must reject malformed caller reviewer ids before package-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &artifacts,
+                &malformed_package_bytes,
+                package_digest,
+                reviewer_id,
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "byte-level production package admission must reject all-zero caller reviewer keys before package-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_v1(
+                &params,
+                &material,
+                &artifacts,
+                &malformed_package_bytes,
+                malformed_reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "byte-derived production package admission must reject malformed caller reviewer ids before package-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_v1(
+                &params,
+                &material,
+                &artifacts,
+                &malformed_package_bytes,
+                reviewer_id,
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "byte-derived production package admission must reject all-zero caller reviewer keys before package-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                package_digest,
+                malformed_reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "combined byte-level production admission must reject malformed caller reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                package_digest,
+                reviewer_id,
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "combined byte-level production admission must reject all-zero caller reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                malformed_reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "derived-digest combined admission must reject malformed caller reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                reviewer_id,
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "derived-digest combined admission must reject all-zero caller reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                malformed_reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "combined byte-level production admission with all digests must reject malformed caller reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                reviewer_id,
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "combined byte-level production admission with all digests must reject all-zero caller reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                zero_package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "zero hash",
+            "combined artifact/package byte admission must reject zero caller-pinned package digests before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &malformed_artifact_bundle_bytes,
+                &package_bytes,
+                placeholder_package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "placeholder",
+            "combined artifact/package byte admission must reject placeholder caller-pinned package digests before artifact-byte decoding",
         );
         let (
             deterministic_package_artifacts_from_bytes,
@@ -47882,6 +49956,104 @@ mod tests {
             "canonical v1 bytes",
             "trusted signoff/artifact byte digests validation must reject compressed artifact-bundle framing before trust",
         );
+        let all_zero_external_review_reviewer_private_key = {
+            let zero_seed = [0_u8; 32];
+            let signing_key = crate::signature::ed25519::PrivateKey::from_bytes(&zero_seed);
+            crate::PrivateKey(Box::new(crate::secrecy::Secret::new(
+                crate::PrivateKeyInner::Ed25519(signing_key),
+            )))
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &package.audit_report_bytes,
+                &package.audit_evidence_archive_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "byte-level external-review builder must reject malformed reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &package.audit_report_bytes,
+                &package.audit_evidence_archive_bytes,
+                reviewer_id,
+                &all_zero_external_review_reviewer_private_key,
+            ),
+            "all zero",
+            "byte-level external-review builder must reject all-zero reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &package.audit_report_bytes,
+                &package.audit_evidence_archive_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "byte-level external-review builder with all digests must reject malformed reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                b"",
+                &package.audit_evidence_archive_bytes,
+                reviewer_id,
+                reviewer_key_pair.private_key(),
+            ),
+            "report bytes must not be empty",
+            "byte-level external-review builder must reject empty report bytes before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &package.audit_report_bytes,
+                b"",
+                reviewer_id,
+                reviewer_key_pair.private_key(),
+            ),
+            "evidence archive bytes must not be empty",
+            "byte-level external-review builder must reject empty archive bytes before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                b"",
+                &package.audit_evidence_archive_bytes,
+                reviewer_id,
+                reviewer_key_pair.private_key(),
+            ),
+            "report bytes must not be empty",
+            "byte-level external-review builder with digests must reject empty report bytes before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &package.audit_report_bytes,
+                b"",
+                reviewer_id,
+                reviewer_key_pair.private_key(),
+            ),
+            "evidence archive bytes must not be empty",
+            "byte-level external-review builder with all digests must reject empty archive bytes before artifact-byte decoding",
+        );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_artifact_bundle_bytes_v1(
                 &params,
@@ -48277,6 +50449,55 @@ mod tests {
             "combined byte-level production admission with all digests must reject noncanonical compressed package framing before trust",
         );
         assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_package_bytes,
+                package_digest,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit package bytes must use canonical v1 bytes",
+            "combined byte-level production admission must reject noncanonical package framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_package_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit package bytes must use canonical v1 bytes",
+            "derived-digest combined admission must reject noncanonical package framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_package_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit package bytes must use canonical v1 bytes",
+            "combined byte-level production admission with digests must reject noncanonical package framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_package_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit package bytes must use canonical v1 bytes",
+            "combined byte-level production admission with all digests must reject noncanonical package framing before artifact-byte decoding",
+        );
+        assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(
                 &compressed_package_bytes,
             ),
@@ -48312,6 +50533,46 @@ mod tests {
             ),
             "canonical v1 bytes",
             "evidence-byte digest helper must reject noncanonical compressed framing before hashing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_evidence_bytes,
+            ),
+            "release audit evidence bytes must use canonical v1 bytes",
+            "release audit evidence byte-pair validation must reject compressed evidence framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_decoded_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_evidence_bytes,
+            ),
+            "release audit evidence bytes must use canonical v1 bytes",
+            "release audit evidence raw-byte admission must reject compressed evidence framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_evidence_bytes,
+            ),
+            "release audit evidence bytes must use canonical v1 bytes",
+            "release audit evidence raw-byte digest admission must reject compressed evidence framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_evidence_bytes,
+            ),
+            "release audit evidence bytes must use canonical v1 bytes",
+            "release audit evidence raw-byte all-digest admission must reject compressed evidence framing before artifact-byte decoding",
         );
         let compressed_record_bytes = norito::to_compressed_bytes(
             &package.record,
@@ -48405,6 +50666,50 @@ mod tests {
             ),
             "canonical v1 bytes",
             "trusted record/artifact byte digests validation must reject compressed record framing before record trust",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_record_bytes,
+            ),
+            "release audit record bytes must use canonical v1 bytes",
+            "record/artifact byte validation must reject compressed record framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_record_bytes,
+            ),
+            "release audit record bytes must use canonical v1 bytes",
+            "record/artifact byte all-digests validation must reject compressed record framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_record_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit record bytes must use canonical v1 bytes",
+            "trusted record/artifact byte validation must reject compressed record framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_record_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit record bytes must use canonical v1 bytes",
+            "trusted record/artifact byte all-digests validation must reject compressed record framing before artifact-byte decoding",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -48504,6 +50809,50 @@ mod tests {
             "signoff/artifact byte digest validation must reject compressed signoff framing before hashing",
         );
         assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_signoff_bytes,
+            ),
+            "release audit signoff bytes must use canonical v1 bytes",
+            "signoff/artifact byte validation must reject compressed signoff framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_signoff_bytes,
+            ),
+            "release audit signoff bytes must use canonical v1 bytes",
+            "signoff/artifact byte all-digests validation must reject compressed signoff framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_signoff_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit signoff bytes must use canonical v1 bytes",
+            "trusted signoff/artifact byte validation must reject compressed signoff framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_signoff_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit signoff bytes must use canonical v1 bytes",
+            "trusted signoff/artifact byte all-digests validation must reject compressed signoff framing before artifact-byte decoding",
+        );
+        assert_error_contains(
             bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(
                 &compressed_signoff_bytes,
             ),
@@ -48516,6 +50865,46 @@ mod tests {
             ),
             "canonical v1 bytes",
             "signoff byte digests helper must reject compressed external-review signoff framing before hashing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_v1(
+                &compressed_record_bytes,
+                &manifest_bytes,
+                b"",
+                &package.audit_evidence_archive_bytes,
+            ),
+            "report bytes must not be empty",
+            "record/manifest byte package builder must reject empty report bytes before record-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_and_all_digests_for_record_and_manifest_bytes_v1(
+                &compressed_record_bytes,
+                &manifest_bytes,
+                &package.audit_report_bytes,
+                b"",
+            ),
+            "evidence archive bytes must not be empty",
+            "record/manifest byte package all-digests builder must reject empty archive bytes before record-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_record_and_manifest_bytes_v1(
+                &compressed_record_bytes,
+                &manifest_bytes,
+                b"",
+                &package.audit_evidence_archive_bytes,
+            ),
+            "report bytes must not be empty",
+            "external-review record/manifest byte package builder must reject empty report bytes before record-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_record_and_manifest_bytes_v1(
+                &compressed_record_bytes,
+                &manifest_bytes,
+                &package.audit_report_bytes,
+                b"",
+            ),
+            "evidence archive bytes must not be empty",
+            "external-review record/manifest byte package all-digests builder must reject empty archive bytes before record-byte decoding",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_record_and_manifest_bytes_v1(
@@ -48559,6 +50948,58 @@ mod tests {
             ),
             "canonical v1 bytes",
             "manifest-byte digests helper must reject noncanonical compressed framing before hashing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_manifest_bytes,
+                &record_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit manifest bytes must use canonical v1 bytes",
+            "trusted manifest/artifact/record byte validation must reject compressed manifest framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_manifest_bytes,
+                &record_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit manifest bytes must use canonical v1 bytes",
+            "trusted manifest/artifact/record byte digest validation must reject compressed manifest framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_manifest_bytes,
+                &record_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit manifest bytes must use canonical v1 bytes",
+            "trusted manifest/artifact/record byte digests validation must reject compressed manifest framing before artifact-byte decoding",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                &compressed_manifest_bytes,
+                &record_bytes,
+                reviewer_id,
+                reviewer_key_pair.public_key(),
+            ),
+            "release audit manifest bytes must use canonical v1 bytes",
+            "trusted manifest/artifact/record byte all-digests validation must reject compressed manifest framing before artifact-byte decoding",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -49713,6 +52154,26 @@ mod tests {
     }
 
     #[test]
+    fn release_audit_key_evidence_from_key_rejects_placeholder_digest_before_decode() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (mut prover_key, _) = sample_full_bootstrap_proof_key_pair(
+            &params,
+            Hash::new(b"release-key-evidence-placeholder-schema-digest-v1"),
+            Hash::new(b"release-key-evidence-placeholder-evaluator-set-v1"),
+        );
+        prover_key.key_material = b"not a Norito full-bootstrap proof-key envelope".to_vec();
+
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
+                Hash::new(b"placeholder full-bootstrap prover-key commitment"),
+                &prover_key,
+            ),
+            "placeholder full-bootstrap digest",
+            "release audit key evidence construction must reject placeholder proof-key digests before decoding key material",
+        );
+    }
+
+    #[test]
     fn release_audit_proof_profile_binds_key_and_native_role() {
         let params = ram_lfe_bfv_parameters_v1();
         let (prover_key, verifier_key) = sample_full_bootstrap_proof_key_pair(
@@ -50488,6 +52949,90 @@ mod tests {
             <[u8; Hash::LENGTH]>::from(Hash::new(&expected_generated_circuit_body)),
             "generated circuit body digest must not use Iroha Hash::new semantics"
         );
+        let mut verifier_payload_with_aliased_generated_body_digest =
+            decoded_verifier_payload.clone();
+        verifier_payload_with_aliased_generated_body_digest.generated_circuit_body_digest =
+            decoded_verifier_payload
+                .arithmetic_trace_profile_digest
+                .into();
+        let verifier_payload_with_aliased_generated_body_digest =
+            norito::to_bytes(&verifier_payload_with_aliased_generated_body_digest)
+                .expect("encode verifier payload with aliased generated-body digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &verifier_payload_with_aliased_generated_body_digest,
+            ),
+            "generated circuit body digest must be distinct from arithmetic trace profile digest",
+            "native verifier payload validation must reject generated-body digest aliases",
+        );
+        let mut prover_payload_with_aliased_generated_body_digest = decoded_prover_payload.clone();
+        prover_payload_with_aliased_generated_body_digest.generated_circuit_body_digest =
+            decoded_prover_payload
+                .centered_scale_round_source_chain_digest
+                .into();
+        let prover_payload_with_aliased_generated_body_digest =
+            norito::to_bytes(&prover_payload_with_aliased_generated_body_digest)
+                .expect("encode prover payload with aliased generated-body digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                circuit_id,
+                &prover_payload_with_aliased_generated_body_digest,
+            ),
+            "generated circuit body digest must be distinct from centered scale-round source-chain digest",
+            "native prover payload validation must reject generated-body digest aliases",
+        );
+        for (case_label, generated_body_digest, expected) in [
+            ("zero", [0_u8; Hash::LENGTH], "zero SHA-256 digest"),
+            (
+                "inert placeholder",
+                sha256(b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD"),
+                "inert or placeholder generated circuit body material",
+            ),
+        ] {
+            let all_zero_generated_body = vec![0_u8; 32];
+            let mut verifier_payload = decoded_verifier_payload.clone();
+            verifier_payload.generated_circuit_body = all_zero_generated_body.clone();
+            verifier_payload.generated_circuit_body_digest = generated_body_digest;
+            let verifier_payload = norito::to_bytes(&verifier_payload)
+                .expect("encode verifier payload with malformed generated-body digest");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                    circuit_id,
+                    &verifier_payload,
+                ),
+                expected,
+                &format!(
+                    "native verifier payload validation must reject {case_label} generated-body digests before all-zero generated-body bytes"
+                ),
+            );
+            assert_error_contains(
+                encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                    circuit_id,
+                    &verifier_payload,
+                ),
+                expected,
+                &format!(
+                    "native verifier material construction must reject {case_label} generated-body digests before all-zero generated-body bytes"
+                ),
+            );
+
+            let mut prover_payload = decoded_prover_payload.clone();
+            prover_payload.generated_circuit_body = all_zero_generated_body;
+            prover_payload.generated_circuit_body_digest = generated_body_digest;
+            let prover_payload = norito::to_bytes(&prover_payload)
+                .expect("encode prover payload with malformed generated-body digest");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                    circuit_id,
+                    &prover_payload,
+                ),
+                expected,
+                &format!(
+                    "native prover payload validation must reject {case_label} generated-body digests before all-zero generated-body bytes"
+                ),
+            );
+        }
         let decoded_generated_body: BfvFullBootstrapNativeGeneratedCircuitBodyV1 =
             norito::decode_from_bytes(&decoded_verifier_payload.generated_circuit_body)
                 .expect("decode canonical generated circuit body");
@@ -50531,6 +53076,46 @@ mod tests {
         assert_eq!(
             decoded_generated_body.release_prover_contract_digest,
             expected_release_prover_contract_digest
+        );
+        let mut verifier_payload_with_schema_aliased_body_digest = decoded_verifier_payload.clone();
+        verifier_payload_with_schema_aliased_body_digest.generated_circuit_body_digest =
+            decoded_generated_body
+                .proof_public_input_schema_payload_digest
+                .into();
+        let verifier_payload_with_schema_aliased_body_digest =
+            norito::to_bytes(&verifier_payload_with_schema_aliased_body_digest)
+                .expect("encode verifier payload with schema-aliased generated-body digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &verifier_payload_with_schema_aliased_body_digest,
+            ),
+            "generated circuit body digest must be distinct from proof public-input schema payload digest",
+            "native verifier payload validation must reject generated-body digests copied from embedded schema payload digests before SHA replay",
+        );
+        assert_error_contains(
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                circuit_id,
+                &verifier_payload_with_schema_aliased_body_digest,
+            ),
+            "generated circuit body digest must be distinct from proof public-input schema payload digest",
+            "native verifier material construction must reject generated-body digests copied from embedded schema payload digests before SHA replay",
+        );
+        let mut prover_payload_with_release_contract_aliased_body_digest =
+            decoded_prover_payload.clone();
+        prover_payload_with_release_contract_aliased_body_digest.generated_circuit_body_digest =
+            decoded_generated_body.release_prover_contract_digest.into();
+        let prover_payload_with_release_contract_aliased_body_digest = norito::to_bytes(
+            &prover_payload_with_release_contract_aliased_body_digest,
+        )
+        .expect("encode prover payload with release-contract-aliased generated-body digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                circuit_id,
+                &prover_payload_with_release_contract_aliased_body_digest,
+            ),
+            "generated circuit body digest must be distinct from release-prover contract digest",
+            "native prover payload validation must reject generated-body digests copied from embedded release-prover contract digests before SHA replay",
         );
         let stale_centered_source_digest =
             Hash::new(b"stale-native-centered-scale-round-source-chain");
@@ -50577,6 +53162,114 @@ mod tests {
             "centered scale-round source-chain digest",
             "native proof-key material must reject stale centered source-chain digests",
         );
+        let mut aliased_native_material = decoded_verifier.clone();
+        aliased_native_material.arithmetic_air_constraint_system_digest =
+            aliased_native_material.arithmetic_trace_profile_digest;
+        let aliased_native_material = norito::to_bytes(&aliased_native_material)
+            .expect("encode aliased native proof-key material");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(&aliased_native_material),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "native proof-key material must reject AIR digests copied from trace-profile digests before canonical mismatch",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_proof_key_material_bytes_for_role_and_circuit_v1(
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                circuit_id,
+                &aliased_native_material,
+            ),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "role/circuit-bound native material admission must reject AIR digests copied from trace-profile digests before canonical mismatch",
+        );
+        let mut verifier_material_with_aliased_payload_digest = decoded_verifier.clone();
+        verifier_material_with_aliased_payload_digest.native_payload_digest =
+            verifier_material_with_aliased_payload_digest
+                .native_circuit_fingerprint
+                .into();
+        let verifier_material_with_aliased_payload_digest =
+            norito::to_bytes(&verifier_material_with_aliased_payload_digest)
+                .expect("encode verifier native material with aliased payload digest");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(
+                &verifier_material_with_aliased_payload_digest,
+            ),
+            "native payload digest must be distinct from native circuit fingerprint",
+            "native proof-key material must reject payload digests copied from circuit fingerprints before SHA replay",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_proof_key_material_bytes_for_role_and_circuit_v1(
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                circuit_id,
+                &verifier_material_with_aliased_payload_digest,
+            ),
+            "native payload digest must be distinct from native circuit fingerprint",
+            "role/circuit-bound native material admission must reject payload digests copied from circuit fingerprints before SHA replay",
+        );
+        let mut prover_material_with_aliased_payload_digest = decoded_prover.clone();
+        prover_material_with_aliased_payload_digest.native_payload_digest =
+            prover_material_with_aliased_payload_digest
+                .centered_scale_round_source_chain_digest
+                .into();
+        let prover_material_with_aliased_payload_digest =
+            norito::to_bytes(&prover_material_with_aliased_payload_digest)
+                .expect("encode prover native material with aliased payload digest");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(
+                &prover_material_with_aliased_payload_digest,
+            ),
+            "native payload digest must be distinct from centered scale-round source-chain digest",
+            "native proof-key material must reject payload digests copied from source-chain digests before SHA replay",
+        );
+        let mut verifier_material_with_body_digest_payload_alias = decoded_verifier.clone();
+        verifier_material_with_body_digest_payload_alias.native_payload_digest =
+            decoded_verifier_payload.generated_circuit_body_digest;
+        let verifier_material_with_body_digest_payload_alias =
+            norito::to_bytes(&verifier_material_with_body_digest_payload_alias)
+                .expect("encode verifier native material with generated-body payload digest alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(
+                &verifier_material_with_body_digest_payload_alias,
+            ),
+            "native payload digest must be distinct from generated circuit body digest",
+            "native proof-key material must reject payload digests copied from generated-body digests before SHA replay",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_proof_key_material_bytes_for_role_and_circuit_v1(
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                circuit_id,
+                &verifier_material_with_body_digest_payload_alias,
+            ),
+            "native payload digest must be distinct from generated circuit body digest",
+            "role/circuit-bound native material admission must reject payload digests copied from generated-body digests before SHA replay",
+        );
+        let mut verifier_material_with_schema_digest_payload_alias = decoded_verifier.clone();
+        verifier_material_with_schema_digest_payload_alias.native_payload_digest =
+            decoded_generated_body
+                .proof_public_input_schema_payload_digest
+                .into();
+        let verifier_material_with_schema_digest_payload_alias =
+            norito::to_bytes(&verifier_material_with_schema_digest_payload_alias)
+                .expect("encode verifier native material with schema payload digest alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(
+                &verifier_material_with_schema_digest_payload_alias,
+            ),
+            "native payload digest must be distinct from proof public-input schema payload digest",
+            "native proof-key material must reject payload digests copied from embedded schema payload digests before SHA replay",
+        );
+        let mut prover_material_with_release_contract_payload_alias = decoded_prover.clone();
+        prover_material_with_release_contract_payload_alias.native_payload_digest =
+            decoded_generated_body.release_prover_contract_digest.into();
+        let prover_material_with_release_contract_payload_alias =
+            norito::to_bytes(&prover_material_with_release_contract_payload_alias)
+                .expect("encode prover native material with release-contract digest alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_native_proof_key_material_v1(
+                &prover_material_with_release_contract_payload_alias,
+            ),
+            "native payload digest must be distinct from release-prover contract digest",
+            "native proof-key material must reject payload digests copied from embedded release-prover contract digests before SHA replay",
+        );
         let mut stale_verifier_payload_metadata = decoded_verifier_payload.clone();
         stale_verifier_payload_metadata.centered_scale_round_source_chain_digest =
             stale_centered_source_digest;
@@ -50590,6 +53283,28 @@ mod tests {
             "centered scale-round source-chain digest",
             "native verifier payload must reject stale centered source-chain digests",
         );
+        let mut aliased_verifier_payload_metadata = decoded_verifier_payload.clone();
+        aliased_verifier_payload_metadata.arithmetic_air_constraint_system_digest =
+            aliased_verifier_payload_metadata.arithmetic_trace_profile_digest;
+        let aliased_verifier_payload_metadata =
+            norito::to_bytes(&aliased_verifier_payload_metadata)
+                .expect("encode verifier payload metadata with aliased AIR digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &aliased_verifier_payload_metadata,
+            ),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "native verifier payloads must reject AIR digests copied from trace-profile digests before canonical mismatch",
+        );
+        assert_error_contains(
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
+                circuit_id,
+                &aliased_verifier_payload_metadata,
+            ),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "native verifier material construction must reject AIR digests copied from trace-profile digests before canonical mismatch",
+        );
         let mut stale_prover_payload_metadata = decoded_prover_payload.clone();
         stale_prover_payload_metadata.centered_scale_round_source_chain_digest =
             stale_centered_source_digest;
@@ -50602,6 +53317,38 @@ mod tests {
             ),
             "centered scale-round source-chain digest",
             "native prover payload must reject stale centered source-chain digests",
+        );
+        let mut aliased_prover_payload_metadata = decoded_prover_payload.clone();
+        aliased_prover_payload_metadata.arithmetic_air_constraint_system_digest =
+            aliased_prover_payload_metadata.arithmetic_trace_profile_digest;
+        let aliased_prover_payload_metadata = norito::to_bytes(&aliased_prover_payload_metadata)
+            .expect("encode prover payload metadata with aliased AIR digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                circuit_id,
+                &aliased_prover_payload_metadata,
+            ),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "native prover payloads must reject AIR digests copied from trace-profile digests before canonical mismatch",
+        );
+        let mut aliased_generated_body = decoded_generated_body.clone();
+        aliased_generated_body.arithmetic_air_constraint_system_digest =
+            aliased_generated_body.arithmetic_trace_profile_digest;
+        let mut aliased_body_verifier_payload = decoded_verifier_payload.clone();
+        aliased_body_verifier_payload.generated_circuit_body =
+            norito::to_bytes(&aliased_generated_body)
+                .expect("encode generated body with aliased AIR digest");
+        aliased_body_verifier_payload.generated_circuit_body_digest =
+            sha256(&aliased_body_verifier_payload.generated_circuit_body);
+        let aliased_body_verifier_payload = norito::to_bytes(&aliased_body_verifier_payload)
+            .expect("encode verifier payload with aliased generated-body AIR digest");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                circuit_id,
+                &aliased_body_verifier_payload,
+            ),
+            "generated circuit body arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "native verifier payloads must reject generated bodies with AIR digests copied from trace-profile digests before embedded AIR mismatch",
         );
         assert!(
             decoded_generated_body.derives_opening_schedule_from_statement_hash,
@@ -51035,9 +53782,9 @@ mod tests {
 
         expect_raw_generated_body_payload_rejects!(
             Vec::new(),
-            "generated circuit body must not be empty",
-            "native verifier material must reject missing generated circuit bodies",
-            "native prover payload must reject missing generated circuit bodies"
+            "inert or placeholder generated circuit body material",
+            "native verifier material must reject missing generated circuit body digests before body checks",
+            "native prover payload must reject missing generated circuit body digests before body checks"
         );
         expect_raw_generated_body_payload_rejects!(
             vec![0_u8; expected_generated_circuit_body.len()],
@@ -51859,6 +54606,28 @@ mod tests {
             "zero SHA-256 digest",
             "native material must reject missing verifier payload digests",
         );
+
+        for (case_label, native_payload_digest, expected) in [
+            ("zero", [0_u8; Hash::LENGTH], "zero SHA-256 digest"),
+            (
+                "inert placeholder",
+                sha256(b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD"),
+                "inert native payload digest",
+            ),
+        ] {
+            let mut malformed_payload_material = decoded_verifier.clone();
+            malformed_payload_material.native_payload = vec![0_u8; 32];
+            malformed_payload_material.native_payload_digest = native_payload_digest;
+            let malformed_payload_material = norito::to_bytes(&malformed_payload_material)
+                .expect("encode malformed native payload material");
+            assert_error_contains(
+                decode_bfv_full_bootstrap_native_proof_key_material_v1(&malformed_payload_material),
+                expected,
+                &format!(
+                    "native material must reject {case_label} payload digests before all-zero native payload bytes"
+                ),
+            );
+        }
 
         let mut inert_payload_material = decoded_verifier.clone();
         inert_payload_material.native_payload = b"not-production-ready".to_vec();
@@ -56778,6 +59547,46 @@ mod tests {
         assert_error_contains(
             bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
                 &params,
+                &public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "exact ciphertext statement byte hashing must validate the declared bound before ciphertext bytes",
+        );
+        assert_error_contains(
+            bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "exact ciphertext statement byte decode-and-digest must validate the declared bound before ciphertext bytes",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_statement_digest_from_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext statement byte hashing must validate the declared bound before ciphertext bytes",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext statement byte decode-and-digest must validate the declared bound before ciphertext bytes",
+        );
+        assert_error_contains(
+            bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
+                &params,
                 &binary_split_placeholder_public_key_bytes,
                 &ciphertext_bytes,
                 declared_bound,
@@ -58002,6 +60811,48 @@ mod tests {
             "canonical v1 bytes",
             "exact public-key/proof-input byte all-digest admission must reject compressed proof-input framing",
         );
+        let insufficient_exact_public_key_proof_input_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient_exact_public_key_proof_input_params
+            .validate()
+            .expect("insufficient exact public-key profile is structurally valid");
+        let insufficient_exact_public_key = BfvPublicKey {
+            b: vec![1, 2],
+            a: vec![3, 4],
+        };
+        let insufficient_exact_public_key_bytes = norito::to_bytes(&insufficient_exact_public_key)
+            .expect("encode insufficient exact public key");
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_public_key_bytes_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &insufficient_exact_public_key_bytes,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key/proof-input byte admission must reject insufficient residual capacity before proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_digest_for_public_key_bytes_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &insufficient_exact_public_key_bytes,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key/proof-input byte digest admission must reject insufficient residual capacity before proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_digests_for_public_key_bytes_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &insufficient_exact_public_key_bytes,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key/proof-input byte all-digest admission must reject insufficient residual capacity before proof-input framing",
+        );
 
         let bounded_public_key_digest =
             bfv_bounded_noise_public_key_proof_input_material_digest_v1(
@@ -58227,6 +61078,49 @@ mod tests {
             ),
             "canonical v1 bytes",
             "bounded public-key/proof-input byte all-digest admission must reject compressed proof-input framing",
+        );
+        let insufficient_bounded_public_key_proof_input_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient_bounded_public_key_proof_input_params
+            .validate()
+            .expect("insufficient bounded public-key profile is structurally valid");
+        let insufficient_bounded_public_key = BfvPublicKey {
+            b: vec![1, 2],
+            a: vec![3, 4],
+        };
+        let insufficient_bounded_public_key_bytes =
+            norito::to_bytes(&insufficient_bounded_public_key)
+                .expect("encode insufficient bounded public key");
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_bytes_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &insufficient_bounded_public_key_bytes,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key/proof-input byte admission must reject insufficient noise capacity before proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_digest_for_public_key_bytes_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &insufficient_bounded_public_key_bytes,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key/proof-input byte digest admission must reject insufficient noise capacity before proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_digests_for_public_key_bytes_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &insufficient_bounded_public_key_bytes,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key/proof-input byte all-digest admission must reject insufficient noise capacity before proof-input framing",
         );
         assert_error_contains(
             validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_v1(
@@ -58503,6 +61397,39 @@ mod tests {
             "canonical v1 bytes",
             "exact ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing",
         );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &params,
+                &exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                u128::MAX,
+                &exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "exact ciphertext/proof-input byte admission must reject oversized declared bounds before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &params,
+                &exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                u128::MAX,
+                &exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "exact ciphertext/proof-input byte digest admission must reject oversized declared bounds before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &params,
+                &exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                u128::MAX,
+                &exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "exact ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before ciphertext framing",
+        );
         let compressed_exact_ciphertext_material_bytes = norito::to_compressed_bytes(
             &exact_ciphertext_material,
             Some(norito::CompressionConfig::default()),
@@ -58562,6 +61489,90 @@ mod tests {
             ),
             "canonical v1 bytes",
             "exact ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing",
+        );
+        let compressed_exact_ciphertext_proof_input_error =
+            "exact-residual BFV ciphertext proof input material bytes must use canonical v1 bytes";
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &params,
+                &exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                exact_bound,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            compressed_exact_ciphertext_proof_input_error,
+            "exact ciphertext/proof-input byte admission must reject compressed proof-input framing before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &params,
+                &exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                exact_bound,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            compressed_exact_ciphertext_proof_input_error,
+            "exact ciphertext/proof-input byte digest admission must reject compressed proof-input framing before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &params,
+                &exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                exact_bound,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            compressed_exact_ciphertext_proof_input_error,
+            "exact ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing before ciphertext framing",
+        );
+        let insufficient_exact_proof_input_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient_exact_proof_input_params
+            .validate()
+            .expect("insufficient exact profile is structurally valid");
+        let insufficient_exact_proof_input_key = BfvPublicKey {
+            b: vec![1, 2],
+            a: vec![3, 4],
+        };
+        let insufficient_exact_proof_input_key_bytes =
+            norito::to_bytes(&insufficient_exact_proof_input_key)
+                .expect("encode insufficient exact public key");
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &insufficient_exact_proof_input_params,
+                &insufficient_exact_proof_input_key_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                0,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext/proof-input byte admission must reject insufficient residual capacity before proof-input or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &insufficient_exact_proof_input_params,
+                &insufficient_exact_proof_input_key_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                0,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext/proof-input byte digest admission must reject insufficient residual capacity before proof-input or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &insufficient_exact_proof_input_params,
+                &insufficient_exact_proof_input_key_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                0,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext/proof-input byte all-digest admission must reject insufficient residual capacity before proof-input or ciphertext framing",
         );
         let binary_split_exact_ciphertext_placeholder =
             b"t\xffo\xffd\xffo pending exact BFV ciphertext proof input material bytes".to_vec();
@@ -58750,6 +61761,39 @@ mod tests {
             "canonical v1 bytes",
             "bounded ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing",
         );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &params,
+                &bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                u128::MAX,
+                &bounded_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext/proof-input byte admission must reject oversized declared bounds before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &params,
+                &bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                u128::MAX,
+                &bounded_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext/proof-input byte digest admission must reject oversized declared bounds before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &params,
+                &bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                u128::MAX,
+                &bounded_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before ciphertext framing",
+        );
         let compressed_bounded_ciphertext_bytes = norito::to_compressed_bytes(
             &bounded_ciphertext_material,
             Some(norito::CompressionConfig::default()),
@@ -58820,6 +61864,90 @@ mod tests {
             ),
             "canonical v1 bytes",
             "bounded ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing",
+        );
+        let compressed_bounded_ciphertext_proof_input_error =
+            "bounded-noise BFV ciphertext proof input material bytes must use canonical v1 bytes";
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &params,
+                &bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                bounded_bound,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            compressed_bounded_ciphertext_proof_input_error,
+            "bounded ciphertext/proof-input byte admission must reject compressed proof-input framing before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &params,
+                &bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                bounded_bound,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            compressed_bounded_ciphertext_proof_input_error,
+            "bounded ciphertext/proof-input byte digest admission must reject compressed proof-input framing before ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &params,
+                &bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                bounded_bound,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            compressed_bounded_ciphertext_proof_input_error,
+            "bounded ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing before ciphertext framing",
+        );
+        let insufficient_bounded_proof_input_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient_bounded_proof_input_params
+            .validate()
+            .expect("insufficient bounded profile is structurally valid");
+        let insufficient_bounded_proof_input_key = BfvPublicKey {
+            b: vec![1, 2],
+            a: vec![3, 4],
+        };
+        let insufficient_bounded_proof_input_key_bytes =
+            norito::to_bytes(&insufficient_bounded_proof_input_key)
+                .expect("encode insufficient bounded public key");
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &insufficient_bounded_proof_input_params,
+                &insufficient_bounded_proof_input_key_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                0,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext/proof-input byte admission must reject insufficient noise capacity before proof-input or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &insufficient_bounded_proof_input_params,
+                &insufficient_bounded_proof_input_key_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                0,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext/proof-input byte digest admission must reject insufficient noise capacity before proof-input or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &insufficient_bounded_proof_input_params,
+                &insufficient_bounded_proof_input_key_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                0,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext/proof-input byte all-digest admission must reject insufficient noise capacity before proof-input or ciphertext framing",
         );
         let binary_split_bounded_ciphertext_placeholder =
             b"t\xffo\xffd\xffo pending bounded BFV ciphertext proof input material bytes".to_vec();
@@ -63270,6 +66398,66 @@ mod tests {
             "placeholder text",
             "release audit signoff byte-pair digests validation must reject binary-split signoff placeholders before hashing",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_trusted_reviewer_v1(
+                &evidence_bytes,
+                &binary_split_placeholder_signoff_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted release audit signoff byte-pair validation must reject malformed caller reviewer id before signoff byte admission",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_trusted_reviewer_v1(
+                &evidence_bytes,
+                &binary_split_placeholder_signoff_bytes,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted release audit signoff byte-pair validation must reject all-zero caller reviewer keys before signoff byte admission",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_trusted_reviewer_v1(
+                &evidence_bytes,
+                &binary_split_placeholder_signoff_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted release audit signoff byte-pair digest validation must reject malformed caller reviewer id before signoff byte admission",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_trusted_reviewer_v1(
+                &evidence_bytes,
+                &binary_split_placeholder_signoff_bytes,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted release audit signoff byte-pair digest validation must reject all-zero caller reviewer keys before signoff byte admission",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_trusted_reviewer_v1(
+                &evidence_bytes,
+                &binary_split_placeholder_signoff_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "canonical",
+            "trusted release audit signoff byte-pair digests validation must reject malformed caller reviewer id before signoff byte admission",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_trusted_reviewer_v1(
+                &evidence_bytes,
+                &binary_split_placeholder_signoff_bytes,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_public_key,
+            ),
+            "all zero",
+            "trusted release audit signoff byte-pair digests validation must reject all-zero caller reviewer keys before signoff byte admission",
+        );
         let binary_split_placeholder_evidence_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap release audit signoff evidence bytes"
                 .to_vec();
@@ -63547,6 +66735,45 @@ mod tests {
             ),
             "canonical v1 bytes",
             "release audit record raw-byte admission must reject compressed artifact-bundle framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "release audit record artifact-byte builder must reject malformed reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_private_key,
+            ),
+            "all zero",
+            "release audit record byte builder must reject all-zero reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "zero hash",
+            "release audit record byte builder with all digests must reject zero audit report digests before artifact-byte decoding",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
@@ -64428,6 +67655,39 @@ mod tests {
         assert_eq!(
             package_digest_from_artifact_bundle_bytes_with_digests, canonical_package_digest,
             "deterministic package byte builder with digests must return the generated package digest"
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "deterministic package byte builder must reject malformed reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_and_digest_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_private_key,
+            ),
+            "all zero",
+            "deterministic package byte builder must reject all-zero reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "deterministic package byte builder with all digests must reject malformed reviewer ids before artifact-byte decoding",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_digest_for_artifact_bundle_bytes_v1(
@@ -69009,6 +72269,45 @@ mod tests {
             "release audit manifest artifact-byte all-digests builder must return the manifest digest"
         );
         assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                " sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "canonical",
+            "release audit manifest artifact-byte builder must reject malformed reviewer ids before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                &all_zero_reviewer_private_key,
+            ),
+            "all zero",
+            "release audit manifest artifact-byte builder must reject all-zero reviewer keys before artifact-byte decoding",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_artifact_bundle_bytes_v1(
+                &params,
+                &material,
+                &compressed_artifact_bundle_bytes,
+                audit_report_digest,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            ),
+            "zero hash",
+            "release audit manifest artifact-byte all-digests builder must reject zero audit archive digests before artifact-byte decoding",
+        );
+        assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_bytes_v1(
                 &params,
                 &material,
@@ -69298,6 +72597,44 @@ mod tests {
                 "release audit package digesting must reject placeholder manifest digests before canonical package encoding",
             );
         }
+        let placeholder_digest =
+            Hash::new(BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES[0]);
+        let mut stale_record_with_placeholder_record_digest = package.clone();
+        stale_record_with_placeholder_record_digest.record.version += 1;
+        stale_record_with_placeholder_record_digest.record_digest = placeholder_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &stale_record_with_placeholder_record_digest,
+            ),
+            "placeholder",
+            "release audit packages must reject placeholder record digests before nested record validation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &stale_record_with_placeholder_record_digest,
+            ),
+            "placeholder",
+            "release audit package digesting must reject placeholder record digests before nested record validation",
+        );
+        let mut stale_manifest_with_placeholder_manifest_digest = package.clone();
+        stale_manifest_with_placeholder_manifest_digest
+            .manifest
+            .version += 1;
+        stale_manifest_with_placeholder_manifest_digest.manifest_digest = placeholder_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &stale_manifest_with_placeholder_manifest_digest,
+            ),
+            "placeholder",
+            "release audit packages must reject placeholder manifest digests before nested manifest validation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &stale_manifest_with_placeholder_manifest_digest,
+            ),
+            "placeholder",
+            "release audit package digesting must reject placeholder manifest digests before nested manifest validation",
+        );
         let mut delayed_placeholder_record_digest_package = package.clone();
         delayed_placeholder_record_digest_package.record_digest =
             delayed_material_placeholder_digest;
@@ -70158,14 +73495,14 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_manifest_v1(
                 &aliased_manifest_report_evidence_digest,
             ),
-            "external audit digests must be distinct from the release evidence digest",
+            "audit report digest must be distinct from release evidence digest",
             "release audit manifests must reject report digests that alias signed release evidence",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_digest_v1(
                 &aliased_manifest_report_evidence_digest,
             ),
-            "external audit digests must be distinct from the release evidence digest",
+            "audit report digest must be distinct from release evidence digest",
             "release audit manifest digesting must reject report digests that alias signed release evidence",
         );
         let mut aliased_manifest_archive_evidence_digest = manifest.clone();
@@ -70175,14 +73512,14 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_manifest_v1(
                 &aliased_manifest_archive_evidence_digest,
             ),
-            "external audit digests must be distinct from the release evidence digest",
+            "evidence archive digest must be distinct from release evidence digest",
             "release audit manifests must reject archive digests that alias signed release evidence",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_digest_v1(
                 &aliased_manifest_archive_evidence_digest,
             ),
-            "external audit digests must be distinct from the release evidence digest",
+            "evidence archive digest must be distinct from release evidence digest",
             "release audit manifest digesting must reject archive digests that alias signed release evidence",
         );
         let manifest_signed_commitment_aliases = [
@@ -70355,7 +73692,7 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "external audit digests must be distinct from the release evidence digest",
+            "audit report digest must be distinct from release evidence digest",
             "release audit signoff payloads must reject report digests that alias signed release evidence",
         );
         assert_error_contains(
@@ -70366,7 +73703,7 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "external audit digests must be distinct from the release evidence digest",
+            "evidence archive digest must be distinct from release evidence digest",
             "release audit signoff payloads must reject archive digests that alias signed release evidence",
         );
         let mut aliased_signoff_report_digest = signoff.clone();
@@ -70486,8 +73823,7 @@ mod tests {
         ];
         for (label, alias_digest) in record_external_digest_aliases {
             let expected = if label == "release evidence digest" {
-                "external audit digests must be distinct from the release evidence digest"
-                    .to_owned()
+                "audit report digest must be distinct from release evidence digest".to_owned()
             } else {
                 format!("audit report digest must be distinct from {label}")
             };
@@ -70508,8 +73844,7 @@ mod tests {
             );
 
             let expected = if label == "release evidence digest" {
-                "external audit digests must be distinct from the release evidence digest"
-                    .to_owned()
+                "evidence archive digest must be distinct from release evidence digest".to_owned()
             } else {
                 format!("evidence archive digest must be distinct from {label}")
             };
@@ -72317,6 +75652,24 @@ mod tests {
             "record digest mismatch",
             "release audit package digesting must reject stale record digests",
         );
+        let mut aliased_package_record_manifest_digests = package.clone();
+        aliased_package_record_manifest_digests.record.version += 1;
+        aliased_package_record_manifest_digests.manifest_digest =
+            aliased_package_record_manifest_digests.record_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_package_v1(
+                &aliased_package_record_manifest_digests,
+            ),
+            "manifest digest must be distinct from record digest",
+            "release audit package validation must reject record/manifest digest aliases before nested record validation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(
+                &aliased_package_record_manifest_digests,
+            ),
+            "manifest digest must be distinct from record digest",
+            "release audit package digesting must reject record/manifest digest aliases before nested record validation",
+        );
         let mut tampered_report_package = package.clone();
         tampered_report_package
             .audit_report_bytes
@@ -73030,8 +76383,13 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_evidence_v1(
                 &duplicate_payload_digest_evidence,
             ),
-            "native payload digest mismatch",
-            "release audit evidence validation must reject duplicated native payload digests before they can alias canonical role payloads",
+            "verifier-key native payload digest must be distinct from prover-key native payload digest",
+            "release audit evidence validation must reject duplicated native payload digests before canonical role replay",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_evidence_digest_v1(&duplicate_payload_digest_evidence),
+            "verifier-key native payload digest must be distinct from prover-key native payload digest",
+            "release audit evidence digesting must reject duplicated native payload digests before canonical role replay",
         );
 
         let mut aliased_payload_digest_evidence = evidence.clone();
@@ -73041,8 +76399,13 @@ mod tests {
             <[u8; Hash::LENGTH]>::from(aliased_payload_digest_evidence.proof_key_pair_commitment);
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_v1(&aliased_payload_digest_evidence),
-            "native payload digest mismatch",
-            "release audit evidence validation must reject native payload digest aliasing with signed evidence commitments before they can replace canonical role payloads",
+            "prover-key native payload digest must be distinct from proof-key pair commitment",
+            "release audit evidence validation must reject native payload digest aliasing with signed evidence commitments before canonical role replay",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_evidence_digest_v1(&aliased_payload_digest_evidence),
+            "prover-key native payload digest must be distinct from proof-key pair commitment",
+            "release audit evidence digesting must reject native payload digest aliasing with signed evidence commitments before canonical role replay",
         );
 
         let mut empty_payload_digest_evidence = evidence.clone();
@@ -73924,6 +77287,18 @@ mod tests {
             &artifacts,
         )
         .expect("artifact-aware full-bootstrap execution preflight must validate");
+        let mut artifact_bundle_digest_public_key = bootstrap_key.clone();
+        artifact_bundle_digest_public_key.public_key_digest = Some(digest);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
+                &params,
+                &artifact_bundle_digest_public_key,
+                &ciphertext,
+                &artifacts,
+            ),
+            "public-key digest must be distinct from artifact bundle digest",
+            "artifact-aware full-bootstrap execution preflight must reject public-key digest replay from the artifact bundle digest before artifact fallback",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
                 &params,
@@ -76196,6 +79571,41 @@ mod tests {
             "proof-key material commitment derivation must reject pair commitments copied from the evaluator digest before envelope mismatch",
         );
 
+        let key_material_commitment_copied_from_pair_key = BfvFullBootstrapProofKeyV1 {
+            key_material_commitment: prover_key.proof_key_pair_commitment,
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &key_material_commitment_copied_from_pair_key,
+            ),
+            "key material commitment must be distinct from proof-key pair commitment",
+            "proof-key profile validation must reject material commitments copied from pair commitments before recomputing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &key_material_commitment_copied_from_pair_key,
+            ),
+            "key material commitment must be distinct from proof-key pair commitment",
+            "proof-key material commitment binding must reject material commitments copied from pair commitments before recomputing",
+        );
+
+        let zero_key_material_commitment = BfvFullBootstrapProofKeyV1 {
+            key_material_commitment: Hash::prehashed([0_u8; Hash::LENGTH]),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &zero_key_material_commitment,
+            ),
+            "zero hash",
+            "proof-key material commitment binding must reject zero advertised material commitments before recomputing",
+        );
+
         let placeholder_key_material_commitment = BfvFullBootstrapProofKeyV1 {
             key_material_commitment: Hash::new(b"placeholder full-bootstrap prover-key commitment"),
             ..prover_key.clone()
@@ -76208,6 +79618,14 @@ mod tests {
             ),
             "placeholder",
             "proof keys must reject placeholder material commitments before recomputing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &placeholder_key_material_commitment,
+            ),
+            "placeholder",
+            "proof-key material commitment binding must reject placeholder advertised material commitments before recomputing",
         );
 
         let transient_key_material_commitment = BfvFullBootstrapProofKeyV1 {
@@ -78252,6 +81670,42 @@ mod tests {
             "arithmetic AIR constraint-system",
             "proof-key envelopes must bind the arithmetic AIR contract",
         );
+        let mut aliased_trace_envelope =
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                .expect("decode canonical proof-key material envelope for trace alias preflight");
+        aliased_trace_envelope.arithmetic_trace_profile_digest =
+            aliased_trace_envelope.parameter_digest;
+        let mut aliased_trace_envelope_key = prover_key.clone();
+        aliased_trace_envelope_key.key_material =
+            norito::to_bytes(&aliased_trace_envelope).expect("encode aliased trace envelope");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&aliased_trace_envelope_key),
+            "arithmetic trace profile digest must be distinct from parameter digest",
+            "proof-key material commitments must reject trace-profile envelope digests copied from parameter digests before canonical mismatch",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_profile_v1(&aliased_trace_envelope_key),
+            "arithmetic trace profile digest must be distinct from parameter digest",
+            "proof-key envelopes must reject trace-profile digests copied from parameter digests before canonical mismatch",
+        );
+        let mut aliased_air_envelope =
+            decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(&prover_key)
+                .expect("decode canonical proof-key material envelope for AIR alias preflight");
+        aliased_air_envelope.arithmetic_air_constraint_system_digest =
+            aliased_air_envelope.arithmetic_trace_profile_digest;
+        let mut aliased_air_envelope_key = prover_key.clone();
+        aliased_air_envelope_key.key_material =
+            norito::to_bytes(&aliased_air_envelope).expect("encode aliased AIR envelope");
+        assert_error_contains(
+            bfv_full_bootstrap_proof_key_material_commitment_v1(&aliased_air_envelope_key),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "proof-key material commitments must reject AIR envelope digests copied from trace-profile digests before canonical mismatch",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_profile_v1(&aliased_air_envelope_key),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "proof-key envelopes must reject AIR digests copied from trace-profile digests before canonical mismatch",
+        );
 
         let verifier_payload_bytes =
             encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
@@ -79103,6 +82557,14 @@ mod tests {
             validate_bfv_full_bootstrap_proof_public_input_schema_v1(&wrong_trace_profile_digest),
             "arithmetic trace profile",
             "proof public-input schemas must pin the arithmetic trace profile",
+        );
+        let mut aliased_air_digest = schema.clone();
+        aliased_air_digest.arithmetic_air_constraint_system_digest =
+            aliased_air_digest.arithmetic_trace_profile_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&aliased_air_digest),
+            "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            "proof public-input schemas must reject AIR digests copied from trace-profile digests before canonical mismatch",
         );
         let mut wrong_air_contract_version = schema.clone();
         wrong_air_contract_version.arithmetic_air_contract_version = wrong_air_contract_version
@@ -82753,8 +86215,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "accumulator artifact hex does not match",
-            "release-audited exact execution must reject artifact replay before missing Galois keys",
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited exact execution must reject artifact digest drift before missing Galois keys",
         );
         assert_error_contains(
             bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
@@ -82768,8 +86230,38 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "accumulator artifact hex does not match",
-            "release-audited exact bounds must reject artifact replay before malformed input bounds",
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited exact bounds must reject artifact digest drift before malformed input bounds",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &stale_release_audited_artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+                &release_audit_package,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited exact execution must run artifact preflight before caller-pinned package digest admission",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &stale_release_audited_artifacts,
+                &galois_keys,
+                u128::MAX,
+                &release_audit_package,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited exact bounds must run artifact preflight before caller-pinned package digest admission",
         );
         assert_error_contains(
             full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
@@ -83443,8 +86935,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "accumulator artifact hex does not match",
-            "release-audited bounded execution must reject artifact replay before missing Galois keys",
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited bounded execution must reject artifact digest drift before missing Galois keys",
         );
         assert_error_contains(
             bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
@@ -83458,8 +86950,38 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.public_key(),
             ),
-            "accumulator artifact hex does not match",
-            "release-audited bounded bounds must reject artifact replay before malformed input bounds",
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited bounded bounds must reject artifact digest drift before malformed input bounds",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &stale_bounded_release_audited_artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+                &bounded_release_audit_package,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited bounded execution must run artifact preflight before caller-pinned package digest admission",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &stale_bounded_release_audited_artifacts,
+                &bounded_galois_keys,
+                u128::MAX,
+                &bounded_release_audit_package,
+                Hash::prehashed([0_u8; Hash::LENGTH]),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            ),
+            "accumulator artifact digest does not match governed full-bootstrap material",
+            "release-audited bounded bounds must run artifact preflight before caller-pinned package digest admission",
         );
         assert_error_contains(
             full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -84463,6 +87985,42 @@ mod tests {
             "canonical v1 bytes",
             "artifact-bound witness byte admission must reject compressed Norito framing",
         );
+        let mut missing_material_bootstrap_key = bootstrap_key.clone();
+        missing_material_bootstrap_key.full_bootstrap_material = None;
+        let missing_full_bootstrap_material_error = "bootstrapping circuit material";
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_witness_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound witness byte digesting must reject missing caller full-bootstrap material before compressed witness bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_witness_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound witness byte digest helper must reject missing caller full-bootstrap material before compressed witness bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_witness_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound witness byte admission must reject missing caller full-bootstrap material before compressed witness bytes",
+        );
         let binary_split_placeholder_witness_material_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap execution witness material bytes"
                 .to_vec();
@@ -84605,6 +88163,18 @@ mod tests {
             ),
             "artifact bundle digest mismatch",
             "public witness material hashing must reject stale artifact-bundle digests",
+        );
+
+        let bootstrap_public_key_digest = *bootstrap_key
+            .public_key_digest
+            .as_ref()
+            .expect("full-bootstrap bootstrap key carries public-key digest metadata");
+        let mut aliased_material_digest = witness_material.clone();
+        aliased_material_digest.full_bootstrap_material_digest = bootstrap_public_key_digest;
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_v1(&aliased_material_digest),
+            "must be distinct from bootstrap public-key digest",
+            "public witness material hashing must reject governed material digests copied from the bootstrap public-key digest",
         );
 
         let mut stale_material_digest = witness_material.clone();
@@ -85544,8 +89114,8 @@ mod tests {
                 &galois_keys,
                 &proof_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "caller-bound proof input byte digesting must reject public-key substitution",
+            "public-key digest",
+            "caller-bound proof input byte digesting must reject public-key substitution before proof-input bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
@@ -85556,8 +89126,8 @@ mod tests {
                 &galois_keys,
                 &proof_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "caller-bound proof input byte digest helper must reject public-key substitution",
+            "public-key digest",
+            "caller-bound proof input byte digest helper must reject public-key substitution before proof-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_and_artifacts_v1(
@@ -85568,8 +89138,8 @@ mod tests {
                 &galois_keys,
                 &proof_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "caller-bound proof input byte admission must reject public-key substitution",
+            "public-key digest",
+            "caller-bound proof input byte admission must reject public-key substitution before proof-input bytes",
         );
         let wrong_public_key_bytes =
             norito::to_bytes(&wrong_public_key).expect("encode wrong public key");
@@ -85618,8 +89188,8 @@ mod tests {
                 &galois_keys,
                 &proof_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "public-key/proof-input byte admission must reject decoded public-key substitution",
+            "public-key digest",
+            "public-key/proof-input byte admission must reject decoded public-key substitution before proof-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1(
@@ -85630,8 +89200,8 @@ mod tests {
                 &galois_keys,
                 &proof_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "public-key/proof-input byte digest admission must reject decoded public-key substitution",
+            "public-key digest",
+            "public-key/proof-input byte digest admission must reject decoded public-key substitution before proof-input bytes",
         );
         let compressed_artifact_bundle_bytes =
             norito::to_compressed_bytes(&artifacts, Some(norito::CompressionConfig::default()))
@@ -85811,6 +89381,149 @@ mod tests {
             ),
             "canonical v1 bytes",
             "caller-bound proof input byte admission must reject compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound proof input byte digesting must reject missing caller full-bootstrap material before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound proof input byte digest helper must reject missing caller full-bootstrap material before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound proof input byte admission must reject missing caller full-bootstrap material before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_public_key_and_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "caller-bound proof input byte digesting must reject missing caller full-bootstrap material before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "caller-bound proof input byte digest helper must reject missing caller full-bootstrap material before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_and_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "caller-bound proof input byte admission must reject missing caller full-bootstrap material before compressed proof-input bytes",
+        );
+        let compressed_proof_input_error =
+            "BFV full-bootstrap execution proof input material bytes must use canonical v1 bytes";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &canonical_galois_key_set_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "execution governance byte admission must reject compressed proof-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &canonical_galois_key_set_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "execution governance byte digest admission must reject compressed proof-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &canonical_galois_key_set_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "execution governance byte digests admission must reject compressed proof-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &artifact_bundle_bytes,
+                &compressed_galois_key_set_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "execution governance byte admission must reject compressed proof-input framing before Galois key-set framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &artifact_bundle_bytes,
+                &compressed_galois_key_set_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "execution governance byte digest admission must reject compressed proof-input framing before Galois key-set framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &artifact_bundle_bytes,
+                &compressed_galois_key_set_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "execution governance byte digests admission must reject compressed proof-input framing before Galois key-set framing",
         );
         let compressed_public_key_bytes =
             norito::to_compressed_bytes(&public_key, Some(norito::CompressionConfig::default()))
@@ -86206,6 +89919,11 @@ mod tests {
 
         for (alias_label, alias_digest, expected) in [
             (
+                "public key",
+                public_key_digest_from_public_key_bytes,
+                "must be distinct from public-key digest",
+            ),
+            (
                 "full-bootstrap material",
                 proof_input.witness_material.full_bootstrap_material_digest,
                 "must be distinct from witness full-bootstrap material digest",
@@ -86233,6 +89951,131 @@ mod tests {
                 ),
             );
         }
+        let proof_input_input_ciphertext_digest =
+            bfv_ciphertext_digest(&params, &proof_input.witness_material.input_ciphertext)
+                .expect("proof input ciphertext digest");
+        let proof_input_output_ciphertext_digest =
+            bfv_ciphertext_digest(&params, &proof_input.witness_material.output_ciphertext)
+                .expect("proof output ciphertext digest");
+        for (alias_label, alias_digest, expected) in [
+            (
+                "input ciphertext",
+                proof_input_input_ciphertext_digest,
+                "BFV full-bootstrap execution proof input material statement hash must be distinct from input ciphertext digest",
+            ),
+            (
+                "output ciphertext",
+                proof_input_output_ciphertext_digest,
+                "BFV full-bootstrap execution proof input material statement hash must be distinct from output ciphertext digest",
+            ),
+        ] {
+            let mut aliased_statement_input = proof_input.clone();
+            aliased_statement_input.statement_hash = alias_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_execution_proof_input_material_v1(
+                    &aliased_statement_input,
+                ),
+                expected,
+                &format!(
+                    "proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
+                ),
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_execution_proof_input_material_digest_v1(
+                    &aliased_statement_input,
+                ),
+                expected,
+                &format!(
+                    "proof input material digesting must reject statement hashes copied from {alias_label} digests before hashing"
+                ),
+            );
+        }
+        let mut statement_input_ciphertext_alias_input = proof_input.clone();
+        statement_input_ciphertext_alias_input.statement_hash = proof_input_input_ciphertext_digest;
+        let statement_input_ciphertext_alias_bytes =
+            norito::to_bytes(&statement_input_ciphertext_alias_input)
+                .expect("encode proof input with statement/input-ciphertext alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
+                &statement_input_ciphertext_alias_bytes,
+            ),
+            "BFV full-bootstrap execution proof input material statement hash must be distinct from input ciphertext digest",
+            "proof input byte admission must reject statement/input-ciphertext digest aliases before accepting canonical bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
+                &statement_input_ciphertext_alias_bytes,
+            ),
+            "BFV full-bootstrap execution proof input material statement hash must be distinct from input ciphertext digest",
+            "proof input byte digesting must reject statement/input-ciphertext digest aliases before hashing",
+        );
+        let mut statement_witness_alias_input = proof_input.clone();
+        statement_witness_alias_input.statement_hash = claim.execution_witness_digest;
+        let statement_witness_alias_expected = "BFV full-bootstrap execution proof input material statement hash must be distinct from execution witness digest";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_v1(
+                &statement_witness_alias_input,
+            ),
+            statement_witness_alias_expected,
+            "proof input material must reject statement hashes copied from execution witness digests before mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_v1(
+                &statement_witness_alias_input,
+            ),
+            statement_witness_alias_expected,
+            "proof input material digesting must reject statement hashes copied from execution witness digests before hashing",
+        );
+        let statement_witness_alias_bytes = norito::to_bytes(&statement_witness_alias_input)
+            .expect("encode proof input with statement/witness alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
+                &statement_witness_alias_bytes,
+            ),
+            statement_witness_alias_expected,
+            "proof input byte admission must reject statement/witness digest aliases before accepting canonical bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
+                &statement_witness_alias_bytes,
+            ),
+            statement_witness_alias_expected,
+            "proof input byte digesting must reject statement/witness digest aliases before hashing",
+        );
+        let mut statement_proof_key_pair_alias_input = proof_input.clone();
+        statement_proof_key_pair_alias_input.statement_hash = material.proof_key_pair_commitment;
+        let statement_proof_key_pair_alias_expected = "BFV full-bootstrap execution proof input material statement hash must be distinct from proof-key pair commitment";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_v1(
+                &statement_proof_key_pair_alias_input,
+            ),
+            statement_proof_key_pair_alias_expected,
+            "proof input material must reject statement hashes copied from governed proof-key pair commitments before mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_v1(
+                &statement_proof_key_pair_alias_input,
+            ),
+            statement_proof_key_pair_alias_expected,
+            "proof input material digesting must reject statement hashes copied from governed proof-key pair commitments before hashing",
+        );
+        let statement_proof_key_pair_alias_bytes =
+            norito::to_bytes(&statement_proof_key_pair_alias_input)
+                .expect("encode proof input with statement/proof-key-pair alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
+                &statement_proof_key_pair_alias_bytes,
+            ),
+            statement_proof_key_pair_alias_expected,
+            "proof input byte admission must reject statement/proof-key pair aliases before accepting canonical bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
+                &statement_proof_key_pair_alias_bytes,
+            ),
+            statement_proof_key_pair_alias_expected,
+            "proof input byte digesting must reject statement/proof-key pair aliases before hashing",
+        );
 
         let mut zero_statement_input = proof_input.clone();
         zero_statement_input.statement_hash = Hash::prehashed([0_u8; Hash::LENGTH]);
@@ -86767,6 +90610,34 @@ mod tests {
             "canonical v1 bytes",
             "proof-input-bound trace material byte admission must reject compressed Norito framing",
         );
+        let mut stale_trace_proof_input_context = proof_input.clone();
+        stale_trace_proof_input_context.version =
+            stale_trace_proof_input_context.version.saturating_add(1);
+        let stale_trace_proof_input_error = "proof input material version";
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_for_proof_input_v1(
+                &stale_trace_proof_input_context,
+                &compressed_trace_material_bytes,
+            ),
+            stale_trace_proof_input_error,
+            "proof-input-bound trace byte digesting must reject stale proof-input context before compressed trace bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_proof_input_v1(
+                &stale_trace_proof_input_context,
+                &compressed_trace_material_bytes,
+            ),
+            stale_trace_proof_input_error,
+            "proof-input-bound trace byte digest helper must reject stale proof-input context before compressed trace bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_material_bytes_for_proof_input_v1(
+                &stale_trace_proof_input_context,
+                &compressed_trace_material_bytes,
+            ),
+            stale_trace_proof_input_error,
+            "proof-input-bound trace byte admission must reject stale proof-input context before compressed trace bytes",
+        );
         let binary_split_placeholder_trace_material_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap arithmetic trace material bytes".to_vec();
         assert_error_contains(
@@ -86919,6 +90790,65 @@ mod tests {
             public_opening_material,
             "trace-bound public opening byte admission must return decoded opening material"
         );
+        let public_opening_trace_proof_input_public_key_digest = bfv_public_key_digest(
+            &trace_material.proof_input_material.witness_material.params,
+            &trace_material.proof_input_material.public_key,
+        )
+        .expect("hash public-opening trace proof input public key");
+        for (alias_label, alias_digest, expected) in [
+            (
+                "proof-input public key",
+                public_opening_trace_proof_input_public_key_digest,
+                "trace material digest must be distinct from proof input public-key digest",
+            ),
+            (
+                "public-opening statement",
+                public_opening_material.statement_hash,
+                "trace material digest must be distinct from statement hash",
+            ),
+            (
+                "proof-input witness full-bootstrap material",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+                "trace material digest must be distinct from proof input witness full-bootstrap material digest",
+            ),
+            (
+                "proof-input witness artifact bundle",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+                "trace material digest must be distinct from proof input witness artifact bundle digest",
+            ),
+            (
+                "proof-input witness Galois key set",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+                "trace material digest must be distinct from proof input witness Galois key set digest",
+            ),
+            (
+                "arithmetic trace profile",
+                trace_material.arithmetic_trace_profile_digest,
+                "trace material digest must be distinct from arithmetic trace profile digest",
+            ),
+        ] {
+            let mut aliased_public_opening_trace_digest = public_opening_material.clone();
+            aliased_public_opening_trace_digest.trace_material_digest = alias_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
+                    &trace_material,
+                    &aliased_public_opening_trace_digest,
+                ),
+                expected,
+                &format!(
+                    "trace-bound public opening material must reject trace material digests copied from {alias_label} before transcript mismatch checks"
+                ),
+            );
+        }
         let compressed_public_opening_material_bytes = norito::to_compressed_bytes(
             &public_opening_material,
             Some(norito::CompressionConfig::default()),
@@ -86954,6 +90884,33 @@ mod tests {
             ),
             "canonical v1 bytes",
             "trace-bound public opening byte admission must reject compressed Norito framing",
+        );
+        let mut stale_trace_context = trace_material.clone();
+        stale_trace_context.version = stale_trace_context.version.saturating_add(1);
+        let stale_trace_context_error = "trace material version";
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+                &stale_trace_context,
+                &compressed_public_opening_material_bytes,
+            ),
+            stale_trace_context_error,
+            "trace-bound public opening byte digesting must reject stale trace context before compressed opening bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_for_trace_v1(
+                &stale_trace_context,
+                &compressed_public_opening_material_bytes,
+            ),
+            stale_trace_context_error,
+            "trace-bound public opening byte digest helper must reject stale trace context before compressed opening bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_for_trace_v1(
+                &stale_trace_context,
+                &compressed_public_opening_material_bytes,
+            ),
+            stale_trace_context_error,
+            "trace-bound public opening byte admission must reject stale trace context before compressed opening bytes",
         );
         let binary_split_placeholder_public_opening_material_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap arithmetic trace public opening material bytes"
@@ -87197,6 +91154,120 @@ mod tests {
             air_evaluation_material,
             "trace-bound AIR evaluation byte admission must return decoded AIR evaluation material"
         );
+        let air_evaluation_trace_proof_input_public_key_digest = bfv_public_key_digest(
+            &trace_material.proof_input_material.witness_material.params,
+            &trace_material.proof_input_material.public_key,
+        )
+        .expect("hash AIR evaluation trace proof input public key");
+        for (alias_label, alias_digest, expected) in [
+            (
+                "proof-input public key",
+                air_evaluation_trace_proof_input_public_key_digest,
+                "arithmetic trace material digest must be distinct from proof input public-key digest",
+            ),
+            (
+                "proof-input statement",
+                trace_material.proof_input_material.statement_hash,
+                "arithmetic trace material digest must be distinct from proof input statement hash",
+            ),
+            (
+                "proof-input witness full-bootstrap material",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+                "arithmetic trace material digest must be distinct from proof input witness full-bootstrap material digest",
+            ),
+            (
+                "proof-input witness artifact bundle",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+                "arithmetic trace material digest must be distinct from proof input witness artifact bundle digest",
+            ),
+            (
+                "proof-input witness Galois key set",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+                "arithmetic trace material digest must be distinct from proof input witness Galois key set digest",
+            ),
+            (
+                "arithmetic trace profile",
+                trace_material.arithmetic_trace_profile_digest,
+                "arithmetic trace material digest must be distinct from arithmetic trace profile digest",
+            ),
+        ] {
+            let mut aliased_air_evaluation_trace_digest = air_evaluation_material.clone();
+            aliased_air_evaluation_trace_digest.arithmetic_trace_material_digest = alias_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1(
+                    &trace_material,
+                    &aliased_air_evaluation_trace_digest,
+                ),
+                expected,
+                &format!(
+                    "trace-bound AIR evaluation must reject trace material digests copied from {alias_label} before mismatch checks"
+                ),
+            );
+        }
+        for (alias_label, alias_digest, expected) in [
+            (
+                "proof-input public key",
+                air_evaluation_trace_proof_input_public_key_digest,
+                "arithmetic AIR constraint-system digest must be distinct from proof input public-key digest",
+            ),
+            (
+                "proof-input statement",
+                trace_material.proof_input_material.statement_hash,
+                "arithmetic AIR constraint-system digest must be distinct from proof input statement hash",
+            ),
+            (
+                "proof-input witness full-bootstrap material",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+                "arithmetic AIR constraint-system digest must be distinct from proof input witness full-bootstrap material digest",
+            ),
+            (
+                "proof-input witness artifact bundle",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+                "arithmetic AIR constraint-system digest must be distinct from proof input witness artifact bundle digest",
+            ),
+            (
+                "proof-input witness Galois key set",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+                "arithmetic AIR constraint-system digest must be distinct from proof input witness Galois key set digest",
+            ),
+            (
+                "arithmetic trace profile",
+                trace_material.arithmetic_trace_profile_digest,
+                "arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest",
+            ),
+        ] {
+            let mut aliased_air_evaluation_constraint_digest = air_evaluation_material.clone();
+            aliased_air_evaluation_constraint_digest.arithmetic_air_constraint_system_digest =
+                alias_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1(
+                    &trace_material,
+                    &aliased_air_evaluation_constraint_digest,
+                ),
+                expected,
+                &format!(
+                    "trace-bound AIR evaluation must reject AIR constraint digests copied from {alias_label} before canonical mismatch checks"
+                ),
+            );
+        }
         let compressed_air_evaluation_material_bytes = norito::to_compressed_bytes(
             &air_evaluation_material,
             Some(norito::CompressionConfig::default()),
@@ -87251,6 +91322,30 @@ mod tests {
             ),
             "canonical v1 bytes",
             "trace-bound AIR evaluation byte admission must reject compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_for_trace_v1(
+                &stale_trace_context,
+                &compressed_air_evaluation_material_bytes,
+            ),
+            stale_trace_context_error,
+            "trace-bound AIR evaluation byte digesting must reject stale trace context before compressed AIR bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_for_trace_v1(
+                &stale_trace_context,
+                &compressed_air_evaluation_material_bytes,
+            ),
+            stale_trace_context_error,
+            "trace-bound AIR evaluation byte digest helper must reject stale trace context before compressed AIR bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_for_trace_v1(
+                &stale_trace_context,
+                &compressed_air_evaluation_material_bytes,
+            ),
+            stale_trace_context_error,
+            "trace-bound AIR evaluation byte admission must reject stale trace context before compressed AIR bytes",
         );
         let binary_split_placeholder_air_evaluation_material_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap arithmetic AIR evaluation material bytes"
@@ -87346,6 +91441,32 @@ mod tests {
             ),
             "trace material digest mismatch",
             "trace-bound AIR evaluation byte admission must reject canonical bytes for another trace",
+        );
+        let mut copied_constraint_digest_air_evaluation_material = air_evaluation_material.clone();
+        copied_constraint_digest_air_evaluation_material.arithmetic_trace_material_digest =
+            copied_constraint_digest_air_evaluation_material
+                .arithmetic_air_constraint_system_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
+                &copied_constraint_digest_air_evaluation_material,
+            ),
+            "must be distinct from constraint-system digest",
+            "AIR evaluation material must reject trace digests copied from the AIR constraint-system digest before trace mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(
+                &copied_constraint_digest_air_evaluation_material,
+            ),
+            "must be distinct from constraint-system digest",
+            "AIR evaluation material digesting must reject trace digests copied from the AIR constraint-system digest before hashing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_for_trace_v1(
+                &trace_material,
+                &copied_constraint_digest_air_evaluation_material,
+            ),
+            "must be distinct from arithmetic AIR constraint-system digest",
+            "trace-bound AIR evaluation digesting must reject copied AIR constraint-system digests before trace mismatch checks",
         );
         let leading_delayed_placeholder_digest = Hash::new_from_chunks(&[
             b" \n\t",
@@ -87686,6 +91807,131 @@ mod tests {
         assert_eq!(prover_input_material.verifier_key, verifier_key);
         validate_bfv_full_bootstrap_execution_prover_input_material_v1(&prover_input_material)
             .expect("proof-key-bound execution prover input material validates");
+        let mut prover_parameter_alias_input = prover_input_material.clone();
+        prover_parameter_alias_input.prover_key.parameter_digest = proof_input.statement_hash;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &prover_parameter_alias_input,
+            ),
+            "prover key parameter digest must be distinct from proof input statement hash",
+            "prover input material must reject prover-key parameter digests copied from proof input statements before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &prover_parameter_alias_input,
+            ),
+            "prover key parameter digest must be distinct from proof input statement hash",
+            "prover input material digesting must reject prover-key parameter digests copied from proof input statements before proof-key mismatch checks",
+        );
+        let mut verifier_key_switch_alias_input = prover_input_material.clone();
+        verifier_key_switch_alias_input
+            .verifier_key
+            .key_switch_decomposition_chain_digest =
+            proof_input.witness_material.artifact_bundle_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &verifier_key_switch_alias_input,
+            ),
+            "verifier key key-switch decomposition-chain digest must be distinct from proof input witness artifact bundle digest",
+            "prover input material must reject verifier-key key-switch digests copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &verifier_key_switch_alias_input,
+            ),
+            "verifier key key-switch decomposition-chain digest must be distinct from proof input witness artifact bundle digest",
+            "prover input material digesting must reject verifier-key key-switch digests copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        let mut schema_alias_prover_input = prover_input_material.clone();
+        schema_alias_prover_input
+            .prover_key
+            .public_input_schema_digest = proof_input.statement_hash;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &schema_alias_prover_input,
+            ),
+            "prover key public-input schema digest must be distinct from proof input statement hash",
+            "prover input material must reject prover-key schema digests copied from proof input statements before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &schema_alias_prover_input,
+            ),
+            "prover key public-input schema digest must be distinct from proof input statement hash",
+            "prover input material digesting must reject prover-key schema digests copied from proof input statements before proof-key mismatch checks",
+        );
+        let mut evaluator_alias_prover_input = prover_input_material.clone();
+        evaluator_alias_prover_input
+            .prover_key
+            .evaluator_artifact_set_digest = proof_input.witness_material.artifact_bundle_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &evaluator_alias_prover_input,
+            ),
+            "prover key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest",
+            "prover input material must reject prover-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &evaluator_alias_prover_input,
+            ),
+            "prover key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest",
+            "prover input material digesting must reject prover-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        let mut verifier_schema_alias_prover_input = prover_input_material.clone();
+        verifier_schema_alias_prover_input
+            .verifier_key
+            .public_input_schema_digest = proof_input.statement_hash;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &verifier_schema_alias_prover_input,
+            ),
+            "verifier key public-input schema digest must be distinct from proof input statement hash",
+            "prover input material must reject verifier-key schema digests copied from proof input statements before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &verifier_schema_alias_prover_input,
+            ),
+            "verifier key public-input schema digest must be distinct from proof input statement hash",
+            "prover input material digesting must reject verifier-key schema digests copied from proof input statements before proof-key mismatch checks",
+        );
+        let mut verifier_evaluator_alias_prover_input = prover_input_material.clone();
+        verifier_evaluator_alias_prover_input
+            .verifier_key
+            .evaluator_artifact_set_digest = proof_input.witness_material.artifact_bundle_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &verifier_evaluator_alias_prover_input,
+            ),
+            "verifier key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest",
+            "prover input material must reject verifier-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &verifier_evaluator_alias_prover_input,
+            ),
+            "verifier key evaluator artifact set digest must be distinct from proof input witness artifact bundle digest",
+            "prover input material digesting must reject verifier-key evaluator digests copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        let mut verifier_pair_alias_prover_input = prover_input_material.clone();
+        verifier_pair_alias_prover_input
+            .verifier_key
+            .proof_key_pair_commitment = proof_input.witness_material.artifact_bundle_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &verifier_pair_alias_prover_input,
+            ),
+            "verifier key proof-key pair commitment must be distinct from proof input witness artifact bundle digest",
+            "prover input material must reject verifier-key pair commitments copied from witness artifact bundles before proof-key mismatch checks",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &verifier_pair_alias_prover_input,
+            ),
+            "verifier key proof-key pair commitment must be distinct from proof input witness artifact bundle digest",
+            "prover input material digesting must reject verifier-key pair commitments copied from witness artifact bundles before proof-key mismatch checks",
+        );
         validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
             &params,
             &bootstrap_key,
@@ -88675,8 +92921,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "caller-bound prover input byte digesting must reject public-key substitution",
+            "public-key digest",
+            "caller-bound prover input byte digesting must reject public-key substitution before prover-input bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
@@ -88687,8 +92933,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "caller-bound prover input byte digest helper must reject public-key substitution",
+            "public-key digest",
+            "caller-bound prover input byte digest helper must reject public-key substitution before prover-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_and_artifacts_v1(
@@ -88699,8 +92945,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "caller-bound prover input byte admission must reject public-key substitution",
+            "public-key digest",
+            "caller-bound prover input byte admission must reject public-key substitution before prover-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
@@ -88711,8 +92957,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "public-key/prover-input byte admission must reject decoded public-key substitution",
+            "public-key digest",
+            "public-key/prover-input byte admission must reject decoded public-key substitution before prover-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1(
@@ -88723,8 +92969,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material_bytes,
             ),
-            "caller public key mismatch",
-            "public-key/prover-input byte digest admission must reject decoded public-key substitution",
+            "public-key digest",
+            "public-key/prover-input byte digest admission must reject decoded public-key substitution before prover-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
@@ -88933,6 +93179,149 @@ mod tests {
             ),
             "canonical v1 bytes",
             "caller-bound prover input byte admission must reject compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound prover input byte digesting must reject missing caller full-bootstrap material before compressed prover-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound prover input byte digest helper must reject missing caller full-bootstrap material before compressed prover-input bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-bound prover input byte admission must reject missing caller full-bootstrap material before compressed prover-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_public_key_and_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "caller-bound prover input byte digesting must reject missing caller full-bootstrap material before compressed prover-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "caller-bound prover input byte digest helper must reject missing caller full-bootstrap material before compressed prover-input bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_and_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "caller-bound prover input byte admission must reject missing caller full-bootstrap material before compressed prover-input bytes",
+        );
+        let compressed_prover_input_error =
+            "BFV full-bootstrap execution prover input material bytes must use canonical v1 bytes";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &canonical_galois_key_set_bytes,
+                &compressed_prover_input_material_bytes,
+            ),
+            compressed_prover_input_error,
+            "prover governance byte admission must reject compressed prover-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &canonical_galois_key_set_bytes,
+                &compressed_prover_input_material_bytes,
+            ),
+            compressed_prover_input_error,
+            "prover governance byte digest admission must reject compressed prover-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &canonical_galois_key_set_bytes,
+                &compressed_prover_input_material_bytes,
+            ),
+            compressed_prover_input_error,
+            "prover governance byte digests admission must reject compressed prover-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &artifact_bundle_bytes,
+                &compressed_galois_key_set_bytes,
+                &compressed_prover_input_material_bytes,
+            ),
+            compressed_prover_input_error,
+            "prover governance byte admission must reject compressed prover-input framing before Galois key-set framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &artifact_bundle_bytes,
+                &compressed_galois_key_set_bytes,
+                &compressed_prover_input_material_bytes,
+            ),
+            compressed_prover_input_error,
+            "prover governance byte digest admission must reject compressed prover-input framing before Galois key-set framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &artifact_bundle_bytes,
+                &compressed_galois_key_set_bytes,
+                &compressed_prover_input_material_bytes,
+            ),
+            compressed_prover_input_error,
+            "prover governance byte digests admission must reject compressed prover-input framing before Galois key-set framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
@@ -89173,6 +93562,51 @@ mod tests {
                 "prover input material must reject separator-spelled placeholder arithmetic trace material digests",
             );
         }
+        for (source_label, alias_digest, prior_label) in [
+            (
+                "proof-input statement",
+                prover_input_material.proof_input_material.statement_hash,
+                "proof input statement hash",
+            ),
+            (
+                "witness full-bootstrap material",
+                prover_input_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+                "proof input witness full-bootstrap material digest",
+            ),
+            (
+                "witness artifact bundle",
+                prover_input_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+                "proof input witness artifact bundle digest",
+            ),
+            (
+                "witness Galois key set",
+                prover_input_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+                "proof input witness Galois key set digest",
+            ),
+        ] {
+            let mut copied_prover_input_trace_digest = prover_input_material.clone();
+            copied_prover_input_trace_digest.arithmetic_trace_material_digest = alias_digest;
+            let expected =
+                format!("arithmetic trace material digest must be distinct from {prior_label}");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
+                    &copied_prover_input_trace_digest,
+                ),
+                &expected,
+                &format!(
+                    "prover input material must reject arithmetic trace digests copied from {source_label} before mismatch checks"
+                ),
+            );
+        }
 
         let mut stale_prover_input_air_digest = prover_input_material.clone();
         stale_prover_input_air_digest.arithmetic_air_constraint_system_digest =
@@ -89281,6 +93715,38 @@ mod tests {
             );
         }
 
+        let mut retargeted_air_evaluation_air_digest = prover_input_material.clone();
+        let embedded_air_digest =
+            Hash::new(b"retargeted embedded BFV full-bootstrap AIR evaluation constraint digest");
+        retargeted_air_evaluation_air_digest
+            .arithmetic_air_evaluation_material
+            .arithmetic_air_constraint_system_digest = embedded_air_digest;
+        retargeted_air_evaluation_air_digest.arithmetic_air_evaluation_material_digest =
+            embedded_air_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &retargeted_air_evaluation_air_digest,
+            ),
+            "arithmetic AIR evaluation material digest must be distinct from embedded arithmetic AIR constraint-system digest",
+            "prover input material must reject AIR evaluation material digests copied from retargeted embedded AIR constraint digests before canonical mismatch checks",
+        );
+
+        let mut retargeted_air_evaluation_trace_digest = prover_input_material.clone();
+        let embedded_trace_digest =
+            Hash::new(b"retargeted embedded BFV full-bootstrap AIR evaluation trace digest");
+        retargeted_air_evaluation_trace_digest
+            .arithmetic_air_evaluation_material
+            .arithmetic_trace_material_digest = embedded_trace_digest;
+        retargeted_air_evaluation_trace_digest.arithmetic_air_evaluation_material_digest =
+            embedded_trace_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &retargeted_air_evaluation_trace_digest,
+            ),
+            "arithmetic AIR evaluation material digest must be distinct from embedded arithmetic trace material digest",
+            "prover input material must reject AIR evaluation material digests copied from retargeted embedded AIR trace digests before canonical mismatch checks",
+        );
+
         let mut nonzero_air_evaluation_composition = prover_input_material.clone();
         nonzero_air_evaluation_composition
             .arithmetic_air_evaluation_material
@@ -89339,6 +93805,11 @@ mod tests {
         );
 
         for (alias_label, alias_digest, expected) in [
+            (
+                "proof input public key",
+                public_key_digest_from_public_key_bytes,
+                "must be distinct from proof input public-key digest",
+            ),
             (
                 "arithmetic trace material",
                 prover_input_material.arithmetic_trace_material_digest,
@@ -89413,6 +93884,38 @@ mod tests {
             "prover input material must reject stale public-opening material digests",
         );
 
+        let mut retargeted_public_opening_statement_digest = prover_input_material.clone();
+        let embedded_statement_hash =
+            Hash::new(b"retargeted embedded BFV full-bootstrap public opening statement hash");
+        retargeted_public_opening_statement_digest
+            .public_opening_material
+            .statement_hash = embedded_statement_hash;
+        retargeted_public_opening_statement_digest.public_opening_material_digest =
+            embedded_statement_hash;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &retargeted_public_opening_statement_digest,
+            ),
+            "public opening material digest must be distinct from embedded statement hash",
+            "prover input material must reject public-opening material digests copied from retargeted embedded statement hashes before canonical mismatch checks",
+        );
+
+        let mut retargeted_public_opening_trace_digest = prover_input_material.clone();
+        let embedded_public_opening_trace_digest =
+            Hash::new(b"retargeted embedded BFV full-bootstrap public opening trace digest");
+        retargeted_public_opening_trace_digest
+            .public_opening_material
+            .trace_material_digest = embedded_public_opening_trace_digest;
+        retargeted_public_opening_trace_digest.public_opening_material_digest =
+            embedded_public_opening_trace_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &retargeted_public_opening_trace_digest,
+            ),
+            "public opening material digest must be distinct from embedded trace material digest",
+            "prover input material must reject public-opening material digests copied from retargeted embedded trace digests before canonical mismatch checks",
+        );
+
         for (alias_label, alias_digest, expected) in [
             (
                 "arithmetic trace material",
@@ -89447,6 +93950,42 @@ mod tests {
                 ),
             );
         }
+
+        let mut copied_proof_key_pair_commitment = prover_input_material.clone();
+        copied_proof_key_pair_commitment
+            .prover_key
+            .proof_key_pair_commitment = prover_input_material.public_opening_material_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
+                &copied_proof_key_pair_commitment,
+            ),
+            "proof-key pair commitment must be distinct from public opening material digest",
+            "prover input material must reject proof-key pair commitments copied from public-opening material before proof-key mismatch checks",
+        );
+
+        let mut copied_prover_key_material_commitment = prover_input_material.clone();
+        copied_prover_key_material_commitment
+            .prover_key
+            .key_material_commitment = prover_input_material.prover_key.proof_key_pair_commitment;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
+                &copied_prover_key_material_commitment,
+            ),
+            "prover key material commitment must be distinct from proof-key pair commitment",
+            "prover input material must reject prover key material commitments copied from the proof-key pair commitment before key-material mismatch checks",
+        );
+
+        let mut copied_verifier_key_material_commitment = prover_input_material.clone();
+        copied_verifier_key_material_commitment
+            .verifier_key
+            .key_material_commitment = prover_input_material.prover_key.key_material_commitment;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
+                &copied_verifier_key_material_commitment,
+            ),
+            "verifier key material commitment must be distinct from prover key material commitment",
+            "prover input material must reject verifier key material commitments copied from the prover key material commitment before key-material mismatch checks",
+        );
 
         let mut retargeted_public_opening_material = prover_input_material.clone();
         retargeted_public_opening_material.public_opening_material =
@@ -89548,6 +94087,58 @@ mod tests {
             "arithmetic trace profile",
             "trace material must bind the canonical arithmetic trace profile",
         );
+
+        let proof_input_public_key_digest = bfv_public_key_digest(
+            &trace_material.proof_input_material.witness_material.params,
+            &trace_material.proof_input_material.public_key,
+        )
+        .expect("hash trace proof input public key");
+        for (alias_label, alias_digest, expected) in [
+            (
+                "proof-input public key",
+                proof_input_public_key_digest,
+                "arithmetic trace profile digest must be distinct from proof input public-key digest",
+            ),
+            (
+                "proof-input statement",
+                trace_material.proof_input_material.statement_hash,
+                "arithmetic trace profile digest must be distinct from proof input statement hash",
+            ),
+            (
+                "proof-input witness full-bootstrap material",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .full_bootstrap_material_digest,
+                "arithmetic trace profile digest must be distinct from proof input witness full-bootstrap material digest",
+            ),
+            (
+                "proof-input witness artifact bundle",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .artifact_bundle_digest,
+                "arithmetic trace profile digest must be distinct from proof input witness artifact bundle digest",
+            ),
+            (
+                "proof-input witness Galois key set",
+                trace_material
+                    .proof_input_material
+                    .witness_material
+                    .galois_key_set_digest,
+                "arithmetic trace profile digest must be distinct from proof input witness Galois key set digest",
+            ),
+        ] {
+            let mut aliased_trace_profile = trace_material.clone();
+            aliased_trace_profile.arithmetic_trace_profile_digest = alias_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&aliased_trace_profile),
+                expected,
+                &format!(
+                    "trace material must reject profile digests copied from {alias_label} before canonical mismatch checks"
+                ),
+            );
+        }
 
         let mut stale_trace_width = trace_material.clone();
         stale_trace_width.row_width += 1;
@@ -90011,6 +94602,113 @@ mod tests {
         assert_ne!(
             exact_statement, different_output_statement,
             "execution proof statements must bind the claimed output ciphertext"
+        );
+
+        let input_ciphertext_digest = bfv_ciphertext_digest(&params, &exact_claim.input_ciphertext)
+            .expect("input ciphertext digest");
+        let output_ciphertext_digest =
+            bfv_ciphertext_digest(&params, &exact_claim.output_ciphertext)
+                .expect("output ciphertext digest");
+        let statement_public_key_digest =
+            bfv_public_key_digest(&params, &public_key).expect("statement public-key digest");
+        let statement_full_bootstrap_material_digest =
+            bfv_full_bootstrap_circuit_material_digest(&params, &material)
+                .expect("statement full-bootstrap material digest");
+        let statement_artifact_bundle_digest =
+            bfv_full_bootstrap_circuit_artifact_bundle_digest(&params, &material, &artifacts)
+                .expect("statement artifact bundle digest");
+        let statement_evaluator_artifact_set_digest =
+            bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(&params, &material)
+                .expect("statement evaluator artifact set digest");
+        for (alias_digest, expected) in [
+            (
+                statement_public_key_digest,
+                "Galois key set digest must be distinct from public-key digest",
+            ),
+            (
+                statement_full_bootstrap_material_digest,
+                "Galois key set digest must be distinct from full-bootstrap material digest",
+            ),
+            (
+                statement_artifact_bundle_digest,
+                "Galois key set digest must be distinct from artifact bundle digest",
+            ),
+            (
+                statement_evaluator_artifact_set_digest,
+                "Galois key set digest must be distinct from evaluator artifact set digest",
+            ),
+        ] {
+            let mut aliased_galois_claim = exact_claim.clone();
+            aliased_galois_claim.galois_key_set_digest = alias_digest;
+            assert_error_contains(
+                bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                    &params,
+                    &public_key,
+                    &bootstrap_key,
+                    &artifacts,
+                    &aliased_galois_claim,
+                ),
+                expected,
+                "execution proof statements must reject Galois key-set digest replay from statement-level public roles",
+            );
+        }
+        for (alias_digest, expected) in [
+            (
+                statement_public_key_digest,
+                "execution witness digest must be distinct from public-key digest",
+            ),
+            (
+                statement_full_bootstrap_material_digest,
+                "execution witness digest must be distinct from full-bootstrap material digest",
+            ),
+            (
+                statement_artifact_bundle_digest,
+                "execution witness digest must be distinct from artifact bundle digest",
+            ),
+            (
+                statement_evaluator_artifact_set_digest,
+                "execution witness digest must be distinct from evaluator artifact set digest",
+            ),
+        ] {
+            let mut aliased_witness_claim = exact_claim.clone();
+            aliased_witness_claim.execution_witness_digest = alias_digest;
+            assert_error_contains(
+                bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                    &params,
+                    &public_key,
+                    &bootstrap_key,
+                    &artifacts,
+                    &aliased_witness_claim,
+                ),
+                expected,
+                "execution proof statements must reject witness digest replay from statement-level public roles",
+            );
+        }
+        let mut aliased_galois_input_ciphertext_claim = exact_claim.clone();
+        aliased_galois_input_ciphertext_claim.galois_key_set_digest = input_ciphertext_digest;
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &aliased_galois_input_ciphertext_claim,
+            ),
+            "Galois key set digest must be distinct from input ciphertext digest",
+            "execution proof statements must reject Galois key-set digests copied from the input ciphertext digest",
+        );
+        let mut aliased_witness_output_ciphertext_claim = exact_claim.clone();
+        aliased_witness_output_ciphertext_claim.execution_witness_digest = output_ciphertext_digest;
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &aliased_witness_output_ciphertext_claim,
+            ),
+            "execution witness digest must be distinct from output ciphertext digest",
+            "execution proof statements must reject witness digests copied from the output ciphertext digest",
         );
 
         let different_bound_claim = BfvFullBootstrapExecutionProofClaimV1 {
@@ -93961,6 +98659,41 @@ mod tests {
                 .expect("hash material proof input material again"),
             "material proof input material digest must be deterministic"
         );
+        let mut proof_input_statement_pair_alias = proof_input.clone();
+        proof_input_statement_pair_alias.statement_hash =
+            full_bootstrap_material.proof_key_pair_commitment;
+        let statement_pair_alias_expected = "BFV full-bootstrap material proof input material statement hash must be distinct from proof-key pair commitment";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_v1(
+                &proof_input_statement_pair_alias,
+            ),
+            statement_pair_alias_expected,
+            "material proof input validation must reject statement hashes copied from governed proof-key pair commitments before recomputing statements",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_v1(
+                &proof_input_statement_pair_alias,
+            ),
+            statement_pair_alias_expected,
+            "material proof input digesting must reject statement hashes copied from governed proof-key pair commitments before hashing",
+        );
+        let proof_input_statement_pair_alias_bytes =
+            norito::to_bytes(&proof_input_statement_pair_alias)
+                .expect("encode proof input with statement/proof-key pair alias");
+        assert_error_contains(
+            decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
+                &proof_input_statement_pair_alias_bytes,
+            ),
+            statement_pair_alias_expected,
+            "material proof input byte admission must reject statement/proof-key pair aliases before accepting canonical bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1(
+                &proof_input_statement_pair_alias_bytes,
+            ),
+            statement_pair_alias_expected,
+            "material proof input byte digesting must reject statement/proof-key pair aliases before hashing",
+        );
         let proof_input_material_bytes =
             norito::to_bytes(&proof_input).expect("encode material proof input material");
         let public_key_bytes = norito::to_bytes(&public_key).expect("encode public key");
@@ -94379,6 +99112,43 @@ mod tests {
             "canonical v1 bytes",
             "caller-bound material proof input byte admission must reject compressed Norito framing",
         );
+        let wrong_profile_params = BfvParameters {
+            ciphertext_modulus: params.ciphertext_modulus + params.plaintext_modulus,
+            ..params
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_for_artifacts_v1(
+                &wrong_profile_params,
+                &public_key,
+                &bundle,
+                &artifacts,
+                &compressed_proof_input_material_bytes,
+            ),
+            "not registered",
+            "caller-bound material proof input byte digesting must reject parameter-profile retargeting before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_for_artifacts_v1(
+                &wrong_profile_params,
+                &public_key,
+                &bundle,
+                &artifacts,
+                &compressed_proof_input_material_bytes,
+            ),
+            "not registered",
+            "caller-bound material proof input byte digest helper must reject parameter-profile retargeting before compressed proof-input bytes",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_artifacts_v1(
+                &wrong_profile_params,
+                &public_key,
+                &bundle,
+                &artifacts,
+                &compressed_proof_input_material_bytes,
+            ),
+            "not registered",
+            "caller-bound material proof input byte admission must reject parameter-profile retargeting before compressed proof-input bytes",
+        );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_governance_bytes_v1(
                 &params,
@@ -94411,6 +99181,41 @@ mod tests {
             ),
             "canonical v1 bytes",
             "governance byte digests admission must reject compressed proof-input framing",
+        );
+        let compressed_proof_input_error =
+            "BFV full-bootstrap material proof input material bytes must use canonical v1 bytes";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "material governance byte admission must reject compressed proof-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "material governance byte digest admission must reject compressed proof-input framing before artifact-bundle framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
+                &params,
+                &public_key_bytes,
+                &evaluation_key_bundle_bytes,
+                &compressed_artifact_bundle_bytes,
+                &compressed_proof_input_material_bytes,
+            ),
+            compressed_proof_input_error,
+            "material governance byte digests admission must reject compressed proof-input framing before artifact-bundle framing",
         );
         let binary_split_placeholder_proof_input_material_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap material proof input bytes".to_vec();
@@ -94505,10 +99310,6 @@ mod tests {
             proof_input_material_digest, proof_input.statement_hash,
             "material proof input package digest must be domain-separated from the public statement"
         );
-        let wrong_profile_params = BfvParameters {
-            ciphertext_modulus: params.ciphertext_modulus + params.plaintext_modulus,
-            ..params
-        };
         assert_error_contains(
             bfv_full_bootstrap_material_proof_input_material_v1(
                 &wrong_profile_params,
@@ -94718,6 +99519,50 @@ mod tests {
             "statement hash mismatch",
             "material proof input material must reject forged statement hashes",
         );
+
+        for (alias_label, alias_digest, expected) in [
+            (
+                "public key",
+                expected_public_key_digest,
+                "must be distinct from public-key digest",
+            ),
+            (
+                "evaluation-key bundle",
+                evaluation_key_digest,
+                "must be distinct from evaluation-key bundle digest",
+            ),
+            (
+                "full-bootstrap material",
+                statement_material.full_bootstrap_material_digest,
+                "must be distinct from full-bootstrap material digest",
+            ),
+            (
+                "artifact bundle",
+                expected_artifact_bundle_digest,
+                "must be distinct from artifact bundle digest",
+            ),
+        ] {
+            let mut aliased_statement_input = proof_input.clone();
+            aliased_statement_input.statement_hash = alias_digest;
+            assert_error_contains(
+                validate_bfv_full_bootstrap_material_proof_input_material_v1(
+                    &aliased_statement_input,
+                ),
+                expected,
+                &format!(
+                    "material proof input material must reject statement hashes copied from {alias_label} digests before mismatch checks"
+                ),
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_material_proof_input_material_digest_v1(
+                    &aliased_statement_input,
+                ),
+                expected,
+                &format!(
+                    "material proof input digesting must reject statement hashes copied from {alias_label} digests before hashing"
+                ),
+            );
+        }
 
         let mut zero_statement_input = proof_input.clone();
         zero_statement_input.statement_hash = Hash::prehashed([0_u8; Hash::LENGTH]);
@@ -95452,6 +100297,59 @@ mod tests {
             "placeholder",
             "bounded direct full-bootstrap bound entry must reject placeholder public-key digest metadata before artifact fallback",
         );
+        let full_bootstrap_material = bootstrap_key
+            .full_bootstrap_material
+            .as_ref()
+            .expect("full-bootstrap material is present");
+        let full_bootstrap_material_digest =
+            bfv_full_bootstrap_circuit_material_digest(&params, full_bootstrap_material)
+                .expect("full-bootstrap material digest");
+        let material_implied_artifact_bundle_digest =
+            bfv_full_bootstrap_circuit_artifact_bundle_digest_from_material_v1(
+                &params,
+                full_bootstrap_material,
+            )
+            .expect("material-implied artifact bundle digest");
+        let governed_evaluator_artifact_set_digest =
+            bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(
+                &params,
+                full_bootstrap_material,
+            )
+            .expect("governed evaluator artifact set digest");
+        for (alias_digest, expected) in [
+            (
+                full_bootstrap_material.parameter_digest,
+                "public-key digest must be distinct from parameter digest",
+            ),
+            (
+                full_bootstrap_material.proof_key_pair_commitment,
+                "public-key digest must be distinct from proof-key pair commitment",
+            ),
+            (
+                full_bootstrap_material_digest,
+                "public-key digest must be distinct from full-bootstrap material digest",
+            ),
+            (
+                material_implied_artifact_bundle_digest,
+                "public-key digest must be distinct from artifact bundle digest",
+            ),
+            (
+                governed_evaluator_artifact_set_digest,
+                "public-key digest must be distinct from evaluator artifact set digest",
+            ),
+        ] {
+            let mut aliased_public_key_digest_key = bootstrap_key.clone();
+            aliased_public_key_digest_key.public_key_digest = Some(alias_digest);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_execution_preflight_v1(
+                    &params,
+                    &aliased_public_key_digest_key,
+                    &ciphertext,
+                ),
+                expected,
+                "full-bootstrap execution preflight must reject public-key digests copied from governed material commitments",
+            );
+        }
         assert_error_contains(
             full_bootstrap_ciphertext_registered_rns_exact_v1(&params, &bootstrap_key, &ciphertext),
             "requires governed full-bootstrap circuit artifacts",

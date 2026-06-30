@@ -466,7 +466,35 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified exactness helper formulas must not be vacuous",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper restatement checks reject pure top-level boolean compositions",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper restatement checks reject identity-literal gates",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper restatement checks propagate known truth values",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper bound-domain checks include comma-shared bindings",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper bound-domain checks skip tuple-pattern component domains",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper singleton-domain checks preserve tuple literal elements",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level relation and boolean scans preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level boolean/equality detector helpers preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level keyword scans preserve tuple literal keywords",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level CASE branch scans preserve tuple literal arms and conditions",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified exactness helper formulas must use their bound identifiers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified unused-bound checks include later binding groups",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified bound identifier scans include later tuple-pattern binding groups",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified exactness helper formulas must not select predicates with control flow",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -475,6 +503,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Quantified exactness helper formulas are checked through boolean operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Negated quantified helper checks unwrap one-line `LET` helper aliases",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Negated quantified helper checks split top-level boolean operands before peeling negation",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper body checks unwrap one-line `LET` helper aliases",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -570,7 +600,11 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "LET helper alias unwrapping preserves static unary result wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "LET binding scans preserve tuple literal definition bodies",
+        f"Sumeragi formal README {readme} is missing required text: "
         "LET helper alias unwrapping resolves chained one-line bindings",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "LET alias substitution respects later quantified binding groups",
         f"Sumeragi formal README {readme} is missing required text: "
         "LET helper alias unwrapping substitutes simple chained binding references",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -602,7 +636,35 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified temporal helper formulas must not be vacuous",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper restatement checks reject pure top-level boolean compositions",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper restatement checks reject identity-literal gates",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper restatement checks propagate known truth values",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper bound-domain checks include comma-shared bindings",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper bound-domain checks skip tuple-pattern component domains",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper singleton-domain checks preserve tuple literal elements",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level relation and boolean scans preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level boolean/equality detector helpers preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level keyword scans preserve tuple literal keywords",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level CASE branch scans preserve tuple literal arms and conditions",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified temporal helper formulas must use their bound identifiers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified unused-bound checks include later binding groups",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified bound identifier scans include later tuple-pattern binding groups",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified temporal helper formulas must not select predicates with control flow",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -3160,6 +3222,185 @@ def test_tla_static_constant_relation_detects_identifier_free_relations() -> Non
     assert module.tla_static_constant_relation("TRUE <=> FALSE") is None
 
 
+def test_vacuous_quantified_helper_formulas_detect_bound_self_membership() -> None:
+    module = load_coverage_module()
+
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in {c}"
+    ) == ["\\A c \\in Cases: c \\in {c}"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in {Other, c}"
+    ) == ["\\A c \\in Cases: c \\in {Other, c}"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in Cases"
+    ) == ["\\A c \\in Cases: c \\in Cases"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c, d \\in Cases: c \\in Cases"
+    ) == ["\\A c, d \\in Cases: c \\in Cases"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c, d \\in Cases: d \\in Cases"
+    ) == ["\\A c, d \\in Cases: d \\in Cases"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A <<c, d>> \\in Pairs: c \\in Pairs"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A <<c, d>> \\in {1}: c = 1"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: [] (c \\in {c})"
+    ) == ["\\A c \\in Cases: [] (c \\in {c})"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: ~(c \\notin {c})"
+    ) == ["\\A c \\in Cases: ~(c \\notin {c})"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\notin {}"
+    ) == ["\\A c \\in Cases: c \\notin {}"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: [] (c \\notin {})"
+    ) == ["\\A c \\in Cases: [] (c \\notin {})"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: ~(c \\in {})"
+    ) == ["\\A c \\in Cases: ~(c \\in {})"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in Cases /\\ c \\notin {}"
+    ) == ["\\A c \\in Cases: c \\in Cases /\\ c \\notin {}"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in Cases \\/ ~(c \\in {})"
+    ) == ["\\A c \\in Cases: c \\in Cases \\/ ~(c \\in {})"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: TRUE /\\ c \\in Cases"
+    ) == ["\\A c \\in Cases: TRUE /\\ c \\in Cases"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: FALSE \\/ c \\notin {}"
+    ) == ["\\A c \\in Cases: FALSE \\/ c \\notin {}"]
+    assert (
+        module.quantified_formula_restatement_literal(
+            "\\A c \\in Cases: c \\in Cases => FALSE"
+        )
+        == "FALSE"
+    )
+    assert (
+        module.quantified_formula_restatement_literal(
+            "\\A c \\in Cases: c \\notin Cases => FALSE"
+        )
+        == "TRUE"
+    )
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in Cases => FALSE"
+    ) == ["\\A c \\in Cases: c \\in Cases => FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\notin Cases => FALSE"
+    ) == ["\\A c \\in Cases: c \\notin Cases => FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\notin Cases <=> FALSE"
+    ) == ["\\A c \\in Cases: c \\notin Cases <=> FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in {} <=> FALSE"
+    ) == ["\\A c \\in Cases: c \\in {} <=> FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {}: c = ready"
+    ) == ["\\A c \\in {}: c = ready"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {}: [] (c = ready)"
+    ) == ["\\A c \\in {}: [] (c = ready)"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1"
+    ) == ["\\A c \\in {1}: c = 1"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A t \\in {<<1, 2>>}: t = <<1, 2>>"
+    ) == ["\\A t \\in {<<1, 2>>}: t = <<1, 2>>"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A t \\in {<<1, 2>>}: <<1, 2>> = t"
+    ) == ["\\A t \\in {<<1, 2>>}: <<1, 2>> = t"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c, d \\in {1}: c = 1"
+    ) == ["\\A c, d \\in {1}: c = 1"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: 1 = c"
+    ) == ["\\A c \\in {1}: 1 = c"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: [] (c = 1)"
+    ) == ["\\A c \\in {1}: [] (c = 1)"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: ~(c # 1)"
+    ) == ["\\A c \\in {1}: ~(c # 1)"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 /\\ 1 = c"
+    ) == ["\\A c \\in {1}: c = 1 /\\ 1 = c"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 \\/ ~(c # 1)"
+    ) == ["\\A c \\in {1}: c = 1 \\/ ~(c # 1)"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: TRUE /\\ c = 1"
+    ) == ["\\A c \\in {1}: TRUE /\\ c = 1"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 /\\ TRUE"
+    ) == ["\\A c \\in {1}: c = 1 /\\ TRUE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: FALSE \\/ c = 1"
+    ) == ["\\A c \\in {1}: FALSE \\/ c = 1"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: TRUE => c = 1"
+    ) == ["\\A c \\in {1}: TRUE => c = 1"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 <=> TRUE"
+    ) == ["\\A c \\in {1}: c = 1 <=> TRUE"]
+    assert (
+        module.quantified_formula_restatement_literal(
+            "\\A c \\in {1}: c = 1 => FALSE"
+        )
+        == "FALSE"
+    )
+    assert (
+        module.quantified_formula_restatement_literal(
+            "\\A c \\in {1}: c # 1 => FALSE"
+        )
+        == "TRUE"
+    )
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 => FALSE"
+    ) == ["\\A c \\in {1}: c = 1 => FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c # 1 => FALSE"
+    ) == ["\\A c \\in {1}: c # 1 => FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c # 1 <=> FALSE"
+    ) == ["\\A c \\in {1}: c # 1 <=> FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 <=> FALSE"
+    ) == ["\\A c \\in {1}: c = 1 <=> FALSE"]
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in Cases /\\ Predicate(c)"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: c = 1 /\\ Predicate(c)"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: TRUE /\\ Predicate(c)"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: FALSE \\/ Predicate(c)"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: Predicate(c) => FALSE"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: Predicate(c) <=> FALSE"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in {1}: Predicate(c)"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: Predicate(c)"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c \\in Cases: c \\in OtherCases"
+    ) == []
+    assert module.vacuous_quantified_helper_formulas(
+        "\\A c, d \\in Cases: c \\in OtherCases"
+    ) == []
+
+
 def test_temporal_helper_references_descend_into_compound_temporal_bodies() -> None:
     module = load_coverage_module()
 
@@ -3226,6 +3467,30 @@ def test_helper_reference_traversal_unwraps_one_line_let_aliases() -> None:
     assert module.tla_static_let_alias_operand(
         "LET first == HiddenLiteral second == first /\\ OtherLiteral IN second"
     ) == "(HiddenLiteral) /\\ OtherLiteral"
+    assert module.tla_static_let_alias_operand(
+        "LET selected == <<left == right, tail>> IN selected"
+    ) == "<<left == right, tail>>"
+    assert module.tla_static_let_alias_operand(
+        "LET snapshot == <<left == right, tail>> selected == HiddenLiteral IN [] selected"
+    ) == "[] (HiddenLiteral)"
+    later_bound_alias = "\\A c \\in Cases, selected \\in Other: Predicate(selected)"
+    assert module.tla_quantified_bound_identifiers(later_bound_alias) == {
+        "c",
+        "selected",
+    }
+    assert (
+        module.tla_static_substitute_let_alias_references(
+            later_bound_alias,
+            [("selected", "HiddenLiteral")],
+        )
+        is None
+    )
+    assert (
+        module.tla_static_let_alias_operand(
+            "LET selected == HiddenLiteral IN " + later_bound_alias
+        )
+        is None
+    )
     assert (
         module.tla_static_let_alias_operand(
             "LET first == second second == first IN first"
@@ -3601,6 +3866,27 @@ def test_unused_bound_quantified_helper_formulas_require_body_use() -> None:
     assert module.quantified_formula_bound_identifiers(
         "\\A c \\in Cases: Predicate(c)"
     ) == {"c"}
+    assert module.quantified_formula_bound_identifiers(
+        "\\A c, d \\in Cases: Predicate(c, d)"
+    ) == {"c", "d"}
+    assert module.quantified_formula_bound_domains(
+        "\\A c, d \\in Cases: Predicate(c, d)"
+    ) == {"c": "Cases", "d": "Cases"}
+    assert module.quantified_formula_bound_domains(
+        "\\A c \\in Cases, d, e \\in Other: Predicate(c, d, e)"
+    ) == {"c": "Cases", "d": "Other", "e": "Other"}
+    assert module.quantified_formula_bound_domains(
+        "\\A <<c, d>> \\in Pairs: Predicate(c, d)"
+    ) == {}
+    assert module.quantified_formula_bound_identifiers(
+        "\\A <<c, d>> \\in Pairs: Predicate(c, d)"
+    ) == {"c", "d"}
+    assert module.quantified_formula_bound_identifiers(
+        "\\A c \\in Cases, <<d, e>> \\in Pairs: Predicate(c, d, e)"
+    ) == {"c", "d", "e"}
+    assert module.quantified_formula_bound_identifiers(
+        "\\A c \\in Cases, d, e \\in Other: Predicate(c, d, e)"
+    ) == {"c", "d", "e"}
     assert module.unused_bound_quantified_helper_formulas(
         "\\A c \\in Cases: ConcretePredicate"
     ) == ["\\A c \\in Cases: ConcretePredicate omits bound c"]
@@ -3610,6 +3896,22 @@ def test_unused_bound_quantified_helper_formulas_require_body_use() -> None:
     assert module.unused_bound_quantified_helper_formulas(
         "\\A c \\in Cases: Predicate(c)"
     ) == []
+    assert module.unused_bound_quantified_helper_formulas(
+        "\\A c \\in Cases, d \\in Other: Predicate(c)"
+    ) == ["\\A c \\in Cases, d \\in Other: Predicate(c) omits bound d"]
+    assert module.unused_bound_quantified_helper_formulas(
+        "\\A c \\in Cases, d, e \\in Other: Predicate(c)"
+    ) == [
+        "\\A c \\in Cases, d, e \\in Other: Predicate(c) omits bound d, e"
+    ]
+    assert module.unused_bound_quantified_helper_formulas(
+        "\\A c \\in Cases, <<d, e>> \\in Pairs: Predicate(c, d)"
+    ) == [
+        "\\A c \\in Cases, <<d, e>> \\in Pairs: Predicate(c, d) omits bound e"
+    ]
+    assert module.unused_bound_quantified_helper_formulas(
+        "\\A <<c, d>> \\in Pairs: Predicate(c)"
+    ) == ["\\A <<c, d>> \\in Pairs: Predicate(c) omits bound d"]
 
 
 def test_control_flow_quantified_helper_formulas_reject_predicate_selection() -> None:
@@ -3659,6 +3961,15 @@ def test_negated_quantified_helper_formulas_reject_top_level_negation() -> None:
         "ConcretePredicate /\\ ~(\\A c \\in Cases: Predicate(c))"
     ) == ["\\A c \\in Cases: Predicate(c) under 1 top-level negation(s)"]
     assert module.negated_quantified_helper_formulas(
+        "~(\\A c \\in Cases: Left(c)) /\\ (\\A d \\in Other: Right(d))"
+    ) == ["\\A c \\in Cases: Left(c) under 1 top-level negation(s)"]
+    assert module.negated_quantified_helper_formulas(
+        "~((\\A c \\in Cases: Left(c)) /\\ (\\A d \\in Other: Right(d)))"
+    ) == [
+        "\\A c \\in Cases: Left(c) under 1 top-level negation(s)",
+        "\\A d \\in Other: Right(d) under 1 top-level negation(s)",
+    ]
+    assert module.negated_quantified_helper_formulas(
         "[] (~(\\A c \\in Cases: Predicate(c)))"
     ) == ["\\A c \\in Cases: Predicate(c) under 1 top-level negation(s)"]
     assert module.negated_quantified_helper_formulas(
@@ -3677,7 +3988,9 @@ def test_nested_control_flow_helper_formulas_require_named_helper_references() -
 
     definitions = {
         "BugCollapsePredicate": (0, "Bug = Collapse"),
+        "BranchPredicate": (4, "checked = branch"),
         "ConcretePredicate": (1, "checked = prepared"),
+        "FallbackPredicate": (5, "checked = fallback"),
         "LeftPredicate": (2, "checked = ready"),
         "RightPredicate": (3, "ready = checked"),
     }
@@ -3690,6 +4003,32 @@ def test_nested_control_flow_helper_formulas_require_named_helper_references() -
         "ConcretePredicate /\\ (CASE ready -> LeftPredicate [] OTHER -> RightPredicate)",
         definitions,
     ) == [("CASE", "CASE ready -> LeftPredicate [] OTHER -> RightPredicate")]
+    assert module.tla_top_level_case_result_branches(
+        "CASE ready -> <<CASE nested -> LeftPredicate [] OTHER -> "
+        "RightPredicate, tail>> [] OTHER -> FallbackPredicate"
+    ) == [
+        "<<CASE nested -> LeftPredicate [] OTHER -> RightPredicate, tail>>",
+        "FallbackPredicate",
+    ]
+    assert module.tla_top_level_case_result_branches(
+        "CASE <<CASE nested -> LeftPredicate [] OTHER -> RightPredicate, "
+        "tail>> = expected -> BranchPredicate [] OTHER -> FallbackPredicate"
+    ) == ["BranchPredicate", "FallbackPredicate"]
+    assert module.control_flow_named_helper_branch_operands(
+        "CASE <<CASE nested -> LeftPredicate [] OTHER -> RightPredicate, "
+        "tail>> = expected -> BranchPredicate [] OTHER -> FallbackPredicate",
+        definitions,
+    ) == ["BranchPredicate", "FallbackPredicate"]
+    assert module.tla_top_level_case_result_branches(
+        "CASE ready -> [] LeftPredicate [] OTHER -> RightPredicate"
+    ) == ["[] LeftPredicate", "RightPredicate"]
+    assert module.control_flow_named_helper_branch_operands(
+        "CASE ready -> [] LeftPredicate [] OTHER -> RightPredicate",
+        definitions,
+    ) == ["LeftPredicate", "RightPredicate"]
+    assert module.tla_top_level_case_result_branches(
+        "CASE [] ReadyPredicate -> LeftPredicate [] OTHER -> RightPredicate"
+    ) == ["LeftPredicate", "RightPredicate"]
     assert module.nested_control_flow_helper_formulas(
         "ConcretePredicate /\\ (IF ready THEN LET selected == LeftPredicate IN "
         "selected ELSE LET fallback == RightPredicate IN fallback)",
@@ -3885,6 +4224,47 @@ def test_exactness_boolean_composition_kinds_descend_into_boolean_operands() -> 
 def test_direct_operator_call_name_accepts_expression_arguments() -> None:
     module = load_coverage_module()
 
+    assert module.tla_top_level_argument_parts("<<1, 2>>, <<3, 4>>") == [
+        "<<1, 2>>",
+        "<<3, 4>>",
+    ]
+    assert module.tla_top_level_conjuncts("<<Left /\\ Right, Tail>>") == [
+        "<<Left /\\ Right, Tail>>"
+    ]
+    assert module.tla_top_level_disjuncts("<<Left \\/ Right, Tail>>") == [
+        "<<Left \\/ Right, Tail>>"
+    ]
+    assert not module.tla_has_top_level_disjunction("<<Left \\/ Right, Tail>>")
+    assert module.tla_top_level_implication_operands(
+        "<<Left => Right, Tail>>"
+    ) == ["<<Left => Right, Tail>>"]
+    assert not module.tla_has_top_level_implication("<<Left => Right, Tail>>")
+    assert module.tla_top_level_equivalence_operands(
+        "<<Left <=> Right, Tail>>"
+    ) == ["<<Left <=> Right, Tail>>"]
+    assert module.tla_top_level_conjuncts("Guard /\\ <<Left /\\ Right, Tail>>") == [
+        "Guard",
+        "<<Left /\\ Right, Tail>>",
+    ]
+    assert module.tla_top_level_membership_parts("<<c \\in Cases, tail>>") is None
+    assert (
+        module.tla_top_level_equality_relation_parts("<<c = c, tail>>") is None
+    )
+    assert not module.tla_has_top_level_equality("<<c = c, tail>>")
+    assert module.tla_has_top_level_disjunction("Left \\/ Right")
+    assert module.tla_has_top_level_implication("Left => Right")
+    assert module.tla_has_top_level_equality("left = right")
+    assert module.tla_explicit_set_elements("{<<1, 2>>}") == ["<<1, 2>>"]
+    assert module.tla_explicit_singleton_set_element("{<<1, 2>>}") == "<<1, 2>>"
+    assert module.tla_top_level_if_parts(
+        "IF ready THEN <<left ELSE right, tail>> ELSE fallback"
+    ) == ("ready", "<<left ELSE right, tail>>", "fallback")
+    assert (
+        module.tla_static_let_alias_operand(
+            "LET selected == <<left IN right, tail>> IN selected"
+        )
+        == "<<left IN right, tail>>"
+    )
     assert (
         module.tla_direct_operator_call_name("Predicate(ready = checked)")
         == "Predicate"
@@ -8894,7 +9274,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_zero_arity_parameterized_c
         "\n".join(
             [
                 "---- MODULE SumeragiZeroArityParameterizedCallLeafEnvelope ----",
-                "CONSTANT Cases",
+                "CONSTANT Cases, Other",
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
@@ -9205,6 +9585,92 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_exactn
         ("self", "\\A c \\in Cases: checked = checked", 6),
         ("self_inequality_hash", "\\A c \\in Cases: checked # checked", 6),
         ("self_inequality_slash", "\\A c \\in Cases: checked /= checked", 6),
+        ("self_membership_set", "\\A c \\in Cases: c \\in {c}", 6),
+        ("self_membership_domain", "\\A c \\in Cases: c \\in Cases", 6),
+        (
+            "self_membership_comma_shared_domain",
+            "\\A c, d \\in Cases: c \\in Cases",
+            6,
+        ),
+        (
+            "self_membership_unary_temporal",
+            "\\A c \\in Cases: [] (c \\in {c})",
+            6,
+        ),
+        (
+            "self_nonmembership_negated",
+            "\\A c \\in Cases: ~(c \\notin {c})",
+            6,
+        ),
+        ("empty_set_nonmembership", "\\A c \\in Cases: c \\notin {}", 6),
+        (
+            "empty_set_nonmembership_unary_temporal",
+            "\\A c \\in Cases: [] (c \\notin {})",
+            6,
+        ),
+        (
+            "empty_set_membership_negated",
+            "\\A c \\in Cases: ~(c \\in {})",
+            6,
+        ),
+        (
+            "self_membership_boolean_composed",
+            "\\A c \\in Cases: c \\in Cases /\\ c \\notin {}",
+            6,
+        ),
+        (
+            "self_membership_identity_gated",
+            "\\A c \\in Cases: TRUE /\\ c \\in Cases",
+            6,
+        ),
+        (
+            "self_membership_truth_implication",
+            "\\A c \\in Cases: c \\notin Cases => FALSE",
+            6,
+        ),
+        ("empty_domain", "\\A c \\in {}: c = ready", 6),
+        (
+            "empty_domain_unary_temporal",
+            "\\A c \\in {}: [] (c = ready)",
+            6,
+        ),
+        ("singleton_domain_equality", "\\A c \\in {1}: c = 1", 6),
+        (
+            "singleton_tuple_domain_equality",
+            "\\A t \\in {<<1, 2>>}: t = <<1, 2>>",
+            6,
+        ),
+        (
+            "singleton_domain_comma_shared_domain",
+            "\\A c, d \\in {1}: c = 1",
+            6,
+        ),
+        ("singleton_domain_reversed_equality", "\\A c \\in {1}: 1 = c", 6),
+        (
+            "singleton_domain_unary_temporal",
+            "\\A c \\in {1}: [] (c = 1)",
+            6,
+        ),
+        (
+            "singleton_domain_negated_inequality",
+            "\\A c \\in {1}: ~(c # 1)",
+            6,
+        ),
+        (
+            "singleton_domain_boolean_composed",
+            "\\A c \\in {1}: c = 1 /\\ 1 = c",
+            6,
+        ),
+        (
+            "singleton_domain_identity_gated",
+            "\\A c \\in {1}: TRUE => c = 1",
+            6,
+        ),
+        (
+            "singleton_domain_truth_equivalence",
+            "\\A c \\in {1}: c # 1 <=> FALSE",
+            6,
+        ),
     ):
         case_dir = tmp_path / case_name
         case_dir.mkdir()
@@ -9243,9 +9709,9 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_exactn
             f"VacuousQuantifiedExactness at {tla}:8 contains transitive "
             "exactness predicate chain with vacuous quantified helper "
             f"VacuousLeaf reaches {formula} through VacuousLeaf at "
-            f"{tla}:{expected_line}; keep literal and self-equality or "
-            "self-inequality quantified helper bodies out of exactness "
-            "predicate chains"
+            f"{tla}:{expected_line}; keep literal and self-equality, "
+            "self-inequality, empty-domain, singleton-domain, self-membership, or empty-set membership quantified helper bodies "
+            "out of exactness predicate chains"
         ]
 
 
@@ -9259,12 +9725,12 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_e
         "\n".join(
             [
                 "---- MODULE SumeragiUnusedBoundQuantifiedEnvelope ----",
-                "CONSTANT Cases",
+                "CONSTANT Cases, Other",
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
-                "ConcretePredicate == ready = checked",
-                "UnusedBoundLeaf == \\A c \\in Cases: ConcretePredicate",
+                "ConcretePredicate(c) == ready = c",
+                "UnusedBoundLeaf == \\A c \\in Cases, d \\in Other: ConcretePredicate(c)",
                 "UnusedBoundQuantifiedExactness ==",
                 "  /\\ UnusedBoundLeaf",
                 "UnusedBoundQuantifiedCorrectnessEnvelope ==",
@@ -9295,8 +9761,8 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_e
         "UnusedBoundQuantifiedCorrectnessEnvelope, but exactness conjunct "
         f"UnusedBoundQuantifiedExactness at {tla}:9 contains transitive "
         "exactness predicate chain with unused quantified helper binding "
-        "UnusedBoundLeaf reaches \\A c \\in Cases: ConcretePredicate omits "
-        f"bound c through UnusedBoundLeaf at {tla}:7; use every bound "
+        "UnusedBoundLeaf reaches \\A c \\in Cases, d \\in Other: "
+        f"ConcretePredicate(c) omits bound d through UnusedBoundLeaf at {tla}:7; use every bound "
         "identifier inside quantified model predicates before composing "
         "exactness predicate chains"
     ]
@@ -14192,7 +14658,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_quantified_undefined_temp
         "\n".join(
             [
                 "---- MODULE Sumeragi ----",
-                "CONSTANT Cases",
+                "CONSTANT Cases, Other",
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
@@ -14394,6 +14860,92 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_tempor
         ("self", "\\A c \\in Cases: checked = checked", 9),
         ("self_inequality_hash", "\\A c \\in Cases: checked # checked", 9),
         ("self_inequality_slash", "\\A c \\in Cases: checked /= checked", 9),
+        ("self_membership_set", "\\A c \\in Cases: c \\in {c}", 9),
+        ("self_membership_domain", "\\A c \\in Cases: c \\in Cases", 9),
+        (
+            "self_membership_comma_shared_domain",
+            "\\A c, d \\in Cases: c \\in Cases",
+            9,
+        ),
+        (
+            "self_membership_unary_temporal",
+            "\\A c \\in Cases: [] (c \\in {c})",
+            9,
+        ),
+        (
+            "self_nonmembership_negated",
+            "\\A c \\in Cases: ~(c \\notin {c})",
+            9,
+        ),
+        ("empty_set_nonmembership", "\\A c \\in Cases: c \\notin {}", 9),
+        (
+            "empty_set_nonmembership_unary_temporal",
+            "\\A c \\in Cases: [] (c \\notin {})",
+            9,
+        ),
+        (
+            "empty_set_membership_negated",
+            "\\A c \\in Cases: ~(c \\in {})",
+            9,
+        ),
+        (
+            "self_membership_boolean_composed",
+            "\\A c \\in Cases: c \\in Cases /\\ c \\notin {}",
+            9,
+        ),
+        (
+            "self_membership_identity_gated",
+            "\\A c \\in Cases: TRUE /\\ c \\in Cases",
+            9,
+        ),
+        (
+            "self_membership_truth_implication",
+            "\\A c \\in Cases: c \\notin Cases => FALSE",
+            9,
+        ),
+        ("empty_domain", "\\A c \\in {}: c = committed", 9),
+        (
+            "empty_domain_unary_temporal",
+            "\\A c \\in {}: [] (c = committed)",
+            9,
+        ),
+        ("singleton_domain_equality", "\\A c \\in {1}: c = 1", 9),
+        (
+            "singleton_tuple_domain_equality",
+            "\\A t \\in {<<1, 2>>}: t = <<1, 2>>",
+            9,
+        ),
+        (
+            "singleton_domain_comma_shared_domain",
+            "\\A c, d \\in {1}: c = 1",
+            9,
+        ),
+        ("singleton_domain_reversed_equality", "\\A c \\in {1}: 1 = c", 9),
+        (
+            "singleton_domain_unary_temporal",
+            "\\A c \\in {1}: [] (c = 1)",
+            9,
+        ),
+        (
+            "singleton_domain_negated_inequality",
+            "\\A c \\in {1}: ~(c # 1)",
+            9,
+        ),
+        (
+            "singleton_domain_boolean_composed",
+            "\\A c \\in {1}: c = 1 /\\ 1 = c",
+            9,
+        ),
+        (
+            "singleton_domain_identity_gated",
+            "\\A c \\in {1}: TRUE => c = 1",
+            9,
+        ),
+        (
+            "singleton_domain_truth_equivalence",
+            "\\A c \\in {1}: c # 1 <=> FALSE",
+            9,
+        ),
     ):
         case_dir = tmp_path / case_name
         case_dir.mkdir()
@@ -14435,8 +14987,9 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_tempor
             f"at {tla}:10 contains transitive temporal side-conjunct chain "
             "with vacuous quantified helper VacuousTemporalLeaf reaches "
             f"{formula} through VacuousTemporalLeaf at {tla}:{expected_line}; "
-            "keep literal and self-equality or self-inequality quantified "
-            "helper bodies out of allowlisted temporal side-conjunct chains"
+            "keep literal and self-equality, self-inequality, "
+            "empty-domain, singleton-domain, self-membership, or empty-set membership quantified helper "
+            "bodies out of allowlisted temporal side-conjunct chains"
         ]
 
 
@@ -14450,15 +15003,15 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_t
         "\n".join(
             [
                 "---- MODULE Sumeragi ----",
-                "CONSTANT Cases",
+                "CONSTANT Cases, Other",
                 "Init == TRUE",
                 "Next == TRUE",
                 "TypeInvariant == TRUE",
                 "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
-                "ConcreteTemporalPredicate == gst => <> committed",
+                "ConcreteTemporalPredicate(c) == c = committed",
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
-                "UnusedBoundTemporalLeaf == \\A c \\in Cases: ConcreteTemporalPredicate",
+                "UnusedBoundTemporalLeaf == \\A c \\in Cases, d \\in Other: ConcreteTemporalPredicate(c)",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] UnusedBoundTemporalLeaf",
                 "EventuallyCommit == [] (Gst => <> Committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
@@ -14492,8 +15045,8 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_t
         "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
         f"{tla}:11 contains transitive temporal side-conjunct chain with "
         "unused quantified helper binding UnusedBoundTemporalLeaf reaches "
-        "\\A c \\in Cases: ConcreteTemporalPredicate omits bound c through "
-        f"UnusedBoundTemporalLeaf at {tla}:10; use every bound identifier "
+        "\\A c \\in Cases, d \\in Other: ConcreteTemporalPredicate(c) omits "
+        f"bound d through UnusedBoundTemporalLeaf at {tla}:10; use every bound identifier "
         "inside quantified temporal predicates before composing allowlisted "
         "temporal side-conjunct chains"
     ]

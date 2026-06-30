@@ -9,9 +9,12 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +53,11 @@ class HostilePublicKey:
 
     def __repr__(self):
         return "secret-token-hostile-key"
+
+
+def skip_unless_system_temp_is_symlink() -> None:
+    if not Path("/tmp").is_symlink():
+        pytest.skip("/tmp is not a symlink on this platform")
 
 
 def phase_command_lines(fragments) -> list[str]:
@@ -4778,6 +4786,25 @@ def test_release_bundle_preflight_accepts_absolute_phase_evidence_dir(
     for phase, artifact in phase_artifacts.items():
         assert artifact["path"] == f"corridor/{phase}.log"
         assert not Path(artifact["path"]).is_absolute()
+
+
+def test_release_bundle_verifier_accepts_artifact_under_system_temp_symlink_prefix() -> None:
+    """Verifier artifact hashing must allow macOS /tmp-style aliases."""
+
+    skip_unless_system_temp_is_symlink()
+    verifier = load_verify_helpers()
+    with tempfile.TemporaryDirectory(
+        prefix="iroha-release-verifier-",
+        dir="/tmp",
+    ) as directory:
+        artifact_path = Path(directory) / "bundle" / "artifact.txt"
+        artifact_path.parent.mkdir()
+        artifact_path.write_text("verified artifact\n", encoding="utf-8")
+
+        artifact = verifier._artifact(artifact_path)
+
+        assert artifact["path"] == str(artifact_path)
+        assert artifact["bytes"] == len("verified artifact\n")
 
 
 def test_generated_bundle_self_verifier_reports_strict_errors(tmp_path: Path) -> None:
@@ -19891,6 +19918,28 @@ def test_release_bundle_rejects_symlinked_evidence_input_before_copy(
     assert not output_dir.exists()
 
 
+def test_release_bundle_accepts_evidence_under_system_temp_symlink_prefix() -> None:
+    """System temp aliases such as macOS /tmp must not block real inputs."""
+
+    skip_unless_system_temp_is_symlink()
+    module = load_bundle_module()
+    with tempfile.TemporaryDirectory(
+        prefix="iroha-release-bundle-",
+        dir="/tmp",
+    ) as directory:
+        tmp_root = Path(directory)
+        source = tmp_root / "complete.toml"
+        destination = tmp_root / "bundle" / "evidence" / "complete.toml"
+        source.write_text("release evidence\n", encoding="utf-8")
+
+        copied = module._copy_file(source, destination)
+        artifact = module._artifact(copied, tmp_root / "bundle")
+
+        assert copied.read_text(encoding="utf-8") == "release evidence\n"
+        assert artifact["path"] == "evidence/complete.toml"
+        assert artifact["bytes"] == len("release evidence\n")
+
+
 def test_release_bundle_rejects_symlinked_evidence_ancestor_before_copy(
     tmp_path: Path,
 ) -> None:
@@ -28983,6 +29032,26 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `UnitTestResult` row to be "
+        "a leaf element"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `UnitTest` definition to "
+        "contain only direct `Execution` and `TestMethod` children"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `TestMethod` definition to "
+        "be a leaf element"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: requires every `Execution` definition to "
+        "be a leaf element"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: requires each `UnitTest` definition to "
         "contain exactly one direct `TestMethod`"
     ) in errors
@@ -35457,6 +35526,26 @@ def test_release_bundle_verifier_classifies_malformed_active_lane_blockers(
             "domain 1 (eth): route canary operator launch hold",
         ),
         (
+            ["Route Canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): Route Canary operator launch hold",
+        ),
+        (
+            ["route%20canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): route%20canary operator launch hold",
+        ),
+        (
+            ["Route%20Allowlist operator launch hold"],
+            ("route_allowlist_binding",),
+            "domain 1 (eth): Route%20Allowlist operator launch hold",
+        ),
+        (
+            ["Source%20Adapter operator launch hold"],
+            ("governed_deployment_evidence",),
+            "domain 1 (eth): Source%20Adapter operator launch hold",
+        ),
+        (
             [duplicate_lane_blocker, duplicate_lane_blocker],
             (*category_item_ids, "no_unresolved_blockers"),
             "domain 1 (eth): active launch lane blockers must not contain duplicate strings",
@@ -35624,6 +35713,41 @@ def test_release_bundle_verifier_numbers_repeated_active_launch_duplicate_groups
         assert rendered.count(f"{error} #") == 2
     for copied_blocker in (*evidence_blockers, *lane_blockers):
         assert copied_blocker not in rendered
+
+
+def test_release_bundle_verifier_decodes_active_launch_blocker_domain_prefixes(
+) -> None:
+    """Verifier active-launch blocker filtering must scope decoded domains."""
+
+    verifier = load_verify_helpers()
+    prefix = (
+        f"domain {verifier.ACTIVE_LAUNCH_DOMAIN} "
+        f"({verifier.ACTIVE_LAUNCH_CHAIN}): "
+    )
+    active_root = "domain%201%20(eth): route canary encoded active evidence hold"
+    active_lane = "Domain%201%20(ETH): route canary encoded active lane hold"
+    other_root = "domain%202%20(bsc): route canary encoded other evidence hold"
+    other_lane = "Domain%202%20(BSC): route canary encoded other lane hold"
+    unscoped_lane = "route canary unscoped active lane hold"
+    summary = {
+        "blockers": [active_root, other_root],
+        "lanes": [
+            {
+                "domain": verifier.ACTIVE_LAUNCH_DOMAIN,
+                "blockers": [active_lane, other_lane, unscoped_lane],
+            }
+        ],
+    }
+
+    blockers = verifier._active_launch_blockers(summary)
+    rendered = "\n".join(blockers)
+
+    assert active_root in blockers
+    assert active_lane in blockers
+    assert f"{prefix}{unscoped_lane}" in blockers
+    assert other_root not in rendered
+    assert other_lane not in rendered
+    assert f"{prefix}{other_lane}" not in rendered
 
 
 def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
@@ -45681,6 +45805,9 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
         assert (
             "readiness report cryptographic evidence row "
             f"{field} must be a u32 integer"
+        ) in verified.stdout or (
+            "readiness report cryptographic evidence row "
+            f"{field} must be null when route canary evidence is absent"
         ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
@@ -45693,6 +45820,15 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
         "route_canary_commitment_root",
         "route_canary_finality_height",
         "route_canary_finality_block_hash",
+    ):
+        assert (
+            "readiness report cryptographic evidence row "
+            f"{field} must be a canonical bytes32 hex string"
+        ) in verified.stdout or (
+            "readiness report cryptographic evidence row "
+            f"{field} must be null when route canary evidence is absent"
+        ) in verified.stdout
+    for field in (
         "route_canary_transaction_hash",
         "route_canary_receipt_block_hash",
         "route_canary_message_id",
@@ -45701,10 +45837,16 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
         assert (
             "readiness report cryptographic evidence row "
             f"{field} must be a canonical bytes32 hex string"
+        ) in verified.stdout or (
+            "readiness report cryptographic evidence row "
+            f"{field} must be empty when route canary evidence is absent"
         ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
         "route_canary_signature_sha256 must be a non-zero canonical bytes32 hex string"
+    ) in verified.stdout or (
+        "readiness report cryptographic evidence row "
+        "route_canary_signature_sha256 must be empty when route canary evidence is absent"
     ) in verified.stdout
     for field in (
         "route_canary_transaction_owner_address",
@@ -45717,10 +45859,17 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     assert (
         "readiness report cryptographic evidence row "
         "route_canary_block_receipts_root must be a non-zero canonical bytes32 hex string"
+    ) in verified.stdout or (
+        "readiness report cryptographic evidence row "
+        "route_canary_block_receipts_root must be empty when route canary evidence is absent"
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
         "route_canary_receipt_block_number must be a positive integer"
+    ) in verified.stdout or (
+        "readiness report cryptographic evidence row "
+        "route_canary_receipt_block_number must be null when route canary "
+        "evidence is absent"
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
@@ -46931,7 +47080,7 @@ def test_release_bundle_verifier_rejects_tron_crypto_transcript_drift() -> None:
             "route_canary_message_proof_used": True,
             "route_canary_raw_data_owner_matches_transaction": True,
             "route_canary_signature_recovers_to_owner": True,
-            "route_canary_transaction_id": "",
+            "route_canary_transaction_id": "0x" + "00" * 32,
             "route_canary_transaction_owner_address": "0x41" + "00" * 20,
             "route_canary_signature_sha256": "0x" + "00" * 32,
             "route_canary_signature_recovered_address": tron_owner,
@@ -46960,8 +47109,7 @@ def test_release_bundle_verifier_rejects_tron_crypto_transcript_drift() -> None:
     for field in ("route_canary_transaction_id", "route_canary_signature_sha256"):
         assert (
             "readiness report cryptographic evidence row "
-            f"{field} must be a non-zero canonical bytes32 hex string for "
-            "TRON route canary evidence"
+            f"{field} must be a non-zero canonical bytes32 hex string"
         ) in errors, field
     assert (
         "readiness report cryptographic evidence row "

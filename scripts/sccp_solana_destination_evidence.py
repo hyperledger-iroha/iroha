@@ -15,11 +15,15 @@ import base64
 import binascii
 import hashlib
 import json
-import stat
 from html import unescape as html_unescape
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import unquote
+
+try:
+    from scripts.path_safety import first_symlinked_existing_path_component
+except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    from path_safety import first_symlinked_existing_path_component
 
 
 SCCP_DOMAIN_SORA = 0
@@ -128,16 +132,8 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
 
 
 def _reject_program_bytes_file_symlink_path(path: Path) -> None:
-    current = Path(path.anchor) if path.is_absolute() else Path(".")
-    parts = path.parts[1:] if path.is_absolute() else path.parts
-    for part in parts:
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            break
-        if stat.S_ISLNK(mode):
-            raise argparse.ArgumentTypeError("program bytes file must not be a symlink")
+    if first_symlinked_existing_path_component(path) is not None:
+        raise argparse.ArgumentTypeError("program bytes file must not be a symlink")
 
 
 def _read_program_bytes_file(path: Path, *, label: str) -> bytes:

@@ -3,10 +3,13 @@ import copy
 import json
 import hashlib
 import sys
+import tempfile
 import urllib.parse
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 TON_CODE_BOC_HEX = "b5ee9c720101020100070001020101000202"
@@ -2525,6 +2528,31 @@ def test_all_lanes_load_evidence_rejects_unreadable_file_shapes(tmp_path):
         assert "secret-token" not in message
         assert "IsADirectoryError" not in message
         assert "FileNotFoundError" not in message
+
+
+def test_all_lanes_loader_accepts_evidence_under_system_temp_symlink_prefix():
+    if not Path("/tmp").is_symlink():
+        pytest.skip("/tmp is not a symlink on this platform")
+
+    module = load_evidence_module()
+    with tempfile.TemporaryDirectory(
+        prefix="iroha-all-lanes-",
+        dir="/tmp",
+    ) as directory:
+        evidence = Path(directory) / "complete.toml"
+        evidence.write_text(
+            "\n".join(
+                [
+                    "[[zk.sccp_source_verifier_materials]]",
+                    "version = 1",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        bundle = module.load_evidence_bundle([evidence])
+
+    assert bundle["sccp_source_verifier_materials"][0]["version"] == 1
 
 
 def test_all_lanes_loader_rejects_duplicate_metadata_comments(tmp_path):
@@ -8380,6 +8408,59 @@ def test_all_lanes_release_checklist_rejects_malformed_lane_metadata():
         assert "Traceback" not in canary_blockers
 
 
+def test_all_lanes_release_checklist_redacts_lane_label_chain_text():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    cases = (
+        (
+            "label_chain.invalid_domain_secret",
+            {"domain": "2", "chain": "secret-token-chain"},
+            "lane: lane domain must be an integer",
+            ("secret-token-chain",),
+        ),
+        (
+            "label_chain.unsupported_domain_secret",
+            {"domain": 99, "chain": "operator%0Achain"},
+            "domain 99: lane domain must be a production remote domain",
+            ("operator%0Achain",),
+        ),
+        (
+            "label_chain.supported_domain_secret",
+            {"domain": module.SCCP_DOMAIN_BSC, "chain": "recovery&#32;phrase"},
+            "domain 2: lane chain must be bsc",
+            ("recovery&#32;phrase", "phrase"),
+        ),
+        (
+            "label_chain.supported_domain_non_ascii",
+            {"domain": module.SCCP_DOMAIN_BSC, "chain": "bsc\u202e"},
+            "domain 2: lane chain must be bsc",
+            ("bsc\u202e",),
+        ),
+    )
+
+    for case_id, metadata, expected, forbidden in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["domain"] = metadata["domain"]
+        lane["chain"] = metadata["chain"]
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        all_blockers = "\n".join(
+            blocker for item in items.values() for blocker in item["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["all_required_lane_records"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in all_blockers, case_id
+        for forbidden_text in forbidden:
+            assert forbidden_text not in all_blockers, case_id
+        assert "Traceback" not in all_blockers, case_id
+
+
 def test_all_lanes_release_checklist_rejects_malformed_lane_blockers():
     module = load_evidence_module()
     base_lane = {
@@ -8446,6 +8527,482 @@ def test_all_lanes_release_checklist_rejects_malformed_lane_blockers():
         assert expected in items["no_unresolved_blockers"]["blockers"]
         if not isinstance(lane_blockers, list):
             assert "o" not in items["live_route_canary_evidence"]["blockers"]
+
+
+def test_all_lanes_release_checklist_redacts_top_level_lane_blockers():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    cases = (
+        (
+            "lane_blockers.valid_non_route",
+            ["operator pending lane certification"],
+            "domain 2 (bsc): operator pending lane certification",
+            False,
+            (),
+        ),
+        (
+            "lane_blockers.valid_route_canary",
+            ["route canary pending operator certification"],
+            "domain 2 (bsc): route canary pending operator certification",
+            True,
+            (),
+        ),
+        (
+            "lane_blockers.case_route_canary",
+            ["Route Canary pending operator certification"],
+            "domain 2 (bsc): Route Canary pending operator certification",
+            True,
+            (),
+        ),
+        (
+            "lane_blockers.encoded_route_canary",
+            ["route%20canary pending operator certification"],
+            "domain 2 (bsc): route%20canary pending operator certification",
+            True,
+            (),
+        ),
+        (
+            "lane_blockers.decoded_sensitive",
+            ["operator recovery&#32;phrase-lane-blocker"],
+            "domain 2 (bsc): lane blockers[0] contains sensitive name",
+            True,
+            ("recovery&#32;phrase", "phrase-lane-blocker"),
+        ),
+        (
+            "lane_blockers.decoded_control",
+            ["operator%0Ahold"],
+            "domain 2 (bsc): lane blockers[0] contains control character",
+            True,
+            ("operator%0Ahold",),
+        ),
+        (
+            "lane_blockers.decoded_markdown",
+            ["operator%7Ctable"],
+            "domain 2 (bsc): lane blockers[0] contains Markdown-unsafe character",
+            True,
+            ("operator%7Ctable",),
+        ),
+        (
+            "lane_blockers.encoded_duplicate",
+            ["operator pending duplicate", "operator%20pending%20duplicate"],
+            "domain 2 (bsc): lane blockers must not contain duplicate strings",
+            True,
+            ("operator pending duplicate", "operator%20pending%20duplicate"),
+        ),
+    )
+
+    for case_id, lane_blockers, expected, canary_blocked, forbidden in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["blockers"] = list(lane_blockers)
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        canary_blockers = "\n".join(
+            items["live_route_canary_evidence"]["blockers"]
+        )
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["all_required_lane_records"]["ready"] is True, case_id
+        assert items["governed_deployment_evidence"]["ready"] is True, case_id
+        assert items["route_allowlist_binding"]["ready"] is True, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in unresolved_blockers, case_id
+        if canary_blocked:
+            assert items["live_route_canary_evidence"]["ready"] is False, case_id
+            assert expected in canary_blockers, case_id
+        else:
+            assert items["live_route_canary_evidence"]["ready"] is True, case_id
+            assert expected not in canary_blockers, case_id
+        for forbidden_text in forbidden:
+            assert forbidden_text not in canary_blockers, case_id
+            assert forbidden_text not in unresolved_blockers, case_id
+
+
+def test_all_lanes_release_checklist_decodes_lane_blocker_category_keywords():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    cases = (
+        (
+            "lane_blockers.case_source_adapter",
+            ["Source Adapter operator launch hold"],
+            "governed_deployment_evidence",
+            "domain 2 (bsc): Source Adapter operator launch hold",
+            ("route_allowlist_binding", "live_route_canary_evidence"),
+        ),
+        (
+            "lane_blockers.encoded_source_adapter",
+            ["Source%20Adapter operator launch hold"],
+            "governed_deployment_evidence",
+            "domain 2 (bsc): Source%20Adapter operator launch hold",
+            ("route_allowlist_binding", "live_route_canary_evidence"),
+        ),
+        (
+            "lane_blockers.case_route_allowlist",
+            ["Route Allowlist operator launch hold"],
+            "route_allowlist_binding",
+            "domain 2 (bsc): Route Allowlist operator launch hold",
+            ("governed_deployment_evidence", "live_route_canary_evidence"),
+        ),
+        (
+            "lane_blockers.encoded_route_allowlist",
+            ["Route%20Allowlist operator launch hold"],
+            "route_allowlist_binding",
+            "domain 2 (bsc): Route%20Allowlist operator launch hold",
+            ("governed_deployment_evidence", "live_route_canary_evidence"),
+        ),
+    )
+
+    for case_id, lane_blockers, item_id, expected, unaffected_item_ids in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["blockers"] = list(lane_blockers)
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        item_blockers = "\n".join(items[item_id]["blockers"])
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["all_required_lane_records"]["ready"] is True, case_id
+        assert items[item_id]["ready"] is False, case_id
+        assert expected in item_blockers, case_id
+        assert expected in unresolved_blockers, case_id
+        for unaffected_item_id in unaffected_item_ids:
+            assert items[unaffected_item_id]["ready"] is True, case_id
+            assert (
+                expected not in "\n".join(items[unaffected_item_id]["blockers"])
+            ), case_id
+
+
+def test_all_lanes_release_checklist_does_not_mask_unbound_route_canary():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lane = copy.deepcopy(
+        next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == module.SCCP_DOMAIN_ETH
+        )
+    )
+    lane["blockers"] = ["route canary pending operator certification"]
+    lane["route_allowlist"]["route_canary"]["evidence_bound"] = False
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    canary_blockers = "\n".join(items["live_route_canary_evidence"]["blockers"])
+    unresolved_blockers = "\n".join(
+        items["no_unresolved_blockers"]["blockers"]
+    )
+    unbound_blocker = "domain 1 (eth): route canary evidence is not bound"
+    lane_blocker = "domain 1 (eth): route canary pending operator certification"
+
+    assert checklist["ready"] is False
+    assert items["live_route_canary_evidence"]["ready"] is False
+    assert items["no_unresolved_blockers"]["ready"] is False
+    assert unbound_blocker in canary_blockers
+    assert unbound_blocker in unresolved_blockers
+    assert lane_blocker in canary_blockers
+    assert lane_blocker in unresolved_blockers
+
+
+def test_all_lanes_release_checklist_redacts_root_blockers():
+    module = load_evidence_module()
+    cases = (
+        (
+            "root_blockers.valid",
+            ["operator pending external verifier deployment"],
+            "operator pending external verifier deployment",
+            (),
+        ),
+        (
+            "root_blockers.scalar",
+            "operator secret-token-root-blocker",
+            "all-lanes root blockers must be a list of non-empty canonical strings",
+            ("secret-token-root-blocker",),
+        ),
+        (
+            "root_blockers.non_string",
+            [123],
+            "all-lanes root blockers[0] must be a non-empty canonical string",
+            (),
+        ),
+        (
+            "root_blockers.decoded_sensitive",
+            ["operator recovery&#32;phrase-root-blocker"],
+            "all-lanes root blockers[0] contains sensitive name",
+            ("recovery&#32;phrase", "phrase-root-blocker"),
+        ),
+        (
+            "root_blockers.decoded_control",
+            ["operator%0Ahold"],
+            "all-lanes root blockers[0] contains control character",
+            ("operator%0Ahold",),
+        ),
+        (
+            "root_blockers.decoded_markdown",
+            ["operator%7Ctable"],
+            "all-lanes root blockers[0] contains Markdown-unsafe character",
+            ("operator%7Ctable",),
+        ),
+        (
+            "root_blockers.encoded_duplicate",
+            ["operator pending duplicate", "operator%20pending%20duplicate"],
+            "all-lanes root blockers must not contain duplicate strings",
+            ("operator pending duplicate", "operator%20pending%20duplicate"),
+        ),
+    )
+
+    for case_id, root_blockers, expected, forbidden in cases:
+        checklist = module._release_checklist([], root_blockers)
+        items = {item["id"]: item for item in checklist["items"]}
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["all_required_lane_records"]["ready"] is True, case_id
+        assert items["governed_deployment_evidence"]["ready"] is True, case_id
+        assert items["route_allowlist_binding"]["ready"] is True, case_id
+        assert items["live_route_canary_evidence"]["ready"] is True, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in unresolved_blockers, case_id
+        for forbidden_text in forbidden:
+            assert forbidden_text not in unresolved_blockers, case_id
+
+
+def test_all_lanes_release_checklist_rejects_copied_lane_schema_drift():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    cases = (
+        (
+            "lane_root_safe",
+            lambda lane: lane.__setitem__("operator_note", "safe lane note"),
+            "all_required_lane_records",
+            "domain 1 (eth): lane unexpected field operator_note",
+            None,
+        ),
+        (
+            "lane_root_hostile",
+            lambda lane: lane.__setitem__(HostilePublicKey(), "hostile lane note"),
+            "all_required_lane_records",
+            "domain 1 (eth): lane unexpected non-string field name",
+            "secret-token-hostile-key",
+        ),
+        (
+            "records_sensitive",
+            lambda lane: lane["records"].__setitem__(
+                "secret-token-record", True
+            ),
+            "all_required_lane_records",
+            "domain 1 (eth): records unexpected field with sensitive name",
+            "secret-token-record",
+        ),
+        (
+            "source_record_hashes_scalar",
+            lambda lane: lane.__setitem__(
+                "source_record_hashes", "operator source hashes"
+            ),
+            "all_required_lane_records",
+            "domain 1 (eth): source record hashes summary is malformed",
+            "operator source hashes",
+        ),
+        (
+            "source_record_hashes_extra",
+            lambda lane: lane["source_record_hashes"].__setitem__(
+                "operator_hash", hex32(0x8C)
+            ),
+            "all_required_lane_records",
+            "domain 1 (eth): source record hashes unexpected field operator_hash",
+            None,
+        ),
+        (
+            "source_gate_extra",
+            lambda lane: lane["source_adapter_gate"].__setitem__(
+                "operator_gate", True
+            ),
+            "governed_deployment_evidence",
+            "domain 1 (eth): source adapter gate unexpected field operator_gate",
+            None,
+        ),
+        (
+            "evm_live_extra",
+            lambda lane: lane["evm_live_metadata"].__setitem__(
+                "operator_evm", True
+            ),
+            "governed_deployment_evidence",
+            "domain 1 (eth): EVM live metadata unexpected field operator_evm",
+            None,
+        ),
+        (
+            "destination_extra",
+            lambda lane: lane["destination_binding"].__setitem__(
+                "operator_destination", True
+            ),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding unexpected field operator_destination",
+            None,
+        ),
+        (
+            "route_extra",
+            lambda lane: lane["route_allowlist"].__setitem__(
+                "operator_route", True
+            ),
+            "route_allowlist_binding",
+            "domain 1 (eth): route allowlist unexpected field operator_route",
+            None,
+        ),
+    )
+    for case_id, mutate, item_id, expected, leaked_text in cases:
+        lane = copy.deepcopy(base_lane)
+        mutate(lane)
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        item_blockers = "\n".join(items[item_id]["blockers"])
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items[item_id]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in item_blockers, case_id
+        assert expected in unresolved_blockers, case_id
+        if leaked_text is not None:
+            assert leaked_text not in item_blockers, case_id
+            assert leaked_text not in unresolved_blockers, case_id
+        assert "Traceback" not in item_blockers
+        assert "__str__" not in item_blockers
+
+
+def test_all_lanes_release_checklist_requires_source_record_hashes():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    cases = (
+        (
+            "missing_hash_container",
+            lambda lane: lane.pop("source_record_hashes", None),
+            (
+                "domain 1 (eth): source verifier material hash must be a canonical non-zero bytes32",
+                "domain 1 (eth): source adapter engine deployment hash must be a canonical non-zero bytes32",
+            ),
+        ),
+        (
+            "malformed_hash_container",
+            lambda lane: lane.__setitem__(
+                "source_record_hashes", "operator copied source hashes"
+            ),
+            (
+                "domain 1 (eth): source record hashes summary is malformed",
+                "domain 1 (eth): source verifier material hash must be a canonical non-zero bytes32",
+                "domain 1 (eth): source adapter engine deployment hash must be a canonical non-zero bytes32",
+            ),
+        ),
+        (
+            "missing_source_material_hash",
+            lambda lane: lane["source_record_hashes"].pop(
+                "source_verifier_material_hash", None
+            ),
+            (
+                "domain 1 (eth): source verifier material hash must be a canonical non-zero bytes32",
+            ),
+        ),
+        (
+            "zero_source_material_hash",
+            lambda lane: lane["source_record_hashes"].__setitem__(
+                "source_verifier_material_hash", "0x" + "00" * 32
+            ),
+            (
+                "domain 1 (eth): source verifier material hash must be a canonical non-zero bytes32",
+            ),
+        ),
+        (
+            "missing_source_deployment_hash",
+            lambda lane: lane["source_record_hashes"].pop(
+                "source_adapter_engine_deployment_hash", None
+            ),
+            (
+                "domain 1 (eth): source adapter engine deployment hash must be a canonical non-zero bytes32",
+            ),
+        ),
+        (
+            "malformed_source_deployment_hash",
+            lambda lane: lane["source_record_hashes"].__setitem__(
+                "source_adapter_engine_deployment_hash", "0X" + "12" * 32
+            ),
+            (
+                "domain 1 (eth): source adapter engine deployment hash must be a canonical non-zero bytes32",
+            ),
+        ),
+    )
+    for case_id, mutate, expected_blockers in cases:
+        lane = copy.deepcopy(base_lane)
+        mutate(lane)
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        record_blockers = "\n".join(items["all_required_lane_records"]["blockers"])
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["all_required_lane_records"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        for expected in expected_blockers:
+            assert expected in record_blockers, case_id
+            assert expected in unresolved_blockers, case_id
+        assert "operator copied source hashes" not in record_blockers
+        assert "Traceback" not in record_blockers
+
+
+def test_all_lanes_release_checklist_rejects_source_record_hash_role_replay():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lane = copy.deepcopy(
+        next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == module.SCCP_DOMAIN_ETH
+        )
+    )
+    replay_hash = lane["source_record_hashes"]["source_verifier_material_hash"]
+    lane["source_record_hashes"]["source_adapter_engine_deployment_hash"] = replay_hash
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["all_required_lane_records"]["blockers"])
+    unresolved_blockers = "\n".join(
+        items["no_unresolved_blockers"]["blockers"]
+    )
+    expected = (
+        "domain 1 (eth): source adapter engine deployment hash must not reuse "
+        "source verifier material hash"
+    )
+
+    assert checklist["ready"] is False
+    assert items["all_required_lane_records"]["ready"] is False
+    assert items["no_unresolved_blockers"]["ready"] is False
+    assert expected in blockers
+    assert expected in unresolved_blockers
+    assert replay_hash not in blockers
+    assert replay_hash not in unresolved_blockers
 
 
 def test_all_lanes_release_checklist_compares_item_ready_exactly():
@@ -13547,6 +14104,64 @@ def test_all_lanes_release_checklist_rejects_malformed_source_gate_blockers():
             not in items["governed_deployment_evidence"]["blockers"]
         ), case_id
 
+    malformed_flag_cases = (
+        (
+            "source_gate.malformed_required_scalar_blockers",
+            "required",
+            "true",
+            "operator hold",
+            "domain 3 (sol): source adapter gate blockers must be a list of "
+            "non-empty canonical strings",
+        ),
+        (
+            "source_gate.malformed_ready_valid_blocker",
+            "ready",
+            "false",
+            ["operator hold"],
+            "domain 3 (sol): operator hold",
+        ),
+        (
+            "source_gate.malformed_required_sensitive_blocker",
+            "required",
+            "true",
+            ["operator secret%2dtoken source gate blocker"],
+            "domain 3 (sol): source adapter gate blockers[0] contains "
+            "sensitive name",
+        ),
+        (
+            "source_gate.malformed_ready_duplicate_blockers",
+            "ready",
+            "false",
+            [
+                "operator duplicate source gate blocker",
+                "operator%20duplicate%20source%20gate%20blocker",
+            ],
+            "domain 3 (sol): source adapter gate blockers must not contain "
+            "duplicate strings",
+        ),
+    )
+    for case_id, flag, flag_value, blockers, expected in malformed_flag_cases:
+        lane = copy.deepcopy(base_lane)
+        lane["source_adapter_gate"][flag] = flag_value
+        lane["source_adapter_gate"]["blockers"] = blockers
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["governed_deployment_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["governed_deployment_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+        assert (
+            f"domain 3 (sol): source adapter gate {flag} flag must be boolean"
+            in items["governed_deployment_evidence"]["blockers"]
+        ), case_id
+        assert (
+            "domain 3 (sol): source adapter gate is not ready"
+            not in items["governed_deployment_evidence"]["blockers"]
+        ), case_id
+
 
 def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
     module = load_evidence_module()
@@ -13678,6 +14293,499 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary():
 
     assert checklist["ready"] is False
     assert "domain 1 (eth): route canary summary is malformed" in blockers
+
+
+def test_all_lanes_release_checklist_requires_bound_route_hashes():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    cases = (
+        (
+            "missing_destination_hash",
+            ("destination_binding", "destination_binding_hash"),
+            "",
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "zero_expected_destination_hash",
+            ("destination_binding", "expected_destination_binding_hash"),
+            "0x" + "00" * 32,
+            "governed_deployment_evidence",
+            "domain 1 (eth): expected destination binding hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "drifted_expected_destination_hash",
+            ("destination_binding", "expected_destination_binding_hash"),
+            hex32(0x8A),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding hash must match expected destination binding hash",
+        ),
+        (
+            "missing_route_hash",
+            ("route_allowlist", "route_allowlist_hash"),
+            "",
+            "route_allowlist_binding",
+            "domain 1 (eth): route allowlist hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "zero_expected_route_hash",
+            ("route_allowlist", "expected_route_allowlist_hash"),
+            "0x" + "00" * 32,
+            "route_allowlist_binding",
+            "domain 1 (eth): expected route allowlist hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "drifted_expected_route_hash",
+            ("route_allowlist", "expected_route_allowlist_hash"),
+            hex32(0x8B),
+            "route_allowlist_binding",
+            "domain 1 (eth): route allowlist hash must match expected route allowlist hash",
+        ),
+    )
+    for case_id, path, value, item_id, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        container_name, field = path
+        lane[container_name][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items[item_id]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items[item_id]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_requires_destination_and_route_recompute():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    forged_hash = hex32(0x91)
+    cases = (
+        (
+            "destination_recomputed_false",
+            lambda lane: lane["destination_binding"].__setitem__("recomputed", False),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding.recomputed must be true",
+        ),
+        (
+            "destination_missing_key",
+            lambda lane: lane["destination_binding"].pop(
+                "destination_binding_key", None
+            ),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding.destination_binding_key must be a non-empty canonical string",
+        ),
+        (
+            "destination_malformed_key",
+            lambda lane: lane["destination_binding"].__setitem__(
+                "destination_binding_key",
+                "evm:wrong",
+            ),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding.destination_binding_key must be a canonical SORA -> eth destination binding key",
+        ),
+        (
+            "destination_hash_not_recomputed",
+            lambda lane: (
+                lane["destination_binding"].__setitem__(
+                    "destination_binding_hash",
+                    forged_hash,
+                ),
+                lane["destination_binding"].__setitem__(
+                    "expected_destination_binding_hash",
+                    forged_hash,
+                ),
+            ),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding.destination_binding_hash must recompute from destination_binding_key",
+        ),
+        (
+            "route_hash_not_recomputed",
+            lambda lane: (
+                lane["route_allowlist"].__setitem__(
+                    "route_allowlist_hash",
+                    forged_hash,
+                ),
+                lane["route_allowlist"].__setitem__(
+                    "expected_route_allowlist_hash",
+                    forged_hash,
+                ),
+                lane["route_allowlist"]["route_canary"].__setitem__(
+                    "route_allowlist_hash",
+                    forged_hash,
+                ),
+            ),
+            "route_allowlist_binding",
+            "domain 1 (eth): route allowlist.route_allowlist_hash must recompute from source material, source adapter deployment, and destination binding hashes",
+        ),
+    )
+    for case_id, mutate, item_id, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        mutate(lane)
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items[item_id]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items[item_id]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_rejects_destination_hash_source_replay():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    cases = (
+        (
+            "destination_replays_source_material_hash",
+            "source_verifier_material_hash",
+            "source verifier material hash",
+        ),
+        (
+            "destination_replays_source_deployment_hash",
+            "source_adapter_engine_deployment_hash",
+            "source adapter engine deployment hash",
+        ),
+    )
+
+    for case_id, source_field, role_label in cases:
+        lane = copy.deepcopy(base_lane)
+        replay_hash = lane["source_record_hashes"][source_field]
+        lane["destination_binding"]["destination_binding_hash"] = replay_hash
+        lane["destination_binding"]["expected_destination_binding_hash"] = replay_hash
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+        expected = (
+            f"domain 1 (eth): destination binding hash must not reuse "
+            f"{role_label}"
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["governed_deployment_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in blockers, case_id
+        assert expected in unresolved_blockers, case_id
+        assert replay_hash not in blockers, case_id
+        assert replay_hash not in unresolved_blockers, case_id
+
+
+def test_all_lanes_release_checklist_rejects_route_hash_governed_replay():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    cases = (
+        (
+            "route_replays_source_material_hash",
+            lambda lane: lane["source_record_hashes"][
+                "source_verifier_material_hash"
+            ],
+            "source verifier material hash",
+        ),
+        (
+            "route_replays_source_deployment_hash",
+            lambda lane: lane["source_record_hashes"][
+                "source_adapter_engine_deployment_hash"
+            ],
+            "source adapter engine deployment hash",
+        ),
+        (
+            "route_replays_destination_binding_hash",
+            lambda lane: lane["destination_binding"]["destination_binding_hash"],
+            "destination binding hash",
+        ),
+    )
+
+    for case_id, replay_value, role_label in cases:
+        lane = copy.deepcopy(base_lane)
+        replay_hash = replay_value(lane)
+        lane["route_allowlist"]["route_allowlist_hash"] = replay_hash
+        lane["route_allowlist"]["expected_route_allowlist_hash"] = replay_hash
+        lane["route_allowlist"]["route_canary"]["route_allowlist_hash"] = replay_hash
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items["route_allowlist_binding"]["blockers"])
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+        expected = (
+            f"domain 1 (eth): route allowlist hash must not reuse {role_label}"
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items["route_allowlist_binding"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in blockers, case_id
+        assert expected in unresolved_blockers, case_id
+        assert replay_hash not in blockers, case_id
+        assert replay_hash not in unresolved_blockers, case_id
+
+
+def test_all_lanes_release_checklist_bounds_route_allowlist_recompute_failures():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    original_recompute = module._expected_route_allowlist_hash
+
+    def fail_recompute(*_args, **_kwargs):
+        raise module.argparse.ArgumentTypeError(
+            "secret-token copied route recompute helper leaked"
+        )
+
+    module._expected_route_allowlist_hash = fail_recompute
+    try:
+        checklist = module._release_checklist([lane], [])
+    finally:
+        module._expected_route_allowlist_hash = original_recompute
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["route_allowlist_binding"]["blockers"])
+    unresolved_blockers = "\n".join(items["no_unresolved_blockers"]["blockers"])
+    expected = (
+        "domain 1 (eth): route allowlist.route_allowlist_hash must recompute "
+        "from source material, source adapter deployment, and destination binding hashes"
+    )
+
+    assert checklist["ready"] is False
+    assert items["route_allowlist_binding"]["ready"] is False
+    assert items["no_unresolved_blockers"]["ready"] is False
+    assert expected in blockers
+    assert expected in unresolved_blockers
+    assert "secret-token" not in blockers
+    assert "secret-token" not in unresolved_blockers
+
+
+def test_all_lanes_release_checklist_rejects_unexpected_route_canary_fields():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_ETH,
+        "chain": "eth",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x5C),
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "evidence_bound": True,
+                "message_proof_used": True,
+                "receipt_block_finalized": True,
+            },
+        },
+        "blockers": [],
+    }
+    cases = (
+        (
+            "blockers",
+            ["operator route canary blocker"],
+            "domain 1 (eth): route canary unexpected field blockers",
+            "operator route canary blocker",
+        ),
+        (
+            "secret-token-route-canary-field",
+            "operator route canary blocker",
+            "domain 1 (eth): route canary unexpected field with sensitive name",
+            "secret-token-route-canary-field",
+        ),
+        (
+            "route canary blockers",
+            "operator route canary blocker",
+            "domain 1 (eth): route canary unexpected field with malformed name",
+            "route canary blockers",
+        ),
+        (
+            HostilePublicKey(),
+            "operator route canary blocker",
+            "domain 1 (eth): route canary unexpected non-string field name",
+            "secret-token-hostile-key",
+        ),
+    )
+    for field, value, expected, leaked_text in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["route_allowlist"]["route_canary"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        canary_blockers = "\n".join(
+            items["live_route_canary_evidence"]["blockers"]
+        )
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, repr(field)
+        assert items["live_route_canary_evidence"]["ready"] is False, repr(field)
+        assert items["no_unresolved_blockers"]["ready"] is False, repr(field)
+        assert expected in canary_blockers, repr(field)
+        assert expected in unresolved_blockers, repr(field)
+        assert leaked_text not in canary_blockers, repr(field)
+        assert leaked_text not in unresolved_blockers, repr(field)
+        assert "Traceback" not in canary_blockers
+        assert "__str__" not in canary_blockers
+
+
+def test_all_lanes_release_checklist_requires_route_canary_hash_bindings():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    cases = (
+        (
+            "missing_canary_route_hash",
+            "route_allowlist_hash",
+            None,
+            "domain 1 (eth): route canary route allowlist hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "zero_canary_route_hash",
+            "route_allowlist_hash",
+            "0x" + "00" * 32,
+            "domain 1 (eth): route canary route allowlist hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "malformed_canary_route_hash",
+            "route_allowlist_hash",
+            "0X" + "12" * 32,
+            "domain 1 (eth): route canary route allowlist hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "drifted_canary_route_hash",
+            "route_allowlist_hash",
+            hex32(0x8D),
+            "domain 1 (eth): route canary route allowlist hash must match route_allowlist_hash",
+        ),
+        (
+            "missing_canary_destination_hash",
+            "destination_binding_hash",
+            None,
+            "domain 1 (eth): route canary destination binding hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "zero_canary_destination_hash",
+            "destination_binding_hash",
+            "0x" + "00" * 32,
+            "domain 1 (eth): route canary destination binding hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "drifted_canary_destination_hash",
+            "destination_binding_hash",
+            hex32(0x8E),
+            "domain 1 (eth): route canary destination binding hash must match destination_binding_hash",
+        ),
+    )
+    for case_id, field, value, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        canary = lane["route_allowlist"]["route_canary"]
+        if value is None:
+            canary.pop(field, None)
+        else:
+            canary[field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["live_route_canary_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["live_route_canary_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_rejects_route_canary_evidence_hash_role_replay():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    eth_lane = lanes_by_domain[module.SCCP_DOMAIN_ETH]
+    sol_lane = lanes_by_domain[module.SCCP_DOMAIN_SOL]
+    role_replay_message = "route canary evidence hash must be distinct from {role}"
+    cases = (
+        (
+            "checklist_route_canary_source_material_hash_replay",
+            eth_lane,
+            eth_lane["source_record_hashes"]["source_verifier_material_hash"],
+            f"domain 1 (eth): {role_replay_message.format(role='source_verifier_material_hash')}",
+        ),
+        (
+            "checklist_route_canary_source_deployment_hash_replay",
+            eth_lane,
+            eth_lane["source_record_hashes"]["source_adapter_engine_deployment_hash"],
+            f"domain 1 (eth): {role_replay_message.format(role='source_adapter_engine_deployment_hash')}",
+        ),
+        (
+            "checklist_route_canary_destination_hash_replay",
+            eth_lane,
+            eth_lane["destination_binding"]["destination_binding_hash"],
+            f"domain 1 (eth): {role_replay_message.format(role='destination_binding_hash')}",
+        ),
+        (
+            "checklist_route_canary_route_hash_replay",
+            eth_lane,
+            eth_lane["route_allowlist"]["route_allowlist_hash"],
+            f"domain 1 (eth): {role_replay_message.format(role='route_allowlist_hash')}",
+        ),
+        (
+            "checklist_route_canary_gate_hash_replay",
+            eth_lane,
+            eth_lane["source_adapter_gate"]["gate_hash"],
+            f"domain 1 (eth): {role_replay_message.format(role='source_adapter_gate_hash')}",
+        ),
+        (
+            "checklist_route_canary_gate_audit_hash_replay",
+            sol_lane,
+            sol_lane["source_adapter_gate"]["audit_hashes"][
+                "solana_tower_replay_verifier_hash"
+            ],
+            "domain 3 (sol): "
+            + role_replay_message.format(
+                role="source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash"
+            ),
+        ),
+    )
+    for case_id, base_lane, replay_hash, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["route_allowlist"]["route_canary"]["evidence_hash"] = replay_hash
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["live_route_canary_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["live_route_canary_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
 
 
 def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
@@ -13841,6 +14949,300 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         assert checklist["ready"] is False, repr((field, value))
         assert items["live_route_canary_evidence"]["ready"] is False
         assert expected in blockers
+
+
+def test_all_lanes_release_checklist_rejects_route_canary_proof_context_drift():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    cases = (
+        (
+            "checklist_evm_receipt_block_number_scalar",
+            module.SCCP_DOMAIN_ETH,
+            "receipt_block_number",
+            "123",
+            "domain 1 (eth): route canary receipt_block_number must be a positive integer",
+        ),
+        (
+            "checklist_evm_log_index_u32",
+            module.SCCP_DOMAIN_ETH,
+            "log_index",
+            -1,
+            "domain 1 (eth): route canary log_index must be a u32 integer",
+        ),
+        (
+            "checklist_evm_target_domain_drift",
+            module.SCCP_DOMAIN_ETH,
+            "target_domain",
+            module.SCCP_DOMAIN_BSC,
+            "domain 1 (eth): route canary target_domain must match lane domain",
+        ),
+        (
+            "checklist_evm_proof_version_drift",
+            module.SCCP_DOMAIN_ETH,
+            "proof_version",
+            2,
+            "domain 1 (eth): route canary proof_version must be 1",
+        ),
+        (
+            "checklist_evm_proof_source_domain_drift",
+            module.SCCP_DOMAIN_ETH,
+            "proof_source_domain",
+            module.SCCP_DOMAIN_ETH,
+            "domain 1 (eth): route canary proof_source_domain must be SORA domain",
+        ),
+        (
+            "checklist_solana_programdata_address_padded",
+            module.SCCP_DOMAIN_SOL,
+            "solana_programdata_address",
+            " padded-address ",
+            "domain 3 (sol): route canary solana_programdata_address must be a non-empty canonical string",
+        ),
+        (
+            "checklist_solana_programdata_slot_scalar",
+            module.SCCP_DOMAIN_SOL,
+            "solana_programdata_slot",
+            42,
+            "domain 3 (sol): route canary solana_programdata_slot must be a canonical positive decimal string",
+        ),
+        (
+            "checklist_ton_last_transaction_lt_zero",
+            module.SCCP_DOMAIN_TON,
+            "ton_last_transaction_lt",
+            "0",
+            "domain 4 (ton): route canary ton_last_transaction_lt must be a canonical positive decimal string",
+        ),
+        (
+            "checklist_tron_block_number_zero",
+            module.SCCP_DOMAIN_TRON,
+            "block_number",
+            0,
+            "domain 5 (tron): route canary block_number must be a positive integer",
+        ),
+        (
+            "checklist_tron_block_timestamp_negative",
+            module.SCCP_DOMAIN_TRON,
+            "block_timestamp",
+            -1,
+            "domain 5 (tron): route canary block_timestamp must be a non-negative integer",
+        ),
+        (
+            "checklist_tron_log_index_overflow",
+            module.SCCP_DOMAIN_TRON,
+            "log_index",
+            0x1_0000_0000,
+            "domain 5 (tron): route canary log_index must be a u32 integer",
+        ),
+        (
+            "checklist_tron_target_domain_drift",
+            module.SCCP_DOMAIN_TRON,
+            "target_domain",
+            module.SCCP_DOMAIN_ETH,
+            "domain 5 (tron): route canary target_domain must match lane domain",
+        ),
+        (
+            "checklist_tron_owner_zero_address",
+            module.SCCP_DOMAIN_TRON,
+            "transaction_owner_address",
+            "0x41" + "00" * 20,
+            "domain 5 (tron): route canary transaction_owner_address must be a non-zero TRON address",
+        ),
+        (
+            "checklist_tron_recovered_owner_drift",
+            module.SCCP_DOMAIN_TRON,
+            "signature_recovered_address",
+            "0x41" + "22" * 20,
+            "domain 5 (tron): route canary signature_recovered_address must match transaction_owner_address",
+        ),
+    )
+    for case_id, domain, field, value, expected in cases:
+        lane = copy.deepcopy(lanes_by_domain[domain])
+        lane["route_allowlist"]["route_canary"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["live_route_canary_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["live_route_canary_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_requires_route_canary_transcript_hashes():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    cases = (
+        (
+            "checklist_evm_missing_transaction_hash",
+            module.SCCP_DOMAIN_ETH,
+            "transaction_hash",
+            "",
+            "domain 1 (eth): route canary transaction_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "checklist_evm_zero_finality_block_hash",
+            module.SCCP_DOMAIN_ETH,
+            "finality_block_hash",
+            "0x" + "00" * 32,
+            "domain 1 (eth): route canary finality_block_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            "checklist_tron_malformed_signature_sha256",
+            module.SCCP_DOMAIN_TRON,
+            "signature_sha256",
+            "0X" + "12" * 32,
+            "domain 5 (tron): route canary signature_sha256 must be a canonical non-zero bytes32",
+        ),
+        (
+            "checklist_ton_zero_last_transaction_hash",
+            module.SCCP_DOMAIN_TON,
+            "ton_last_transaction_hash",
+            "0x" + "00" * 32,
+            "domain 4 (ton): route canary ton_last_transaction_hash must be a canonical non-zero bytes32",
+        ),
+    )
+    for case_id, domain, field, value, expected in cases:
+        lane = copy.deepcopy(lanes_by_domain[domain])
+        lane["route_allowlist"]["route_canary"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["live_route_canary_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["live_route_canary_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_rejects_route_canary_transcript_hash_role_replay():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    eth_lane = lanes_by_domain[module.SCCP_DOMAIN_ETH]
+    tron_lane = lanes_by_domain[module.SCCP_DOMAIN_TRON]
+    ton_lane = lanes_by_domain[module.SCCP_DOMAIN_TON]
+    cases = (
+        (
+            "checklist_evm_receipt_hash_replays_transaction_hash",
+            eth_lane,
+            "receipt_block_hash",
+            eth_lane["route_allowlist"]["route_canary"]["transaction_hash"],
+            "domain 1 (eth): route canary hash role receipt_block_hash must not reuse transaction_hash",
+        ),
+        (
+            "checklist_tron_message_id_replays_route_hash",
+            tron_lane,
+            "message_id",
+            tron_lane["route_allowlist"]["route_allowlist_hash"],
+            "domain 5 (tron): route canary hash role message_id must not reuse route_allowlist_hash",
+        ),
+        (
+            "checklist_ton_last_transaction_hash_replays_account_state",
+            ton_lane,
+            "ton_last_transaction_hash",
+            ton_lane["route_allowlist"]["route_canary"]["ton_account_state_hash"],
+            "domain 4 (ton): route canary hash role ton_last_transaction_hash must not reuse ton_account_state_hash",
+        ),
+    )
+    for case_id, base_lane, field, value, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["route_allowlist"]["route_canary"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["live_route_canary_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["live_route_canary_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_rejects_route_canary_template_hash_replays():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    cases = (
+        (
+            "checklist_eth_evidence_template_replay",
+            module.SCCP_DOMAIN_ETH,
+            "evidence_hash",
+            "domain 1 (eth): route canary.evidence_hash must be live evidence, not built-in template material",
+        ),
+        (
+            "checklist_eth_transaction_template_replay",
+            module.SCCP_DOMAIN_ETH,
+            "transaction_hash",
+            "domain 1 (eth): route canary.transaction_hash must be live evidence, not built-in template material",
+        ),
+        (
+            "checklist_sol_evidence_template_replay",
+            module.SCCP_DOMAIN_SOL,
+            "evidence_hash",
+            "domain 3 (sol): route canary.evidence_hash must be live evidence, not built-in template material",
+        ),
+        (
+            "checklist_ton_account_state_template_replay",
+            module.SCCP_DOMAIN_TON,
+            "ton_account_state_hash",
+            "domain 4 (ton): route canary.ton_account_state_hash must be live evidence, not built-in template material",
+        ),
+        (
+            "checklist_tron_signature_template_replay",
+            module.SCCP_DOMAIN_TRON,
+            "signature_sha256",
+            "domain 5 (tron): route canary.signature_sha256 must be live evidence, not built-in template material",
+        ),
+    )
+    for case_id, domain, field, expected in cases:
+        profile = module.LANE_PROFILES[domain]
+        template_hash = next(iter(module._source_material_template_hashes(profile).values()))
+        lane = copy.deepcopy(lanes_by_domain[domain])
+        lane["route_allowlist"]["route_canary"][field] = "0x" + template_hash.hex()
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, case_id
+        assert items["live_route_canary_evidence"]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in items["live_route_canary_evidence"]["blockers"], case_id
+        assert expected in items["no_unresolved_blockers"]["blockers"], case_id
+
+
+def test_all_lanes_release_checklist_bounds_route_canary_template_loader_failures():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    original_template_hashes = module._source_material_template_hashes
+
+    def fail_template_hashes(_profile):
+        raise module.argparse.ArgumentTypeError(
+            "secret-token route canary template helper leaked"
+        )
+
+    module._source_material_template_hashes = fail_template_hashes
+    try:
+        checklist = module._release_checklist([lane], [])
+    finally:
+        module._source_material_template_hashes = original_template_hashes
+    items = {item["id"]: item for item in checklist["items"]}
+    canary_blockers = "\n".join(items["live_route_canary_evidence"]["blockers"])
+    unresolved_blockers = "\n".join(items["no_unresolved_blockers"]["blockers"])
+    expected = "domain 1 (eth): route canary template material validation failed"
+
+    assert checklist["ready"] is False
+    assert items["live_route_canary_evidence"]["ready"] is False
+    assert items["no_unresolved_blockers"]["ready"] is False
+    assert expected in canary_blockers
+    assert expected in unresolved_blockers
+    assert "secret-token" not in canary_blockers
+    assert "secret-token" not in unresolved_blockers
 
 
 def test_all_lanes_route_canary_evidence_sources_cover_launch_lanes():

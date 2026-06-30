@@ -758,6 +758,12 @@ all_test_methods = [
 all_executions = [
     element for element in root.iter() if is_vstest_element(element, "Execution")
 ]
+if any(list(element) for element in all_unit_results):
+    fail("requires every TRX UnitTestResult row to be a leaf element")
+if any(list(element) for element in all_test_methods):
+    fail("requires every TRX TestMethod definition to be a leaf element")
+if any(list(element) for element in all_executions):
+    fail("requires every TRX Execution definition to be a leaf element")
 unit_tests = (
     [
         child
@@ -832,6 +838,14 @@ for element in unit_tests:
     unit_test_name = element.attrib.get("name")
     if unit_test_name is not None and not is_canonical_trx_test_name(unit_test_name):
         fail("requires canonical TRX UnitTest definition name values")
+    if any(
+        not is_vstest_element(child, "Execution")
+        and not is_vstest_element(child, "TestMethod")
+        for child in element
+    ):
+        fail(
+            "requires every TRX UnitTest definition to contain only direct Execution and TestMethod children"
+        )
     direct_test_methods = [
         child for child in element if is_vstest_element(child, "TestMethod")
     ]
