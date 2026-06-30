@@ -79,8 +79,8 @@ public final class OfflineListParams {
     if (platformPolicy != null) {
       params.put("platform_policy", platformPolicy.slug());
     }
-    if (verdictIdHex != null && !verdictIdHex.trim().isEmpty()) {
-      params.put("verdict_id_hex", verdictIdHex.toLowerCase());
+    if (verdictIdHex != null) {
+      params.put("verdict_id_hex", requireExactLowerHex(verdictIdHex, "verdictIdHex"));
     }
     if (requireVerdict) {
       params.put("require_verdict", "true");
@@ -100,6 +100,26 @@ public final class OfflineListParams {
       throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
     }
     return value;
+  }
+
+  private static String requireExactLowerHex(final String value, final String field) {
+    final String exact = Objects.requireNonNull(value, field + " must not be null");
+    if (exact.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be empty");
+    }
+    if (!exact.trim().equals(exact)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    if ((exact.length() & 1) != 0) {
+      throw new IllegalArgumentException(field + " must be even-length lowercase hex");
+    }
+    for (int i = 0; i < exact.length(); i++) {
+      final char c = exact.charAt(i);
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+        throw new IllegalArgumentException(field + " must be even-length lowercase hex");
+      }
+    }
+    return exact;
   }
 
   public static Builder builder() {
@@ -211,7 +231,7 @@ public final class OfflineListParams {
         throw new IllegalArgumentException(
             "`requireVerdict` cannot be combined with `onlyMissingVerdict`");
       }
-      if (onlyMissingVerdict && verdictIdHex != null && !verdictIdHex.trim().isEmpty()) {
+      if (onlyMissingVerdict && verdictIdHex != null) {
         throw new IllegalArgumentException(
             "`verdictIdHex` cannot be combined with `onlyMissingVerdict`");
       }

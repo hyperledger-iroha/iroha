@@ -1561,6 +1561,38 @@ def validate_aggregate_required_row_output(
             errors.append(
                 f"{gate.name} aggregate invalid row {field} must be a non-negative integer when present"
             )
+    oldest = row.get("oldest_generated_at_unix")
+    newest = row.get("newest_generated_at_unix")
+    if (
+        isinstance(oldest, int)
+        and not isinstance(oldest, bool)
+        and isinstance(newest, int)
+        and not isinstance(newest, bool)
+        and newest < oldest
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row newest_generated_at_unix must be >= oldest_generated_at_unix"
+        )
+    thresholds = row.get("thresholds")
+    if thresholds is not None:
+        thresholds_errors: list[str] = []
+        require_threshold_map(row, "thresholds", thresholds_errors)
+        for threshold_error in thresholds_errors:
+            errors.append(f"{gate.name} aggregate invalid row {threshold_error}")
+    if (
+        row.get("deployment_id") is not None
+        and canonical_string(row.get("deployment_id")) is None
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row deployment_id must be canonical when present"
+        )
+    if (
+        row.get("environment") is not None
+        and canonical_string(row.get("environment")) is None
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row environment must be canonical when present"
+        )
     if row.get("expected_required_kinds") != list(gate.required_kinds):
         errors.append(
             f"{gate.name} aggregate invalid row expected_required_kinds must match gate contract"
@@ -1643,11 +1675,11 @@ def validate_aggregate_summary_output(
             "aggregate summary recognized_summary_count must not exceed required gate count"
         )
     deployment = summary.get("deployment")
+    allowed_deployment_fields = {"deployment_id", "environment"}
     if not isinstance(deployment, dict):
         errors.append("aggregate summary deployment must be an object")
     else:
         deployment_fields = set(deployment)
-        allowed_deployment_fields = {"deployment_id", "environment"}
         if deployment_fields and deployment_fields != allowed_deployment_fields:
             errors.append(
                 "aggregate summary deployment fields must be deployment_id and environment"
@@ -1701,6 +1733,26 @@ def validate_aggregate_summary_output(
                     row,
                     errors,
                 )
+    if summary.get("status") == "ready":
+        if not isinstance(deployment, dict) or set(deployment) != allowed_deployment_fields:
+            errors.append(
+                "aggregate summary ready deployment must include deployment_id and environment"
+            )
+        if (
+            isinstance(recognized_summary_count, int)
+            and not isinstance(recognized_summary_count, bool)
+            and recognized_summary_count != len(required_gates)
+        ):
+            errors.append(
+                "aggregate summary ready recognized_summary_count must match required gate count"
+            )
+        if not isinstance(required, dict) or any(
+            not isinstance(row, dict)
+            or row.get("present") is not True
+            or row.get("valid") is not True
+            for row in required.values()
+        ):
+            errors.append("aggregate summary ready rows must all be present and valid")
     error_values = summary.get("errors")
     if not isinstance(error_values, list):
         errors.append("aggregate summary errors must be a list")
@@ -1709,6 +1761,8 @@ def validate_aggregate_summary_output(
             if canonical_string(error) is None:
                 errors.append("aggregate summary errors must contain canonical strings")
                 break
+        if summary.get("status") != evidence_gate_status(error_values):
+            errors.append("aggregate summary status must match aggregate diagnostics")
 
 
 def validate_gate_summary(

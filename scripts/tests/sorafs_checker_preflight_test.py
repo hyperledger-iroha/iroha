@@ -708,6 +708,30 @@ def test_write_checker_summary_uses_no_follow_descriptor_open(
     assert checker_summary_write_open_flags() == opened["flags"]
 
 
+def test_write_checker_summary_completes_partial_descriptor_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary = tmp_path / "summary.json"
+    summary_text = '{\n  "status": "ready"\n}\n'
+    original_write = os.write
+    writes: list[int] = []
+
+    def partial_write(fd: int, data) -> int:
+        chunk = bytes(data)
+        limit = max(1, min(3, len(chunk)))
+        writes.append(limit)
+        return original_write(fd, chunk[:limit])
+
+    monkeypatch.setattr(os, "write", partial_write)
+
+    errors = write_checker_summary(summary, summary_text)
+
+    assert errors == []
+    assert summary.read_text(encoding="utf-8") == summary_text
+    assert len(writes) > 1
+
+
 def test_write_checker_summary_rejects_non_string_text(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 

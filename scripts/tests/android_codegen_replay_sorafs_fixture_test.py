@@ -85,9 +85,13 @@ def test_write_json_uses_no_follow_descriptor_open(
 
     monkeypatch.setattr(MODULE.os, "open", open_path)
 
-    MODULE.write_json(output, {"ready": True}, label="Android fixture")
+    payload = {"ready": True}
+    MODULE.write_json(output, payload, label="Android fixture")
 
-    assert json.loads(output.read_text(encoding="utf-8")) == {"ready": True}
+    assert output.read_text(encoding="utf-8") == (
+        json.dumps(payload, indent=2, allow_nan=False) + "\n"
+    )
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
     assert opened["flags"] & os.O_WRONLY
     assert opened["flags"] & os.O_CREAT
     assert opened["flags"] & os.O_TRUNC
@@ -95,6 +99,31 @@ def test_write_json_uses_no_follow_descriptor_open(
         assert opened["flags"] & os.O_NOFOLLOW
     assert opened["mode"] == 0o666
     assert opened["flags"] == MODULE.write_open_flags()
+
+
+def test_write_json_completes_partial_descriptor_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "generated" / "fixture.json"
+    payload = {"chunks": [1, 2, 3], "ready": True}
+    original_write = os.write
+    writes: list[int] = []
+
+    def partial_write(fd: int, data) -> int:
+        chunk = bytes(data)
+        limit = max(1, min(3, len(chunk)))
+        writes.append(limit)
+        return original_write(fd, chunk[:limit])
+
+    monkeypatch.setattr(MODULE.os, "write", partial_write)
+
+    MODULE.write_json(output, payload, label="Android fixture")
+
+    assert output.read_text(encoding="utf-8") == (
+        json.dumps(payload, indent=2, allow_nan=False) + "\n"
+    )
+    assert len(writes) > 1
 
 
 def test_write_json_rejects_symlinked_parent_before_create(

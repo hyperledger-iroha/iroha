@@ -210,8 +210,7 @@ SafetyAnchors ==
   /\ SnapshotAnchors
 
 RbcAbortStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllRbcAbortCandidatesMatchSpec
   /\ SafetyAnchors
 
 RbcAbortStatusCorrectnessEnvelope ==

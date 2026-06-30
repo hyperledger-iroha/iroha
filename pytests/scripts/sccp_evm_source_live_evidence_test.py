@@ -526,6 +526,11 @@ def test_evm_source_json_rpc_rejects_envelope_drift():
             "string JSON-RPC id was accepted",
         ),
         (
+            {"jsonrpc": "2.0", "id": True, "result": "0x38"},
+            "response id",
+            "boolean JSON-RPC id was accepted",
+        ),
+        (
             {"id": 1, "result": "0x38"},
             "protocol version",
             "missing JSON-RPC protocol version was accepted",
@@ -745,7 +750,13 @@ def test_evm_source_live_receipt_ready_predicate_uses_guarded_receipt_hash_parse
 def test_evm_source_live_hex_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_live_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token EVM source live hex TypeError detail"
             if exception_type is TypeError
@@ -794,6 +805,27 @@ def test_evm_source_live_hex_parsers_redact_helper_exit_parser_causes(monkeypatc
                 )
 
 
+def test_evm_source_live_rpc_fixed_hex_nonzero_controls_reject_non_booleans():
+    module = load_live_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module._rpc_fixed_hex_data(
+                "0x" + "00" * 32,
+                method="eth_getTransactionReceipt",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "EVM source-live RPC fixed hex nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed EVM source-live RPC fixed-hex nonzero control accepted"
+            )
+
+
 def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags():
     module = load_live_module()
 
@@ -824,6 +856,16 @@ def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags(
 def test_evm_source_live_cli_defaults_eth_to_finalized_and_bsc_to_latest():
     module = load_live_module()
     parser = module.build_parser()
+
+    assert module.default_block_tag_for_domain(module.SCCP_DOMAIN_ETH) == "finalized"
+    assert module.default_block_tag_for_domain(module.SCCP_DOMAIN_BSC) == "latest"
+    for alias_domain in (True, False):
+        try:
+            module.default_block_tag_for_domain(alias_domain)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == "domain must be an EVM-family source lane"
+        else:
+            raise AssertionError("boolean EVM source-live block-tag domain was accepted")
 
     eth_fake = fake_opener_for(module)
     eth_args = parser.parse_args(
@@ -1094,6 +1136,13 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
         ),
         (
             lambda forged: forged["source_bridge"].__setitem__(
+                "expected_rpc_chain_id",
+                True,
+            ),
+            "expected source RPC chain id",
+        ),
+        (
+            lambda forged: forged["source_bridge"].__setitem__(
                 "expected_source_bridge_code_hash",
                 "0x" + "aa" * 32,
             ),
@@ -1170,6 +1219,9 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
         assert "secret-token" not in rendered
         assert "must be hex" not in rendered
         assert exc.__cause__ is None
+        assert (
+            exc.__suppress_context__ is True
+        ), "EVM source live runtime metadata context leaked"
     else:
         raise AssertionError("invalid EVM source live runtime metadata rendered TOML")
 
@@ -1532,7 +1584,13 @@ def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypat
     )
 
     for target_method, expected_message in cases:
-        for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            TypeError,
+            RuntimeError,
+            ValueError,
+        ):
             fake = fake_opener_for(module)
 
             def fail_target_receipt_field(
@@ -1606,7 +1664,13 @@ def test_evm_source_live_redacts_receipt_readback_parser_exception_causes(monkey
     )
 
     for target_method, expected_message in cases:
-        for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            TypeError,
+            RuntimeError,
+            ValueError,
+        ):
             fake = fake_opener_for(module)
 
             def fail_target_receipt_readback(
@@ -1662,7 +1726,13 @@ def test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures(
     module = load_live_module()
     original_parse_hex32 = module._parse_hex32
 
-    for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        RuntimeError,
+        ValueError,
+    ):
         fake = fake_opener_for(module)
 
         def fail_receipt_block_hash(value, *, label, exception_type=exception_type):

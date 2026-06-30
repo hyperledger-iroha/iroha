@@ -368,44 +368,71 @@ PostCommitActionExactFor(cases) ==
     candidate \in cases =>
       ImplementationActions(candidate) = SpecActions(candidate)
 
-PostCommitRbcCleanupExactness ==
+PostCommitRbcCleanupActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitRbcCases)
 
-PostCommitPendingDescendantExactness ==
+PostCommitRbcCleanupExactness ==
+  /\ PostCommitRbcCleanupActionsMatchSpec
+
+PostCommitPendingDescendantActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitPendingDescendantCases)
 
-PostCommitStalePendingExactness ==
+PostCommitPendingDescendantExactness ==
+  /\ PostCommitPendingDescendantActionsMatchSpec
+
+PostCommitStalePendingActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitStalePendingCases)
 
-PostCommitQcProposalExactness ==
+PostCommitStalePendingExactness ==
+  /\ PostCommitStalePendingActionsMatchSpec
+
+PostCommitQcProposalActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitQcProposalCases)
 
-PostCommitMissingRequestExactness ==
+PostCommitQcProposalExactness ==
+  /\ PostCommitQcProposalActionsMatchSpec
+
+PostCommitMissingRequestActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitMissingRequestCases)
 
-PostCommitVoteCacheExactness ==
+PostCommitMissingRequestExactness ==
+  /\ PostCommitMissingRequestActionsMatchSpec
+
+PostCommitVoteCacheActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitVoteCacheCases)
 
-PostCommitSlotViewExactness ==
+PostCommitVoteCacheExactness ==
+  /\ PostCommitVoteCacheActionsMatchSpec
+
+PostCommitSlotViewActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitSlotViewCases)
 
-PostCommitRecoveryFrontierExactness ==
+PostCommitSlotViewExactness ==
+  /\ PostCommitSlotViewActionsMatchSpec
+
+PostCommitRecoveryFrontierActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitRecoveryFrontierCases)
 
-PostCommitValidationInflightExactness ==
+PostCommitRecoveryFrontierExactness ==
+  /\ PostCommitRecoveryFrontierActionsMatchSpec
+
+PostCommitValidationInflightActionsMatchSpec ==
   PostCommitActionExactFor(PostCommitValidationInflightCases)
+
+PostCommitValidationInflightExactness ==
+  /\ PostCommitValidationInflightActionsMatchSpec
 
 PostCommitCleanupExactness ==
   /\ PostCommitCleanupCaseGroupsComplete
-  /\ PostCommitActionExactFor(PostCommitRbcCases)
-  /\ PostCommitActionExactFor(PostCommitPendingDescendantCases)
-  /\ PostCommitActionExactFor(PostCommitStalePendingCases)
-  /\ PostCommitActionExactFor(PostCommitQcProposalCases)
-  /\ PostCommitActionExactFor(PostCommitMissingRequestCases)
-  /\ PostCommitActionExactFor(PostCommitVoteCacheCases)
-  /\ PostCommitActionExactFor(PostCommitSlotViewCases)
-  /\ PostCommitActionExactFor(PostCommitRecoveryFrontierCases)
-  /\ PostCommitActionExactFor(PostCommitValidationInflightCases)
+  /\ PostCommitRbcCleanupActionsMatchSpec
+  /\ PostCommitPendingDescendantActionsMatchSpec
+  /\ PostCommitStalePendingActionsMatchSpec
+  /\ PostCommitQcProposalActionsMatchSpec
+  /\ PostCommitMissingRequestActionsMatchSpec
+  /\ PostCommitVoteCacheActionsMatchSpec
+  /\ PostCommitSlotViewActionsMatchSpec
+  /\ PostCommitRecoveryFrontierActionsMatchSpec
+  /\ PostCommitValidationInflightActionsMatchSpec
 
 PostCommitCleanupCorrectnessEnvelope ==
   /\ TypeInvariant

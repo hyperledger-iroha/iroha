@@ -6,7 +6,7 @@ use std::{
     convert::TryInto,
     env,
     fmt::Write as FmtWrite,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -16,6 +16,9 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use base64::{
     Engine,
@@ -3152,7 +3155,127 @@ fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
 }
 
 fn write_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fs::write(path, bytes).map_err(|err| format!("failed to write `{}`: {err}", path.display()))
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options
+        .open(path)
+        .map_err(|err| format!("failed to open `{}` for writing: {err}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect `{}` after open: {err}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write `{}`: output must be a regular file",
+            path.display()
+        ));
+    }
+    file.write_all(bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
+}
+
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("output `{}` must not be a symlink", path.display()));
+            }
+            if metadata.is_dir() {
+                return Err(format!(
+                    "output `{}` must not be a directory",
+                    path.display()
+                ));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect output `{}`: {err}",
+                path.display()
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        ));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(format!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        ));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect output parent `{}`: {err}",
+                        ancestor.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 fn format_car_error(err: CarWriteError) -> String {

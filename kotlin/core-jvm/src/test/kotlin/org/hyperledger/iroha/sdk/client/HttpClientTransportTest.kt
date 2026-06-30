@@ -164,6 +164,19 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun offlineListParamsRejectsNormalizedVerdictIdHexBeforeDispatch() {
+        val verdictId = "ab".repeat(32)
+        assertEquals(verdictId, OfflineListParams(verdictIdHex = verdictId).toQueryParameters()["verdict_id_hex"])
+
+        for (invalid in listOf(" $verdictId", "$verdictId ", verdictId.uppercase(), "0x$verdictId", "abc", "", "zz")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                OfflineListParams(verdictIdHex = invalid).toQueryParameters()
+            }
+            assertTrue(error.message?.contains("verdictIdHex") == true)
+        }
+    }
+
+    @Test
     fun identifierHiddenFunctionRequestsCarryOutputOpening() {
         val opening = sampleOpening()
         val request = IdentifierResolveRequest.encrypted("phone#retail", "abcd", opening)

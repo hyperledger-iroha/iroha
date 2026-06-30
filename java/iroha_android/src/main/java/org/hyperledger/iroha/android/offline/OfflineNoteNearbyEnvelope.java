@@ -350,11 +350,11 @@ public final class OfflineNoteNearbyEnvelope {
     private final String assetName;
 
     public PairingChallenge(final String assetName) {
-      final String trimmed = Objects.requireNonNull(assetName, "assetName").trim();
-      if (!ASSET_NAMES.contains(trimmed)) {
+      final String value = Objects.requireNonNull(assetName, "assetName");
+      if (!ASSET_NAMES.contains(value)) {
         throw new IllegalArgumentException("Unsupported nearby pairing challenge");
       }
-      this.assetName = trimmed;
+      this.assetName = value;
     }
 
     public static PairingChallenge fromAssetName(final String value) {

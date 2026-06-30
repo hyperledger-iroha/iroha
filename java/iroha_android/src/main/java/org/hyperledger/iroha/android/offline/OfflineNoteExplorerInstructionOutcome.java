@@ -20,11 +20,11 @@ public final class OfflineNoteExplorerInstructionOutcome {
       final String transactionStatus,
       final String transactionHashHex,
       final byte[] encodedInstruction) {
-    if (kind == null || kind.trim().isEmpty()) {
-      throw new IllegalArgumentException("kind must not be blank");
+    if (!isExactNonEmpty(kind)) {
+      throw new IllegalArgumentException("kind must be an exact non-empty string");
     }
-    if (transactionStatus == null || transactionStatus.trim().isEmpty()) {
-      throw new IllegalArgumentException("transactionStatus must not be blank");
+    if (!isExactNonEmpty(transactionStatus)) {
+      throw new IllegalArgumentException("transactionStatus must be an exact non-empty string");
     }
     this.kind = kind;
     this.transactionStatus = transactionStatus;
@@ -33,6 +33,10 @@ public final class OfflineNoteExplorerInstructionOutcome {
     if (this.encodedInstruction.length == 0) {
       throw new IllegalArgumentException("encodedInstruction must not be empty");
     }
+  }
+
+  private static boolean isExactNonEmpty(final String value) {
+    return value != null && !value.isEmpty() && value.equals(value.trim());
   }
 
   public String kind() {

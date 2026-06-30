@@ -174,11 +174,13 @@ fn decode_verified_sccp_payload(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
 }
 
 fn decode_ascii_hex_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<Vec<u8>> {
-    let raw = std::str::from_utf8(payload_bytes).ok()?.trim();
+    let raw = std::str::from_utf8(payload_bytes).ok()?;
     let hex = raw.strip_prefix("0x").unwrap_or(raw);
     if hex.is_empty()
         || hex.len() % 2 != 0
-        || !hex.chars().all(|character| character.is_ascii_hexdigit())
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return None;
     }
@@ -1371,6 +1373,71 @@ mod tests {
         let messages = collect_sccp_messages_from_signed_block(&block);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].payload, expected_payload);
+    }
+
+    #[test]
+    fn collect_sccp_messages_accepts_lowercase_prefixed_hex_record_payload_bytes() {
+        let expected_payload =
+            sample_transfer_payload(7, b"0x0000000000000000000000000000000000000007");
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&expected_payload);
+        let encoded_payload = format!("0x{}", hex::encode(&payload)).into_bytes();
+        let (block, _) = signed_block_with_sccp_payloads(&[encoded_payload], 4);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload, expected_payload);
+    }
+
+    #[test]
+    fn collect_sccp_messages_rejects_noncanonical_hex_record_payload_bytes() {
+        let expected_payload =
+            sample_transfer_payload(8, b"0x0000000000000000000000000000000000000008");
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&expected_payload);
+        let lowercase_hex = hex::encode(&payload);
+        let uppercase_hex = lowercase_hex.to_ascii_uppercase();
+        let cases = [
+            uppercase_hex.as_bytes().to_vec(),
+            format!("0X{lowercase_hex}").into_bytes(),
+            format!(" {lowercase_hex}").into_bytes(),
+            format!("{lowercase_hex}\n").into_bytes(),
+            format!("{lowercase_hex}0").into_bytes(),
+            b"not-hex".to_vec(),
+        ];
+
+        for encoded_payload in cases {
+            let (block, _) = signed_block_with_sccp_payloads(&[encoded_payload], 5);
+            assert!(
+                collect_sccp_messages_from_signed_block(&block).is_empty(),
+                "noncanonical SCCP hex record payload must be ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_sccp_messages_ignores_noncanonical_hex_for_commitment_root() {
+        let accepted_payload =
+            sample_transfer_payload(9, b"0x0000000000000000000000000000000000000009");
+        let accepted_bytes = iroha_sccp::canonical_sccp_payload_bytes(&accepted_payload);
+        let accepted_hex = format!("0x{}", hex::encode(&accepted_bytes)).into_bytes();
+
+        let rejected_payload =
+            sample_transfer_payload(10, b"0x0000000000000000000000000000000000000010");
+        let rejected_bytes = iroha_sccp::canonical_sccp_payload_bytes(&rejected_payload);
+        let rejected_hex = hex::encode(&rejected_bytes);
+        let uppercase_alias = rejected_hex.to_ascii_uppercase().into_bytes();
+        let padded_alias = format!("{rejected_hex}\n").into_bytes();
+        let (block, _) =
+            signed_block_with_sccp_payloads(&[uppercase_alias, accepted_hex, padded_alias], 6);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload, accepted_payload);
+
+        let expected_commitment = iroha_sccp::hub_commitment_from_sccp_payload(&accepted_payload);
+        assert_eq!(
+            sccp_commitment_root_from_messages(&messages),
+            iroha_sccp::commitment_merkle_root(&[expected_commitment])
+        );
     }
 
     #[test]

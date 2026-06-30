@@ -5,6 +5,10 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -297,6 +301,26 @@ public final class AndroidOfflineNoteSecureStoreInstrumentedTest {
     }
   }
 
+  @Test
+  public void testWalletNoteJsonRejectsRetiredStateAliases() throws Exception {
+    final OfflineNoteWalletNote note = sourceWalletNote(loadFixture());
+    final String json = new String(encodeWalletNoteJson(note), StandardCharsets.UTF_8);
+    assertTrue(json.contains("\"state\":\"SPENDABLE\""));
+    for (final String retiredState :
+        Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")) {
+      final String retiredJson =
+          json.replace("\"state\":\"SPENDABLE\"", "\"state\":\"" + retiredState + "\"");
+      try {
+        decodeWalletNoteJson(retiredJson.getBytes(StandardCharsets.UTF_8));
+        fail("retired " + retiredState + " wallet-note state should reject");
+      } catch (final IllegalArgumentException expected) {
+        assertTrue(
+            "state decoder should name invalid retired state",
+            expected.getMessage().contains("invalid Offline Note wallet note state"));
+      }
+    }
+  }
+
   private static Map<String, ?> snapshot(final SharedPreferences preferences) {
     return new HashMap<>(preferences.getAll());
   }
@@ -336,6 +360,42 @@ public final class AndroidOfflineNoteSecureStoreInstrumentedTest {
         + parts[2]
         + ":"
         + Base64.encodeToString(ciphertext, Base64.NO_WRAP);
+  }
+
+  private static byte[] encodeWalletNoteJson(final OfflineNoteWalletNote note) throws Exception {
+    return (byte[]) walletNoteJsonCodecMethod("encode", OfflineNoteWalletNote.class)
+        .invoke(walletNoteJsonCodecInstance(), note);
+  }
+
+  private static OfflineNoteWalletNote decodeWalletNoteJson(final byte[] payload) throws Exception {
+    try {
+      return (OfflineNoteWalletNote) walletNoteJsonCodecMethod("decode", byte[].class)
+          .invoke(walletNoteJsonCodecInstance(), payload);
+    } catch (final InvocationTargetException exception) {
+      if (exception.getCause() instanceof IllegalArgumentException) {
+        throw (IllegalArgumentException) exception.getCause();
+      }
+      throw exception;
+    }
+  }
+
+  private static Object walletNoteJsonCodecInstance() throws Exception {
+    final Class<?> codec =
+        Class.forName(
+            "org.hyperledger.iroha.sdk.offline.wallet.AndroidOfflineNoteSecureStore$WalletNoteJsonCodec");
+    final java.lang.reflect.Field instance = codec.getDeclaredField("INSTANCE");
+    instance.setAccessible(true);
+    return instance.get(null);
+  }
+
+  private static Method walletNoteJsonCodecMethod(
+      final String name, final Class<?>... parameterTypes) throws Exception {
+    final Class<?> codec =
+        Class.forName(
+            "org.hyperledger.iroha.sdk.offline.wallet.AndroidOfflineNoteSecureStore$WalletNoteJsonCodec");
+    final Method method = codec.getDeclaredMethod(name, parameterTypes);
+    method.setAccessible(true);
+    return method;
   }
 
   private Map<String, Object> loadFixture() throws Exception {

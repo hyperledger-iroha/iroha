@@ -89,6 +89,14 @@ def validate_sdk_path(path: pathlib.Path, label: str) -> None:
         if parent.exists() and not parent.is_dir():
             sys.exit(f"[sorafs-sdk] {label} parent must be a directory: {parent}")
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS SDK artifact")
+        view = view[written:]
+
 def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
     if not path.exists():
         print(f"[sorafs-sdk] warning: fixture file missing ({path})", file=sys.stderr)
@@ -116,7 +124,7 @@ try:
         chunk = os.read(read_fd, 1024 * 1024)
         if not chunk:
             break
-        os.write(write_fd, chunk)
+        write_all(write_fd, chunk)
 finally:
     os.close(read_fd)
     if write_fd >= 0:
@@ -215,15 +223,21 @@ def read_text_artifact(path: Path, label: str) -> str:
         if fd >= 0:
             os.close(fd)
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS SDK artifact")
+        view = view[written:]
+
 def write_text_artifact(path: Path, body: str, label: str) -> None:
     validate_sdk_path(path, label)
     ensure_sdk_directory(path.parent, f"{label} parent directory")
     validate_sdk_path(path, label)
     fd = os.open(path, write_open_flags(), 0o666)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(body)
+        write_all(fd, body.encode("utf-8"))
     finally:
         if fd >= 0:
             os.close(fd)
@@ -389,12 +403,20 @@ def validate_sdk_path(path: pathlib.Path, label: str) -> None:
                 f"[sorafs-sdk] {label} parent must be a directory: {parent}"
             )
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS SDK artifact")
+        view = view[written:]
+
 validate_sdk_path(path, "results TSV")
 if path.exists() and not stat.S_ISREG(path.lstat().st_mode):
     raise SystemExit(f"[sorafs-sdk] results TSV must be a regular file: {path}")
 fd = os.open(path, append_open_flags(), 0o666)
 try:
-    os.write(fd, ("\t".join(fields) + "\n").encode("utf-8"))
+    write_all(fd, ("\t".join(fields) + "\n").encode("utf-8"))
 finally:
     os.close(fd)
 PY

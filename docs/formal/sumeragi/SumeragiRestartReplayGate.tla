@@ -314,28 +314,43 @@ RestartReplayActionExactFor(cases) ==
     candidate \in cases =>
       ImplementationActions(candidate) = SpecActions(candidate)
 
-RestartReplaySnapshotValidationExactness ==
+RestartReplaySnapshotValidationActionsMatchSpec ==
   RestartReplayActionExactFor(RestartReplaySnapshotValidationCases)
 
-RestartReplayKuraParityExactness ==
+RestartReplaySnapshotValidationExactness ==
+  /\ RestartReplaySnapshotValidationActionsMatchSpec
+
+RestartReplayKuraParityActionsMatchSpec ==
   RestartReplayActionExactFor(RestartReplayKuraParityCases)
 
-RestartReplayLegacyManifestExactness ==
+RestartReplayKuraParityExactness ==
+  /\ RestartReplayKuraParityActionsMatchSpec
+
+RestartReplayLegacyManifestActionsMatchSpec ==
   RestartReplayActionExactFor(RestartReplayLegacyManifestCases)
 
-RestartReplayWriteBackExactness ==
+RestartReplayLegacyManifestExactness ==
+  /\ RestartReplayLegacyManifestActionsMatchSpec
+
+RestartReplayWriteBackActionsMatchSpec ==
   RestartReplayActionExactFor(RestartReplayWriteBackCases)
 
-RestartReplayCanonicalCheckpointExactness ==
+RestartReplayWriteBackExactness ==
+  /\ RestartReplayWriteBackActionsMatchSpec
+
+RestartReplayCanonicalCheckpointActionsMatchSpec ==
   RestartReplayActionExactFor(RestartReplayCanonicalCheckpointCases)
+
+RestartReplayCanonicalCheckpointExactness ==
+  /\ RestartReplayCanonicalCheckpointActionsMatchSpec
 
 RestartReplayExactness ==
   /\ RestartReplayCaseGroupsComplete
-  /\ RestartReplayActionExactFor(RestartReplaySnapshotValidationCases)
-  /\ RestartReplayActionExactFor(RestartReplayKuraParityCases)
-  /\ RestartReplayActionExactFor(RestartReplayLegacyManifestCases)
-  /\ RestartReplayActionExactFor(RestartReplayWriteBackCases)
-  /\ RestartReplayActionExactFor(RestartReplayCanonicalCheckpointCases)
+  /\ RestartReplaySnapshotValidationActionsMatchSpec
+  /\ RestartReplayKuraParityActionsMatchSpec
+  /\ RestartReplayLegacyManifestActionsMatchSpec
+  /\ RestartReplayWriteBackActionsMatchSpec
+  /\ RestartReplayCanonicalCheckpointActionsMatchSpec
 
 RestartReplayCorrectnessEnvelope ==
   /\ TypeInvariant

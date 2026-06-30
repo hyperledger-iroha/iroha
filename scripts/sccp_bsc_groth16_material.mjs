@@ -394,11 +394,11 @@ function assertUnsignedCliMaterialize(options) {
 
 function optionEnabled(options, key, fallback = false) {
   const value = ownValue(options, key);
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined) {
     return fallback;
   }
-  if (value === "true" || value === true) return true;
-  if (value === "false" || value === false) return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
   throw new Error(`--${key} must be true or false.`);
 }
 
@@ -422,6 +422,63 @@ function optionalPath(options, names) {
     }
   }
   return null;
+}
+
+function optionalPathEntry(options, names) {
+  const keys = Array.isArray(names) ? names : [names];
+  for (const key of keys) {
+    const value = ownValue(options, key);
+    if (value !== undefined && trim(value) !== "") {
+      return {
+        path: resolve(String(value)),
+        label: `--${key}`,
+      };
+    }
+  }
+  return null;
+}
+
+function requiredPathEntry(options, names, label) {
+  const keys = Array.isArray(names) ? names : [names];
+  for (const key of keys) {
+    const value = ownValue(options, key);
+    if (value !== undefined && trim(value) !== "") {
+      return {
+        path: resolve(String(value)),
+        label: `--${key}`,
+      };
+    }
+  }
+  throw new Error(`${label} requires --${keys[0]}.`);
+}
+
+function assertDistinctResolvedPaths(leftPath, leftLabel, rightPath, rightLabel) {
+  if (resolve(leftPath) === resolve(rightPath)) {
+    throw new Error(`${leftLabel} must not be the same path as ${rightLabel}.`);
+  }
+}
+
+function assertOutputPathDistinctFromInputs(outPath, entries, outLabel = "--out") {
+  for (const entry of entries) {
+    if (entry?.path) {
+      assertDistinctResolvedPaths(outPath, outLabel, entry.path, entry.label);
+    }
+  }
+}
+
+function assertDistinctOutputEntries(entries) {
+  const seen = new Map();
+  for (const entry of entries) {
+    if (!entry?.path) {
+      continue;
+    }
+    const resolved = resolve(entry.path);
+    const existing = seen.get(resolved);
+    if (existing) {
+      throw new Error(`${entry.label} must not write the same path as ${existing}.`);
+    }
+    seen.set(resolved, entry.label);
+  }
 }
 
 function evidenceArtifactInputPathBlockers(pathName, label) {
@@ -5105,7 +5162,6 @@ export async function generateBscGroth16Material(options = {}) {
       `--circuit-profile must be ${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE} or ${BSC_FULL_SCCP_CIRCUIT_PROFILE}.`,
     );
   }
-  const externalCircuitSource = optionalPath(options, "circuit-source");
   const circomBin = commandValue(options, "circom-bin", "circom2");
   const snarkjsBin = commandValue(options, "snarkjs-bin", "snarkjs");
   const createLocalPowerValue = ownValue(options, "create-local-ptau-power");
@@ -5120,12 +5176,121 @@ export async function generateBscGroth16Material(options = {}) {
   if (localPtauRequested && profile.key !== "testnet") {
     throw new Error("local Powers of Tau generation is only allowed for testnet candidates.");
   }
-  await mkdir(outDir, { recursive: true });
-  const trustedSignerFingerprints = parseTrustedSignerFingerprints(options);
+  if (
+    localPtauRequested &&
+    (!Number.isSafeInteger(createLocalPower) ||
+      createLocalPower < 5 ||
+      createLocalPower > 28)
+  ) {
+    throw new Error("--create-local-ptau-power must be an integer from 5 to 28.");
+  }
   const artifactStem = circuitProfile;
   const circuitSourcePath = join(outDir, `${artifactStem}.circom`);
+  const r1csPath = join(outDir, `${artifactStem}.r1cs`);
+  const wasmPath = join(outDir, `${artifactStem}_js`, `${artifactStem}.wasm`);
+  const symPath = join(outDir, `${artifactStem}.sym`);
+  const zkeyInitialPath = join(outDir, `${artifactStem}.0000.zkey`);
+  const zkeyFinalPath = join(outDir, `${artifactStem}.final.zkey`);
+  const snarkjsVerifierKeyPath = join(
+    outDir,
+    `${artifactStem}.snarkjs-verification-key.json`,
+  );
+  const bscVerifierKeyPath = join(
+    outDir,
+    `${profile.key}-bsc-groth16-verifier-key.json`,
+  );
+  const materialManifestPath = join(
+    outDir,
+    `${profile.key}-bsc-groth16-material.manifest.json`,
+  );
+  const externalCircuitSource = optionalPathEntry(options, "circuit-source");
+  const ptauInput = localPtauRequested
+    ? null
+    : requiredPathEntry(options, "ptau", "Powers of Tau file");
+  const trustedSetupTranscriptInput = optionalPathEntry(options, [
+    "trusted-setup-transcript",
+    "contribution-transcript",
+    "ceremony-transcript",
+  ]);
+  const reproducibleBuildTranscriptInput = optionalPathEntry(options, [
+    "reproducible-build-transcript",
+    "build-transcript",
+  ]);
+  const generateOutputEntries = [
+    { path: circuitSourcePath, label: "BSC Groth16 circuit source output" },
+    { path: r1csPath, label: "BSC Groth16 R1CS output" },
+    { path: wasmPath, label: "BSC Groth16 witness WASM output" },
+    { path: symPath, label: "BSC Groth16 symbols output" },
+    { path: zkeyInitialPath, label: "BSC Groth16 initial proving key output" },
+    { path: zkeyFinalPath, label: "BSC Groth16 final proving key output" },
+    {
+      path: snarkjsVerifierKeyPath,
+      label: "BSC Groth16 SnarkJS verifier key output",
+    },
+    { path: bscVerifierKeyPath, label: "BSC Groth16 verifier key output" },
+    { path: materialManifestPath, label: "BSC Groth16 material manifest output" },
+    ...(localPtauRequested
+      ? [
+          {
+            path: join(
+              outDir,
+              `powersOfTau28_hez_${createLocalPower
+                .toString()
+                .padStart(2, "0")}_0000.ptau`,
+            ),
+            label: "BSC Groth16 local initial Powers of Tau output",
+          },
+          {
+            path: join(
+              outDir,
+              `powersOfTau28_hez_${createLocalPower
+                .toString()
+                .padStart(2, "0")}_0001.ptau`,
+            ),
+            label: "BSC Groth16 local contributed Powers of Tau output",
+          },
+          {
+            path: join(
+              outDir,
+              `powersOfTau28_hez_${createLocalPower
+                .toString()
+                .padStart(2, "0")}_final.ptau`,
+            ),
+            label: "BSC Groth16 local final Powers of Tau output",
+          },
+        ]
+      : []),
+    trustedSetupTranscriptInput
+      ? {
+          path: join(outDir, basename(trustedSetupTranscriptInput.path)),
+          label: "trusted setup transcript output",
+        }
+      : null,
+    reproducibleBuildTranscriptInput
+      ? {
+          path: join(outDir, basename(reproducibleBuildTranscriptInput.path)),
+          label: "reproducible build transcript output",
+        }
+      : null,
+  ].filter(Boolean);
+  assertDistinctOutputEntries(generateOutputEntries);
+  const inputEntries = [
+    externalCircuitSource,
+    ptauInput,
+    trustedSetupTranscriptInput,
+    reproducibleBuildTranscriptInput,
+  ].filter(Boolean);
+  for (const outputEntry of generateOutputEntries) {
+    assertOutputPathDistinctFromInputs(
+      outputEntry.path,
+      inputEntries,
+      outputEntry.label,
+    );
+  }
+  await mkdir(outDir, { recursive: true });
+  const trustedSignerFingerprints = parseTrustedSignerFingerprints(options);
   const resolvedCircuitSource =
-    externalCircuitSource ??
+    externalCircuitSource?.path ??
     (circuitProfile === BSC_FULL_SCCP_CIRCUIT_PROFILE
       ? await canonicalFullMessageCircuitSourcePath()
       : null);
@@ -5144,34 +5309,22 @@ export async function generateBscGroth16Material(options = {}) {
     "--wasm",
     "--sym",
     "-o",
-    outDir,
+      outDir,
   ]);
-  const r1csPath = join(outDir, `${artifactStem}.r1cs`);
-  const wasmPath = join(outDir, `${artifactStem}_js`, `${artifactStem}.wasm`);
-  const symPath = join(outDir, `${artifactStem}.sym`);
   const ptauPath = localPtauRequested
     ? await createLocalPtau({ snarkjsBin, outDir, power: createLocalPower })
-    : await assertReadableRegularFile(requiredOption(options, "ptau", "Powers of Tau file"), "Powers of Tau file");
-  const trustedSetupTranscriptInput = optionalPath(options, [
-    "trusted-setup-transcript",
-    "contribution-transcript",
-    "ceremony-transcript",
-  ]);
+    : await assertReadableRegularFile(ptauInput.path, "Powers of Tau file");
   const trustedSetupTranscriptPath = trustedSetupTranscriptInput
     ? await copyPublicFile(
-        trustedSetupTranscriptInput,
-        join(outDir, basename(trustedSetupTranscriptInput)),
+        trustedSetupTranscriptInput.path,
+        join(outDir, basename(trustedSetupTranscriptInput.path)),
         "trusted setup transcript",
       )
     : null;
-  const reproducibleBuildTranscriptInput = optionalPath(options, [
-    "reproducible-build-transcript",
-    "build-transcript",
-  ]);
   const reproducibleBuildTranscriptPath = reproducibleBuildTranscriptInput
     ? await copyPublicFile(
-        reproducibleBuildTranscriptInput,
-        join(outDir, basename(reproducibleBuildTranscriptInput)),
+        reproducibleBuildTranscriptInput.path,
+        join(outDir, basename(reproducibleBuildTranscriptInput.path)),
         "reproducible build transcript",
       )
     : null;
@@ -5212,67 +5365,128 @@ export async function materializeBscGroth16Material(options = {}) {
     ownValue(options, "out-dir") ??
       join(DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT, profile.key),
   );
-  await mkdir(outDir, { recursive: true });
-  const r1csPath = await copyPublicFile(
-    requiredOption(options, "r1cs", "R1CS artifact"),
-    join(outDir, basename(requiredOption(options, "r1cs", "R1CS artifact"))),
-    "R1CS artifact",
-  );
-  const zkeyPath = await copyPublicFile(
-    requiredOption(options, "zkey", "proving key"),
-    join(outDir, basename(requiredOption(options, "zkey", "proving key"))),
-    "proving key",
-  );
-  const snarkjsVerifierKeyPath = await copyPublicFile(
-    requiredOption(
-      options,
-      ["snarkjs-verifier-key", "verification-key"],
-      "SnarkJS verification key",
-    ),
-    join(
-      outDir,
-      basename(
-        requiredOption(
-          options,
-          ["snarkjs-verifier-key", "verification-key"],
-          "SnarkJS verification key",
-        ),
-      ),
-    ),
+  const r1csInput = requiredPathEntry(options, "r1cs", "R1CS artifact");
+  const zkeyInput = requiredPathEntry(options, "zkey", "proving key");
+  const snarkjsVerifierKeyInput = requiredPathEntry(
+    options,
+    ["snarkjs-verifier-key", "verification-key"],
     "SnarkJS verification key",
   );
-  const ptauInput = optionalPath(options, ["ptau", "powers-of-tau", "powersoftau"]);
-  const ptauPath = ptauInput
-    ? await copyPublicFile(
-        ptauInput,
-        join(outDir, basename(ptauInput)),
-        "Powers of Tau file",
-      )
-    : null;
-  const witnessWasmInput = optionalPath(options, [
+  const ptauInput = optionalPathEntry(options, ["ptau", "powers-of-tau", "powersoftau"]);
+  const witnessWasmInput = optionalPathEntry(options, [
     "witness-wasm",
     "witness-wasm-artifact",
     "wasm",
   ]);
+  const circuitProfile = trim(
+    ownValue(options, "circuit-profile") ?? BSC_FULL_SCCP_CIRCUIT_PROFILE,
+  );
+  const circuitSourceInput = optionalPathEntry(options, "circuit-source");
+  const resolvedCircuitSource =
+    circuitSourceInput?.path ??
+    (circuitProfile === BSC_FULL_SCCP_CIRCUIT_PROFILE
+      ? await canonicalFullMessageCircuitSourcePath()
+      : null);
+  const trustedSetupTranscriptInput = optionalPathEntry(options, [
+    "trusted-setup-transcript",
+    "contribution-transcript",
+    "ceremony-transcript",
+  ]);
+  const reproducibleBuildTranscriptInput = optionalPathEntry(options, [
+    "reproducible-build-transcript",
+    "build-transcript",
+  ]);
+  const copiedMaterialTargets = [
+    {
+      path: join(outDir, basename(r1csInput.path)),
+      label: r1csInput.label,
+    },
+    {
+      path: join(outDir, basename(zkeyInput.path)),
+      label: zkeyInput.label,
+    },
+    {
+      path: join(outDir, basename(snarkjsVerifierKeyInput.path)),
+      label: snarkjsVerifierKeyInput.label,
+    },
+    ptauInput
+      ? { path: join(outDir, basename(ptauInput.path)), label: ptauInput.label }
+      : null,
+    witnessWasmInput
+      ? {
+          path: join(outDir, basename(witnessWasmInput.path)),
+          label: witnessWasmInput.label,
+        }
+      : null,
+    resolvedCircuitSource
+      ? {
+          path: join(outDir, basename(resolvedCircuitSource)),
+          label: circuitSourceInput?.label ?? "canonical circuit source",
+        }
+      : null,
+    trustedSetupTranscriptInput
+      ? {
+          path: join(outDir, basename(trustedSetupTranscriptInput.path)),
+          label: trustedSetupTranscriptInput.label,
+        }
+      : null,
+    reproducibleBuildTranscriptInput
+      ? {
+          path: join(outDir, basename(reproducibleBuildTranscriptInput.path)),
+          label: reproducibleBuildTranscriptInput.label,
+        }
+      : null,
+  ].filter(Boolean);
+  assertDistinctOutputEntries(copiedMaterialTargets);
+  for (const fixedOutput of [
+    {
+      path: join(outDir, `${profile.key}-bsc-groth16-verifier-key.json`),
+      label: "BSC Groth16 verifier key output",
+    },
+    {
+      path: join(outDir, `${profile.key}-bsc-groth16-material.manifest.json`),
+      label: "BSC Groth16 material manifest output",
+    },
+  ]) {
+    assertOutputPathDistinctFromInputs(
+      fixedOutput.path,
+      copiedMaterialTargets,
+      fixedOutput.label,
+    );
+  }
+  await mkdir(outDir, { recursive: true });
+  const r1csPath = await copyPublicFile(
+    r1csInput.path,
+    join(outDir, basename(r1csInput.path)),
+    "R1CS artifact",
+  );
+  const zkeyPath = await copyPublicFile(
+    zkeyInput.path,
+    join(outDir, basename(zkeyInput.path)),
+    "proving key",
+  );
+  const snarkjsVerifierKeyPath = await copyPublicFile(
+    snarkjsVerifierKeyInput.path,
+    join(outDir, basename(snarkjsVerifierKeyInput.path)),
+    "SnarkJS verification key",
+  );
+  const ptauPath = ptauInput
+    ? await copyPublicFile(
+        ptauInput.path,
+        join(outDir, basename(ptauInput.path)),
+        "Powers of Tau file",
+      )
+    : null;
   const defaultWitnessWasmPath = defaultWitnessWasmPathFromR1cs(r1csPath);
   const wasmPath = witnessWasmInput
     ? await copyPublicFile(
-        witnessWasmInput,
-        join(outDir, basename(witnessWasmInput)),
+        witnessWasmInput.path,
+        join(outDir, basename(witnessWasmInput.path)),
         "witness WASM artifact",
       )
     : existsSync(defaultWitnessWasmPath)
       ? defaultWitnessWasmPath
       : null;
-  const circuitSourceInput = optionalPath(options, "circuit-source");
-  const circuitProfile = trim(
-    ownValue(options, "circuit-profile") ?? BSC_FULL_SCCP_CIRCUIT_PROFILE,
-  );
-  const resolvedCircuitSource =
-    circuitSourceInput ??
-    (circuitProfile === BSC_FULL_SCCP_CIRCUIT_PROFILE
-      ? await canonicalFullMessageCircuitSourcePath()
-      : null);
   const circuitSourcePath = resolvedCircuitSource
     ? await copyPublicFile(
         resolvedCircuitSource,
@@ -5280,26 +5494,17 @@ export async function materializeBscGroth16Material(options = {}) {
         "circuit source",
       )
     : null;
-  const trustedSetupTranscriptInput = optionalPath(options, [
-    "trusted-setup-transcript",
-    "contribution-transcript",
-    "ceremony-transcript",
-  ]);
   const trustedSetupTranscriptPath = trustedSetupTranscriptInput
     ? await copyPublicFile(
-        trustedSetupTranscriptInput,
-        join(outDir, basename(trustedSetupTranscriptInput)),
+        trustedSetupTranscriptInput.path,
+        join(outDir, basename(trustedSetupTranscriptInput.path)),
         "trusted setup transcript",
       )
     : null;
-  const reproducibleBuildTranscriptInput = optionalPath(options, [
-    "reproducible-build-transcript",
-    "build-transcript",
-  ]);
   const reproducibleBuildTranscriptPath = reproducibleBuildTranscriptInput
     ? await copyPublicFile(
-        reproducibleBuildTranscriptInput,
-        join(outDir, basename(reproducibleBuildTranscriptInput)),
+        reproducibleBuildTranscriptInput.path,
+        join(outDir, basename(reproducibleBuildTranscriptInput.path)),
         "reproducible build transcript",
       )
     : null;
@@ -6639,12 +6844,21 @@ async function runBscGroth16AdversarialChecks({
 }
 
 export async function runBscGroth16ProofSelfTest(options = {}) {
+  const manifestOption = requiredOption(
+    options,
+    ["manifest", "material-manifest", "groth16-material-manifest"],
+    "BSC Groth16 proof self-test",
+  );
+  const explicitOutPath = optionalPath(options, "out");
+  const explicitInputPathEntries = [
+    { path: resolve(String(manifestOption)), label: "--manifest" },
+    optionalPathEntry(options, ["witness-wasm", "wasm"]),
+  ];
+  if (explicitOutPath) {
+    assertOutputPathDistinctFromInputs(explicitOutPath, explicitInputPathEntries);
+  }
   const manifestPath = await assertReadableRegularFile(
-    requiredOption(
-      options,
-      ["manifest", "material-manifest", "groth16-material-manifest"],
-      "BSC Groth16 proof self-test",
-    ),
+    manifestOption,
     "BSC Groth16 material manifest",
   );
   const manifest = await readJson(manifestPath, "BSC Groth16 material manifest");
@@ -6742,6 +6956,21 @@ export async function runBscGroth16ProofSelfTest(options = {}) {
   );
   const snarkjsBin = commandValue(options, "snarkjs-bin", "snarkjs");
   const sample = bscGroth16SelfTestInput(profile);
+  const outPath =
+    explicitOutPath ??
+    join(dirname(manifestPath), `${profile.key}-bsc-groth16-proof-self-test.json`);
+  assertOutputPathDistinctFromInputs(outPath, [
+    { path: manifestPath, label: "--manifest" },
+    { path: resolvedArtifacts.circuitSource, label: "material manifest circuitSource" },
+    { path: resolvedArtifacts.r1cs, label: "material manifest r1cs" },
+    { path: resolvedArtifacts.provingKey, label: "material manifest provingKey" },
+    {
+      path: resolvedArtifacts.snarkjsVerificationKey,
+      label: "material manifest snarkjsVerificationKey",
+    },
+    { path: resolvedArtifacts.bscVerifierKey, label: "material manifest bscVerifierKey" },
+    { path: witnessWasm, label: "--witness-wasm" },
+  ]);
   const tempRoot = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-self-test-"));
   try {
     const inputPath = join(tempRoot, "input.json");
@@ -6836,9 +7065,6 @@ export async function runBscGroth16ProofSelfTest(options = {}) {
       proof,
       publicSignals,
     };
-    const outPath =
-      optionalPath(options, "out") ??
-      join(dirname(manifestPath), `${profile.key}-bsc-groth16-proof-self-test.json`);
     await writePublicJson(outPath, report);
     return {
       ok: true,
@@ -7530,12 +7756,33 @@ export async function writeBscGroth16TranscriptTemplates(options = {}) {
   const indexPath =
     optionalPath(options, "out") ??
     join(outDir, `${profile.key}-bsc-groth16-transcript-templates.json`);
-  for (const [pathName, label] of [
-    [trustedSetupTranscriptPath, "trusted setup transcript template"],
-    [reproducibleBuildTranscriptPath, "reproducible build transcript template"],
-    [indexPath, "BSC Groth16 transcript template index"],
-  ]) {
-    assertTemplateOutputAvailable(pathName, overwrite, label);
+  const transcriptOutputEntries = [
+    { path: trustedSetupTranscriptPath, label: "trusted setup transcript template" },
+    {
+      path: reproducibleBuildTranscriptPath,
+      label: "reproducible build transcript template",
+    },
+    { path: indexPath, label: "BSC Groth16 transcript template index" },
+  ];
+  const transcriptInputEntries = [
+    { path: r1csPath, label: "--r1cs" },
+    { path: zkeyPath, label: "--zkey" },
+    { path: ptauPath, label: "--ptau" },
+    { path: snarkjsVerifierKeyPath, label: "--snarkjs-verifier-key" },
+    {
+      path: circuitSourcePath,
+      label: circuitSourceInput ? "--circuit-source" : "canonical circuit source",
+    },
+    witnessWasmPath ? { path: witnessWasmPath, label: "--witness-wasm" } : null,
+  ];
+  assertDistinctOutputEntries(transcriptOutputEntries);
+  for (const output of transcriptOutputEntries) {
+    assertOutputPathDistinctFromInputs(
+      output.path,
+      transcriptInputEntries,
+      output.label,
+    );
+    assertTemplateOutputAvailable(output.path, overwrite, output.label);
   }
   const snarkjsVerifierKey = await readJson(
     snarkjsVerifierKeyPath,
@@ -7698,6 +7945,16 @@ export async function fingerprintBscGroth16Toolchain(options = {}) {
     "reproducible-build-transcript",
     "build-transcript",
   ]);
+  const defaultOut = transcriptPath
+    ? join(
+        dirname(transcriptPath),
+        `${basename(transcriptPath, ".json")}.with-toolchain-hashes.json`,
+      )
+    : join(process.cwd(), "bsc-groth16-toolchain-fingerprint.json");
+  const outPath = optionalPath(options, "out") ?? defaultOut;
+  if (transcriptPath) {
+    assertDistinctResolvedPaths(outPath, "--out", transcriptPath, "--transcript");
+  }
   const transcript = transcriptPath
     ? await readJson(transcriptPath, "reproducible build transcript")
     : null;
@@ -7754,13 +8011,6 @@ export async function fingerprintBscGroth16Toolchain(options = {}) {
         toolchain,
         toolchainSha256,
       };
-  const defaultOut = transcriptPath
-    ? join(
-        dirname(transcriptPath),
-        `${basename(transcriptPath, ".json")}.with-toolchain-hashes.json`,
-      )
-    : join(process.cwd(), "bsc-groth16-toolchain-fingerprint.json");
-  const outPath = optionalPath(options, "out") ?? defaultOut;
   await writePublicJson(outPath, body);
   return {
     ok: true,
@@ -7893,14 +8143,25 @@ export async function writeBscGroth16EvidenceTemplates(options = {}) {
   const indexPath =
     optionalPath(options, "out") ??
     join(outDir, `${profile.key}-bsc-groth16-evidence-templates.json`);
-  for (const [pathName, label] of [
-    [semanticReportPath, "semantic review report template"],
-    [circuitReportPath, "circuit security audit report template"],
-    [semanticEvidencePath, "semantic review evidence template"],
-    [circuitEvidencePath, "circuit security audit evidence template"],
-    [indexPath, "BSC Groth16 evidence template index"],
-  ]) {
-    assertTemplateOutputAvailable(pathName, overwrite, label);
+  const evidenceOutputEntries = [
+    { path: semanticReportPath, label: "semantic review report template" },
+    { path: circuitReportPath, label: "circuit security audit report template" },
+    { path: semanticEvidencePath, label: "semantic review evidence template" },
+    {
+      path: circuitEvidencePath,
+      label: "circuit security audit evidence template",
+    },
+    { path: indexPath, label: "BSC Groth16 evidence template index" },
+  ];
+  assertDistinctOutputEntries(evidenceOutputEntries);
+  for (const output of evidenceOutputEntries) {
+    assertDistinctResolvedPaths(
+      output.path,
+      output.label,
+      manifestPath,
+      "--manifest",
+    );
+    assertTemplateOutputAvailable(output.path, overwrite, output.label);
   }
   const semanticReportText = evidenceTemplateReportText("semantic", commonBody);
   const circuitReportText = evidenceTemplateReportText("circuit-security", commonBody);
@@ -7986,13 +8247,15 @@ export async function writeBscGroth16EvidenceTemplates(options = {}) {
 }
 
 function optionalHandoffPath(options, names, defaultPath) {
-  const explicit = optionalPath(options, names);
+  const explicit = optionalPathEntry(options, names);
   if (explicit) {
-    return { path: explicit, explicit: true };
+    return { path: explicit.path, explicit: true, label: explicit.label };
   }
+  const defaultLabel = `--${Array.isArray(names) ? names[0] : names}`;
   return {
     path: existsSync(resolve(defaultPath)) ? resolve(defaultPath) : null,
     explicit: false,
+    label: defaultLabel,
   };
 }
 
@@ -8112,12 +8375,32 @@ function attestationRequestStatusOptions(options, requestPath) {
 }
 
 export async function writeBscGroth16AttestationHandoff(options = {}) {
+  const manifestOption = requiredOption(
+    options,
+    ["manifest", "material-manifest", "groth16-material-manifest"],
+    "BSC Groth16 attestation handoff",
+  );
+  const explicitOutPath = optionalPath(options, "out");
+  const explicitInputPathEntries = [
+    { path: resolve(String(manifestOption)), label: "--manifest" },
+    optionalPathEntry(options, [
+      "transcript-template",
+      "transcript-template-package",
+      "transcript-templates",
+      "transcript-package",
+    ]),
+    optionalPathEntry(options, [
+      "evidence-template",
+      "evidence-template-package",
+      "evidence-templates",
+    ]),
+    optionalPathEntry(options, ["request", "attestation-request", "request-package"]),
+  ];
+  if (explicitOutPath) {
+    assertOutputPathDistinctFromInputs(explicitOutPath, explicitInputPathEntries);
+  }
   const manifestPath = await assertReadableRegularFile(
-    requiredOption(
-      options,
-      ["manifest", "material-manifest", "groth16-material-manifest"],
-      "BSC Groth16 attestation handoff",
-    ),
+    manifestOption,
     "BSC Groth16 material manifest",
   );
   const manifest = await readJson(manifestPath, "BSC Groth16 material manifest");
@@ -8157,6 +8440,7 @@ export async function writeBscGroth16AttestationHandoff(options = {}) {
     );
     if (existsSync(resolve(fallback))) {
       transcriptPackage.path = resolve(fallback);
+      transcriptPackage.label = "--transcript-template";
     }
   }
   const evidencePackage = optionalHandoffPath(
@@ -8175,8 +8459,16 @@ export async function writeBscGroth16AttestationHandoff(options = {}) {
   );
   const overwrite = optionEnabled(options, "overwrite", false);
   const outPath =
-    optionalPath(options, "out") ??
+    explicitOutPath ??
     join(materialDir, `${profile.key}-bsc-groth16-attestation-handoff.json`);
+  assertOutputPathDistinctFromInputs(outPath, [
+    { path: manifestPath, label: "--manifest" },
+    transcriptPackage.path
+      ? { path: transcriptPackage.path, label: transcriptPackage.label }
+      : null,
+    evidencePackage.path ? { path: evidencePackage.path, label: evidencePackage.label } : null,
+    requestPackage.path ? { path: requestPackage.path, label: requestPackage.label } : null,
+  ]);
   assertTemplateOutputAvailable(outPath, overwrite, "BSC Groth16 attestation handoff");
   const handoffDir = dirname(resolve(outPath));
 
@@ -9144,12 +9436,22 @@ export async function verifyBscGroth16AttestationHandoff(options = {}) {
 }
 
 export async function generateBscGroth16AttestationRequestPackage(options = {}) {
+  const manifestOption = requiredOption(
+    options,
+    ["manifest", "material-manifest", "groth16-material-manifest"],
+    "attestation request package",
+  );
+  const explicitOutPath = optionalPath(options, "out");
+  const inputPathEntries = [
+    { path: resolve(String(manifestOption)), label: "--manifest" },
+    optionalPathEntry(options, BSC_GROTH16_SEMANTIC_REVIEW_EVIDENCE_OPTION_NAMES),
+    optionalPathEntry(options, BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_OPTION_NAMES),
+  ];
+  if (explicitOutPath) {
+    assertOutputPathDistinctFromInputs(explicitOutPath, inputPathEntries);
+  }
   const manifestPath = await assertReadableRegularFile(
-    requiredOption(
-      options,
-      ["manifest", "material-manifest", "groth16-material-manifest"],
-      "attestation request package",
-    ),
+    manifestOption,
     "BSC Groth16 material manifest",
   );
   const manifest = await readJson(manifestPath, "BSC Groth16 material manifest");
@@ -9331,8 +9633,9 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
     },
   };
   const outPath =
-    optionalPath(options, "out") ??
+    explicitOutPath ??
     join(dirname(manifestPath), `${profile.key}-bsc-groth16-attestation-request.json`);
+  assertOutputPathDistinctFromInputs(outPath, inputPathEntries);
   await writePublicJson(outPath, packageBody);
   return {
     ok: true,
@@ -10085,12 +10388,25 @@ function signedAttestationRecord({ body, privateKey, publicKeyPem, signerFingerp
 }
 
 export async function signBscGroth16AttestationRole(options = {}) {
+  const requestOption = requiredOption(
+    options,
+    ["request", "attestation-request", "request-package"],
+    "attestation signing",
+  );
+  const privateKeyOption = requiredOption(
+    options,
+    ["private-key-pem", "private-key-file", "ed25519-private-key"],
+    "attestation signing",
+  );
+  const explicitOutPath = optionalPath(options, "out");
+  if (explicitOutPath) {
+    assertDistinctResolvedPaths(explicitOutPath, "--out", requestOption, "--request");
+    if (resolve(explicitOutPath) === resolve(String(privateKeyOption))) {
+      throw new Error("attestation signing output must not overwrite the private key file.");
+    }
+  }
   const requestPath = await assertReadableRegularFile(
-    requiredOption(
-      options,
-      ["request", "attestation-request", "request-package"],
-      "attestation signing",
-    ),
+    requestOption,
     "BSC Groth16 attestation request package",
   );
   const request = await readJson(
@@ -10141,11 +10457,7 @@ export async function signBscGroth16AttestationRole(options = {}) {
     publicKeyPem,
     signerFingerprint,
   } = await readEd25519PrivateKey(
-    requiredOption(
-      options,
-      ["private-key-pem", "private-key-file", "ed25519-private-key"],
-      "attestation signing",
-    ),
+    privateKeyOption,
   );
   const explicitFingerprint = ownValue(options, "signer-fingerprint");
   if (explicitFingerprint !== undefined && trim(explicitFingerprint) !== "") {
@@ -10166,8 +10478,9 @@ export async function signBscGroth16AttestationRole(options = {}) {
     signerFingerprint,
   });
   const outPath =
-    optionalPath(options, "out") ??
+    explicitOutPath ??
     join(dirname(requestPath), `${profile.key}-bsc-groth16-${roleKey}-attestation.json`);
+  assertDistinctResolvedPaths(outPath, "--out", requestPath, "--request");
   if (resolve(outPath) === privateKeyPath) {
     throw new Error("attestation signing output must not overwrite the private key file.");
   }
@@ -10803,12 +11116,26 @@ export async function inventoryBscGroth16Attestations(options = {}) {
 }
 
 export async function finalizeBscGroth16Attestations(options = {}) {
+  const requestOption = requiredOption(
+    options,
+    ["request", "attestation-request", "request-package"],
+    "attestation finalization",
+  );
+  const explicitOutDir = optionalPath(options, "out-dir");
+  if (explicitOutDir) {
+    assertOutputPathDistinctFromInputs(
+      explicitOutDir,
+      [
+        { path: resolve(String(requestOption)), label: "--request" },
+        ...BSC_GROTH16_ATTESTATION_ROLE_SPECS.map((spec) =>
+          optionalPathEntry(options, spec.optionNames),
+        ),
+      ],
+      "--out-dir",
+    );
+  }
   const requestPath = await assertReadableRegularFile(
-    requiredOption(
-      options,
-      ["request", "attestation-request", "request-package"],
-      "attestation finalization",
-    ),
+    requestOption,
     "BSC Groth16 attestation request package",
   );
   const request = await readJson(

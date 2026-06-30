@@ -34,8 +34,8 @@ class OfflineNoteIssuerDeviceBinding(
     private val _deviceBinding = deepCopyObject(rejectRetiredDeviceBindingAliases(deviceBinding))
 
     init {
-        require(deviceId.trim().isNotEmpty()) { "deviceId must not be blank" }
-        require(offlinePublicKey.trim().isNotEmpty()) { "offlinePublicKey must not be blank" }
+        require(isExactNonEmptyText(deviceId)) { "deviceId must be exact non-empty text" }
+        require(isExactNonEmptyText(offlinePublicKey)) { "offlinePublicKey must be exact non-empty text" }
         (_deviceBinding["device_id"] as? String)?.let {
             require(it == deviceId) { "device_binding.device_id must match deviceId" }
         }
@@ -46,14 +46,22 @@ class OfflineNoteIssuerDeviceBinding(
         }
     }
 
-    fun attestationKeyId(): String =
-        (_deviceBinding["attestation_key_id"] as? String)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+    fun attestationKeyId(): String {
+        val keyId = (_deviceBinding["attestation_key_id"] as? String)
             ?: throw IllegalStateException("device_binding.attestation_key_id is required")
+        if (keyId.isEmpty()) {
+            throw IllegalStateException("device_binding.attestation_key_id is required")
+        }
+        if (!isExactNonEmptyText(keyId)) {
+            throw IllegalStateException("device_binding.attestation_key_id must be exact non-empty text")
+        }
+        return keyId
+    }
 
     fun deviceBinding(): Map<String, Any?> = deepCopyObject(_deviceBinding)
 }
+
+private fun isExactNonEmptyText(value: String): Boolean = value.isNotEmpty() && value == value.trim()
 
 private fun rejectRetiredDeviceBindingAliases(deviceBinding: Map<String, Any?>): Map<String, Any?> {
     for (retiredKey in RETIRED_ASSERTION_PUBLIC_KEY_ALIAS_FIELDS) {

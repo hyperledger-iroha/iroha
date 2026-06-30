@@ -520,6 +520,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/Halo2PastaTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineProofVerifierTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
@@ -644,6 +645,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashPolicyV1.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteExplorerInstructionOutcome.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteOutcomeIndex.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalEntry.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalException.java",
@@ -651,12 +653,19 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/NativeOfflineNoteProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashTextCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequestCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiptAckCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteNearbyEnvelope.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteIssuerDeviceBinding.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
@@ -802,6 +811,8 @@ SOURCE_PATHS = (
     "java/norito_java/src/main/java/org/hyperledger/iroha/norito/SchemaHash.java",
     "java/norito_java/src/main/java/org/hyperledger/iroha/norito/TypeAdapter.java",
     "java/norito_java/src/main/java/org/hyperledger/iroha/norito/Varint.java",
+    "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStore.kt",
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt",
@@ -888,14 +899,22 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/NativeOfflineNoteProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteTransportProtocols.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineQrStream.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt",
@@ -1247,6 +1266,7 @@ PYTHON_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_python_sdk.sh"
 PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs --lib -- --test-threads=1"
 PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes --lib -- --test-threads=1"
 PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture"
+PYTHON_CONFIDENTIAL_INPUT_DIVERSIFIER_NATIVE_GUARD_COMMAND = "cargo test -p iroha_python_rs python_confidential_transfer_input_requires_canonical_diversifier -- --nocapture"
 ABI7_SDK_MANIFEST_COVERAGE = {
     "python/iroha_python/tests/kagemusha_test.py": (
         "_shared_recursive_spend_abi7_manifest",
@@ -1480,6 +1500,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift key-refill attestation alias negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-key-refill-attestation-alias",
+    ),
+    (
+        "Swift Offline Cash API note commitment exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-cash-api-note-commitment-exactness",
+    ),
+    (
+        "Swift Offline Cash API redemption hash exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-cash-api-redemption-hash-exactness",
     ),
     (
         "Mobile retired QR prefix wording negative control",
@@ -1878,6 +1906,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-halo2-vk-hash",
     ),
     (
+        "mobile OpenVerifyEnvelope public-input hash exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-open-verify-public-input-hash-exactness",
+    ),
+    (
         "Rust recursive compact unavailable classifier negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-rust-recursive-compact-unavailable-classifier",
     ),
@@ -2076,6 +2108,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JVM offline list asset selector exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-asset-selector-exactness",
+    ),
+    (
+        "JVM offline list verdict id hex exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-verdict-id-hex-exactness",
     ),
     (
         "multisig resolved account exactness negative control",
@@ -2546,12 +2582,76 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bearer-cash-policy-validation",
     ),
     (
+        "Mobile Offline Bearer Cash text exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-bearer-cash-text-exactness",
+    ),
+    (
+        "Mobile Nearby pairing challenge exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-nearby-pairing-challenge-exactness",
+    ),
+    (
+        "Mobile Offline Note explorer outcome exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-outcome-exactness",
+    ),
+    (
+        "Mobile Offline Note outcome encoded instruction exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-outcome-encoded-instruction-exactness",
+    ),
+    (
+        "Swift transfer text payload exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-transfer-text-payload-exactness",
+    ),
+    (
+        "Mobile QR stream text exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-qr-stream-text-exactness",
+    ),
+    (
+        "Kotlin Offline Bearer Cash text exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-bearer-cash-text-exactness",
+    ),
+    (
+        "Kotlin Offline Note explorer outcome exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-outcome-exactness",
+    ),
+    (
+        "Kotlin Offline Note payment token commitment exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-payment-token-commitment-exactness",
+    ),
+    (
+        "Swift Offline Note payment token commitment exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-payment-token-commitment-exactness",
+    ),
+    (
         "Kotlin offline cash settlement coverage negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage",
     ),
     (
+        "Kotlin offline cash request strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-request-strictness",
+    ),
+    (
         "Kotlin offline wallet compact certificate profile negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-compact-certificate-profile",
+    ),
+    (
+        "Kotlin offline wallet recursive proof strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-recursive-proof-strictness",
+    ),
+    (
+        "Kotlin offline wallet device binding alias strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-device-binding-alias-strictness",
+    ),
+    (
+        "Kotlin offline wallet attestation payload strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-attestation-payload-strictness",
+    ),
+    (
+        "Kotlin offline wallet signed payload strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-signed-payload-strictness",
+    ),
+    (
+        "Kotlin offline wallet state collection strictness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-state-collection-strictness",
     ),
     (
         "Kotlin offline wallet amount normalization negative control",
@@ -2628,6 +2728,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Mobile wallet-note retired state migration negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-retired-state-migration",
+    ),
+    (
+        "Mobile wallet-note commitment hex exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-commitment-hex-exactness",
     ),
     (
         "Mobile Offline Note draft proof replacement negative control",
@@ -8870,6 +8974,992 @@ def check_mobile_bearer_cash_policy_validation(texts, errors):
     )
 
 
+def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
+    swift_note_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    swift_text_source = "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    java_base64_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java"
+    )
+    java_text_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashTextCodec.java"
+    )
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    swift_codecs = (
+        (
+            "public enum OfflineNoteReceiveRequestCodec",
+            "public struct OfflineNotePaymentToken",
+            "Swift Offline Bearer Cash receive text exactness source block",
+        ),
+        (
+            "public enum OfflineNotePaymentTokenCodec",
+            "public struct OfflineNoteReceiptAck",
+            "Swift Offline Bearer Cash payment text exactness source block",
+        ),
+        (
+            "public enum OfflineNoteReceiptAckCodec",
+            "public protocol OfflineNoteTransactionSubmitter",
+            "Swift Offline Bearer Cash ACK text exactness source block",
+        ),
+    )
+    for start, end, label in swift_codecs:
+        require_block_contains(
+            texts,
+            swift_note_source,
+            start,
+            end,
+            (
+                "public static func decodeText(_ text: String)",
+                "guard text.hasPrefix(textPrefix)",
+                "String(text.dropFirst(textPrefix.count))",
+            ),
+            label,
+            errors,
+        )
+        require_block_not_regex(
+            texts,
+            swift_note_source,
+            start,
+            end,
+            r"let\s+trimmed\s*=\s*text\.trimmingCharacters\(in:\s*\.whitespacesAndNewlines\)|trimmed\.hasPrefix\(textPrefix\)|trimmed\.dropFirst\(textPrefix\.count\)",
+            f"{label} whitespace normalization",
+            errors,
+        )
+    swift_note_text = texts[swift_note_source]
+    require(
+        swift_note_text.count('guard !value.isEmpty,\n              !value.contains("="),') >= 3,
+        "Swift Offline Bearer Cash base64url text exactness source missing exact empty-payload checks",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        swift_note_source,
+        r"guard\s+!value\.trimmingCharacters\(in:\s*\.whitespacesAndNewlines\)\.isEmpty,\s*!value\.contains\(\"=\"\)",
+        "Swift Offline Bearer Cash base64url text exactness source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        swift_text_source,
+        "public static func payloadKind(_ text: String)",
+        "private static func isBase64UrlCharacter",
+        (
+            "hasExactUnpaddedBase64UrlPayload(text, prefix: receiveRequestTextPrefix)",
+            "hasExactUnpaddedBase64UrlPayload(text, prefix: paymentTextPrefix)",
+            "hasExactUnpaddedBase64UrlPayload(text, prefix: ackTextPrefix)",
+        ),
+        "Swift Offline Bearer Cash payload kind exactness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        swift_text_source,
+        "private static func hasExactUnpaddedBase64UrlPayload",
+        "private static func isBase64UrlCharacter",
+        (
+            "guard text.hasPrefix(prefix)",
+            "payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload",
+            "!payload.contains(\"=\")",
+            "payload.unicodeScalars.allSatisfy(isBase64UrlCharacter)",
+        ),
+        "Swift Offline Bearer Cash payload kind payload exactness source block",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        swift_text_source,
+        "public static func payloadKind(_ text: String)",
+        "private static func hasExactUnpaddedBase64UrlPayload",
+        r"let\s+trimmed\s*=\s*text\.trimmingCharacters\(in:\s*\.whitespacesAndNewlines\)|trimmed\.hasPrefix",
+        "Swift Offline Bearer Cash payload kind whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            'OfflineNotePaymentTokenCodec.decodeText(" \\(text)")',
+            'OfflineNotePaymentTokenCodec.decodeText("\\(text)\\n")',
+            'OfflineBearerCashTextCodec.decodePaymentText("\\t\\(text)")',
+            'XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" \\(text)"))',
+            'XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA"))',
+            'OfflineNoteReceiveRequestCodec.decodeText(" \\(text)")',
+            'OfflineBearerCashTextCodec.decodeReceiveRequestText("\\(text)\\n")',
+            'XCTAssertNil(OfflineBearerCashTextCodec.payloadKind("\\(text) "))',
+            "func testOfflineNoteReceiptAckCodecRejectsWhitespaceWrappedText() throws",
+            'OfflineNoteReceiptAckCodec.decodeText(" \\(text)")',
+            'OfflineBearerCashTextCodec.decodeAckText("\\(text)\\t")',
+            'XCTAssertNil(OfflineBearerCashTextCodec.payloadKind("\\n\\(text)"))',
+        ),
+        "Swift Offline Bearer Cash text exactness tests",
+        errors,
+    )
+    java_codecs = (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequestCodec.java",
+            "Android Java Offline Bearer Cash receive text exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
+            "Android Java Offline Bearer Cash payment text exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiptAckCodec.java",
+            "Android Java Offline Bearer Cash ACK text exactness source",
+        ),
+    )
+    for source, label in java_codecs:
+        require_contains(
+            texts,
+            source,
+            (
+                'final String value = Objects.requireNonNull(text, "text");',
+                "if (!value.startsWith(TEXT_PREFIX))",
+                "value.substring(TEXT_PREFIX.length())",
+            ),
+            label,
+            errors,
+        )
+        require_not_regex(
+            texts,
+            source,
+            r"final\s+String\s+trimmed\s*=\s*Objects\.requireNonNull\(text,\s*\"text\"\)\.trim\(\)|trimmed\.startsWith\(TEXT_PREFIX\)|trimmed\.substring\(TEXT_PREFIX\.length\(\)\)",
+            f"{label} whitespace normalization",
+            errors,
+        )
+    require_contains(
+        texts,
+        java_base64_source,
+        ('if (payload.isEmpty() || payload.indexOf(\'=\') >= 0)',),
+        "Android Java Offline Bearer Cash base64url text exactness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        java_base64_source,
+        r"payload\.trim\(\)\.isEmpty\(\)",
+        "Android Java Offline Bearer Cash base64url text exactness source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_text_source,
+        "public static OfflineBearerCashPayloadKindV1 payloadKind",
+        "private static boolean hasExactUnpaddedBase64UrlPayload",
+        (
+            "hasExactUnpaddedBase64UrlPayload(value, RECEIVE_REQUEST_TEXT_PREFIX)",
+            "hasExactUnpaddedBase64UrlPayload(value, PAYMENT_TEXT_PREFIX)",
+            "hasExactUnpaddedBase64UrlPayload(value, ACK_TEXT_PREFIX)",
+        ),
+        "Android Java Offline Bearer Cash payload kind exactness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_text_source,
+        "private static boolean hasExactUnpaddedBase64UrlPayload",
+        "private static boolean isBase64UrlCharacter",
+        (
+            "if (!text.startsWith(prefix))",
+            "payload.isEmpty()",
+            "!payload.trim().equals(payload)",
+            "payload.indexOf('=') >= 0",
+            "!isBase64UrlCharacter(payload.charAt(index))",
+        ),
+        "Android Java Offline Bearer Cash payload kind payload exactness source block",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        java_text_source,
+        "public static OfflineBearerCashPayloadKindV1 payloadKind",
+        "private static boolean hasExactUnpaddedBase64UrlPayload",
+        r"final\s+String\s+trimmed\s*=\s*Objects\.requireNonNull\(text,\s*\"text\"\)\.trim\(\)|trimmed\.startsWith",
+        "Android Java Offline Bearer Cash payload kind whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            'OfflineNotePaymentTokenCodec.decodeText(" " + text)',
+            'OfflineNotePaymentTokenCodec.decodeText(text + "\\n")',
+            'OfflineBearerCashTextCodec.decodePaymentText("\\t" + text)',
+            'OfflineBearerCashTextCodec.payloadKind(" " + text) == null',
+            'OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA")',
+            'OfflineNoteReceiveRequestCodec.decodeText(" " + text)',
+            'OfflineBearerCashTextCodec.decodeReceiveRequestText(text + "\\n")',
+            'OfflineBearerCashTextCodec.payloadKind(text + " ") == null',
+            'OfflineNoteReceiptAckCodec.decodeText(" " + text)',
+            'OfflineBearerCashTextCodec.decodeAckText(text + "\\t")',
+            'OfflineBearerCashTextCodec.payloadKind("\\n" + text) == null',
+        ),
+        "Android Java Offline Bearer Cash text exactness tests",
+        errors,
+    )
+
+
+def check_mobile_nearby_pairing_challenge_exactness(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferProtocols.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin_source = (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteTransportProtocols.kt"
+    )
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    java_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteNearbyEnvelope.java"
+    )
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_block_contains(
+        texts,
+        swift_source,
+        "public init(assetName: String) throws",
+        "public init(from decoder: Decoder) throws",
+        (
+            "guard Self.allAssetNames.contains(assetName)",
+            "self.assetName = assetName",
+        ),
+        "Swift Nearby pairing challenge exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        swift_source,
+        "public init(assetName: String) throws",
+        "public init(from decoder: Decoder) throws",
+        r"let\s+trimmed\s*=\s*assetName\.trimmingCharacters|contains\(trimmed\)|self\.assetName\s*=\s*trimmed",
+        "Swift Nearby pairing challenge whitespace normalization source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        kotlin_source,
+        "class OfflineNoteNearbyPairingChallenge(assetName: String)",
+        "/** JSON envelope for Nearby byte transports",
+        (
+            "val assetName: String = assetName",
+            "OfflineNoteNearbyPairingChallenge(value)",
+        ),
+        "Kotlin Nearby pairing challenge exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        kotlin_source,
+        "class OfflineNoteNearbyPairingChallenge(assetName: String)",
+        "/** JSON envelope for Nearby byte transports",
+        r"assetName\.trim\(\)|value\.trim\(\)",
+        "Kotlin Nearby pairing challenge whitespace normalization source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_source,
+        "public PairingChallenge(final String assetName)",
+        "public static PairingChallenge fromAssetName",
+        (
+            'final String value = Objects.requireNonNull(assetName, "assetName");',
+            "ASSET_NAMES.contains(value)",
+            "this.assetName = value",
+        ),
+        "Android Java Nearby pairing challenge exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        java_source,
+        "public PairingChallenge(final String assetName)",
+        "public static PairingChallenge fromAssetName",
+        r"trimmed|\.trim\(\)",
+        "Android Java Nearby pairing challenge whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            'OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_bird")',
+            'OfflineNoteNearbyPairingChallenge(assetName: " nearby_pairing_mask")',
+            'OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_mask\\n")',
+            '#""pairingChallenge":" nearby_pairing_bird""#',
+            '#""pairingChallenge":{"assetName":"nearby_pairing_bird "}"#',
+        ),
+        "Swift Nearby pairing challenge exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            'OfflineNoteNearbyPairingChallenge("nearby_pairing_bird")',
+            'OfflineNoteNearbyPairingChallenge(" nearby_pairing_mask")',
+            'OfflineNoteNearbyPairingChallenge("nearby_pairing_mask\\n")',
+            '\\"pairingChallenge\\":\\" nearby_pairing_bird\\"',
+            '\\"pairingChallenge\\":{\\"assetName\\":\\"nearby_pairing_bird \\"}',
+        ),
+        "Kotlin Nearby pairing challenge exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            'new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_bird")',
+            'new OfflineNoteNearbyEnvelope.PairingChallenge(" nearby_pairing_mask")',
+            'new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_mask\\n")',
+            '"\\"pairingChallenge\\":\\" nearby_pairing_bird\\""',
+            '"\\"pairingChallenge\\":{\\"assetName\\":\\"nearby_pairing_bird \\"}"',
+        ),
+        "Android Java Nearby pairing challenge exactness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_bearer_cash_text_exactness(texts, errors):
+    note_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    text_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    for start, end, label in (
+        (
+            "object OfflineNoteReceiveRequestCodec",
+            "class OfflineNotePaymentToken",
+            "Kotlin Offline Bearer Cash receive text exactness source block",
+        ),
+        (
+            "object OfflineNotePaymentTokenCodec",
+            "private object PaymentTokenAdapter",
+            "Kotlin Offline Bearer Cash payment text exactness source block",
+        ),
+        (
+            "object OfflineNoteReceiptAckCodec",
+            "private object ReceiptAckAdapter",
+            "Kotlin Offline Bearer Cash ACK text exactness source block",
+        ),
+    ):
+        require_block_contains(
+            texts,
+            note_source,
+            start,
+            end,
+            (
+                "fun decodeText(text: String)",
+                "require(text.startsWith(TEXT_PREFIX))",
+                "text.substring(TEXT_PREFIX.length)",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        note_source,
+        (
+            "require(value.isNotEmpty() && value.trim() == value && !value.contains(\"=\"))",
+            "require(value.all(::isBase64UrlCharacter))",
+        ),
+        "Kotlin Offline Bearer Cash base64url text exactness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        note_source,
+        r"val\s+trimmed\s*=\s*text\.trim\(\)|trimmed\.startsWith\(TEXT_PREFIX\)|trimmed\.substring\(TEXT_PREFIX\.length\)",
+        "Kotlin Offline Bearer Cash codec whitespace normalization source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        text_source,
+        "fun payloadKind(text: String): OfflineBearerCashPayloadKindV1?",
+        "private fun hasExactUnpaddedBase64UrlPayload",
+        (
+            "hasExactUnpaddedBase64UrlPayload(text, RECEIVE_REQUEST_TEXT_PREFIX)",
+            "hasExactUnpaddedBase64UrlPayload(text, PAYMENT_TEXT_PREFIX)",
+            "hasExactUnpaddedBase64UrlPayload(text, ACK_TEXT_PREFIX)",
+        ),
+        "Kotlin Offline Bearer Cash payload kind exactness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        text_source,
+        "private fun hasExactUnpaddedBase64UrlPayload",
+        "private fun isBase64UrlCharacter",
+        (
+            "if (!text.startsWith(prefix)) return false",
+            "payload.trim() == payload",
+            "!payload.contains(\"=\")",
+            "payload.all(::isBase64UrlCharacter)",
+        ),
+        "Kotlin Offline Bearer Cash payload kind payload exactness source block",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        text_source,
+        r"val\s+trimmed\s*=\s*text\.trim\(\)|trimmed\.startsWith\(RECEIVE_REQUEST_TEXT_PREFIX\)|trimmed\.startsWith\(PAYMENT_TEXT_PREFIX\)|trimmed\.startsWith\(ACK_TEXT_PREFIX\)|payload\.trim\(\)\.isNotEmpty\(\)",
+        "Kotlin Offline Bearer Cash payload kind whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            'OfflineNotePaymentTokenCodec.decodeText(" $text")',
+            'OfflineNotePaymentTokenCodec.decodeText("$text\\n")',
+            'OfflineBearerCashTextCodec.decodePaymentText("\\t$text")',
+            'assertNull(OfflineBearerCashTextCodec.payloadKind(" $text"))',
+            'assertNull(OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA"))',
+            'OfflineNoteReceiveRequestCodec.decodeText(" $text")',
+            'OfflineBearerCashTextCodec.decodeReceiveRequestText("$text\\n")',
+            'assertNull(OfflineBearerCashTextCodec.payloadKind("$text "))',
+            'OfflineNoteReceiptAckCodec.decodeText(" $text")',
+            'OfflineBearerCashTextCodec.decodeAckText("$text\\t")',
+            'assertNull(OfflineBearerCashTextCodec.payloadKind("\\n$text"))',
+        ),
+        "Kotlin Offline Bearer Cash text exactness tests",
+        errors,
+    )
+
+
+def check_mobile_offline_outcome_exactness(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    java_outcome = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteExplorerInstructionOutcome.java"
+    java_index = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteOutcomeIndex.java"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_contains(
+        texts,
+        swift_source,
+        (
+            "public init(kind: String,",
+            "guard isExactNonEmptyOutcomeField(kind) else",
+            "guard isExactNonEmptyOutcomeField(transactionStatus) else",
+            "guard !encodedInstruction.isEmpty else",
+            'public static let statusCommitted = "Committed"',
+            'public static let statusRejected = "Rejected"',
+            "let committed = outcome.transactionStatus == statusCommitted",
+            "let rejected = outcome.transactionStatus == statusRejected",
+            "if outcome.kind == kindIssue",
+            "else if outcome.kind == kindAudit",
+            "else if outcome.kind == kindRedeem",
+        ),
+        "Swift Offline Note explorer outcome exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        swift_source,
+        "public static func fromExplorerOutcomes(_ outcomes: [OfflineNoteExplorerInstructionOutcome])",
+        "public final class OfflineNoteOutcomeIndexSyncResolver",
+        r"lowercased\(\)|caseInsensitiveCompare",
+        "Swift Offline Note explorer outcome permissive matching source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "let permissiveCaseDrift = try OfflineNoteOutcomeIndex.fromExplorerOutcomes",
+            'transactionStatus: "committed"',
+            'kind: "redeemofflinenote"',
+            "XCTAssertNil(try permissiveCaseDrift.resolve(redeemPending))",
+            '" \\(OfflineNoteOutcomeIndex.kindRedeem)"',
+            '"\\(OfflineNoteOutcomeIndex.statusCommitted) "',
+        ),
+        "Swift Offline Note explorer outcome exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_outcome,
+        (
+            "if (!isExactNonEmpty(kind))",
+            "if (!isExactNonEmpty(transactionStatus))",
+            "value.equals(value.trim())",
+        ),
+        "Android Java Offline Note explorer outcome exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_index,
+        (
+            'public static final String STATUS_COMMITTED = "Committed";',
+            'public static final String STATUS_REJECTED = "Rejected";',
+            "final boolean committed = STATUS_COMMITTED.equals(outcome.transactionStatus());",
+            "final boolean rejected = STATUS_REJECTED.equals(outcome.transactionStatus());",
+            "if (KIND_ISSUE.equals(outcome.kind()))",
+            "else if (KIND_AUDIT.equals(outcome.kind()))",
+            "else if (KIND_REDEEM.equals(outcome.kind()))",
+        ),
+        "Android Java Offline Note explorer outcome exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        java_index,
+        "public static OfflineNoteOutcomeIndex fromExplorerOutcomes",
+        "  }",
+        r"toLowerCase|equalsIgnoreCase",
+        "Android Java Offline Note explorer outcome permissive matching source",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "final OfflineNoteOutcomeIndex permissiveCaseDrift =",
+            '"committed"',
+            "OfflineNoteOutcomeIndex.KIND_REDEEM.toLowerCase(Locale.ROOT)",
+            "assertTrue(permissiveCaseDrift.resolve(redeemPending) == null",
+            '" " + OfflineNoteOutcomeIndex.KIND_REDEEM',
+            'OfflineNoteOutcomeIndex.STATUS_COMMITTED + " "',
+        ),
+        "Android Java Offline Note explorer outcome exactness tests",
+        errors,
+    )
+
+
+def check_mobile_offline_outcome_encoded_instruction_exactness(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteOutcomeProvider.java"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_contains(
+        texts,
+        swift_source,
+        (
+            "return try exactEncodedInstructionHex(encoded)",
+            "private func exactEncodedInstructionHex(_ value: String) throws -> String",
+            "private static func isExactLowercaseHex(_ value: String) -> Bool",
+            "value.count.isMultiple(of: 2)",
+            "(97...102).contains(scalar.value)",
+        ),
+        "Swift Offline Note outcome encoded instruction exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        swift_source,
+        "private func encodedInstructionHex(from box: ToriiExplorerInstructionBox) throws -> String",
+        "public final class IrohaOfflineNoteTransactionSubmitter",
+        r"trimmingCharacters|lowercased\(\)|hasPrefix\(\"0x\"\)|dropFirst\(2\)",
+        "Swift Offline Note outcome encoded instruction normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_source,
+        (
+            'encodedInstruction = exactLowerHexBytes(encoded, "encoded")',
+            "private fun exactLowerHexBytes(value: String, field: String): ByteArray",
+            "require(value.isNotEmpty() && value.length % 2 == 0)",
+            "require(value.all(::isLowerHexCharacter))",
+        ),
+        "Kotlin Offline Note outcome encoded instruction exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        kotlin_source,
+        "private fun exactLowerHexBytes(value: String, field: String): ByteArray",
+        "private fun lowerHex32Bytes(value: String, field: String): ByteArray",
+        r"trim\(\)|removePrefix|lowercase\(",
+        "Kotlin Offline Note outcome encoded instruction normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_source,
+        (
+            'exactLowerHexBytes(encoded, "encoded")',
+            "private byte[] exactLowerHexBytes(final String value, final String field)",
+            "value.isEmpty() || (value.length() & 1) != 0",
+            "!isLowerHexCharacter(high) || !isLowerHexCharacter(low)",
+            "private boolean isLowerHexCharacter(final char value)",
+        ),
+        "Android Java Offline Note outcome encoded instruction exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        java_source,
+        "private byte[] exactLowerHexBytes(final String value, final String field)",
+        "private String rejectCode(final Map<String, List<String>> headers)",
+        r"trim\(\)|toLowerCase|regionMatches|substring\(2\)",
+        "Android Java Offline Note outcome encoded instruction normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "testToriiOfflineNoteOutcomeProviderRequiresExactEncodedInstructionHex",
+            'toriiOutcomeProviderEncodedInstruction("beef", nested: false)',
+            'toriiOutcomeProviderEncodedInstruction("cafe", nested: true)',
+            '(" beef", false)',
+            '("beef\\n", false)',
+            '("0xbeef", false)',
+            '("BEEF", true)',
+            '("abc", true)',
+            '("gg", true)',
+        ),
+        "Swift Offline Note outcome encoded instruction exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "fun outcomeProviderRequiresExactEncodedInstructionHex()",
+            'outcomeProviderEncodedInstruction("beef", nested = false)',
+            'outcomeProviderEncodedInstruction("cafe", nested = true)',
+            '" beef" to false',
+            '"beef\\n" to false',
+            '"0xbeef" to false',
+            '"BEEF" to true',
+            '"abc" to true',
+            '"gg" to true',
+        ),
+        "Kotlin Offline Note outcome encoded instruction exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "outcomeProviderRequiresExactEncodedInstructionHex",
+            'outcomeProviderEncodedInstruction("beef", false)',
+            'outcomeProviderEncodedInstruction("cafe", true)',
+            '{" beef", false}',
+            '{"beef\\n", false}',
+            '{"0xbeef", false}',
+            '{"BEEF", true}',
+            '{"abc", true}',
+            '{"gg", true}',
+        ),
+        "Android Java Offline Note outcome encoded instruction exactness tests",
+        errors,
+    )
+
+
+def check_swift_transfer_text_payload_exactness(texts, errors):
+    payloads = "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift"
+    handoff = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferHandoff.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift"
+    require_contains(
+        texts,
+        payloads,
+        (
+            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
+            "guard text.hasPrefix(prefix) else",
+            "String(text.dropFirst(prefix.count))",
+        ),
+        "Swift transfer JSON text payload exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        payloads,
+        "static func textPayload(_ text: String, prefix: String) throws -> Data",
+        "static func encodeJsonText",
+        r"let\s+trimmed|trimmed\.hasPrefix|trimmed\.dropFirst",
+        "Swift transfer JSON text payload whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        handoff,
+        (
+            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
+            "if value.hasPrefix(receiveRequestPrefix)",
+            "encoded = value.dropFirst(receiveRequestPrefix.count)",
+            "if value.hasPrefix(paymentTokenPrefix)",
+            "encoded = value.dropFirst(paymentTokenPrefix.count)",
+            "if value.hasPrefix(receiptAckPrefix)",
+            "encoded = value.dropFirst(receiptAckPrefix.count)",
+            "public static func payloadKind(for value: String) -> OfflineQrPayloadKind",
+            "if hasExactTextPayload(value, prefix: receiveRequestPrefix)",
+            "if hasExactTextPayload(value, prefix: paymentTokenPrefix)",
+            "if hasExactTextPayload(value, prefix: receiptAckPrefix)",
+            "private static func hasExactTextPayload(_ value: String, prefix: String) -> Bool",
+            "base64UrlDecode(String(value.dropFirst(prefix.count))) != nil",
+        ),
+        "Swift transfer text payload exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        handoff,
+        "public static func decode(\n        _ value: String,",
+        "static func validatePayloadContents",
+        r"trimmingCharacters|trimmed\.hasPrefix|trimmed\.dropFirst",
+        "Swift transfer text payload decode whitespace normalization source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        handoff,
+        "public static func payloadKind(for value: String) -> OfflineQrPayloadKind",
+        "private static func validateReceiveRequest",
+        r"trimmingCharacters|trimmed\.hasPrefix",
+        "Swift transfer text payload kind whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            'OfflineNoteTransferTextPayloadCodec.payloadKind(for: " \\(payment)")',
+            'OfflineNoteTransferTextPayloadCodec.payloadKind(for: "\\(ack)\\n")',
+            'OfflineNoteTransferTextPayloadCodec.decode(" \\(challenge)", expectedKind: .receiveRequest)',
+            'OfflineNoteTransferTextPayloadCodec.decode("\\(ack)\\n", expectedKind: .receiptAck)',
+            'OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(" \\(encoded)")',
+            'OfflineNoteTransferTextPayloadCodec.decodeReceiptAck("\\(encoded)\\n")',
+        ),
+        "Swift transfer text payload exactness tests",
+        errors,
+    )
+
+
+def check_mobile_qr_stream_text_exactness(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineQrStream.kt"
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java"
+    require_contains(
+        texts,
+        swift_source,
+        (
+            "guard let stripped = value.stripPrefix(base64Prefix) else",
+            "guard let decoded = Data(base64Encoded: stripped) else",
+        ),
+        "Swift QR stream text exactness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        swift_source,
+        r"trimmingCharacters\(in: \.whitespacesAndNewlines\)",
+        "Swift QR stream text whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_source,
+        (
+            "require(value.startsWith(PREFIX))",
+            "value.substring(PREFIX.length)",
+            "value\n            }",
+        ),
+        "Kotlin QR stream text exactness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        kotlin_source,
+        r"value\.trim\(\)|trimmed\.startsWith|trimmed\.substring",
+        "Kotlin QR stream text whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_source,
+        (
+            "if (!value.startsWith(PREFIX))",
+            "payload = value.substring(PREFIX.length());",
+            "payload = value;",
+        ),
+        "Android Java QR stream text exactness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        java_source,
+        r"value\.trim\(\)|trimmed\.startsWith|trimmed\.substring",
+        "Android Java QR stream text whitespace normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            'OfflineQrStreamTextCodec.decode(" \\(encoded)", encoding: .base64)',
+            'OfflineQrStreamTextCodec.decode("\\(encoded)\\n", encoding: .base64)',
+        ),
+        "Swift QR stream text exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            'OfflineQrStream.TextCodec.decode(" $encoded", OfflineQrStream.FrameEncoding.BASE64)',
+            'OfflineQrStream.TextCodec.decode("$encoded\\n", OfflineQrStream.FrameEncoding.BASE64)',
+        ),
+        "Kotlin QR stream text exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            'OfflineQrStream.TextCodec.decode(" " + encoded, OfflineQrStream.FrameEncoding.BASE64)',
+            'OfflineQrStream.TextCodec.decode(encoded + "\\n", OfflineQrStream.FrameEncoding.BASE64)',
+        ),
+        "Android Java QR stream text exactness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_outcome_exactness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "require(kind.isNotEmpty() && kind.trim() == kind)",
+            "require(transactionStatus.isNotEmpty() && transactionStatus.trim() == transactionStatus)",
+            'const val STATUS_COMMITTED: String = "Committed"',
+            'const val STATUS_REJECTED: String = "Rejected"',
+            "val committed = outcome.transactionStatus == STATUS_COMMITTED",
+            "val rejected = outcome.transactionStatus == STATUS_REJECTED",
+            "outcome.kind == KIND_ISSUE",
+            "outcome.kind == KIND_AUDIT",
+            "outcome.kind == KIND_REDEEM",
+        ),
+        "Kotlin Offline Note explorer outcome exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        source,
+        "fun fromExplorerOutcomes(outcomes: List<OfflineNoteExplorerInstructionOutcome>)",
+        "class OfflineNoteOutcomeIndexSyncResolver",
+        r"transactionStatus\.equals\(|outcome\.kind\.equals\(|equals\([^)]*ignoreCase\s*=\s*true",
+        "Kotlin Offline Note explorer outcome permissive matching source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "val permissiveCaseDrift = OfflineNoteOutcomeIndex.fromExplorerOutcomes",
+            'transactionStatus = "committed"',
+            'kind = "redeemofflinenote"',
+            "assertNull(permissiveCaseDrift.resolve(redeemPending))",
+            '" ${OfflineNoteOutcomeIndex.KIND_REDEEM}"',
+            '"${OfflineNoteOutcomeIndex.STATUS_COMMITTED} "',
+        ),
+        "Kotlin Offline Note explorer outcome exactness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_payment_token_commitment_exactness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            'outputClaimForNoteCommitment(lowerHex32Bytes(noteCommitmentHex, "note_commitment"))',
+            "private fun lowerHex32Bytes(value: String, field: String)",
+            "require(value.length == 64 && value.all(::isLowerHexCharacter))",
+            "private fun isLowerHexCharacter(value: Char): Boolean",
+        ),
+        "Kotlin Offline Note payment token commitment exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        source,
+        "fun outputClaimForNoteCommitmentHex(noteCommitmentHex: String)",
+        "fun containsOutputNoteCommitment",
+        r"noteCommitmentHex\.trim\(\)|hexBytes\(noteCommitmentHex",
+        "Kotlin Offline Note payment token commitment permissive source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            '" 0x${string(derivation, "change_output_commitment").uppercase(Locale.ROOT)} "',
+            'string(derivation, "change_output_commitment").uppercase(Locale.ROOT)',
+            'token.outputClaimForNoteCommitmentHex("0x${string(derivation, "change_output_commitment")}")',
+            'token.outputClaimForNoteCommitmentHex("${string(derivation, "change_output_commitment")} ")',
+        ),
+        "Kotlin Offline Note payment token commitment exactness tests",
+        errors,
+    )
+
+
+def check_swift_offline_payment_token_commitment_exactness(texts, errors):
+    payload_source = "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift"
+    native_source = "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    require_contains(
+        texts,
+        payload_source,
+        (
+            "guard Self.isExactNoteCommitmentHex(noteCommitment) else {",
+            "$0.noteCommitment == noteCommitment",
+            "private static func isExactNoteCommitmentHex(_ value: String) -> Bool",
+            "OfflineNoteTextPayloadEncoding.isCanonicalHashHex(value)",
+        ),
+        "Swift Offline Note payment token commitment exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        payload_source,
+        "public func outputClaim(matchingNoteCommitment noteCommitment: String)",
+        "public func containsOutputNoteCommitment(_ noteCommitment: String)",
+        r"trimmingCharacters|lowercased\(\)|hasPrefix\(\"0x\"\)",
+        "Swift Offline Note payment token commitment permissive source",
+        errors,
+    )
+    require_contains(
+        texts,
+        native_source,
+        (
+            "guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(noteCommitmentHex),",
+            "let noteCommitment = Data(hexString: noteCommitmentHex),",
+        ),
+        "Swift Offline Note native audit commitment exactness source",
+        errors,
+    )
+    require_block_not_regex(
+        texts,
+        native_source,
+        "public func outputClaim(matchingNoteCommitmentHex noteCommitmentHex: String)",
+        "public func containsOutputNoteCommitment(_ noteCommitment: Data)",
+        r"trimmingCharacters|lowercased\(\)|hasPrefix\(\"0x\"\)|normalizedNoteCommitmentHex",
+        "Swift Offline Note native audit commitment permissive source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            '" 0x\\(derivation.changeOutputCommitment.uppercased()) "',
+            "XCTAssertFalse(nativeToken.containsOutputNoteCommitment(hex: derivation.changeOutputCommitment.uppercased()))",
+            'XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: "0x\\(derivation.changeOutputCommitment)"))',
+            'XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: "\\(derivation.changeOutputCommitment) "))',
+            "XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(derivation.changeOutputCommitment.uppercased()))",
+            'XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "0x\\(derivation.changeOutputCommitment)"))',
+            'XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "\\(derivation.changeOutputCommitment) "))',
+        ),
+        "Swift Offline Note payment token commitment exactness tests",
+        errors,
+    )
+
+
 def check_kotlin_offline_cash_settlement_coverage(texts, errors):
     require_contains(
         texts,
@@ -8954,6 +10044,110 @@ def check_kotlin_offline_cash_settlement_coverage(texts, errors):
     )
 
 
+def check_kotlin_offline_cash_request_strictness(texts, errors):
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+        (
+            "internal fun requireExactNonEmptyText(value: String, field: String): String",
+            "value.isNotEmpty() && value.trim() == value",
+            '"$field must be an exact non-empty string"',
+            "internal fun requireOptionalExactNonEmptyText(value: String?, field: String): String?",
+            "return requireExactNonEmptyText(value, field)",
+            "internal fun canonicalNonNegativeAmountString(amount: String, field: String): String",
+            "amount.isNotEmpty() && amount.trim() == amount",
+            '"$field must be an exact amount string"',
+            "require(!canonical.startsWith(\"-\"))",
+            '"$field must be a non-negative amount"',
+        ),
+        "Kotlin offline cash request strictness helpers",
+        errors,
+    )
+    request_targets = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt",
+            "Kotlin offline cash setup request exactness",
+            (
+                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(',
+                '"asset_definition_id"',
+                'map["account_id"] = accountId',
+                'map["asset_definition_id"] = assetDefinitionId',
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
+            "Kotlin offline cash load request exactness",
+            (
+                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
+                'OfflineCashCodec.requireOptionalExactNonEmptyText(lineageId, "lineage_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+                '"asset_definition_id"',
+                'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
+                'map["amount"] = amount',
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt",
+            "Kotlin offline cash refresh request exactness",
+            (
+                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+                'map["lineage_id"] = lineageId',
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt",
+            "Kotlin offline cash sync request exactness",
+            (
+                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+                "private val _receipts: List<OfflineTransferReceipt> = receipts.toList()",
+                "val receipts: List<OfflineTransferReceipt> get() = _receipts.toList()",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt",
+            "Kotlin offline cash redeem request exactness",
+            (
+                'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
+                'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+                'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
+                "private val _receipts: List<OfflineTransferReceipt> = receipts.toList()",
+                'map["redeem_proof"] = redeemProof.toJsonMap()',
+            ),
+        ),
+    )
+    for relative, label, needles in request_targets:
+        require_contains(texts, relative, needles, label, errors)
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
+        (
+            "cashMutationRequestsRejectNonCanonicalSignedFields",
+            'assertEquals("1.2300", load.amount)',
+            'assertEquals("1.2300", load.toJsonMap()["amount"])',
+            'assertEquals("10", redeem.amount)',
+            'assertEquals("10", redeem.toJsonMap()["amount"])',
+            '"account_id must be an exact non-empty string" to {',
+            '"asset_definition_id must be an exact non-empty string" to {',
+            '"operation_id must be an exact non-empty string" to {',
+            '"lineage_id must be an exact non-empty string" to {',
+            '"amount must be an exact amount string" to {',
+            '"amount must be a non-negative amount" to {',
+            "OfflineCashRefreshRequest(",
+            "OfflineCashSyncRequest(",
+            "OfflineCashRedeemRequest(",
+            "private fun redeemRequestProof(): OfflineRedeemRequestProof",
+        ),
+        "Kotlin offline cash request strictness tests",
+        errors,
+    )
+
+
 def check_kotlin_offline_wallet_compact_certificate_profile(texts, errors):
     source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
     test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
@@ -8962,8 +10156,20 @@ def check_kotlin_offline_wallet_compact_certificate_profile(texts, errors):
         source,
         (
             "import org.hyperledger.iroha.sdk.offline.OfflineNoteV2",
+            "require(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION)",
+            '"app_attest_public_key_base64 is retired; use assertion_public_key"',
             "require(assertionScheme == expectedAssertionScheme(platform))",
             "require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform))",
+            "require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+            'val decodedPublicKey = requireCanonicalNonEmptyBase64(publicKey, "public_key")',
+            "require(decodedPublicKey.size == 32)",
+            'val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKey, "assertion_public_key")',
+            "require(decodedAssertionPublicKey.size == 65)",
+            'val issuerSignature = requireCanonicalNonEmptyBase64(issuerSignatureBase64, "issuer_signature_base64")',
+            "require(issuerSignature.size == 64)",
+            '"issuer_signature_base64 must be 64 bytes"',
+            'requireCanonicalNonEmptyBase64(it, "issuer_signature_payload_base64")',
+            "private fun expectedAssertionUsageCountLimit(platform: String): Int?",
             "OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME",
             "OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME",
             "OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM",
@@ -8975,6 +10181,26 @@ def check_kotlin_offline_wallet_compact_certificate_profile(texts, errors):
             "OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM",
         ),
         "Kotlin offline wallet compact certificate profile source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineCompactKeyCertificate",
+        "data class OfflineRecursiveProof",
+        (
+            "require(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION)",
+            "require(appAttestPublicKeyBase64 == null)",
+            "require(assertionScheme == expectedAssertionScheme(platform))",
+            "require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform))",
+            "require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+            'val decodedPublicKey = requireCanonicalNonEmptyBase64(publicKey, "public_key")',
+            "require(decodedPublicKey.size == 32)",
+            'val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKey, "assertion_public_key")',
+            "require(decodedAssertionPublicKey.size == 65)",
+            "require(issuerSignature.size == 64)",
+        ),
+        "Kotlin offline wallet compact certificate profile source block",
         errors,
     )
     require_not_regex(
@@ -8995,11 +10221,487 @@ def check_kotlin_offline_wallet_compact_certificate_profile(texts, errors):
         (
             "compactKeyCertificateRejectsNonCanonicalProfileFields",
             "assertFailsWith<IllegalArgumentException>",
+            "compactKeyCertificate(version = 2)",
             '"android-keymint-ecdsa-p256-usage-limit"',
             '"ed25519"',
             'for (invalidPlatform in listOf("android", "android-keymint ", "Android-keymint", "ios-appattest-android"))',
+            "assertionUsageCountLimit = null",
+            "assertionUsageCountLimit = 2",
+            '"app_attest_public_key_base64":"${base64(ByteArray(65) { 4 })}"',
+            '"app_attest_public_key_base64 is retired; use assertion_public_key"',
+            "compactKeyCertificateRejectsNonCanonicalBase64Fields",
+            "canonicalPublicKey.dropLast(1)",
+            "canonicalAssertionPublicKey.dropLast(1)",
+            '"public_key must be canonical base64"',
+            '"public_key must be 32 bytes"',
+            '"assertion_public_key must be canonical base64"',
+            '"assertion_public_key must be 65 bytes"',
+            '"issuer_signature_base64 must be canonical base64"',
+            '"issuer_signature_base64 must be 64 bytes"',
+            '"issuer_signature_payload_base64 must be canonical base64"',
+            "Json.decodeFromString<OfflineCompactKeyCertificate>(json)",
         ),
         "Kotlin offline wallet compact certificate profile tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_wallet_recursive_proof_strictness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "import java.util.Base64",
+            "data class OfflineRecursiveProof",
+            "require(verifierKeyBackend == OfflineNote.RECURSIVE_BACKEND)",
+            '"verifier_key_backend must be ${OfflineNote.RECURSIVE_BACKEND}"',
+            "require(verifierKeyId == OfflineNote.RECURSIVE_VERIFIER_NAME)",
+            '"verifier_key_id must be ${OfflineNote.RECURSIVE_VERIFIER_NAME}"',
+            "require(proofBackend == OfflineNote.RECURSIVE_BACKEND)",
+            '"proof_backend must be ${OfflineNote.RECURSIVE_BACKEND}"',
+            "require(publicInputsHashHex.isLowerHex32())",
+            '"public_inputs_hash_hex must be 32-byte lowercase hex"',
+            'requireCanonicalNonEmptyBase64(proofBytesBase64, "proof_bytes_base64")',
+            "private fun requireCanonicalNonEmptyBase64(value: String, field: String)",
+            "value.isNotEmpty() && value.trim() == value",
+            "Base64.getDecoder().decode(value)",
+            "decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == value",
+            '"$field must be canonical base64"',
+            'else -> throw SerializationException("verifier_key_id must be a string")',
+        ),
+        "Kotlin offline wallet recursive proof strictness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        source,
+        r"verifier_key_id object|verifier_key_id must be a string or object|substring\(separator \+ 1\)",
+        "Kotlin offline wallet recursive proof retired verifier-key-id aliases source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "recursiveProofRejectsNonCanonicalHashAndProofBytes",
+            "recursiveProofRejectsRetiredVerifierMetadataAliases",
+            "OfflineNote.RECURSIVE_BACKEND",
+            "OfflineNote.RECURSIVE_VERIFIER_NAME",
+            "verifier_key_id must be a string",
+            '"${OfflineNote.RECURSIVE_BACKEND}:${OfflineNote.RECURSIVE_VERIFIER_NAME}"',
+            '"public_inputs_hash_hex must be 32-byte lowercase hex"',
+            '"proof_bytes_base64 must be canonical base64"',
+            "Json.decodeFromString<OfflineRecursiveProof>(json)",
+            '"_w=="',
+            "canonicalProofBytes.dropLast(1)",
+            '"proof_bytes_base64":" ${base64(ByteArray(2) { 7 })}"',
+        ),
+        "Kotlin offline wallet recursive proof strictness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "data class OfflineDeviceBinding",
+            '@SerialName("device_public_key") val devicePublicKey: String? = null',
+            '@SerialName("app_attest_public_key_base64") val appAttestPublicKeyBase64: String? = null',
+            '"device_public_key is retired; use assertion_public_key"',
+            '"app_attest_public_key_base64 is retired; use assertion_public_key"',
+        ),
+        "Kotlin offline wallet device binding alias strictness source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineDeviceBinding",
+        "data class OfflineAttestationReceipt",
+        (
+            "require(devicePublicKey == null)",
+            "require(appAttestPublicKeyBase64 == null)",
+        ),
+        "Kotlin offline wallet device binding alias strictness source block",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "offlineDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+            'for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64"))',
+            "Json.decodeFromString<OfflineDeviceBinding>(json)",
+            '"$retiredKey is retired; use assertion_public_key"',
+        ),
+        "Kotlin offline wallet device binding alias strictness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "data class OfflineAttestationReceipt",
+            '@SerialName("assertion_usage_count_limit") val assertionUsageCountLimit: Int? = null',
+            "data class OfflineDeviceProof",
+            "private fun expectedAssertionUsageCountLimit(platform: String): Int?",
+            "private fun isSupportedFirstReleasePlatform(platform: String): Boolean",
+            "private fun String.isExactNonEmptyProtocolString(): Boolean",
+        ),
+        "Kotlin offline wallet attestation payload strictness source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineAttestationReceipt",
+        "data class OfflineDeviceProof",
+        (
+            "require(version == 1L)",
+            "require(accountId.isExactNonEmptyProtocolString())",
+            "require(assertionScheme == expectedAssertionScheme(platform))",
+            "require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform))",
+            "require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+            "require(hardwareOneUse)",
+            'val offlinePublicKey = requireCanonicalNonEmptyBase64(offlinePublicKeyBase64, "offline_public_key_base64")',
+            "require(offlinePublicKey.size == 32)",
+            'val assertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKeyBase64, "assertion_public_key_base64")',
+            "require(assertionPublicKey.size == 65)",
+            "require(attestationReportHashHex.isLowerHex32())",
+            "require(issuedAtMs >= 0 && expiresAtMs > issuedAtMs)",
+            'val signature = requireCanonicalNonEmptyBase64(signatureBase64, "signature_base64")',
+            "require(signature.size == 64)",
+        ),
+        "Kotlin offline wallet attestation receipt strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineDeviceProof",
+        "data class OfflineSpendAuthorization",
+        (
+            "require(isSupportedFirstReleasePlatform(platform))",
+            "require(attestationKeyId.isExactNonEmptyProtocolString())",
+            "require(challengeHashHex.isLowerHex32())",
+            'requireCanonicalNonEmptyBase64(assertionBase64, "assertion_base64")',
+            "require(counter == null || counter >= 0)",
+        ),
+        "Kotlin offline wallet device proof strictness source block",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "attestationReceiptRejectsNonCanonicalProfileAndEncodingFields",
+            "deviceProofRejectsNonCanonicalPlatformHashAndAssertion",
+            "OfflineNoteV2.IOS_APP_ATTEST_PLATFORM",
+            '"version must be 1"',
+            '"account_id must be an exact non-empty string"',
+            '"assertion_usage_count_limit must be 1"',
+            '"assertion_usage_count_limit must be absent"',
+            '"hardware_one_use must be true"',
+            '"offline_public_key_base64 must be canonical base64"',
+            '"offline_public_key_base64 must be 32 bytes"',
+            '"assertion_public_key_base64 must be canonical base64"',
+            '"assertion_public_key_base64 must be 65 bytes"',
+            '"attestation_report_hash_hex must be 32-byte lowercase hex"',
+            '"signature_base64 must be canonical base64"',
+            '"signature_base64 must be 64 bytes"',
+            '"challenge_hash_hex must be 32-byte lowercase hex"',
+            '"assertion_base64 must be canonical base64"',
+            '"counter must be non-negative"',
+            "Json.decodeFromString<OfflineAttestationReceipt>(json)",
+            "Json.decodeFromString<OfflineDeviceProof>(json)",
+        ),
+        "Kotlin offline wallet attestation payload strictness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_wallet_signed_payload_strictness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "private fun requireCanonicalSignatureBase64(value: String, field: String)",
+            "private fun requireNonNegativeAmountString(value: String, field: String)",
+            "data class OfflineSpendAuthorization",
+            "data class OfflineCashStatePayload",
+            "data class OfflineRevocationBundlePayload",
+            "data class OfflineAssetSendLimit",
+            "data class OfflineTransferReceipt",
+        ),
+        "Kotlin offline wallet signed payload strictness source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineSpendAuthorization",
+        "data class OfflineCashStatePayload",
+        (
+            'requireNonNegativeAmountString(policyMaxBalance, "max_balance")',
+            'requireNonNegativeAmountString(policyMaxTxValue, "max_tx_value")',
+            "require(issuedAtMs >= 0 && refreshAtMs >= issuedAtMs && expiresAtMs > issuedAtMs)",
+            'requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")',
+        ),
+        "Kotlin offline wallet spend authorization strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineCashStatePayload",
+        "data class OfflineRevocationBundlePayload",
+        (
+            'requireNonNegativeAmountString(balance, "balance")',
+            'requireNonNegativeAmountString(lockedBalance, "locked_balance")',
+            "require(serverRevision >= 0)",
+            "require(serverStateHash.isLowerHex32())",
+            "require(pendingLocalRevision >= 0)",
+            'requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")',
+        ),
+        "Kotlin offline wallet cash state payload strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineRevocationBundlePayload",
+        "data class OfflineAssetSendLimit",
+        (
+            "require(issuedAtMs >= 0 && expiresAtMs > issuedAtMs)",
+            "require(verdictIds.all { it.isExactNonEmptyProtocolString() })",
+            "require(blacklistedAccountIds.all { it.isExactNonEmptyProtocolString() })",
+            'requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")',
+        ),
+        "Kotlin offline wallet revocation bundle strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineAssetSendLimit",
+        "data class OfflineTransferReceipt",
+        (
+            "require(assetDefinitionId.isExactNonEmptyProtocolString())",
+            'requireNonNegativeAmountString(dailySendLimit, "daily_send_limit")',
+            'requireNonNegativeAmountString(monthlySendLimit, "monthly_send_limit")',
+        ),
+        "Kotlin offline wallet asset send limit strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineTransferReceipt",
+        "data class OfflineTransferJournalEntry",
+        (
+            "require(version == 1)",
+            'require(direction == "incoming" || direction == "outgoing")',
+            'requireNonNegativeAmountString(preBalance, "pre_balance")',
+            'requireNonNegativeAmountString(postBalance, "post_balance")',
+            'requireNonNegativeAmountString(amount, "amount")',
+            "require(preStateHash.isLowerHex32())",
+            "require(postStateHash.isLowerHex32())",
+            "require(localRevision >= 0)",
+            'requireCanonicalSignatureBase64(senderSignatureBase64, "sender_signature_base64")',
+            "require(createdAtMs >= 0)",
+        ),
+        "Kotlin offline wallet transfer receipt strictness source block",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "signedWalletPayloadsRejectMalformedHashesAmountsAndSignatures",
+            '"max_balance must be a non-negative amount"',
+            '"authorization validity window must be increasing"',
+            '"issuer_signature_base64 must be canonical base64"',
+            '"issuer_signature_base64 must be 64 bytes"',
+            '"server_state_hash must be 32-byte lowercase hex"',
+            '"daily_send_limit must be a non-negative amount"',
+            '"revocation bundle validity window must be increasing"',
+            '"direction must be incoming or outgoing"',
+            '"pre_state_hash must be 32-byte lowercase hex"',
+            '"sender_signature_base64 must be canonical base64"',
+            '"sender_signature_base64 must be 64 bytes"',
+            "Json.decodeFromString<OfflineTransferReceipt>(json)",
+        ),
+        "Kotlin offline wallet signed payload strictness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_wallet_state_collection_strictness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "private fun requireEmptyOrLowerHex32(value: String, field: String)",
+            "private fun requireOptionalCanonicalNonEmptyBase64(value: String?, field: String)",
+            "if (trimmed != value) return null",
+            "data class OfflineTransferJournalEntry",
+            "data class OfflineCashMutationHistoryEntry",
+            "data class OfflineAssetTransferUsage",
+            "data class OfflineNoteRecord",
+            "data class OfflineOneUseKeyPoolState",
+            "data class OfflinePendingOutboxEntry",
+            "data class OfflinePendingAuditReceipt",
+            "data class OfflineRestoreQuarantineState",
+            "data class OfflineWalletState",
+        ),
+        "Kotlin offline wallet state collection strictness source",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineAssetTransferUsage",
+        "enum class OfflineNoteRecordSource",
+        (
+            'require(windowKind == "daily" || windowKind == "monthly")',
+            'requireNonNegativeAmountString(amount, "amount")',
+        ),
+        "Kotlin offline wallet asset-transfer usage strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineNoteRecord",
+        "data class OfflineOneUseKeyPoolState",
+        (
+            "require(noteId.isExactNonEmptyProtocolString())",
+            'requireNonNegativeAmountString(amount, "amount")',
+            'requireOptionalCanonicalNonEmptyBase64(noteSecretBase64, "note_secret_base64")',
+            "requireOptionalNonNegative(originOutputIndex, \"origin_output_index\")",
+            "requireOptionalCanonicalNonEmptyBase64(\n"
+            "            nativeIssuerPaymentTokenNoritoBase64,\n"
+            '            "native_issuer_payment_token_norito_base64"',
+        ),
+        "Kotlin offline wallet note-record strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineOneUseKeyPoolState",
+        "data class OfflinePendingOutboxEntry",
+        (
+            "require(remainingCapacity <= capacity)",
+            "require((availableKeyIds + consumedKeyIds).distinct().size == availableKeyIds.size + consumedKeyIds.size)",
+            "require(availableKeyIds.size == remainingCapacity)",
+            "require(availableKeyIds.size + consumedKeyIds.size <= capacity)",
+        ),
+        "Kotlin offline wallet one-use key pool strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflinePendingOutboxEntry",
+        "data class OfflinePendingAuditReceipt",
+        (
+            "require(tokenId.isExactNonEmptyProtocolString())",
+            'requireNonNegativeAmountString(amount, "amount")',
+            "require(payload.isExactNonEmptyProtocolString())",
+            "requireOptionalExactNonEmptyString(receiptAckPayload, \"receipt_ack_payload\")",
+        ),
+        "Kotlin offline wallet pending outbox strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflinePendingAuditReceipt",
+        "data class OfflineRestoreQuarantineState",
+        (
+            "require(paymentTokenNoritoBase64 != null || bearerSettlementBatchNoritoBase64 != null)",
+            'requireOptionalCanonicalNonEmptyBase64(paymentTokenNoritoBase64, "payment_token_norito_base64")',
+            "requireOptionalCanonicalNonEmptyBase64(\n"
+            "            bearerSettlementBatchNoritoBase64,\n"
+            '            "bearer_settlement_batch_norito_base64"',
+        ),
+        "Kotlin offline wallet pending audit receipt strictness source block",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        source,
+        "data class OfflineWalletState",
+        "const val OFFLINE_WALLET_STATE_SCHEMA_VERSION",
+        (
+            "require(schemaVersion == OFFLINE_WALLET_STATE_SCHEMA_VERSION)",
+            'requireNonNegativeAmountString(localBalance, "local_balance")',
+            "requireEmptyOrLowerHex32(localStateHash, \"local_state_hash\")",
+            "require(sourceNullifiers.all { it.isLowerHex32() })",
+            "requireOptionalExactNonEmptyString(frozenReason, \"frozen_reason\")",
+        ),
+        "Kotlin offline wallet root state strictness source block",
+        errors,
+    )
+    require_contains(
+        texts,
+        source,
+        (
+            "state.localStateHash.isNotEmpty() -> state.localStateHash",
+            "anchor != null -> anchor.serverStateHash",
+            "sourceNullifiers = state.sourceNullifiers.distinct()",
+            "keyId !in activeCertificateIds",
+            "return revocationBundle?.verdictIds.orEmpty().any { it == verdictId }",
+            "return revocationBundle?.blacklistedAccountIds.orEmpty().any { it == normalized }",
+            "it.assetDefinitionId == normalized",
+            "val left = lhs.orEmpty()",
+            "return left.isNotEmpty() && right.isNotEmpty() && left == right",
+        ),
+        "Kotlin offline wallet exact state policy source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        source,
+        r"state\.localStateHash\.trim\(\)\.isNotBlank\(\)|state\.sourceNullifiers\s*\n\s*\.map|equals\([^)]*ignoreCase\s*=\s*true|accountId\?\.trim|assetDefinitionId\?\.trim|lhs\?\.trim|rhs\?\.trim|filter \{ it\.noteId\.isNotBlank\(\)",
+        "Kotlin offline wallet permissive state normalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "walletStateRejectsPermissiveNormalizationDrift",
+            'BearerOfflineWalletPolicy.normalizeAmountString(" 1")',
+            '"local_state_hash must be empty or 32-byte lowercase hex"',
+            '"source_nullifiers must be 32-byte lowercase hex strings"',
+            '"window_kind must be daily or monthly"',
+            '"note_secret_base64 must be canonical base64"',
+            '"chain_tx_hash must be 32-byte lowercase hex"',
+            '"payload must be an exact non-empty string"',
+            '"pending audit receipt must carry a payment token or settlement batch"',
+            '"token_id must be an exact non-empty string"',
+            'Json.decodeFromString<OfflineWalletState>(json)',
+            'BearerOfflineWalletPolicy.isRevoked(spendAuthorization(), revocation)',
+            'BearerOfflineWalletPolicy.assetSendLimit(" limit-asset#xor", revocation, Instant.ofEpochMilli(11))',
+        ),
+        "Kotlin offline wallet state collection strictness tests",
         errors,
     )
 
@@ -9085,6 +10787,9 @@ def check_kotlin_offline_wallet_input_claim_strictness(texts, errors):
             "val computedClaimHash = OfflineNote.IssuedClaim(",
             'hexBytes32(noteCommitment, "note_commitment")',
             'hexBytes32(keyCertificatePayloadHash, "key_certificate_payload_hash")',
+            "val canonicalAssetId = OfflineNote.canonicalAssetId(assetId)",
+            'require(assetId == canonicalAssetId) { "asset_id must be canonical" }',
+            "assetId = canonicalAssetId,",
             "claimHash.isNotEmpty() && claimHash.isLowerHex32()",
             "claimHash == computedClaimHash",
             '"claim_hash must match issued claim"',
@@ -9101,6 +10806,9 @@ def check_kotlin_offline_wallet_input_claim_strictness(texts, errors):
             "paymentTokenInputClaimRejectsMalformedAmountAndClaimHashDrift",
             'paymentTokenInputClaim(amount = "not-an-amount")',
             'paymentTokenInputClaim(noteCommitment = "zz")',
+            'val nonCanonicalAssetId = "${validAssetDefinitionId()}#alice@wonderland"',
+            "assertEquals(canonicalAssetId, OfflineNote.canonicalAssetId(canonicalAssetId))",
+            'paymentTokenInputClaim(assetId = nonCanonicalAssetId)',
             'paymentTokenInputClaim(claimHash = "f".repeat(64))',
             'paymentTokenInputClaim(noteCommitment = "0x" + "01".repeat(32))',
             'paymentTokenInputClaim(noteCommitment = " " + "01".repeat(32))',
@@ -11415,6 +13123,10 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             '"app_attest_public_key_base64"',
             "where deviceBinding.keys.contains(retiredKey)",
             'throw ToriiOfflineNoteIssuerClientError.invalidJSON("device_binding.\\(retiredKey)")',
+            'let exactDeviceId = try Self.requiredExactNonEmptyText(deviceId, "device_id")',
+            'let exactPublicKey = try Self.requiredExactNonEmptyText(offlinePublicKey, "offline_public_key")',
+            'return try Self.requiredExactNonEmptyText(value, "device_binding.attestation_key_id")',
+            "private static func requiredExactNonEmptyText(_ value: String, _ field: String) throws -> String",
             'let publicKey = try requiredExactBase64(value, "public_key")',
             "let assertionScheme = try requiredAssertionScheme(value, platform: platform)",
             "let assertionKeyAlgorithm = try requiredAssertionKeyAlgorithm(value, platform: platform)",
@@ -11473,6 +13185,10 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "testToriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             'for retiredKey in ["device_public_key", "app_attest_public_key_base64"]',
             '.invalidJSON("device_binding.\\(retiredKey)")',
+            "testToriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
+            '.invalidJSON("device_id")',
+            '.invalidJSON("offline_public_key")',
+            '.invalidJSON("device_binding.attestation_key_id")',
             "currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)",
             'for invalidScheme in ["apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit"]',
             'for invalidAlgorithm in ["ecdsa-p256-sha256", "ed25519"]',
@@ -11520,6 +13236,11 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "deepCopyObject(rejectRetiredDeviceBindingAliases(deviceBinding))",
             "private fun rejectRetiredDeviceBindingAliases(deviceBinding: Map<String, Any?>): Map<String, Any?>",
             '"device_binding.$retiredKey is retired; use assertion_public_key"',
+            'require(isExactNonEmptyText(deviceId)) { "deviceId must be exact non-empty text" }',
+            'require(isExactNonEmptyText(offlinePublicKey)) { "offlinePublicKey must be exact non-empty text" }',
+            'if (!isExactNonEmptyText(keyId))',
+            'throw IllegalStateException("device_binding.attestation_key_id must be exact non-empty text")',
+            "private fun isExactNonEmptyText(value: String): Boolean = value.isNotEmpty() && value == value.trim()",
             'publicKey = decodeExactBase64(requiredString(value, "public_key"), "public_key")',
             "assertionScheme = requiredAssertionScheme(value)",
             "assertionKeyAlgorithm = requiredAssertionKeyAlgorithm(value)",
@@ -11575,6 +13296,10 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             'for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64"))',
             '"device_binding.$retiredKey is retired; use assertion_public_key"',
+            "toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
+            '"deviceId must be exact non-empty text"',
+            '"offlinePublicKey must be exact non-empty text"',
+            '"device_binding.attestation_key_id must be exact non-empty text"',
             "currentIssuerCertificateJson(obj(obj(fixture, \"payment_token\"), \"sender_key_certificate\"))",
             "for (invalidScheme in listOf(\"apple-appattest-counter\", \"android-keymint-ecdsa-p256-usage-limit\"))",
             "for (invalidAlgorithm in listOf(\"ecdsa-p256-sha256\", \"ed25519\"))",
@@ -11638,7 +13363,20 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "rejectRetiredDeviceBindingAliases(Objects.requireNonNull(deviceBinding, \"deviceBinding\"));",
             "private static void rejectRetiredDeviceBindingAliases(final Map<String, Object> deviceBinding)",
             '"device_binding." + retiredKey + " is retired; use assertion_public_key"',
+            "requireExactNonEmptyText(deviceId, \"deviceId\")",
+            "requireExactNonEmptyText(offlinePublicKey, \"offlinePublicKey\")",
+            "if (!isExactNonEmptyText(value))",
+            '"device_binding.attestation_key_id must be exact non-empty text"',
+            "private static String requireExactNonEmptyText(final String value, final String field)",
+            "private static boolean isExactNonEmptyText(final String value)",
         ),
+        "Android Java retired Offline Note issuer device binding source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        android_binding_source,
+        r"return\s+value\.trim\(\);",
         "Android Java retired Offline Note issuer device binding source",
         errors,
     )
@@ -11680,6 +13418,10 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             "toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             'Arrays.asList("device_public_key", "app_attest_public_key_base64")',
             '"device_binding." + retiredKey + " is retired; use assertion_public_key"',
+            "toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
+            '"deviceId must be exact non-empty text"',
+            '"offlinePublicKey must be exact non-empty text"',
+            '"device_binding.attestation_key_id must be exact non-empty text"',
             'currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))',
             'List.of("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")',
             'List.of("ecdsa-p256-sha256", "ed25519")',
@@ -12286,10 +14028,22 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
         "OfflineNoteWalletNoteJsonCodec.java"
     )
     java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    kotlin_android_source = (
+        "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/"
+        "AndroidOfflineNoteSecureStore.kt"
+    )
+    kotlin_android_test = (
+        "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/"
+        "offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java"
+    )
     retired_state_pattern = r"spendPending|SPEND_PENDING|changePending|CHANGE_PENDING"
     for relative, label in (
         (swift_source, "Swift Offline Note wallet-note state decoder retired aliases"),
         (java_source, "Android Java Offline Note wallet-note state decoder retired aliases"),
+        (
+            kotlin_android_source,
+            "Kotlin Android Offline Note wallet-note state decoder retired aliases",
+        ),
     ):
         require_not_regex(texts, relative, retired_state_pattern, label, errors)
     require_contains(
@@ -12315,6 +14069,35 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
     )
     require_contains(
         texts,
+        java_source,
+        (
+            "value.length() != 64",
+            'field + " must be 32-byte lowercase hex"',
+            "lowercaseHexDigit(value.charAt(i * 2), field)",
+            "ch >= 'a' && ch <= 'f'",
+        ),
+        "Android Java Offline Note wallet-note commitment hex exactness source",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        java_source,
+        r"toLowerCase\(Locale\.ROOT\)",
+        "Android Java Offline Note wallet-note commitment hex exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_android_source,
+        (
+            "OfflineNoteWalletNoteState.valueOf(value)",
+            '"invalid Offline Note wallet note state: $value"',
+        ),
+        "Kotlin Android Offline Note wallet-note state decoder strict source",
+        errors,
+    )
+    require_contains(
+        texts,
         swift_test,
         (
             '["spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING"]',
@@ -12332,6 +14115,28 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
             '"retired " + retiredState + " wallet-note state should reject"',
         ),
         "Android Java Offline Note wallet-note retired state rejection tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "walletNoteJsonCodecRejectsNonExactCommitmentHex",
+            "nonExactLowerHex32(canonicalCommitment)",
+            '"non-exact wallet-note commitment should reject: " + nonExactCommitment',
+        ),
+        "Android Java Offline Note wallet-note commitment hex exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_android_test,
+        (
+            'Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")',
+            '"retired " + retiredState + " wallet-note state should reject"',
+            "decodeWalletNoteJson(retiredJson.getBytes(StandardCharsets.UTF_8));",
+        ),
+        "Kotlin Android Offline Note wallet-note retired state rejection tests",
         errors,
     )
     for relative in ("IrohaSwift/README.md", "java/iroha_android/README.md", "kotlin/README.md"):
@@ -12663,18 +14468,34 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
         android,
         (
             "private static BigDecimal requirePositivePaymentAmount(final String amount)",
-            "if (value.signum() <= 0) {",
+            "static String canonicalPositivePaymentAmountString(final String amount)",
+            "final String canonical = canonicalPaymentAmountString(amount)",
+            "if (decimal(canonical).signum() <= 0) {",
             'throw new IllegalArgumentException("Offline Note payment amount must be positive");',
-            "requirePositivePaymentAmount(amount);",
+            'throw new IllegalArgumentException("Offline Note payment amount must be an exact amount string");',
+            'throw new IllegalArgumentException(\n            "Offline Note payment amount must contain only decimal digits");',
+            "canonicalAmount = canonicalPositivePaymentAmountString(amount);",
+            "issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)",
+            "deriveNoteCommitment(\n                                context.keyCertificate(),\n                                assetId,\n                                canonicalAmount,",
             "requirePositivePaymentAmount(receiveRequest.canonicalAmount())",
         ),
         "Android Java Offline Note wallet positive amount source",
         errors,
     )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java",
+        (
+            "this.amount = OfflineNoteWallet.canonicalPositivePaymentAmountString(amount);",
+            "this.outputCommitment, keyCertificate, assetId, this.amount)",
+        ),
+        "Android Java Offline Note receive request positive amount source",
+        errors,
+    )
     require_regex(
         texts,
         android,
-        r"public CompletableFuture<OfflineNoteWalletNote> load\([\s\S]*?if \(issuerClient == null\) \{[\s\S]*?\}[\s\S]*?try \{\s*requirePositivePaymentAmount\(amount\);\s*\} catch \(final Throwable error\) \{\s*return failedFuture\(error\);\s*\}[\s\S]*?issuerClient\.prepareLoad",
+        r"public CompletableFuture<OfflineNoteWalletNote> load\([\s\S]*?if \(issuerClient == null\) \{[\s\S]*?\}[\s\S]*?final String canonicalAmount;[\s\S]*?canonicalAmount = canonicalPositivePaymentAmountString\(amount\);[\s\S]*?issuerClient\.prepareLoad\(chainId, accountId, assetDefinition\(assetId\), canonicalAmount\)",
         "Android Java Offline Note wallet positive amount source",
         errors,
     )
@@ -12684,13 +14505,19 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
         (
             "walletRejectsNonPositiveLoadAmounts();",
             "private static void walletRejectsNonPositiveLoadAmounts()",
+            "walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts();",
+            "private static void walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts()",
+            'assertEquals("1.2300", issuerClient.lastPrepareAmount, "canonical load prepare amount")',
+            'assertEquals("1.2300", issuerClient.lastIssueRequest.amount(), "canonical issue amount")',
+            'assertEquals("10", receiveRequest.amount(), "canonical receive request amount")',
+            'Arrays.asList(" 1", "1\\n", "1e3", ".", "")',
             "walletRejectsNonPositiveReceiveAndPaymentAmounts();",
             "private static void walletRejectsNonPositiveReceiveAndPaymentAmounts()",
             'for (final String invalidAmount : Arrays.asList("0", "-1"))',
             '"Offline Note payment amount must be positive"',
             "assertEquals(0L, issuerClient.prepareLoadCount",
             "assertTrue(issuerClient.lastIssueRequest == null",
-            "senderWallet.pay(forgedRequest)",
+            "new OfflineNoteReceiveRequest(",
             "OfflineNoteWalletNoteState.SPENDABLE",
         ),
         "Android Java Offline Note wallet positive amount tests",
@@ -16198,6 +18025,21 @@ def check_javascript(texts, errors):
             f"{relative} confidential v2 derivation fixed32 exactness",
             errors,
         )
+        require_block_contains(
+            texts,
+            relative,
+            "export function deriveConfidentialOwnerTagV2(spendKey, options) {",
+            "export function deriveConfidentialDiversifierV2(seed) {",
+            (
+                "if (options?.diversifier !== undefined) {",
+                'throw new Error("diversifier must use canonical diversifierHex")',
+                "if (options?.diversifierHex === undefined) {",
+                'throw new Error("diversifier is required")',
+                'normalizeFixed32HexInput(options.diversifierHex, "diversifier")',
+            ),
+            f"{relative} confidential owner-tag diversifier exactness",
+            errors,
+        )
     for relative in ("javascript/iroha_js/src/transaction.js", "javascript/iroha_js/dist/transaction.js"):
         require_block_contains(
             texts,
@@ -16228,6 +18070,22 @@ def check_javascript(texts, errors):
         require_block_contains(
             texts,
             relative,
+            "function normalizeConfidentialInputDiversifierHex(input, index) {",
+            "function toNamedBuffer",
+            (
+                'const context = `inputs[${index}].diversifier`',
+                "input?.diversifier_hex !== undefined || input?.diversifier !== undefined",
+                "throw new TypeError(`${context} must use canonical diversifierHex`)",
+                "if (input?.diversifierHex === undefined) {",
+                "throw new TypeError(`${context} is required`)",
+                "return normalizeFixed32HexInput(input.diversifierHex, context)",
+            ),
+            f"{relative} confidential proof diversifier exactness",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
             "export function buildPrivateKaigiFeeSpend({",
             "export function buildPrivateCreateKaigiTransaction({",
             (
@@ -16246,6 +18104,53 @@ def check_javascript(texts, errors):
             f"{relative} confidential proof metadata exactness",
             errors,
         )
+    require_block_contains(
+        texts,
+        "crates/iroha_js_host/src/lib.rs",
+        "fn parse_required_confidential_diversifier_hex(",
+        "fn parse_confidential_transfer_inputs_v2(",
+        (
+            "format!(\"{context} is required\")",
+            "format!(\"{context} must not contain surrounding whitespace\")",
+            "parse_fixed_32_hex(context, value)",
+            "parse_required_confidential_diversifier_hex(",
+        ),
+        "JS host confidential proof diversifier exactness",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "crates/iroha_js_host/src/lib.rs",
+        "pub fn derive_confidential_owner_tag_v2(",
+        "pub fn derive_confidential_diversifier_v2(",
+        (
+            "parse_required_confidential_diversifier_hex(",
+            "\"diversifier_hex\"",
+        ),
+        "JS host confidential owner-tag diversifier exactness",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        "export interface ConfidentialTransferProofInputV2 {",
+        "export interface ConfidentialTransferProofOutputV2",
+        ("diversifierHex: string;",),
+        "JavaScript confidential proof input declaration exactness",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        "export function deriveConfidentialOwnerTagV2(",
+        "export function deriveConfidentialDiversifierV2(",
+        (
+            "options: {",
+            "diversifierHex: string;",
+        ),
+        "JavaScript confidential owner-tag declaration exactness",
+        errors,
+    )
     require_contains(
         texts,
         "javascript/iroha_js/test/crypto.test.js",
@@ -16310,6 +18215,9 @@ def check_javascript(texts, errors):
             "rho must not contain surrounding whitespace",
             "ownerTag must not contain surrounding whitespace",
             "diversifier must not contain surrounding whitespace",
+            "diversifier is required",
+            "diversifier must use canonical diversifierHex",
+            "diversifier: rho",
         ),
         "JavaScript confidential v2 derivation exactness tests",
         errors,
@@ -16327,6 +18235,9 @@ def check_javascript(texts, errors):
             "rho must not contain surrounding whitespace",
             "ownerTag must not contain surrounding whitespace",
             "diversifier must not contain surrounding whitespace",
+            "diversifier is required",
+            "diversifier must use canonical diversifierHex",
+            "diversifier: rho",
         ),
         "JavaScript package dist confidential v2 derivation exactness tests",
         errors,
@@ -16346,6 +18257,10 @@ def check_javascript(texts, errors):
             "inputs\\[0\\]\\.amount must not contain surrounding whitespace",
             "inputs\\[0\\]\\.rho must not contain surrounding whitespace",
             "inputs\\[0\\]\\.diversifier must not contain surrounding whitespace",
+            "inputs\\[0\\]\\.diversifier is required",
+            "inputs\\[0\\]\\.diversifier must use canonical diversifierHex",
+            "diversifier_hex: diversifier",
+            "diversifier: Buffer.alloc(32, 0x52)",
             "outputs\\[0\\]\\.amount must not contain surrounding whitespace",
             "outputs\\[0\\]\\.ownerTag must not contain surrounding whitespace",
             "treeCommitments\\[0\\] must not contain surrounding whitespace",
@@ -16363,6 +18278,10 @@ def check_javascript(texts, errors):
             "privateKaigiFeeSpend\\.feeAmount must not contain surrounding whitespace",
             "inputs\\[0\\]\\.amount must not contain surrounding whitespace",
             "outputs\\[0\\]\\.amount must not contain surrounding whitespace",
+            "inputs\\[0\\]\\.diversifier is required",
+            "inputs\\[0\\]\\.diversifier must use canonical diversifierHex",
+            "diversifier_hex: diversifier",
+            "diversifier: Buffer.alloc(32, 0x52)",
             "publicAmount must not contain surrounding whitespace",
         ),
         "JavaScript package dist confidential proof amount exactness tests",
@@ -16694,6 +18613,9 @@ def check_python(texts, errors):
         errors,
     )
     abi7_fixture_guard_index = script.find(PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND)
+    python_confidential_diversifier_guard_index = script.find(
+        PYTHON_CONFIDENTIAL_INPUT_DIVERSIFIER_NATIVE_GUARD_COMMAND
+    )
     maturin_index = script.find('"${VENV_DIR}/bin/python" -m maturin develop --release')
     require(
         abi7_fixture_guard_index >= 0,
@@ -16704,6 +18626,17 @@ def check_python(texts, errors):
         require(
             abi7_fixture_guard_index < maturin_index,
             "Kagemusha Python SDK script must validate ABI-7 archive fixtures before building the wheel",
+            errors,
+        )
+    require(
+        python_confidential_diversifier_guard_index >= 0,
+        "Kagemusha Python SDK script must run the confidential input diversifier native guard",
+        errors,
+    )
+    if python_confidential_diversifier_guard_index >= 0 and maturin_index >= 0:
+        require(
+            python_confidential_diversifier_guard_index < maturin_index,
+            "Kagemusha Python SDK script must validate confidential input diversifiers before building the wheel",
             errors,
         )
     require(
@@ -16944,6 +18877,20 @@ def check_python(texts, errors):
         and "format!(\"fuzz_artifact_hash:{reused_review_hash}\")" in python_privacy_native
         and "!privacy_capability_invariants_hold(&reused_ready_hash)" in python_privacy_native,
         "Python native privacy production gate invariant reused hash test",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/iroha_python_rs/src/lib.rs",
+        (
+            "python_confidential_transfer_input_requires_canonical_diversifier",
+            "dict_get_alias(dict, &[\"diversifier_hex\", \"diversifierHex\"])?",
+            "inputs[{index}].diversifier must use canonical diversifier",
+            "&[\"diversifier\"],",
+            "&format!(\"inputs[{index}].diversifier\")",
+            "inputs[0].diversifier is required",
+        ),
+        "Python native confidential proof diversifier exactness",
         errors,
     )
     require(
@@ -18839,6 +20786,7 @@ def check_swift(texts, errors):
     torii_client = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
     torii_client_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
     torii_offline_cash_api_models = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift"
+    offline_cash_models = "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift"
     offline_note = "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift"
     offline_v2 = "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift"
     offline_decoding = "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift"
@@ -18847,10 +20795,69 @@ def check_swift(texts, errors):
     offline_note_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     offline_v2_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
     offline_proof_verifier_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineProofVerifierTests.swift"
+    offline_revocation_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift"
     offline_payloads = "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift"
     torii_offline_cash_api_models_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
     nfc_mobile_transport = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
     transport_ui_test = "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
+    require_contains(
+        texts,
+        offline_cash_models,
+        (
+            "public func blacklistsAccount(_ accountId: String) -> Bool {",
+            ") throws {",
+            'throw OfflineNotePayloadError.invalidField("expires_at_ms")',
+            'try ToriiOfflineCashModelValidation.requireExactNonEmptyText(verdictId, field: "verdict_id")',
+            'field: "blacklisted_account_id"',
+            'field: "issuer_signature_base64"',
+            "guard !accountId.isEmpty else { return false }",
+            "return blacklistedAccountIds.contains(accountId)",
+            "public func revokesVerdict(_ verdictId: String?) -> Bool {",
+            "guard let verdictId, !verdictId.isEmpty else { return false }",
+            "return verdictIds.contains(verdictId)",
+            "public func sendLimit(assetDefinitionId: String) -> ToriiOfflineAssetSendLimit?",
+            "guard !assetDefinitionId.isEmpty else { return nil }",
+            "return assetSendLimits.first { $0.assetDefinitionId == assetDefinitionId }",
+            'field: "asset_definition_id"',
+            'field: "daily_send_limit"',
+            'field: "monthly_send_limit"',
+            "private static func exactNonEmptyText(_ value: String, field: String) throws -> String",
+            'verdictIds: try bundle.verdictIds.map { value in',
+            'try exactNonEmptyText(value, field: "verdict_id")',
+            'blacklistedAccountIds: try bundle.blacklistedAccountIds.map { value in',
+            'try exactNonEmptyText(value, field: "blacklisted_account_id")',
+            'assetDefinitionId: try exactNonEmptyText(',
+            'field: "asset_definition_id"',
+        ),
+        "Swift Offline Cash revocation exact lookup source",
+        errors,
+    )
+    require_contains(
+        texts,
+        offline_revocation_test,
+        (
+            "testPolicyLookupsUseExactAccountsVerdictsAndAssets",
+            'XCTAssertTrue(bundle.blacklistsAccount("i105blacklisted"))',
+            'XCTAssertTrue(bundle.revokesVerdict("verdict-1"))',
+            'XCTAssertEqual(bundle.sendLimit(assetDefinitionId: "pkr#offline")?.dailySendLimit, "10.00")',
+            'XCTAssertFalse(bundle.blacklistsAccount(" i105blacklisted "))',
+            'XCTAssertFalse(bundle.blacklistsAccount("I105blacklisted"))',
+            'XCTAssertFalse(bundle.revokesVerdict(" verdict-1 "))',
+            'XCTAssertFalse(bundle.revokesVerdict("Verdict-1"))',
+            'XCTAssertNil(bundle.sendLimit(assetDefinitionId: " pkr#offline "))',
+            'XCTAssertNil(bundle.sendLimit(assetDefinitionId: "PKR#offline"))',
+            "testRevocationBundleRejectsMalformedPolicyFields",
+            "ToriiOfflineCashCodec.revocationBundleUnsignedPayload(try bundle())",
+            'try bundle(verdictIds: [" verdict-1"])',
+            'try bundle(blacklistedAccountIds: [" i105blacklisted"])',
+            'try bundle(assetDefinitionId: " pkr#offline")',
+            'try bundle(dailySendLimit: "-1.00")',
+            'try bundle(expiresAtMs: 1_000)',
+            "JSONDecoder().decode(ToriiOfflineRevocationBundle.self, from: json)",
+        ),
+        "Swift Offline Cash revocation exact lookup tests",
+        errors,
+    )
     require_not_regex(
         texts,
         offline_note_test,
@@ -18984,11 +20991,15 @@ def check_swift(texts, errors):
             "static func isCanonicalHashHex(_ value: String) -> Bool",
             "value == value.lowercased()",
             "value.utf8.allSatisfy",
-            "let computedClaimHash = try OfflineNoteIssuedClaim(",
+            "let issuedClaim = try OfflineNoteIssuedClaim(",
+            "guard assetId == issuedClaim.assetId else",
+            'throw OfflineNotePayloadError.invalidField("asset_id")',
+            "let computedClaimHash = try issuedClaim.claimHash().hexLowercased()",
             "guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(claimHash) else",
             "guard claimHash == computedClaimHash else",
             'throw OfflineNotePayloadError.invalidField("claim_hash")',
             "claimHash: container.decodeIfPresent(String.self, forKey: .claimHash)",
+            "self.assetId = issuedClaim.assetId",
         ),
         "Swift Offline Note payload input-claim amount/hash strict source",
         errors,
@@ -19005,12 +21016,15 @@ def check_swift(texts, errors):
             "func testOfflineNotePayloadRejectsInvalidAmountStrings() throws",
             'XCTAssertEqual(validReceive.amount, "1.00")',
             "XCTAssertNotNil(validInput.claimHash)",
+            'let nonCanonicalAssetId = "cash#branch.sbp"',
             '.invalidAmount("not-an-amount")',
             '.invalidField("note_commitment")',
+            "OfflineNoritoError.invalidAssetId(nonCanonicalAssetId)",
             '.invalidField("claim_hash")',
             'noteCommitment: "0x\\(inputClaim.noteCommitment)"',
             'noteCommitment: " \\(inputClaim.noteCommitment)"',
             'noteCommitment: String(repeating: "ab", count: 32).uppercased()',
+            'inputObject["asset_id"] = nonCanonicalAssetId',
             'claimHash: ""',
             'claimHash: " \\(computedClaimHash)"',
             'claimHash: "0x\\(computedClaimHash)"',
@@ -19052,6 +21066,62 @@ def check_swift(texts, errors):
             "try registration.keyCertificatePayloadHash().hexLowercased()",
         ),
         "Swift Offline Note V2 registration certificate payload tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+        (
+            "fun keyCertificatePayload(): KeyCertificatePayloadV2 = KeyCertificatePayloadV2(",
+            "fun keyCertificatePayloadHash(): ByteArray = keyCertificatePayload().payloadHash()",
+        ),
+        "Kotlin Offline Note V2 registration certificate payload source",
+        errors,
+    )
+    require(
+        "issuerSignature = ByteArray(64)" not in texts[
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt"
+        ],
+        "Kotlin Offline Note V2 registration must not synthesize zero issuer signatures",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
+        (
+            "val keyCertificatePayload = registration.keyCertificatePayload()",
+            "hex(keyCertificatePayload.payloadHash())",
+            "OfflineNoteV2.decodeCertificatePayload(keyCertificatePayload.noritoEncoded())",
+        ),
+        "Kotlin Offline Note V2 registration certificate payload tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+        (
+            "public KeyCertificatePayloadV2 keyCertificatePayload()",
+            "return keyCertificatePayload().payloadHash();",
+        ),
+        "Android Java Offline Note V2 registration certificate payload source",
+        errors,
+    )
+    require(
+        "new byte[64]" not in texts[
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java"
+        ],
+        "Android Java Offline Note V2 registration must not synthesize zero issuer signatures",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
+        (
+            "registration.keyCertificatePayload()",
+            "hex(keyCertificatePayload.payloadHash())",
+            "OfflineNoteV2.decodeCertificatePayload(keyCertificatePayload.noritoEncoded())",
+        ),
+        "Android Java Offline Note V2 registration certificate payload tests",
         errors,
     )
     require_contains(
@@ -19101,14 +21171,232 @@ def check_swift(texts, errors):
         "Swift Offline recursive proof exact-base64 tests",
         errors,
     )
+    require_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"if let noteCommitment \{\s*"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*noteCommitment,\s*"
+        r"field: \"note_commitment\"\s*\)\s*"
+        r"self\.noteCommitment = noteCommitment\s*"
+        r"\} else \{\s*"
+        r"self\.noteCommitment = nil",
+        "Swift Offline Cash settlement proof note commitment exactness source",
+        errors,
+        re.S,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models,
+        (
+            "private enum ToriiOfflineCashAPIModelValidation",
+            "static func requireExactNonEmptyText(_ value: String, field: String) throws",
+            "static func canonicalNonNegativeAmount(_ value: String, field: String) throws -> String",
+            "static func requireCanonicalSignatureBase64(_ value: String, field: String) throws",
+            "try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(\n"
+            "            operationId,\n"
+            '            field: "operation_id"',
+            "try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: \"account_id\")",
+            "try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: \"device_id\")",
+            "_ = try OfflineNoteTextPayloadEncoding.requireHashHex(entryHash, field: \"entry_hash\")",
+            "_ = try OfflineNoteTextPayloadEncoding.requireHashHex(chainTxHash, field: \"chain_tx_hash\")",
+            'field: "issuer_signature_base64"',
+            "self.amount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(",
+            'field: "pre_balance"',
+            'field: "post_balance"',
+        ),
+        "Swift Offline Cash settlement proof signed field strict source",
+        errors,
+    )
+    require_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"public struct ToriiOfflineNoteIssueSettlementRequest[\s\S]*?"
+        r"try ToriiOfflineCashAPIModelValidation\.requireExactNonEmptyText\(\s*operationId,\s*"
+        r"field: \"operation_id\"\s*\)[\s\S]*?"
+        r"field: \"offline_public_key\"[\s\S]*?"
+        r"let canonicalAmount = try ToriiOfflineCashAPIModelValidation\.canonicalNonNegativeAmount\(\s*"
+        r"amount,\s*field: \"amount\"\s*\)[\s\S]*?"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*noteCommitment,\s*"
+        r"field: \"note_commitment\"\s*\)[\s\S]*?"
+        r"let canonicalLocalBalance = try ToriiOfflineCashAPIModelValidation\.canonicalNonNegativeAmount\(\s*"
+        r"localBalance,\s*field: \"local_balance\"\s*\)[\s\S]*?"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*localStateHash,\s*"
+        r"field: \"local_state_hash\"\s*\)[\s\S]*?"
+        r"self\.amount = canonicalAmount[\s\S]*?"
+        r"self\.localBalance = canonicalLocalBalance[\s\S]*?"
+        r"public init\(from decoder: Decoder\) throws[\s\S]*?"
+        r"try self\.init\(",
+        "Swift Offline Cash issue settlement note commitment exactness source",
+        errors,
+        re.S,
+    )
+    require_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"public struct ToriiOfflineNoteRedeemSettlementRequest[\s\S]*?"
+        r"try ToriiOfflineCashAPIModelValidation\.requireExactNonEmptyText\(\s*operationId,\s*"
+        r"field: \"operation_id\"\s*\)[\s\S]*?"
+        r"field: \"lineage_id\"[\s\S]*?"
+        r"field: \"asset_definition_id\"[\s\S]*?"
+        r"let canonicalAmount = try ToriiOfflineCashAPIModelValidation\.canonicalNonNegativeAmount\(\s*"
+        r"amount,\s*field: \"amount\"\s*\)[\s\S]*?"
+        r"let canonicalLocalBalance = try ToriiOfflineCashAPIModelValidation\.canonicalNonNegativeAmount\(\s*"
+        r"localBalance,\s*field: \"local_balance\"\s*\)[\s\S]*?"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*localStateHash,\s*"
+        r"field: \"local_state_hash\"\s*\)[\s\S]*?"
+        r"self\.amount = canonicalAmount[\s\S]*?"
+        r"self\.localBalance = canonicalLocalBalance[\s\S]*?"
+        r"public init\(from decoder: Decoder\) throws[\s\S]*?"
+        r"paymentTokens: container\.decodeIfPresent",
+        "Swift Offline Cash redeem settlement request signed field strict source",
+        errors,
+        re.S,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models,
+        (
+            "guard !inputNullifiers.isEmpty else {",
+            'throw OfflineNotePayloadError.invalidField("input_nullifiers")',
+            'field: "recipient_account_id"',
+            'field: "asset_definition_id"',
+            "self.amount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(",
+        ),
+        "Swift Offline Cash redemption proof signed field strict source",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models_test,
+        (
+            "func testSettlementProofRejectsNonCanonicalSignedFields() throws",
+            "assertInvalidSettlement(operationId: \" op-issue\", expectedField: \"operation_id\")",
+            "assertInvalidSettlement(amount: \"-50.00\", expectedField: \"amount\")",
+            "assertInvalidSettlement(preBalance: \"-1\", expectedField: \"pre_balance\")",
+            "assertInvalidSettlement(postBalance: \"-1\", expectedField: \"post_balance\")",
+            "assertInvalidSettlement(entryHash: Self.hashHex(0xab).uppercased(), expectedField: \"entry_hash\")",
+            "assertInvalidSettlement(chainTxHash: \"chain-tx\", expectedField: \"chain_tx_hash\")",
+            "issuerSignatureBase64: Self.issuerSignatureBase64().replacingOccurrences(of: \"=\", with: \"\")",
+            "JSONDecoder().decode(ToriiOfflineSettlementProof.self, from: payload)",
+            "entry_hash\":\"\\(Self.hashHex(0x07))\"",
+            "issuer_signature_base64\":\"\\(Self.issuerSignatureBase64())\"",
+        ),
+        "Swift Offline Cash settlement proof signed field strict tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models_test,
+        (
+            "func testIssueSettlementRequestRejectsNonCanonicalSignedFields() throws",
+            'assertInvalidIssueRequest(operationId: " op-issue", expectedField: "operation_id")',
+            'assertInvalidIssueRequest(offlinePublicKey: " offline-public-key", expectedField: "offline_public_key")',
+            'assertInvalidIssueRequest(amount: "-50.00", expectedField: "amount")',
+            'assertInvalidIssueRequest(localBalance: "-1", expectedField: "local_balance")',
+            "JSONDecoder().decode(ToriiOfflineNoteIssueSettlementRequest.self, from: payload)",
+            "func testRedeemSettlementRequestRejectsNonCanonicalSignedFields() throws",
+            'assertInvalidRedeemRequest(operationId: " op-redeem", expectedField: "operation_id")',
+            'assertInvalidRedeemRequest(amount: "-25.00", expectedField: "amount")',
+            'assertInvalidRedeemRequest(localBalance: "-1", expectedField: "local_balance")',
+            "JSONDecoder().decode(ToriiOfflineNoteRedeemSettlementRequest.self, from: payload)",
+            "func testRedemptionProofRejectsNonCanonicalSignedFields() throws",
+            'assertInvalidRedemption(inputNullifiers: [], expectedField: "input_nullifiers")',
+            'assertInvalidRedemption(amount: "-25.00", expectedField: "amount")',
+        ),
+        "Swift Offline Cash request DTO signed field strict tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"public struct ToriiOfflineNoteIssueSettlementResponse[\s\S]*?"
+        r"if let issuedNoteCommitment \{\s*"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*issuedNoteCommitment,\s*"
+        r"field: \"issued_note_commitment\"\s*\)\s*"
+        r"self\.issuedNoteCommitment = issuedNoteCommitment\s*"
+        r"\} else \{\s*"
+        r"self\.issuedNoteCommitment = nil[\s\S]*?"
+        r"public init\(from decoder: Decoder\) throws[\s\S]*?"
+        r"issuedNoteCommitment: container\.decodeIfPresent\(",
+        "Swift Offline Cash issue settlement response commitment exactness source",
+        errors,
+        re.S,
+    )
+    require_not_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"noteCommitment(?:\?)?[\s\r\n]*\.trimmingCharacters\(in:\s*\.whitespacesAndNewlines\)"
+        r"[\s\r\n]*\.lowercased\(",
+        "Swift Offline Cash API note commitment normalization",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"issuedNoteCommitment(?:\?)?[\s\r\n]*\.trimmingCharacters\(in:\s*\.whitespacesAndNewlines\)"
+        r"[\s\r\n]*\.lowercased\(",
+        "Swift Offline Cash API issued note commitment normalization",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models_test,
+        (
+            "func testIssueSettlementRequestRejectsNonExactNoteCommitmentHex() throws",
+            "func testSettlementProofRejectsNonExactNoteCommitmentHex() throws",
+            "func testIssueSettlementResponseRejectsNonExactIssuedNoteCommitmentHex() throws",
+            "Self.nonExactHashHexVariants(canonical)",
+            "canonical.uppercased()",
+            '"0x\\(canonical)"',
+            "JSONDecoder().decode(ToriiOfflineSettlementProof.self",
+            "JSONDecoder().decode(ToriiOfflineNoteIssueSettlementResponse.self",
+            '.invalidField("note_commitment")',
+            '.invalidField("issued_note_commitment")',
+        ),
+        "Swift Offline Cash API note commitment exactness tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"public struct ToriiOfflineRedemptionProof[\s\S]*?"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*sourceNoteCommitment,\s*"
+        r"field: \"source_note_commitment\"\s*\)[\s\S]*?"
+        r"for inputNullifier in inputNullifiers \{[\s\S]*?"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*inputNullifier,\s*"
+        r"field: \"input_nullifiers\"\s*\)[\s\S]*?"
+        r"public init\(from decoder: Decoder\) throws[\s\S]*?try self\.init\(",
+        "Swift Offline Cash redemption proof hash exactness source",
+        errors,
+        re.S,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models_test,
+        (
+            "func testRedemptionProofRejectsNonExactHashFields() throws",
+            "Self.redemptionProof(sourceNoteCommitment: invalid, inputNullifiers: [inputNullifier])",
+            "Self.redemptionProof(sourceNoteCommitment: sourceCommitment, inputNullifiers: [invalid])",
+            "JSONDecoder().decode(ToriiOfflineRedemptionProof.self",
+            '.invalidField("source_note_commitment")',
+            '.invalidField("input_nullifiers")',
+        ),
+        "Swift Offline Cash redemption proof hash exactness tests",
+        errors,
+    )
     require_contains(
         texts,
         torii_offline_cash_api_models,
         (
             "public var attestationKeyId: String",
             "attestationKeyId: String,",
+            'field: "attestation_key_id"',
+            "static func requireEmptyOrHashHex(_ value: String, field: String) throws",
+            'field: "existing_lineage_id"',
+            'field: "local_state_hash"',
             "self.attestationKeyId = attestationKeyId",
-            "attestationKeyId = try container.decode(String.self, forKey: .attestationKeyId)",
+            "try self.init(",
+            "attestationKeyId: container.decode(String.self, forKey: .attestationKeyId)",
             "try container.encode(attestationKeyId, forKey: .attestationKeyId)",
             'case attestationKeyId = "attestation_key_id"',
         ),
@@ -19151,6 +21439,69 @@ def check_swift(texts, errors):
             'XCTAssertEqual(key.stringValue, "attestation_key_id")',
         ),
         "Swift key-refill request rejects retired attestation alias tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        torii_offline_cash_api_models,
+        r"public struct ToriiOfflineAuditRequest[\s\S]*?"
+        r"try ToriiOfflineCashAPIModelValidation\.requireExactNonEmptyText\(\s*operationId,\s*"
+        r"field: \"operation_id\"\s*\)[\s\S]*?"
+        r"field: \"account_id\"[\s\S]*?"
+        r"field: \"device_id\"[\s\S]*?"
+        r"field: \"lineage_id\"[\s\S]*?"
+        r"_ = try OfflineNoteTextPayloadEncoding\.requireHashHex\(\s*localStateHash,\s*"
+        r"field: \"local_state_hash\"\s*\)[\s\S]*?"
+        r"public init\(from decoder: Decoder\) throws[\s\S]*?"
+        r"try self\.init\(",
+        "Swift Offline Cash audit request signed field strict source",
+        errors,
+        re.S,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models,
+        (
+            "static func optionalExactNonEmptyText(_ value: String?, field: String) throws -> String?",
+            "static func optionalCanonicalNonNegativeAmount(_ value: String?, field: String) throws -> String?",
+            "static func optionalHashHex(_ value: String?, field: String) throws -> String?",
+            "public struct ToriiOfflineKeyRefillResponse",
+            "public struct ToriiOfflineNoteRedeemSettlementResponse",
+            "public struct ToriiOfflineAuditResponse",
+            'field: "locked_balance"',
+            'field: "accepted_receipt_ids"',
+            "acceptedReceiptIds = try acceptedReceiptIds?.map { receiptId in",
+            "self.localStateHash = try ToriiOfflineCashAPIModelValidation.optionalHashHex(",
+            "public init(from decoder: Decoder) throws",
+        ),
+        "Swift Offline Cash response DTO signed field strict source",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_offline_cash_api_models_test,
+        (
+            "func testKeyRefillRequestRejectsNonCanonicalSignedFields() throws",
+            'XCTAssertEqual(try Self.keyRefillRequest(localStateHash: "").localStateHash, "")',
+            'assertInvalidKeyRefill(operationId: " op-refill", expectedField: "operation_id")',
+            'assertInvalidKeyRefill(attestationKeyId: "attest-key ", expectedField: "attestation_key_id")',
+            'assertInvalidKeyRefill(existingLineageId: " lineage-1", expectedField: "existing_lineage_id")',
+            'assertInvalidKeyRefill(localStateHash: "state-3", expectedField: "local_state_hash")',
+            "JSONDecoder().decode(ToriiOfflineKeyRefillRequest.self, from: payload)",
+            "func testAuditRequestRejectsNonCanonicalSignedFields() throws",
+            'assertInvalidAuditRequest(operationId: " op-audit", expectedField: "operation_id")',
+            'assertInvalidAuditRequest(localStateHash: "state-6", expectedField: "local_state_hash")',
+            "JSONDecoder().decode(ToriiOfflineAuditRequest.self, from: payload)",
+            "func testResponseDtosRejectNonCanonicalStateFields() throws",
+            "ToriiOfflineKeyRefillResponse(operationId: \" op-refill\")",
+            "ToriiOfflineKeyRefillResponse.self,",
+            "ToriiOfflineNoteIssueSettlementResponse(",
+            "ToriiOfflineNoteRedeemSettlementResponse(",
+            "ToriiOfflineAuditResponse(",
+            'acceptedReceiptIds: ["receipt-1\\n"]',
+            "ToriiOfflineAuditResponse.self,",
+        ),
+        "Swift Offline Cash key-refill and audit request signed field strict tests",
         errors,
     )
     require_contains(
@@ -23929,6 +26280,16 @@ def check_java_kotlin(texts, errors):
         ),
         (
             java_offline_list_params,
+            'params.put("verdict_id_hex", requireExactLowerHex(verdictIdHex, "verdictIdHex"));',
+            "Android Java offline list verdict id hex exactness",
+        ),
+        (
+            java_offline_list_params,
+            "private static String requireExactLowerHex(final String value, final String field)",
+            "Android Java offline list verdict id hex validator",
+        ),
+        (
+            java_offline_list_params,
             'throw new IllegalArgumentException(field + " must not contain surrounding whitespace");',
             "Android Java offline list asset selector whitespace rejection",
         ),
@@ -23936,6 +26297,16 @@ def check_java_kotlin(texts, errors):
             kotlin_offline_list_params,
             'assetId?.let { params["asset_id"] = requireExactNonEmpty(it, "assetId") }',
             "Kotlin offline list asset selector exactness",
+        ),
+        (
+            kotlin_offline_list_params,
+            'verdictIdHex?.let { params["verdict_id_hex"] = requireExactLowerHex(it, "verdictIdHex") }',
+            "Kotlin offline list verdict id hex exactness",
+        ),
+        (
+            kotlin_offline_list_params,
+            "private fun requireExactLowerHex(value: String, field: String): String",
+            "Kotlin offline list verdict id hex validator",
         ),
         (
             kotlin_offline_list_params,
@@ -24338,6 +26709,26 @@ def check_java_kotlin(texts, errors):
     )
     require_contains(
         texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java",
+        (
+            "offlineListParamsRejectsNormalizedVerdictIdHex",
+            'OfflineListParams.builder().verdictIdHex(" " + verdictId)',
+            'OfflineListParams.builder().verdictIdHex(repeat("AB", 32))',
+            'OfflineListParams.builder().verdictIdHex("0x" + verdictId)',
+            'OfflineListParams.builder().verdictIdHex("abc")',
+        ),
+        "Android Java offline list verdict id hex exactness tests",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        java_offline_list_params,
+        r"verdictIdHex\.toLowerCase\(",
+        "Android Java offline list verdict id hex lowercase normalization",
+        errors,
+    )
+    require_contains(
+        texts,
         java_identifier_parser_test,
         (
             "padded resolved multisig account id must be rejected",
@@ -24392,6 +26783,26 @@ def check_java_kotlin(texts, errors):
             "assetId must not be blank",
         ),
         "Kotlin offline list asset selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "offlineListParamsRejectsNormalizedVerdictIdHexBeforeDispatch",
+            'OfflineListParams(verdictIdHex = verdictId).toQueryParameters()["verdict_id_hex"]',
+            "verdictId.uppercase()",
+            '"0x$verdictId"',
+            '"zz"',
+        ),
+        "Kotlin offline list verdict id hex exactness tests",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        kotlin_offline_list_params,
+        r"verdictIdHex\.lowercase\(",
+        "Kotlin offline list verdict id hex lowercase normalization",
         errors,
     )
     require_contains(
@@ -24945,7 +27356,7 @@ def check_java_kotlin(texts, errors):
             "Android Java Offline List params production JDK 8 blank checks",
             (
                 "value.trim().isEmpty()",
-                "verdictIdHex.trim().isEmpty()",
+                "exact.isEmpty()",
             ),
         ),
         (
@@ -24958,10 +27369,11 @@ def check_java_kotlin(texts, errors):
         ),
         (
             java_offline_explorer_outcome,
-            "Android Java Offline explorer outcome production JDK 8 blank checks",
+            "Android Java Offline explorer outcome production JDK 8 exact non-empty checks",
             (
-                "kind.trim().isEmpty()",
-                "transactionStatus.trim().isEmpty()",
+                "if (!isExactNonEmpty(kind))",
+                "if (!isExactNonEmpty(transactionStatus))",
+                "value.equals(value.trim())",
             ),
         ),
     ):
@@ -29623,6 +32035,111 @@ def check_mobile_halo2_canonical_vk_hash(texts, errors):
         require_contains(texts, relative, (needle,), label, errors)
 
 
+def check_mobile_open_verify_public_input_hash_exactness(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/Halo2PastaTests.swift"
+    java_v1 = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java"
+    java_v2 = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java"
+    kotlin_v1 = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java"
+    kotlin_v2 = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    java_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    kotlin_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+
+    require_contains(
+        texts,
+        swift_source,
+        (
+            "isExactLowerHex(publicInputsHashHex, byteCount: 32)",
+            "Data(hexString: publicInputsHashHex)",
+            "private static func isExactLowerHex(_ value: String, byteCount: Int) -> Bool",
+        ),
+        "Swift OpenVerifyEnvelope public input hash exactness",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        swift_source,
+        r"publicInputsHashHex\.trimmingCharacters\(in:\s*\.whitespacesAndNewlines\)\.lowercased\(",
+        "Swift OpenVerifyEnvelope public input hash normalization",
+        errors,
+    )
+    for relative, label in (
+        (java_v1, "Android Java OpenVerifyEnvelope V1 public input hash exactness"),
+        (java_v2, "Android Java OpenVerifyEnvelope V2 public input hash exactness"),
+        (kotlin_v1, "Kotlin OpenVerifyEnvelope V1 public input hash exactness"),
+        (kotlin_v2, "Kotlin OpenVerifyEnvelope V2 public input hash exactness"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "isExactLowerHex(publicInputsHashHex, 64)",
+                ".equals(publicInputsHashHex)",
+                "private static boolean isExactLowerHex(final String value, final int expectedLength)",
+            ),
+            label,
+            errors,
+        )
+        require_not_regex(
+            texts,
+            relative,
+            r"publicInputsHashHex\.trim\(\)\.toLowerCase\(|publicInputsHashHex\.toLowerCase\(|publicInputsHashHex\.lowercase\(",
+            label.replace("exactness", "normalization"),
+            errors,
+        )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "testOpenVerifyEnvelopeRejectsNonExactPublicInputHashBeforeParsingEnvelope",
+            "Self.nonExactPublicInputHashes(canonicalHash)",
+            "canonicalHash.uppercased()",
+            '"0x\\(canonicalHash)"',
+            "Self.nonExactPublicInputHashes(fixture.chainVectors.audit.publicInputsHash)",
+        ),
+        "Swift OpenVerifyEnvelope public input hash exactness tests",
+        errors,
+    )
+    for relative, label in (
+        (java_test, "Android Java OpenVerifyEnvelope V1 public input hash exactness tests"),
+        (java_v2_test, "Android Java OpenVerifyEnvelope V2 public input hash exactness tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding",
+                "nonExactPublicInputHashes(canonicalHash)",
+                "new byte[0], rejectedHash",
+                "canonicalHash.toUpperCase(Locale.ROOT)",
+                '"0x" + canonicalHash',
+                "nonExactPublicInputHashes(publicInputsHashHex)",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (kotlin_test, "Kotlin OpenVerifyEnvelope V1 public input hash exactness tests"),
+        (kotlin_v2_test, "Kotlin OpenVerifyEnvelope V2 public input hash exactness tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding",
+                "nonExactPublicInputHashes(canonicalHash)",
+                "ByteArray(0), rejectedHash",
+                "canonicalHash.uppercase(Locale.ROOT)",
+                '"0x$canonicalHash"',
+                "nonExactPublicInputHashes(publicInputsHashHex)",
+            ),
+            label,
+            errors,
+        )
+
+
 def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
     """Pin preferred-mode selection: ABI-7 compact first, ABI-6 recursive spend, then no mode."""
 
@@ -30838,8 +33355,24 @@ def run_checks(texts):
     check_mobile_offline_readiness_coverage(texts, errors)
     check_offline_readiness_artifact_contract(texts, errors)
     check_mobile_bearer_cash_policy_validation(texts, errors)
+    check_mobile_offline_bearer_cash_text_exactness(texts, errors)
+    check_mobile_nearby_pairing_challenge_exactness(texts, errors)
+    check_mobile_offline_outcome_exactness(texts, errors)
+    check_mobile_offline_outcome_encoded_instruction_exactness(texts, errors)
+    check_swift_transfer_text_payload_exactness(texts, errors)
+    check_mobile_qr_stream_text_exactness(texts, errors)
+    check_kotlin_offline_bearer_cash_text_exactness(texts, errors)
+    check_kotlin_offline_outcome_exactness(texts, errors)
+    check_kotlin_offline_payment_token_commitment_exactness(texts, errors)
+    check_swift_offline_payment_token_commitment_exactness(texts, errors)
     check_kotlin_offline_cash_settlement_coverage(texts, errors)
+    check_kotlin_offline_cash_request_strictness(texts, errors)
     check_kotlin_offline_wallet_compact_certificate_profile(texts, errors)
+    check_kotlin_offline_wallet_recursive_proof_strictness(texts, errors)
+    check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors)
+    check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors)
+    check_kotlin_offline_wallet_signed_payload_strictness(texts, errors)
+    check_kotlin_offline_wallet_state_collection_strictness(texts, errors)
     check_kotlin_offline_wallet_amount_normalization(texts, errors)
     check_kotlin_offline_wallet_max_inputs_strictness(texts, errors)
     check_kotlin_offline_wallet_input_claim_strictness(texts, errors)
@@ -30876,6 +33409,7 @@ def run_checks(texts):
     check_abi7_sdk_manifest_coverage(texts, errors)
     check_csharp(texts, errors)
     check_mobile_halo2_canonical_vk_hash(texts, errors)
+    check_mobile_open_verify_public_input_hash_exactness(texts, errors)
     check_cross_sdk_preferred_mode_fallback_policy(texts, errors)
     check_sdk_readme_previous_proof_boundary(texts, errors)
     check_public_docs_removed_kagemusha_readiness_aliases(texts, errors)
@@ -35916,6 +38450,665 @@ if mode == "--negative-control-mobile-bearer-cash-policy-validation":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-mobile-offline-bearer-cash-text-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "public static func decodeText(_ text: String) throws -> OfflineNoteReceiveRequest {\n"
+            "        guard text.hasPrefix(textPrefix)",
+            "public static func decodeText(_ text: String) throws -> OfflineNoteReceiveRequest {\n"
+            "        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        guard trimmed.hasPrefix(textPrefix)",
+            "Swift Offline Bearer Cash receive text exactness source block",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "public static func decodeText(_ text: String) throws -> OfflineNotePaymentToken {\n"
+            "        guard text.hasPrefix(textPrefix)",
+            "public static func decodeText(_ text: String) throws -> OfflineNotePaymentToken {\n"
+            "        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        guard trimmed.hasPrefix(textPrefix)",
+            "Swift Offline Bearer Cash payment text exactness source block",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "public static func decodeText(_ text: String) throws -> OfflineNoteReceiptAck {\n"
+            "        guard text.hasPrefix(textPrefix)",
+            "public static func decodeText(_ text: String) throws -> OfflineNoteReceiptAck {\n"
+            "        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        guard trimmed.hasPrefix(textPrefix)",
+            "Swift Offline Bearer Cash ACK text exactness source block",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            'guard !value.isEmpty,\n              !value.contains("="),',
+            'guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,\n              !value.contains("="),',
+            "Swift Offline Bearer Cash base64url text exactness source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift",
+            "payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload",
+            "!payload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty",
+            "Swift Offline Bearer Cash payload kind payload exactness source block",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'OfflineBearerCashTextCodec.decodeAckText("\\(text)\\t")',
+            "OfflineBearerCashTextCodec.decodeAckText(text)",
+            "Swift Offline Bearer Cash text exactness tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequestCodec.java",
+            'final String value = Objects.requireNonNull(text, "text");\n    if (!value.startsWith(TEXT_PREFIX))',
+            'final String trimmed = Objects.requireNonNull(text, "text").trim();\n    if (!trimmed.startsWith(TEXT_PREFIX))',
+            "Android Java Offline Bearer Cash receive text exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
+            'final String value = Objects.requireNonNull(text, "text");\n    if (!value.startsWith(TEXT_PREFIX))',
+            'final String trimmed = Objects.requireNonNull(text, "text").trim();\n    if (!trimmed.startsWith(TEXT_PREFIX))',
+            "Android Java Offline Bearer Cash payment text exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiptAckCodec.java",
+            'final String value = Objects.requireNonNull(text, "text");\n    if (!value.startsWith(TEXT_PREFIX))',
+            'final String trimmed = Objects.requireNonNull(text, "text").trim();\n    if (!trimmed.startsWith(TEXT_PREFIX))',
+            "Android Java Offline Bearer Cash ACK text exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java",
+            "payload.isEmpty() || payload.indexOf('=') >= 0",
+            "payload.trim().isEmpty() || payload.indexOf('=') >= 0",
+            "Android Java Offline Bearer Cash base64url text exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashTextCodec.java",
+            "!payload.trim().equals(payload)",
+            "payload.trim().isEmpty()",
+            "Android Java Offline Bearer Cash payload kind payload exactness source block",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            'OfflineBearerCashTextCodec.decodeAckText(text + "\\t")',
+            "OfflineBearerCashTextCodec.decodeAckText(text)",
+            "Android Java Offline Bearer Cash text exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Bearer Cash text exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "mobile Offline Bearer Cash text exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected mobile Offline Bearer Cash text exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-nearby-pairing-challenge-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferProtocols.swift",
+            "public init(assetName: String) throws {\n"
+            "        guard Self.allAssetNames.contains(assetName) else {",
+            "public init(assetName: String) throws {\n"
+            "        let trimmed = assetName.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        guard Self.allAssetNames.contains(trimmed) else {",
+            "Swift Nearby pairing challenge exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteTransportProtocols.kt",
+            "val assetName: String = assetName",
+            "val assetName: String = assetName.trim()",
+            "Kotlin Nearby pairing challenge whitespace normalization source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteTransportProtocols.kt",
+            "OfflineNoteNearbyPairingChallenge(value)",
+            "OfflineNoteNearbyPairingChallenge(value.trim())",
+            "Kotlin Nearby pairing challenge whitespace normalization source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteNearbyEnvelope.java",
+            'final String value = Objects.requireNonNull(assetName, "assetName");',
+            'final String value = Objects.requireNonNull(assetName, "assetName").trim();',
+            "Android Java Nearby pairing challenge exactness source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'OfflineNoteNearbyPairingChallenge(assetName: " nearby_pairing_mask")',
+            'OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_mask")',
+            "Swift Nearby pairing challenge exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            'OfflineNoteNearbyPairingChallenge(" nearby_pairing_mask")',
+            'OfflineNoteNearbyPairingChallenge("nearby_pairing_mask")',
+            "Kotlin Nearby pairing challenge exactness tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            'new OfflineNoteNearbyEnvelope.PairingChallenge(" nearby_pairing_mask")',
+            'new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_mask")',
+            "Android Java Nearby pairing challenge exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Nearby pairing challenge exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "mobile Nearby pairing challenge exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected mobile Nearby pairing challenge exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-offline-outcome-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "guard isExactNonEmptyOutcomeField(kind) else {",
+            "guard !kind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {",
+            "Swift Offline Note explorer outcome exactness source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "let committed = outcome.transactionStatus == statusCommitted",
+            'let committed = outcome.transactionStatus.lowercased() == "committed"',
+            "Swift Offline Note explorer outcome permissive matching source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "let permissiveCaseDrift = try OfflineNoteOutcomeIndex.fromExplorerOutcomes",
+            "let permissiveCaseAllowed = try OfflineNoteOutcomeIndex.fromExplorerOutcomes",
+            "Swift Offline Note explorer outcome exactness tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteExplorerInstructionOutcome.java",
+            "if (!isExactNonEmpty(kind))",
+            "if (kind == null || kind.trim().isEmpty())",
+            "Android Java Offline Note explorer outcome exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteOutcomeIndex.java",
+            "final boolean committed = STATUS_COMMITTED.equals(outcome.transactionStatus());",
+            'final boolean committed = "committed".equals(outcome.transactionStatus().toLowerCase(Locale.ROOT));',
+            "Android Java Offline Note explorer outcome permissive matching source",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "final OfflineNoteOutcomeIndex permissiveCaseDrift =",
+            "final OfflineNoteOutcomeIndex permissiveCaseAllowed =",
+            "Android Java Offline Note explorer outcome exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Note explorer outcome exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "mobile Offline Note explorer outcome exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected mobile Offline Note explorer outcome exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-offline-outcome-encoded-instruction-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "value.count.isMultiple(of: 2) &&",
+            "value.trimmingCharacters(in: .whitespacesAndNewlines).count.isMultiple(of: 2) &&",
+            "Swift Offline Note outcome encoded instruction normalization source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            'encodedInstruction = exactLowerHexBytes(encoded, "encoded"),',
+            'encodedInstruction = hexBytes(encoded, "encoded"),',
+            "Kotlin Offline Note outcome encoded instruction exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteOutcomeProvider.java",
+            'exactLowerHexBytes(encoded, "encoded")',
+            'hexBytes(encoded, "encoded")',
+            "Android Java Offline Note outcome encoded instruction exactness source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            '("0xbeef", false),',
+            '("beef", false),',
+            "Swift Offline Note outcome encoded instruction exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            '"0xbeef" to false,',
+            '"beef" to false,',
+            "Kotlin Offline Note outcome encoded instruction exactness tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            '{"0xbeef", false},',
+            '{"beef", false},',
+            "Android Java Offline Note outcome encoded instruction exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Note outcome encoded instruction exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "mobile Offline Note outcome encoded instruction exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected mobile Offline Note outcome encoded instruction exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-transfer-text-payload-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift",
+            "static func textPayload(_ text: String, prefix: String) throws -> Data {\n"
+            "        guard text.hasPrefix(prefix) else {",
+            "static func textPayload(_ text: String, prefix: String) throws -> Data {\n"
+            "        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        guard trimmed.hasPrefix(prefix) else {",
+            "Swift transfer JSON text payload whitespace normalization source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferHandoff.swift",
+            "let kind: OfflineNoteTextPayloadKind\n"
+            "        let encoded: Substring\n"
+            "        if value.hasPrefix(receiveRequestPrefix)",
+            "let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        let kind: OfflineNoteTextPayloadKind\n"
+            "        let encoded: Substring\n"
+            "        if trimmed.hasPrefix(receiveRequestPrefix)",
+            "Swift transfer text payload decode whitespace normalization source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferHandoff.swift",
+            "public static func payloadKind(for value: String) -> OfflineQrPayloadKind {\n"
+            "        if hasExactTextPayload(value, prefix: receiveRequestPrefix)",
+            "public static func payloadKind(for value: String) -> OfflineQrPayloadKind {\n"
+            "        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "        if trimmed.hasPrefix(receiveRequestPrefix)",
+            "Swift transfer text payload kind whitespace normalization source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
+            'OfflineNoteTransferTextPayloadCodec.decode(" \\(challenge)", expectedKind: .receiveRequest)',
+            'OfflineNoteTransferTextPayloadCodec.decode(challenge, expectedKind: .receiveRequest)',
+            "Swift transfer text payload exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift transfer text payload exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "Swift transfer text payload exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected Swift transfer text payload exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-qr-stream-text-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift",
+            "guard let stripped = value.stripPrefix(base64Prefix) else",
+            "guard let stripped = value.trimmingCharacters(in: .whitespacesAndNewlines).stripPrefix(base64Prefix) else",
+            "Swift QR stream text whitespace normalization source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineQrStream.kt",
+            "fun decode(value: String, encoding: FrameEncoding): ByteArray {\n"
+            "            val payload = if (encoding == FrameEncoding.BASE64)",
+            "fun decode(value: String, encoding: FrameEncoding): ByteArray {\n"
+            "            val trimmed = value.trim()\n"
+            "            val payload = if (encoding == FrameEncoding.BASE64)",
+            "Kotlin QR stream text whitespace normalization source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java",
+            "final String payload;\n      if (encoding == FrameEncoding.BASE64)",
+            "final String trimmed = value.trim();\n      final String payload;\n      if (encoding == FrameEncoding.BASE64)",
+            "Android Java QR stream text whitespace normalization source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
+            'OfflineQrStreamTextCodec.decode(" \\(encoded)", encoding: .base64)',
+            "OfflineQrStreamTextCodec.decode(encoded, encoding: .base64)",
+            "Swift QR stream text exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            'OfflineQrStream.TextCodec.decode(" $encoded", OfflineQrStream.FrameEncoding.BASE64)',
+            "OfflineQrStream.TextCodec.decode(encoded, OfflineQrStream.FrameEncoding.BASE64)",
+            "Kotlin QR stream text exactness tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java",
+            'OfflineQrStream.TextCodec.decode(" " + encoded, OfflineQrStream.FrameEncoding.BASE64)',
+            "OfflineQrStream.TextCodec.decode(encoded, OfflineQrStream.FrameEncoding.BASE64)",
+            "Android Java QR stream text exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile QR stream text exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "mobile QR stream text exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected mobile QR stream text exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-bearer-cash-text-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "fun decodeText(text: String): OfflineNoteReceiveRequest {\n"
+            "        require(text.startsWith(TEXT_PREFIX))",
+            "fun decodeText(text: String): OfflineNoteReceiveRequest {\n"
+            "        val trimmed = text.trim()\n"
+            "        require(trimmed.startsWith(TEXT_PREFIX))",
+            "Kotlin Offline Bearer Cash receive text exactness source block",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "fun decodeText(text: String): OfflineNotePaymentToken {\n"
+            "        require(text.startsWith(TEXT_PREFIX))",
+            "fun decodeText(text: String): OfflineNotePaymentToken {\n"
+            "        val trimmed = text.trim()\n"
+            "        require(trimmed.startsWith(TEXT_PREFIX))",
+            "Kotlin Offline Bearer Cash payment text exactness source block",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "fun decodeText(text: String): OfflineNoteReceiptAck {\n"
+            "        require(text.startsWith(TEXT_PREFIX))",
+            "fun decodeText(text: String): OfflineNoteReceiptAck {\n"
+            "        val trimmed = text.trim()\n"
+            "        require(trimmed.startsWith(TEXT_PREFIX))",
+            "Kotlin Offline Bearer Cash ACK text exactness source block",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "require(value.isNotEmpty() && value.trim() == value && !value.contains(\"=\"))",
+            "require(value.trim().isNotEmpty() && !value.contains(\"=\"))",
+            "Kotlin Offline Bearer Cash base64url text exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt",
+            "payload.trim() == payload",
+            "payload.trim().isNotEmpty()",
+            "Kotlin Offline Bearer Cash payload kind payload exactness source block",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            'OfflineBearerCashTextCodec.decodeAckText("$text\\t")',
+            'OfflineBearerCashTextCodec.decodeAckText(text)',
+            "Kotlin Offline Bearer Cash text exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin Offline Bearer Cash text exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "Kotlin Offline Bearer Cash text exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected Kotlin Offline Bearer Cash text exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-outcome-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "require(kind.isNotEmpty() && kind.trim() == kind)",
+            "require(kind.trim().isNotEmpty())",
+            "Kotlin Offline Note explorer outcome exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "val committed = outcome.transactionStatus == STATUS_COMMITTED",
+            'val committed = outcome.transactionStatus.equals("committed", ignoreCase = true)',
+            "Kotlin Offline Note explorer outcome exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "outcome.kind == KIND_REDEEM",
+            "outcome.kind.equals(KIND_REDEEM, ignoreCase = true)",
+            "Kotlin Offline Note explorer outcome exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "val permissiveCaseDrift = OfflineNoteOutcomeIndex.fromExplorerOutcomes",
+            "val permissiveCaseAllowed = OfflineNoteOutcomeIndex.fromExplorerOutcomes",
+            "Kotlin Offline Note explorer outcome exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            'transactionStatus = "committed"',
+            "transactionStatus = OfflineNoteOutcomeIndex.STATUS_COMMITTED",
+            "Kotlin Offline Note explorer outcome exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin Offline Note explorer outcome exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "Kotlin Offline Note explorer outcome exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected Kotlin Offline Note explorer outcome exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-payment-token-commitment-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            'outputClaimForNoteCommitment(lowerHex32Bytes(noteCommitmentHex, "note_commitment"))',
+            'outputClaimForNoteCommitment(hexBytes(noteCommitmentHex.trim(), "note_commitment"))',
+            "Kotlin Offline Note payment token commitment exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "require(value.length == 64 && value.all(::isLowerHexCharacter))",
+            'require(value.removePrefix("0x").removePrefix("0X").trim().isNotEmpty())',
+            "Kotlin Offline Note payment token commitment exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            'token.outputClaimForNoteCommitmentHex("0x${string(derivation, "change_output_commitment")}")',
+            'token.outputClaimForNoteCommitmentHex(string(derivation, "change_output_commitment"))',
+            "Kotlin Offline Note payment token commitment exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin Offline Note payment token commitment exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "Kotlin Offline Note payment token commitment exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected Kotlin Offline Note payment token commitment exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-offline-payment-token-commitment-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNotePayloads.swift",
+            "guard Self.isExactNoteCommitmentHex(noteCommitment) else {",
+            "guard !noteCommitment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {",
+            "Swift Offline Note payment token commitment exactness source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
+            "guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(noteCommitmentHex),",
+            "guard !noteCommitmentHex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,",
+            "Swift Offline Note native audit commitment exactness source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "XCTAssertFalse(nativeToken.containsOutputNoteCommitment(hex: derivation.changeOutputCommitment.uppercased()))",
+            "XCTAssertTrue(nativeToken.containsOutputNoteCommitment(hex: derivation.changeOutputCommitment.uppercased()))",
+            "Swift Offline Note payment token commitment exactness tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "0x\\(derivation.changeOutputCommitment)"))',
+            'XCTAssertNotNil(canonicalToken.outputClaim(matchingNoteCommitment: "0x\\(derivation.changeOutputCommitment)"))',
+            "Swift Offline Note payment token commitment exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift Offline Note payment token commitment exactness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated_texts,
+                (expected_label,),
+                "Swift Offline Note payment token commitment exactness drift",
+            )
+        )
+        mutated_texts[target] = original
+    print("negative control rejected Swift Offline Note payment token commitment exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
     mutated_texts = dict(texts)
     targets = (
@@ -35976,14 +39169,147 @@ if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-kotlin-offline-cash-request-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+            "internal fun requireExactNonEmptyText(value: String, field: String): String",
+            "internal fun requireLooseNonEmptyText(value: String, field: String): String",
+            "Kotlin offline cash request strictness helpers missing internal fun requireExactNonEmptyText(value: String, field: String): String",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+            "amount.isNotEmpty() && amount.trim() == amount",
+            "amount.isNotEmpty()",
+            "Kotlin offline cash request strictness helpers missing amount.isNotEmpty() && amount.trim() == amount",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt",
+            'OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+            "accountId",
+            'Kotlin offline cash setup request exactness missing OfflineCashCodec.requireExactNonEmptyText(accountId, "account_id")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
+            'OfflineCashCodec.requireOptionalExactNonEmptyText(lineageId, "lineage_id")',
+            "lineageId",
+            'Kotlin offline cash load request exactness missing OfflineCashCodec.requireOptionalExactNonEmptyText(lineageId, "lineage_id")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt",
+            'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
+            "amount",
+            'Kotlin offline cash load request exactness missing OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt",
+            'OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
+            "operationId",
+            'Kotlin offline cash refresh request exactness missing OfflineCashCodec.requireExactNonEmptyText(operationId, "operation_id")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt",
+            'OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
+            "lineageId",
+            'Kotlin offline cash sync request exactness missing OfflineCashCodec.requireExactNonEmptyText(lineageId, "lineage_id")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt",
+            'OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
+            "amount",
+            'Kotlin offline cash redeem request exactness missing OfflineCashCodec.canonicalNonNegativeAmountString(amount, "amount")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
+            "cashMutationRequestsRejectNonCanonicalSignedFields",
+            "cashMutationRequestsAllowNonCanonicalSignedFields",
+            "Kotlin offline cash request strictness tests missing cashMutationRequestsRejectNonCanonicalSignedFields",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline cash request strictness for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated_texts,
+                    (expected_label,),
+                    "Kotlin offline cash request strictness drift",
+                )
+            )
+        finally:
+            mutated_texts[target] = original
+    if not detected_messages:
+        raise SystemExit("negative control failed: Kotlin offline cash request strictness drift was not detected")
+    print("negative control rejected Kotlin offline cash request strictness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-kotlin-offline-wallet-compact-certificate-profile":
     mutated_texts = dict(texts)
     mutations = (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION)",
+            "check(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION)",
+            "Kotlin offline wallet compact certificate profile source missing require(version == OfflineNoteV2.KEY_CERTIFICATE_VERSION)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
             "require(assertionScheme == expectedAssertionScheme(platform))",
             "check(assertionScheme == expectedAssertionScheme(platform))",
-            "Kotlin offline wallet compact certificate profile source missing require(assertionScheme == expectedAssertionScheme(platform))",
+            "Kotlin offline wallet compact certificate profile source block missing require(assertionScheme == expectedAssertionScheme(platform))",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(appAttestPublicKeyBase64 == null)",
+            "check(appAttestPublicKeyBase64 == null)",
+            "Kotlin offline wallet compact certificate profile source block missing require(appAttestPublicKeyBase64 == null)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+            "check(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+            "Kotlin offline wallet compact certificate profile source block missing require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'val decodedPublicKey = requireCanonicalNonEmptyBase64(publicKey, "public_key")',
+            'require(publicKey.isNotEmpty()) { "public_key must not be empty" }',
+            'Kotlin offline wallet compact certificate profile source missing val decodedPublicKey = requireCanonicalNonEmptyBase64(publicKey, "public_key")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(decodedPublicKey.size == 32)",
+            "check(decodedPublicKey.size == 32)",
+            "Kotlin offline wallet compact certificate profile source missing require(decodedPublicKey.size == 32)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKey, "assertion_public_key")',
+            'require(assertionPublicKey.isNotEmpty()) { "assertion_public_key must not be empty" }',
+            'Kotlin offline wallet compact certificate profile source missing val decodedAssertionPublicKey = requireCanonicalNonEmptyBase64(assertionPublicKey, "assertion_public_key")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(decodedAssertionPublicKey.size == 65)",
+            "check(decodedAssertionPublicKey.size == 65)",
+            "Kotlin offline wallet compact certificate profile source missing require(decodedAssertionPublicKey.size == 65)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(issuerSignature.size == 64)",
+            "check(issuerSignature.size == 64)",
+            "Kotlin offline wallet compact certificate profile source missing require(issuerSignature.size == 64)",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
@@ -35999,9 +39325,45 @@ if mode == "--negative-control-kotlin-offline-wallet-compact-certificate-profile
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "compactKeyCertificate(version = 2)",
+            "compactKeyCertificate(version = 1)",
+            "Kotlin offline wallet compact certificate profile tests missing compactKeyCertificate(version = 2)",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
             'for (invalidPlatform in listOf("android", "android-keymint ", "Android-keymint", "ios-appattest-android"))',
             'for (invalidPlatform in listOf("android"))',
             'Kotlin offline wallet compact certificate profile tests missing for (invalidPlatform in listOf("android", "android-keymint ", "Android-keymint", "ios-appattest-android"))',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "assertionUsageCountLimit = 2",
+            "assertionUsageCountLimit = 1",
+            "Kotlin offline wallet compact certificate profile tests missing assertionUsageCountLimit = 2",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            '"app_attest_public_key_base64 is retired; use assertion_public_key"',
+            '"retired alias unexpectedly accepted"',
+            'Kotlin offline wallet compact certificate profile tests missing "app_attest_public_key_base64 is retired; use assertion_public_key"',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "compactKeyCertificateRejectsNonCanonicalBase64Fields",
+            "compactKeyCertificateAcceptsNonCanonicalBase64Fields",
+            "Kotlin offline wallet compact certificate profile tests missing compactKeyCertificateRejectsNonCanonicalBase64Fields",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "canonicalAssertionPublicKey.dropLast(1)",
+            "canonicalAssertionPublicKey",
+            "Kotlin offline wallet compact certificate profile tests missing canonicalAssertionPublicKey.dropLast(1)",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            '"assertion_public_key must be 65 bytes"',
+            '"assertion_public_key unexpectedly accepted"',
+            'Kotlin offline wallet compact certificate profile tests missing "assertion_public_key must be 65 bytes"',
         ),
     )
     detected_messages = []
@@ -36036,6 +39398,538 @@ if mode == "--negative-control-kotlin-offline-wallet-compact-certificate-profile
             "negative control failed: Kotlin offline wallet compact certificate profile drift was not detected"
         )
     print("negative control rejected Kotlin offline wallet compact certificate profile drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-wallet-recursive-proof-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(verifierKeyBackend == OfflineNote.RECURSIVE_BACKEND)",
+            "check(verifierKeyBackend == OfflineNote.RECURSIVE_BACKEND)",
+            "Kotlin offline wallet recursive proof strictness source missing require(verifierKeyBackend == OfflineNote.RECURSIVE_BACKEND)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(verifierKeyId == OfflineNote.RECURSIVE_VERIFIER_NAME)",
+            "check(verifierKeyId == OfflineNote.RECURSIVE_VERIFIER_NAME)",
+            "Kotlin offline wallet recursive proof strictness source missing require(verifierKeyId == OfflineNote.RECURSIVE_VERIFIER_NAME)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(publicInputsHashHex.isLowerHex32())",
+            "check(publicInputsHashHex.isLowerHex32())",
+            "Kotlin offline wallet recursive proof strictness source missing require(publicInputsHashHex.isLowerHex32())",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireCanonicalNonEmptyBase64(proofBytesBase64, "proof_bytes_base64")',
+            'require(proofBytesBase64.isNotEmpty()) { "proof_bytes_base64 must not be empty" }',
+            'Kotlin offline wallet recursive proof strictness source missing requireCanonicalNonEmptyBase64(proofBytesBase64, "proof_bytes_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == value",
+            "decoded.isNotEmpty()",
+            "Kotlin offline wallet recursive proof strictness source missing decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == value",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'else -> throw SerializationException("verifier_key_id must be a string")',
+            'else -> ""',
+            'Kotlin offline wallet recursive proof strictness source missing else -> throw SerializationException("verifier_key_id must be a string")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "recursiveProofRejectsNonCanonicalHashAndProofBytes",
+            "recursiveProofAcceptsNonCanonicalHashAndProofBytes",
+            "Kotlin offline wallet recursive proof strictness tests missing recursiveProofRejectsNonCanonicalHashAndProofBytes",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "recursiveProofRejectsRetiredVerifierMetadataAliases",
+            "recursiveProofAcceptsRetiredVerifierMetadataAliases",
+            "Kotlin offline wallet recursive proof strictness tests missing recursiveProofRejectsRetiredVerifierMetadataAliases",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            '"_w=="',
+            '"AA=="',
+            'Kotlin offline wallet recursive proof strictness tests missing "_w=="',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "canonicalProofBytes.dropLast(1)",
+            "canonicalProofBytes",
+            "Kotlin offline wallet recursive proof strictness tests missing canonicalProofBytes.dropLast(1)",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline wallet recursive proof strictness coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline wallet recursive proof strictness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet recursive proof strictness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet recursive proof strictness drift was not detected"
+        )
+    print("negative control rejected Kotlin offline wallet recursive proof strictness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-wallet-device-binding-alias-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(devicePublicKey == null)",
+            "check(devicePublicKey == null)",
+            "Kotlin offline wallet device binding alias strictness source block missing require(devicePublicKey == null)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'require(appAttestPublicKeyBase64 == null) {\n'
+            '            "app_attest_public_key_base64 is retired; use assertion_public_key"\n'
+            '        }\n'
+            '    }\n'
+            '}\n'
+            '\n'
+            '@Serializable\n'
+            'data class OfflineAttestationReceipt',
+            'check(appAttestPublicKeyBase64 == null) {\n'
+            '            "app_attest_public_key_base64 is retired; use assertion_public_key"\n'
+            '        }\n'
+            '    }\n'
+            '}\n'
+            '\n'
+            '@Serializable\n'
+            'data class OfflineAttestationReceipt',
+            "Kotlin offline wallet device binding alias strictness source block missing require(appAttestPublicKeyBase64 == null)",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "offlineDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+            "offlineDeviceBindingAcceptsRetiredAssertionPublicKeyAliases",
+            "Kotlin offline wallet device binding alias strictness tests missing offlineDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            'for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64"))',
+            'for (retiredKey in listOf("device_public_key"))',
+            'Kotlin offline wallet device binding alias strictness tests missing for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64"))',
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline wallet device binding alias coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline wallet device binding alias drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet device binding alias drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet device binding alias drift was not detected"
+        )
+    print("negative control rejected Kotlin offline wallet device binding alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-wallet-attestation-payload-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(version == 1L)",
+            "check(version == 1L)",
+            "Kotlin offline wallet attestation receipt strictness source block missing require(version == 1L)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            '@SerialName("signature_base64") val signatureBase64: String\n'
+            ') {\n'
+            '    init {\n'
+            '        require(version == 1L) {\n'
+            '            "version must be 1"\n'
+            '        }\n'
+            '        require(accountId.isExactNonEmptyProtocolString()) {\n'
+            '            "account_id must be an exact non-empty string"\n'
+            '        }\n'
+            '        require(deviceId.isExactNonEmptyProtocolString()) {\n'
+            '            "device_id must be an exact non-empty string"\n'
+            '        }\n'
+            '        require(attestationKeyId.isExactNonEmptyProtocolString()) {\n'
+            '            "attestation_key_id must be an exact non-empty string"\n'
+            '        }\n'
+            '        require(assertionScheme == expectedAssertionScheme(platform)) {\n'
+            '            "assertion_scheme must be ${expectedAssertionScheme(platform)}"\n'
+            '        }\n'
+            '        require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform)) {\n'
+            '            "assertion_key_algorithm must be ${expectedAssertionKeyAlgorithm(platform)}"\n'
+            '        }\n'
+            '        require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))',
+            '@SerialName("signature_base64") val signatureBase64: String\n'
+            ') {\n'
+            '    init {\n'
+            '        require(version == 1L) {\n'
+            '            "version must be 1"\n'
+            '        }\n'
+            '        require(accountId.isExactNonEmptyProtocolString()) {\n'
+            '            "account_id must be an exact non-empty string"\n'
+            '        }\n'
+            '        require(deviceId.isExactNonEmptyProtocolString()) {\n'
+            '            "device_id must be an exact non-empty string"\n'
+            '        }\n'
+            '        require(attestationKeyId.isExactNonEmptyProtocolString()) {\n'
+            '            "attestation_key_id must be an exact non-empty string"\n'
+            '        }\n'
+            '        require(assertionScheme == expectedAssertionScheme(platform)) {\n'
+            '            "assertion_scheme must be ${expectedAssertionScheme(platform)}"\n'
+            '        }\n'
+            '        require(assertionKeyAlgorithm == expectedAssertionKeyAlgorithm(platform)) {\n'
+            '            "assertion_key_algorithm must be ${expectedAssertionKeyAlgorithm(platform)}"\n'
+            '        }\n'
+            '        check(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))',
+            "Kotlin offline wallet attestation receipt strictness source block missing require(assertionUsageCountLimit == expectedAssertionUsageCountLimit(platform))",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'val offlinePublicKey = requireCanonicalNonEmptyBase64(offlinePublicKeyBase64, "offline_public_key_base64")',
+            'require(offlinePublicKeyBase64.isNotEmpty()) { "offline_public_key_base64 must not be empty" }',
+            'Kotlin offline wallet attestation receipt strictness source block missing val offlinePublicKey = requireCanonicalNonEmptyBase64(offlinePublicKeyBase64, "offline_public_key_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(attestationReportHashHex.isLowerHex32())",
+            "check(attestationReportHashHex.isLowerHex32())",
+            "Kotlin offline wallet attestation receipt strictness source block missing require(attestationReportHashHex.isLowerHex32())",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'val signature = requireCanonicalNonEmptyBase64(signatureBase64, "signature_base64")',
+            'require(signatureBase64.isNotEmpty()) { "signature_base64 must not be empty" }',
+            'Kotlin offline wallet attestation receipt strictness source block missing val signature = requireCanonicalNonEmptyBase64(signatureBase64, "signature_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(isSupportedFirstReleasePlatform(platform))",
+            "check(isSupportedFirstReleasePlatform(platform))",
+            "Kotlin offline wallet device proof strictness source block missing require(isSupportedFirstReleasePlatform(platform))",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireCanonicalNonEmptyBase64(assertionBase64, "assertion_base64")',
+            'require(assertionBase64.isNotEmpty()) { "assertion_base64 must not be empty" }',
+            'Kotlin offline wallet device proof strictness source block missing requireCanonicalNonEmptyBase64(assertionBase64, "assertion_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "attestationReceiptRejectsNonCanonicalProfileAndEncodingFields",
+            "attestationReceiptAcceptsNonCanonicalProfileAndEncodingFields",
+            "Kotlin offline wallet attestation payload strictness tests missing attestationReceiptRejectsNonCanonicalProfileAndEncodingFields",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "deviceProofRejectsNonCanonicalPlatformHashAndAssertion",
+            "deviceProofAcceptsNonCanonicalPlatformHashAndAssertion",
+            "Kotlin offline wallet attestation payload strictness tests missing deviceProofRejectsNonCanonicalPlatformHashAndAssertion",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            'Json.decodeFromString<OfflineDeviceProof>(json)',
+            'Json.decodeFromString<OfflineTransferReceipt>(json)',
+            "Kotlin offline wallet attestation payload strictness tests missing Json.decodeFromString<OfflineDeviceProof>(json)",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline wallet attestation payload coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline wallet attestation payload drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet attestation payload drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet attestation payload drift was not detected"
+        )
+    print("negative control rejected Kotlin offline wallet attestation payload drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-wallet-signed-payload-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireNonNegativeAmountString(policyMaxBalance, "max_balance")',
+            'require(policyMaxBalance.isNotEmpty()) { "max_balance must not be empty" }',
+            'Kotlin offline wallet spend authorization strictness source block missing requireNonNegativeAmountString(policyMaxBalance, "max_balance")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")',
+            'require(issuerSignatureBase64.isNotEmpty()) { "issuer_signature_base64 must not be empty" }',
+            'Kotlin offline wallet spend authorization strictness source block missing requireCanonicalSignatureBase64(issuerSignatureBase64, "issuer_signature_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(serverStateHash.isLowerHex32())",
+            "check(serverStateHash.isLowerHex32())",
+            "Kotlin offline wallet cash state payload strictness source block missing require(serverStateHash.isLowerHex32())",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(verdictIds.all { it.isExactNonEmptyProtocolString() })",
+            "check(verdictIds.all { it.isExactNonEmptyProtocolString() })",
+            "Kotlin offline wallet revocation bundle strictness source block missing require(verdictIds.all { it.isExactNonEmptyProtocolString() })",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireNonNegativeAmountString(dailySendLimit, "daily_send_limit")',
+            'require(dailySendLimit.isNotEmpty()) { "daily_send_limit must not be empty" }',
+            'Kotlin offline wallet asset send limit strictness source block missing requireNonNegativeAmountString(dailySendLimit, "daily_send_limit")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'require(direction == "incoming" || direction == "outgoing")',
+            'check(direction == "incoming" || direction == "outgoing")',
+            'Kotlin offline wallet transfer receipt strictness source block missing require(direction == "incoming" || direction == "outgoing")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(preStateHash.isLowerHex32())",
+            "check(preStateHash.isLowerHex32())",
+            "Kotlin offline wallet transfer receipt strictness source block missing require(preStateHash.isLowerHex32())",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireCanonicalSignatureBase64(senderSignatureBase64, "sender_signature_base64")',
+            'require(senderSignatureBase64.isNotEmpty()) { "sender_signature_base64 must not be empty" }',
+            'Kotlin offline wallet transfer receipt strictness source block missing requireCanonicalSignatureBase64(senderSignatureBase64, "sender_signature_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "signedWalletPayloadsRejectMalformedHashesAmountsAndSignatures",
+            "signedWalletPayloadsAcceptMalformedHashesAmountsAndSignatures",
+            "Kotlin offline wallet signed payload strictness tests missing signedWalletPayloadsRejectMalformedHashesAmountsAndSignatures",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            '"sender_signature_base64 must be 64 bytes"',
+            '"sender_signature_base64 unexpectedly accepted"',
+            'Kotlin offline wallet signed payload strictness tests missing "sender_signature_base64 must be 64 bytes"',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "Json.decodeFromString<OfflineTransferReceipt>(json)",
+            "Json.decodeFromString<OfflineTransferJournalEntry>(json)",
+            "Kotlin offline wallet signed payload strictness tests missing Json.decodeFromString<OfflineTransferReceipt>(json)",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline wallet signed payload coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline wallet signed payload drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet signed payload drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet signed payload drift was not detected"
+        )
+    print("negative control rejected Kotlin offline wallet signed payload drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-wallet-state-collection-strictness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "if (trimmed != value) return null",
+            "// removed exact amount spacing guard",
+            "Kotlin offline wallet state collection strictness source missing if (trimmed != value) return null",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'require(windowKind == "daily" || windowKind == "monthly")',
+            'check(windowKind == "daily" || windowKind == "monthly")',
+            'Kotlin offline wallet asset-transfer usage strictness source block missing require(windowKind == "daily" || windowKind == "monthly")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireOptionalCanonicalNonEmptyBase64(noteSecretBase64, "note_secret_base64")',
+            'requireOptionalExactNonEmptyString(noteSecretBase64, "note_secret_base64")',
+            'Kotlin offline wallet note-record strictness source block missing requireOptionalCanonicalNonEmptyBase64(noteSecretBase64, "note_secret_base64")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(availableKeyIds.size == remainingCapacity)",
+            "check(availableKeyIds.size == remainingCapacity)",
+            "Kotlin offline wallet one-use key pool strictness source block missing require(availableKeyIds.size == remainingCapacity)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "require(paymentTokenNoritoBase64 != null || bearerSettlementBatchNoritoBase64 != null)",
+            "check(paymentTokenNoritoBase64 != null || bearerSettlementBatchNoritoBase64 != null)",
+            "Kotlin offline wallet pending audit receipt strictness source block missing require(paymentTokenNoritoBase64 != null || bearerSettlementBatchNoritoBase64 != null)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'requireEmptyOrLowerHex32(localStateHash, "local_state_hash")',
+            'require(localStateHash.isEmpty() || localStateHash.isNotEmpty()) { "local_state_hash accepted" }',
+            'Kotlin offline wallet root state strictness source block missing requireEmptyOrLowerHex32(localStateHash, "local_state_hash")',
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "state.localStateHash.isNotEmpty() -> state.localStateHash",
+            "state.localStateHash.trim().isNotBlank() -> state.localStateHash.trim().lowercase(Locale.ROOT)",
+            "Kotlin offline wallet exact state policy source missing state.localStateHash.isNotEmpty() -> state.localStateHash",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            "return revocationBundle?.verdictIds.orEmpty().any { it == verdictId }",
+            "return revocationBundle?.verdictIds.orEmpty().any { it.equals(verdictId, ignoreCase = true) }",
+            "Kotlin offline wallet exact state policy source missing return revocationBundle?.verdictIds.orEmpty().any { it == verdictId }",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "walletStateRejectsPermissiveNormalizationDrift",
+            "walletStateAllowsPermissiveNormalizationDrift",
+            "Kotlin offline wallet state collection strictness tests missing walletStateRejectsPermissiveNormalizationDrift",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            '"note_secret_base64 must be canonical base64"',
+            '"note_secret_base64 unexpectedly accepted"',
+            'Kotlin offline wallet state collection strictness tests missing "note_secret_base64 must be canonical base64"',
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModelsTest.kt",
+            "Json.decodeFromString<OfflineWalletState>(json)",
+            "Json.decodeFromString<OfflineWalletOverview>(json)",
+            "Kotlin offline wallet state collection strictness tests missing Json.decodeFromString<OfflineWalletState>(json)",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin offline wallet state collection coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline wallet state collection drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet state collection drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin offline wallet state collection drift was not detected"
+        )
+    print("negative control rejected Kotlin offline wallet state collection drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -36144,6 +40038,12 @@ if mode == "--negative-control-kotlin-offline-wallet-max-inputs-strictness":
 if mode == "--negative-control-kotlin-offline-wallet-input-claim-strictness":
     mutated_texts = dict(texts)
     mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
+            'require(assetId == canonicalAssetId) { "asset_id must be canonical" }',
+            'check(assetId == canonicalAssetId) { "asset_id must be canonical" }',
+            "Kotlin offline wallet input-claim strictness source",
+        ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
             "claimHash.isNotEmpty() && claimHash.isLowerHex32()",
@@ -37663,6 +41563,12 @@ if mode == "--negative-control-mobile-retired-offline-note-issuers":
             "Swift retired Offline Note issuer source missing where deviceBinding.keys.contains(retiredKey)",
         ),
         (
+            "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
+            'return try Self.requiredExactNonEmptyText(value, "device_binding.attestation_key_id")',
+            "return value.trimmingCharacters(in: .whitespacesAndNewlines)",
+            'Swift retired Offline Note issuer source missing return try Self.requiredExactNonEmptyText(value, "device_binding.attestation_key_id")',
+        ),
+        (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
             '"X-Iroha-Account": "retired-account"',
             '"X-Iroha-Account": "allowed-account"',
@@ -37673,6 +41579,12 @@ if mode == "--negative-control-mobile-retired-offline-note-issuers":
             "testToriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             "testToriiIssuerDeviceBindingAllowsRetiredAssertionPublicKeyAliases",
             "Swift retired Offline Note issuer tests missing testToriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "testToriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
+            "testToriiIssuerDeviceBindingAllowsWhitespaceNormalizedFields",
+            "Swift retired Offline Note issuer tests missing testToriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
@@ -37729,6 +41641,12 @@ if mode == "--negative-control-mobile-retired-offline-note-issuers":
             "Kotlin retired Offline Note issuer source missing deepCopyObject(rejectRetiredDeviceBindingAliases(deviceBinding))",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
+            'require(isExactNonEmptyText(deviceId)) { "deviceId must be exact non-empty text" }',
+            'require(deviceId.trim().isNotEmpty()) { "deviceId must not be blank" }',
+            'Kotlin retired Offline Note issuer source missing require(isExactNonEmptyText(deviceId)) { "deviceId must be exact non-empty text" }',
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
             "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
             "\"retired issue message drift\"",
@@ -37745,6 +41663,12 @@ if mode == "--negative-control-mobile-retired-offline-note-issuers":
             "toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             "toriiIssuerDeviceBindingAllowsRetiredAssertionPublicKeyAliases",
             "Kotlin retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
+            "toriiIssuerDeviceBindingAllowsWhitespaceNormalizedFields",
+            "Kotlin retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
@@ -37801,6 +41725,13 @@ if mode == "--negative-control-mobile-retired-offline-note-issuers":
             "Android Java retired Offline Note issuer device binding source missing rejectRetiredDeviceBindingAliases(Objects.requireNonNull(deviceBinding, \"deviceBinding\"));",
         ),
         (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+            "OfflineNoteIssuerDeviceBinding.java",
+            'requireExactNonEmptyText(deviceId, "deviceId")',
+            'requireNonBlank(deviceId, "deviceId")',
+            'Android Java retired Offline Note issuer device binding source missing requireExactNonEmptyText(deviceId, "deviceId")',
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
             "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
             "\"retired issue message drift\"",
@@ -37814,9 +41745,15 @@ if mode == "--negative-control-mobile-retired-offline-note-issuers":
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
-            "toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
-            "toriiIssuerDeviceBindingAllowsRetiredAssertionPublicKeyAliases",
-            "Android Java retired Offline Note issuer tests missing toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
+            'Arrays.asList("device_public_key", "app_attest_public_key_base64")',
+            'List.of("device_public_key")',
+            'Android Java retired Offline Note issuer tests missing Arrays.asList("device_public_key", "app_attest_public_key_base64")',
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            '"deviceId must be exact non-empty text"',
+            '"deviceId accepts padded values"',
+            'Android Java retired Offline Note issuer tests missing "deviceId must be exact non-empty text"',
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
@@ -38393,6 +42330,10 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
         "OfflineNoteWalletNoteJsonCodec.java"
     )
+    kotlin_android_source = (
+        "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/"
+        "AndroidOfflineNoteSecureStore.kt"
+    )
     readme_strict = (
         "wallet-note state names are rejected; first-release records must use current\n"
         "state names."
@@ -38444,6 +42385,25 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
             ),
         ),
         (
+            kotlin_android_source,
+            """        private fun decodeState(value: String): OfflineNoteWalletNoteState =
+            try {
+                OfflineNoteWalletNoteState.valueOf(value)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("invalid Offline Note wallet note state: $value", e)
+            }""",
+            """        private fun decodeState(value: String): OfflineNoteWalletNoteState =
+            when (value) {
+                "SPEND_PENDING", "spendPending" -> OfflineNoteWalletNoteState.SPENT
+                "CHANGE_PENDING", "changePending" -> OfflineNoteWalletNoteState.SPENDABLE
+                else -> OfflineNoteWalletNoteState.valueOf(value)
+            }""",
+            (
+                "Kotlin Android Offline Note wallet-note state decoder retired aliases "
+                "contains forbidden pattern spendPending|SPEND_PENDING|changePending|CHANGE_PENDING"
+            ),
+        ),
+        (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
             '["spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING"]',
             '["SPENDABLE"]',
@@ -38458,6 +42418,15 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
             'Arrays.asList("SPENDABLE")',
             (
                 'Android Java Offline Note wallet-note retired state rejection tests missing '
+                'Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")'
+            ),
+        ),
+        (
+            "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java",
+            'Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")',
+            'Arrays.asList("SPENDABLE")',
+            (
+                'Kotlin Android Offline Note wallet-note retired state rejection tests missing '
                 'Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")'
             ),
         ),
@@ -38508,6 +42477,69 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
         )
         mutated[target] = current
     print("negative control rejected mobile wallet-note retired state migration drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-wallet-note-commitment-hex-exactness":
+    mutated = dict(texts)
+    java_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "OfflineNoteWalletNoteJsonCodec.java"
+    )
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    mutations = (
+        (
+            java_source,
+            """    if (value.length() != 64) {
+      throw new IllegalArgumentException(field + " must be 32-byte lowercase hex");
+    }""",
+            """    if ((value.length() & 1) != 0) {
+      throw new IllegalArgumentException(field + " must have an even hex length");
+    }""",
+            (
+                "Android Java Offline Note wallet-note commitment hex exactness source "
+                "missing value.length() != 64"
+            ),
+        ),
+        (
+            java_source,
+            "lowercaseHexDigit(value.charAt(i * 2), field)",
+            "Character.digit(value.charAt(i * 2), 16)",
+            (
+                "Android Java Offline Note wallet-note commitment hex exactness source "
+                "missing lowercaseHexDigit(value.charAt(i * 2), field)"
+            ),
+        ),
+        (
+            java_test,
+            "nonExactLowerHex32(canonicalCommitment)",
+            "Arrays.asList(canonicalCommitment)",
+            (
+                "Android Java Offline Note wallet-note commitment hex exactness tests "
+                "missing nonExactLowerHex32(canonicalCommitment)"
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile wallet-note commitment hex exactness in "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                (expected_label,),
+                "mobile wallet-note commitment hex exactness drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected mobile wallet-note commitment hex exactness drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -38699,8 +42731,8 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
-            "if (value.signum() <= 0) {",
-            "if (value.signum() < 0) {",
+            "if (decimal(canonical).signum() <= 0) {",
+            "if (decimal(canonical).signum() < 0) {",
             "Android Java Offline Note wallet positive amount source",
         ),
         (
@@ -38717,7 +42749,7 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
-            "    try {\n      requirePositivePaymentAmount(amount);\n    } catch (final Throwable error) {\n      return failedFuture(error);\n    }\n    final String assetId = walletAssetId(assetDefinitionId, accountId);",
+            "    final String canonicalAmount;\n    try {\n      canonicalAmount = canonicalPositivePaymentAmountString(amount);\n    } catch (final Throwable error) {\n      return failedFuture(error);\n    }\n    final String assetId = walletAssetId(assetDefinitionId, accountId);",
             "    final String assetId = walletAssetId(assetDefinitionId, accountId);",
             "Android Java Offline Note wallet positive amount source",
         ),
@@ -38737,6 +42769,12 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
             "private static void walletRejectsNonPositiveLoadAmounts()",
             "private static void walletAllowsNonPositiveLoadAmounts()",
+            "Android Java Offline Note wallet positive amount tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts()",
+            "private static void walletAllowsMalformedLoadAndReceiveAmounts()",
             "Android Java Offline Note wallet positive amount tests",
         ),
         (
@@ -43375,7 +47413,7 @@ if mode == "--negative-control-android-java-kagemusha-jdk8-api-surface":
             "Android Java Offline Journal JDK 8 unsigned sort contains forbidden pattern",
             "Android Java Offline List params production JDK 8 blank checks contains forbidden pattern",
             "Android Java Offline Torii exception production JDK 8 blank checks contains forbidden pattern",
-            "Android Java Offline explorer outcome production JDK 8 blank checks contains forbidden pattern",
+            "Android Java Offline explorer outcome production JDK 8 exact non-empty checks contains forbidden pattern",
             "Android Java executable model production JDK 8 collection factories contains forbidden pattern",
             "Android Java instruction box production JDK 8 blank checks contains forbidden pattern",
             "Android Java client response production JDK 8 blank checks contains forbidden pattern",
@@ -44266,6 +48304,70 @@ if mode == "--negative-control-js-confidential-v2-derivation-exactness":
             "if (value.trim() !== value) {",
         ),
         (
+            "javascript/iroha_js/src/crypto.js",
+            "export function deriveConfidentialOwnerTagV2(spendKey, options) {",
+            "export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {",
+            "javascript/iroha_js/src/crypto.js confidential owner-tag diversifier exactness",
+            "block start export function deriveConfidentialOwnerTagV2(spendKey, options) {",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "export function deriveConfidentialOwnerTagV2(spendKey, options) {",
+            "export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {",
+            "javascript/iroha_js/dist/crypto.js confidential owner-tag diversifier exactness",
+            "block start export function deriveConfidentialOwnerTagV2(spendKey, options) {",
+        ),
+        (
+            "javascript/iroha_js/src/transaction.js",
+            "function normalizeConfidentialInputDiversifierHex(input, index) {",
+            "function normalizeConfidentialInputDiversifier(input, index) {",
+            "javascript/iroha_js/src/transaction.js confidential proof diversifier exactness",
+            "block start function normalizeConfidentialInputDiversifierHex(input, index) {",
+        ),
+        (
+            "javascript/iroha_js/dist/transaction.js",
+            "function normalizeConfidentialInputDiversifierHex(input, index) {",
+            "function normalizeConfidentialInputDiversifier(input, index) {",
+            "javascript/iroha_js/dist/transaction.js confidential proof diversifier exactness",
+            "block start function normalizeConfidentialInputDiversifierHex(input, index) {",
+        ),
+        (
+            "crates/iroha_js_host/src/lib.rs",
+            "fn parse_required_confidential_diversifier_hex(",
+            "fn parse_optional_confidential_input_diversifier_hex(",
+            "JS host confidential proof diversifier exactness",
+            "block start fn parse_required_confidential_diversifier_hex(",
+        ),
+        (
+            "crates/iroha_js_host/src/lib.rs",
+            "parse_required_confidential_diversifier_hex(\"diversifier_hex\", diversifier_hex.as_deref())?",
+            "parse_optional_confidential_diversifier_hex(\"diversifier_hex\", diversifier_hex.as_deref())?",
+            "JS host confidential owner-tag diversifier exactness",
+            "parse_required_confidential_diversifier_hex(",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            """export interface ConfidentialTransferProofInputV2 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: BinaryLike;
+  diversifierHex: string;""",
+            """export interface ConfidentialTransferProofInputV2 {
+  amount: NumericLike;
+  rhoHex?: string;
+  rho?: BinaryLike;
+  diversifierHex?: string;""",
+            "JavaScript confidential proof input declaration exactness",
+            "diversifierHex: string;",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "options: {\n    diversifierHex: string;",
+            "options?: {\n    diversifierHex?: string;",
+            "JavaScript confidential owner-tag declaration exactness",
+            "options: {",
+        ),
+        (
             "javascript/iroha_js/test/crypto.test.js",
             "spendKeyHex must not contain surrounding whitespace",
             "spendKeyHex accepts surrounding whitespace",
@@ -44280,6 +48382,13 @@ if mode == "--negative-control-js-confidential-v2-derivation-exactness":
             "confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
         ),
         (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "diversifier is required",
+            "diversifier default is accepted",
+            "JavaScript confidential v2 derivation exactness tests",
+            "diversifier is required",
+        ),
+        (
             "javascript/iroha_js/test/package_dist.test.js",
             "package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
             "package dist confidential v2 derivation helpers accept padded chain and asset IDs before native dispatch",
@@ -44287,11 +48396,25 @@ if mode == "--negative-control-js-confidential-v2-derivation-exactness":
             "package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
         ),
         (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "diversifier: rho",
+            "diversifierAlias: rho",
+            "JavaScript package dist confidential v2 derivation exactness tests",
+            "diversifier: rho",
+        ),
+        (
             "javascript/iroha_js/test/transactionBuilder.test.js",
             "confidential proof builders reject padded chain IDs and hex fields before native dispatch",
             "confidential proof builders accept padded chain IDs and hex fields before native dispatch",
             "JavaScript confidential proof builder exactness tests",
             "confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+        ),
+        (
+            "javascript/iroha_js/test/transactionBuilder.test.js",
+            "inputs\\[0\\]\\.diversifier is required",
+            "inputs\\[0\\]\\.diversifier default is accepted",
+            "JavaScript confidential proof builder exactness tests",
+            "inputs\\[0\\]\\.diversifier is required",
         ),
         (
             "javascript/iroha_js/test/transactionBuilder.test.js",
@@ -44306,6 +48429,27 @@ if mode == "--negative-control-js-confidential-v2-derivation-exactness":
             "package dist confidential proof builders accept padded amount literals before native dispatch",
             "JavaScript package dist confidential proof amount exactness tests",
             "package dist confidential proof builders reject padded amount literals before native dispatch",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "diversifier: Buffer.alloc(32, 0x52)",
+            "diversifierAlias: Buffer.alloc(32, 0x52)",
+            "JavaScript package dist confidential proof amount exactness tests",
+            "diversifier: Buffer.alloc(32, 0x52)",
+        ),
+        (
+            "python/iroha_python/iroha_python_rs/src/lib.rs",
+            "python_confidential_transfer_input_requires_canonical_diversifier",
+            "python_confidential_transfer_input_accepts_default_diversifier",
+            "Python native confidential proof diversifier exactness",
+            "python_confidential_transfer_input_requires_canonical_diversifier",
+        ),
+        (
+            "python/iroha_python/iroha_python_rs/src/lib.rs",
+            "dict_get_alias(dict, &[\"diversifier_hex\", \"diversifierHex\"])?",
+            "dict_get_alias(dict, &[\"diversifier_legacy\", \"diversifierAlias\"])?",
+            "Python native confidential proof diversifier exactness",
+            "dict_get_alias(dict, &[\"diversifier_hex\", \"diversifierHex\"])?",
         ),
     )
     detected_messages = []
@@ -45330,6 +49474,18 @@ if mode == "--negative-control-swift-offline-note-payload-certificate-fail-close
         ),
         (
             source,
+            "guard assetId == issuedClaim.assetId else {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"asset_id\")\n"
+            "        }",
+            "if false && assetId != issuedClaim.assetId {\n"
+            "            throw OfflineNotePayloadError.invalidField(\"asset_id\")\n"
+            "        }",
+            (
+                "Swift Offline Note payload input-claim amount/hash strict source",
+            ),
+        ),
+        (
+            source,
             "claimHash: container.decodeIfPresent(String.self, forKey: .claimHash)",
             "claimHash: nil",
             (
@@ -45653,10 +49809,10 @@ if mode == "--negative-control-swift-key-refill-attestation-alias":
     mutations = (
         (
             source,
-            "attestationKeyId = try container.decode(String.self, forKey: .attestationKeyId)",
-            "attestationKeyId = try container.decodeIfPresent(String.self, forKey: .attestationKeyId)\n"
-            "            ?? container.decodeIfPresent(String.self, forKey: .appAttestKeyId)\n"
-            "            ?? deviceBinding.attestationKeyId",
+            "attestationKeyId: container.decode(String.self, forKey: .attestationKeyId),",
+            "attestationKeyId: container.decodeIfPresent(String.self, forKey: .attestationKeyId)\n"
+            "                ?? container.decodeIfPresent(String.self, forKey: .appAttestKeyId)\n"
+            "                ?? deviceBinding.attestationKeyId,",
             (
                 "Swift key-refill request canonical attestation key source",
             ),
@@ -45706,6 +49862,197 @@ if mode == "--negative-control-swift-key-refill-attestation-alias":
         )
         mutated[target] = current
     print("negative control rejected Swift key-refill attestation alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-offline-cash-api-note-commitment-exactness":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
+    mutations = (
+        (
+            source,
+            "            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(\n"
+            "                noteCommitment,\n"
+            "                field: \"note_commitment\"\n"
+            "            )\n"
+            "            self.noteCommitment = noteCommitment",
+            "            self.noteCommitment = noteCommitment\n"
+            "                .trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "                .lowercased()",
+            (
+                "Swift Offline Cash settlement proof note commitment exactness source",
+                "Swift Offline Cash API note commitment normalization",
+            ),
+        ),
+        (
+            source,
+            "        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(\n"
+            "            noteCommitment,\n"
+            "            field: \"note_commitment\"\n"
+            "        )",
+            "        // regression: issue note_commitment validation removed",
+            (
+                "Swift Offline Cash issue settlement note commitment exactness source",
+            ),
+        ),
+        (
+            source,
+            "        if let issuedNoteCommitment {\n"
+            "            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(\n"
+            "                issuedNoteCommitment,\n"
+            "                field: \"issued_note_commitment\"\n"
+            "            )\n"
+            "            self.issuedNoteCommitment = issuedNoteCommitment\n"
+            "        } else {\n"
+            "            self.issuedNoteCommitment = nil\n"
+            "        }",
+            "        self.issuedNoteCommitment = issuedNoteCommitment?\n"
+            "            .trimmingCharacters(in: .whitespacesAndNewlines)\n"
+            "            .lowercased()",
+            (
+                "Swift Offline Cash issue settlement response commitment exactness source",
+                "Swift Offline Cash API issued note commitment normalization",
+            ),
+        ),
+        (
+            test,
+            "testIssueSettlementRequestRejectsNonExactNoteCommitmentHex",
+            "testIssueSettlementRequestAllowsNormalizedNoteCommitmentHex",
+            (
+                "Swift Offline Cash API note commitment exactness tests",
+            ),
+        ),
+        (
+            test,
+            "testSettlementProofRejectsNonExactNoteCommitmentHex",
+            "testSettlementProofAllowsNormalizedNoteCommitmentHex",
+            (
+                "Swift Offline Cash API note commitment exactness tests",
+            ),
+        ),
+        (
+            test,
+            "testIssueSettlementResponseRejectsNonExactIssuedNoteCommitmentHex",
+            "testIssueSettlementResponseAllowsNormalizedIssuedNoteCommitmentHex",
+            (
+                "Swift Offline Cash API note commitment exactness tests",
+            ),
+        ),
+        (
+            test,
+            "nonExactHashHexVariants",
+            "normalizedHashHexVariants",
+            (
+                "Swift Offline Cash API note commitment exactness tests",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, before, after, expected_labels in mutations:
+        current = mutated[target]
+        replace_count = -1 if before == "nonExactHashHexVariants" else 1
+        updated = current.replace(before, after, replace_count)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift Offline Cash API note commitment exactness "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                expected_labels,
+                "Swift Offline Cash API note commitment exactness drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected Swift Offline Cash API note commitment exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-offline-cash-api-redemption-hash-exactness":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
+    mutations = (
+        (
+            source,
+            "        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(\n"
+            "            sourceNoteCommitment,\n"
+            "            field: \"source_note_commitment\"\n"
+            "        )",
+            "        // regression: source_note_commitment validation removed",
+            (
+                "Swift Offline Cash redemption proof hash exactness source",
+            ),
+        ),
+        (
+            source,
+            "        for inputNullifier in inputNullifiers {\n"
+            "            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(\n"
+            "                inputNullifier,\n"
+            "                field: \"input_nullifiers\"\n"
+            "            )\n"
+            "        }",
+            "        // regression: input_nullifiers validation removed",
+            (
+                "Swift Offline Cash redemption proof hash exactness source",
+            ),
+        ),
+        (
+            source,
+            "    public init(from decoder: Decoder) throws {\n"
+            "        let container = try decoder.container(keyedBy: CodingKeys.self)\n"
+            "        try self.init(\n"
+            "            sourceNoteCommitment:",
+            "    public init(decodingWithoutHashValidation decoder: Decoder) throws {\n"
+            "        let container = try decoder.container(keyedBy: CodingKeys.self)\n"
+            "        try self.init(\n"
+            "            sourceNoteCommitment:",
+            (
+                "Swift Offline Cash redemption proof hash exactness source",
+            ),
+        ),
+        (
+            test,
+            "testRedemptionProofRejectsNonExactHashFields",
+            "testRedemptionProofAllowsNonExactHashFields",
+            (
+                "Swift Offline Cash redemption proof hash exactness tests",
+            ),
+        ),
+        (
+            test,
+            "JSONDecoder().decode(ToriiOfflineRedemptionProof.self",
+            "JSONDecoder().decode(ToriiOfflineSettlementProof.self",
+            (
+                "Swift Offline Cash redemption proof hash exactness tests",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, before, after, expected_labels in mutations:
+        current = mutated[target]
+        replace_count = -1 if before == "JSONDecoder().decode(ToriiOfflineRedemptionProof.self" else 1
+        updated = current.replace(before, after, replace_count)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift Offline Cash API redemption hash exactness "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                expected_labels,
+                "Swift Offline Cash API redemption hash exactness drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected Swift Offline Cash API redemption hash exactness drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -48953,6 +53300,91 @@ if mode == "--negative-control-mobile-halo2-vk-hash":
     if not detected_messages:
         raise SystemExit("negative control failed: mobile Halo2 VK hash drift was not detected")
     print("negative control rejected mobile Halo2 VK hash drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-open-verify-public-input-hash-exactness":
+    mutated_texts = dict(texts)
+    swift_source = "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/Halo2PastaTests.swift"
+    java_sources = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java",
+    )
+    java_kotlin_tests = (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
+    )
+
+    mutated_texts[swift_source] = mutated_texts[swift_source].replace(
+        "        guard isExactLowerHex(publicInputsHashHex, byteCount: 32),\n"
+        "              let expectedPublicInputsHash = Data(hexString: publicInputsHashHex) else {",
+        "        let normalized = publicInputsHashHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()\n"
+        "        guard normalized.count == 64, let expectedPublicInputsHash = Data(hexString: normalized) else {",
+    )
+    for target in java_sources:
+        mutated_texts[target] = (
+            mutated_texts[target]
+            .replace(
+                "    if (!isExactLowerHex(publicInputsHashHex, 64)) {\n"
+                "      return false;\n"
+                "    }\n"
+                "    final byte[] payload = proofPayloadFromOpenVerifyEnvelope(envelope);",
+                "    final byte[] payload = proofPayloadFromOpenVerifyEnvelope(envelope);",
+            )
+            .replace(
+                "if (!hexLower(publicInputsHash(decoded.publicValues)).equals(publicInputsHashHex)) {",
+                "if (!hexLower(publicInputsHash(decoded.publicValues)).equals(publicInputsHashHex.trim().toLowerCase(java.util.Locale.ROOT))) {",
+            )
+        )
+    mutated_texts[swift_test] = (
+        mutated_texts[swift_test]
+        .replace(
+            "testOpenVerifyEnvelopeRejectsNonExactPublicInputHashBeforeParsingEnvelope",
+            "testOpenVerifyEnvelopeAllowsNormalizedPublicInputHashBeforeParsingEnvelope",
+        )
+        .replace("nonExactPublicInputHashes", "normalizedPublicInputHashes")
+    )
+    for target in java_kotlin_tests:
+        mutated_texts[target] = (
+            mutated_texts[target]
+            .replace(
+                "openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding",
+                "openVerifyEnvelopeAllowsNormalizedPublicInputHashBeforeDecoding",
+            )
+            .replace("nonExactPublicInputHashes", "normalizedPublicInputHashes")
+        )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate mobile OpenVerifyEnvelope public-input hash exactness")
+    expected_labels = (
+        "Swift OpenVerifyEnvelope public input hash exactness",
+        "Swift OpenVerifyEnvelope public input hash normalization",
+        "Android Java OpenVerifyEnvelope V1 public input hash exactness",
+        "Android Java OpenVerifyEnvelope V1 public input hash normalization",
+        "Android Java OpenVerifyEnvelope V2 public input hash exactness",
+        "Android Java OpenVerifyEnvelope V2 public input hash normalization",
+        "Kotlin OpenVerifyEnvelope V1 public input hash exactness",
+        "Kotlin OpenVerifyEnvelope V1 public input hash normalization",
+        "Kotlin OpenVerifyEnvelope V2 public input hash exactness",
+        "Kotlin OpenVerifyEnvelope V2 public input hash normalization",
+        "Swift OpenVerifyEnvelope public input hash exactness tests",
+        "Android Java OpenVerifyEnvelope V1 public input hash exactness tests",
+        "Android Java OpenVerifyEnvelope V2 public input hash exactness tests",
+        "Kotlin OpenVerifyEnvelope V1 public input hash exactness tests",
+        "Kotlin OpenVerifyEnvelope V2 public input hash exactness tests",
+    )
+    detected_messages = detect_negative_control(
+        mutated_texts,
+        expected_labels,
+        "mobile OpenVerifyEnvelope public-input hash exactness drift",
+    )
+    print("negative control rejected mobile OpenVerifyEnvelope public-input hash exactness drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -65136,6 +69568,70 @@ if mode == "--negative-control-jvm-offline-list-asset-selector-exactness":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM offline list asset selector exactness drift was not detected")
+
+if mode == "--negative-control-jvm-offline-list-verdict-id-hex-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineListParams.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineListParams.kt"
+    java_literal_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+
+    mutated_texts[java_source] = mutated_texts[java_source].replace(
+        'if (verdictIdHex != null) {\n      params.put("verdict_id_hex", requireExactLowerHex(verdictIdHex, "verdictIdHex"));\n    }',
+        'if (verdictIdHex != null && !verdictIdHex.trim().isEmpty()) {\n      params.put("verdict_id_hex", verdictIdHex.toLowerCase());\n    }',
+    )
+    mutated_texts[kotlin_source] = mutated_texts[kotlin_source].replace(
+        'verdictIdHex?.let { params["verdict_id_hex"] = requireExactLowerHex(it, "verdictIdHex") }',
+        'if (!verdictIdHex.isNullOrBlank()) params["verdict_id_hex"] = verdictIdHex.lowercase()',
+    )
+    mutated_texts[java_literal_test] = (
+        mutated_texts[java_literal_test]
+        .replace("offlineListParamsRejectsNormalizedVerdictIdHex", "offlineListParamsAllowsNormalizedVerdictIdHex")
+        .replace('OfflineListParams.builder().verdictIdHex(" " + verdictId)', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+        .replace('OfflineListParams.builder().verdictIdHex(verdictId + " ")', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+        .replace('OfflineListParams.builder().verdictIdHex(repeat("AB", 32))', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+        .replace('OfflineListParams.builder().verdictIdHex("0x" + verdictId)', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+        .replace('OfflineListParams.builder().verdictIdHex("abc")', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+        .replace('OfflineListParams.builder().verdictIdHex("")', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+        .replace('OfflineListParams.builder().verdictIdHex("zz")', 'OfflineListParams.builder().verdictIdHex(verdictId)')
+    )
+    mutated_texts[kotlin_test] = (
+        mutated_texts[kotlin_test]
+        .replace(
+            "offlineListParamsRejectsNormalizedVerdictIdHexBeforeDispatch",
+            "offlineListParamsAllowsNormalizedVerdictIdHex",
+        )
+        .replace(
+            'for (invalid in listOf(" $verdictId", "$verdictId ", verdictId.uppercase(), "0x$verdictId", "abc", "", "zz"))',
+            "for (invalid in listOf(verdictId))",
+        )
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate JVM offline list verdict id hex exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java offline list verdict id hex exactness",
+            "Android Java offline list verdict id hex lowercase normalization",
+            "Kotlin offline list verdict id hex exactness",
+            "Kotlin offline list verdict id hex lowercase normalization",
+            "Android Java offline list verdict id hex exactness tests",
+            "Kotlin offline list verdict id hex exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM offline list verdict id hex exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM offline list verdict id hex exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM offline list verdict id hex exactness drift was not detected")
 
 if mode == "--negative-control-multisig-resolved-account-exactness":
     mutated_texts = dict(texts)

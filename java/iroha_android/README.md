@@ -1403,8 +1403,19 @@ Wallet `load` records newly issued local notes as `ISSUE_PENDING` until sync
 observes the matching `IssueOfflineNote` commit; rejected issue outcomes cancel
 the pending note. The Java Android wallet-note JSON codec rejects retired
 `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING` state
-wallet-note state names are rejected; first-release records must use current
-state names. The core module
+spellings; wallet-note state names are rejected; first-release records must use current state names.
+Persisted `note_commitment_hex` values must already be exact lowercase
+32-byte hex and are not lowercased during parsing. Persisted wallet-note integer
+fields (`version`, timestamps, and origin counters) must be JSON integer
+numbers; quoted, fractional, or signed-64-overflow values fail parsing instead
+of being coerced. Offline asset IDs with dataspace scopes must spell the
+optional suffix as `#dataspace:<id>` using lowercase `dataspace:` and canonical
+unsigned decimal text (`0`, or no leading zero); blank, signed, leading-zero,
+fractional, uppercase-prefix, or signed-64-overflow ids fail parsing. The core
+module also requires offline transfer-list metadata
+fields (`total`, `receipt_count`, `recorded_at_ms`, and `recorded_at_height`) to
+be JSON integer numbers; quoted, blank, fractional, or signed-64-overflow values
+fail parsing instead of being trimmed, defaulted, or truncated. The core module
 includes an in-memory store and `ToriiOfflineNoteIssuerClient` for body-signed
 key-refill in tests and JVM tooling. Retired note issue and
 `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are

@@ -4512,16 +4512,6 @@ fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyRe
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a whole-number amount")))
 }
 
-fn parse_optional_confidential_diversifier_py(
-    value: Option<Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<[u8; 32]> {
-    match value {
-        Some(value) => py_fixed_array::<32>(&value, context),
-        None => Ok(iroha_core::zk::confidential_v2::default_confidential_diversifier_v2()),
-    }
-}
-
 fn parse_confidential_leaf_index_py(
     value: Option<Bound<'_, PyAny>>,
     context: &str,
@@ -4547,14 +4537,23 @@ fn parse_confidential_transfer_input_py(
         &["rho", "rho_hex", "rhoHex"],
         &format!("inputs[{index}].rho"),
     )?;
-    let diversifier = dict_get_alias(dict, &["diversifier", "diversifier_hex", "diversifierHex"])?;
+    if dict_get_alias(dict, &["diversifier_hex", "diversifierHex"])?.is_some() {
+        return Err(PyValueError::new_err(format!(
+            "inputs[{index}].diversifier must use canonical diversifier"
+        )));
+    }
+    let diversifier = dict_require_alias(
+        dict,
+        &["diversifier"],
+        &format!("inputs[{index}].diversifier"),
+    )?;
     let leaf_index = dict_get_alias(dict, &["leaf_index", "leafIndex"])?;
     Ok(
         iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
             amount: parse_confidential_amount_py(&amount, &format!("inputs[{index}].amount"))?,
             rho: py_fixed_array::<32>(&rho, &format!("inputs[{index}].rho"))?,
-            diversifier: parse_optional_confidential_diversifier_py(
-                diversifier,
+            diversifier: py_fixed_array::<32>(
+                &diversifier,
                 &format!("inputs[{index}].diversifier"),
             )?,
             leaf_index: parse_confidential_leaf_index_py(
@@ -6106,6 +6105,60 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+
+    #[test]
+    fn python_confidential_transfer_input_requires_canonical_diversifier() {
+        ensure_python();
+        Python::attach(|py| {
+            let input_with_diversifier = |key: Option<&str>| {
+                let input = PyDict::new(py);
+                input.set_item("amount", "7").expect("amount field");
+                input
+                    .set_item("rho", PyBytes::new(py, &[0x51; 32]))
+                    .expect("rho field");
+                if let Some(key) = key {
+                    input
+                        .set_item(key, PyBytes::new(py, &[0x52; 32]))
+                        .expect("diversifier field");
+                }
+                input
+            };
+
+            let parsed = parse_confidential_transfer_input_py(
+                input_with_diversifier(Some("diversifier")).as_any(),
+                0,
+            )
+            .expect("canonical diversifier accepted");
+            assert_eq!(parsed.diversifier, [0x52; 32]);
+
+            let missing =
+                parse_confidential_transfer_input_py(input_with_diversifier(None).as_any(), 0)
+                    .expect_err("missing diversifier rejected");
+            assert!(
+                missing
+                    .value(py)
+                    .to_string()
+                    .contains("inputs[0].diversifier is required"),
+                "unexpected missing-diversifier error: {}",
+                missing.value(py)
+            );
+
+            for alias in ["diversifier_hex", "diversifierHex"] {
+                let err = parse_confidential_transfer_input_py(
+                    input_with_diversifier(Some(alias)).as_any(),
+                    0,
+                )
+                .expect_err("retired diversifier alias rejected");
+                assert!(
+                    err.value(py)
+                        .to_string()
+                        .contains("inputs[0].diversifier must use canonical diversifier"),
+                    "unexpected alias error for {alias}: {}",
+                    err.value(py)
+                );
+            }
+        });
     }
 
     fn canonical_i105_from_seed(seed: u8) -> String {

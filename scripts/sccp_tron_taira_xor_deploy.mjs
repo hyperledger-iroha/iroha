@@ -126,7 +126,7 @@ const HTML_ENTITY_PATTERN =
   /&(?:#([0-9]{1,7})|#x([0-9a-f]{1,6})|amp|lt|gt|quot|apos);/giu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 const PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN =
-  /(?:change[\s._-]*me|replace[\s._-]*(?:me|before[\s._-]*production)|to[\s._-]*do|todo|example|sample|stub|test[\s._-]*only|your[\s._-]+[a-z0-9_-]+)/iu;
+  /(?:change[\s._-]*me|replace[\s._-]*(?:me|before[\s._-]*production)|to[\s._-]*do|dummy|example|fixture|mock|placeholder|sample|stub|test[\s._-]*only|your[\s._-]+[a-z0-9_-]+)/iu;
 
 const textEncoder = new TextEncoder();
 
@@ -1078,6 +1078,12 @@ async function writeText(path, value, mode = 0o600) {
   return out;
 }
 
+function assertDistinctResolvedPaths(leftPath, leftLabel, rightPath, rightLabel) {
+  if (resolve(leftPath) === resolve(rightPath)) {
+    throw new Error(`${leftLabel} must not be the same path as ${rightLabel}.`);
+  }
+}
+
 async function pathExists(path) {
   try {
     await stat(resolve(path));
@@ -1244,7 +1250,7 @@ function assertDeployerSecretNetwork(deployer, profile, label = "deployer secret
 }
 
 function optionEnabled(options, key, fallback = false) {
-  if (options[key] === undefined || options[key] === null || options[key] === "") {
+  if (options[key] === undefined) {
     return fallback;
   }
   if (options[key] === "true") return true;
@@ -2175,10 +2181,15 @@ function normalizeSignedTransactionArtifact(payload, label = "signed transaction
 
 async function signTransactionCommand(options) {
   if (!options.transaction) throw new Error("--transaction is required");
+  const transactionPath = options.transaction;
+  const secretPath = options.secret ?? DEFAULT_SECRET_OUT;
+  const outPath = options.out ?? DEFAULT_SIGNED_TRANSACTION_OUT;
+  assertDistinctResolvedPaths(outPath, "--out", transactionPath, "--transaction");
+  assertDistinctResolvedPaths(outPath, "--out", secretPath, "--secret");
   const profile = resolveTronNetworkProfile(options);
-  const deployer = await loadDeployerSecret(options.secret ?? DEFAULT_SECRET_OUT);
+  const deployer = await loadDeployerSecret(secretPath);
   assertDeployerSecretNetwork(deployer, profile);
-  const payload = await readJson(options.transaction, "unsigned transaction");
+  const payload = await readJson(transactionPath, "unsigned transaction");
   const { transaction, stepKey, stepKind } = normalizeUnsignedTransactionArtifact(
     payload,
     options,
@@ -2187,7 +2198,7 @@ async function signTransactionCommand(options) {
   );
   const signed = signTransactionPayload(transaction, deployer);
   const out = await writeJson(
-    options.out ?? DEFAULT_SIGNED_TRANSACTION_OUT,
+    outPath,
     {
       ...buildSignedTransactionArtifact(signed, new Date(), options),
       step_key: stepKey,
@@ -2253,10 +2264,13 @@ async function broadcastSignedTransaction(endpoint, transaction, options = {}) {
 
 async function broadcastCommand(options) {
   if (!options.transaction) throw new Error("--transaction is required");
+  const transactionPath = options.transaction;
+  const outPath = options.out ?? DEFAULT_BROADCAST_OUT;
+  assertDistinctResolvedPaths(outPath, "--out", transactionPath, "--transaction");
   const profile = resolveTronNetworkProfile(options);
   requireBroadcastConfirmation(options, profile, "broadcast");
   const endpoint = normalizeTronEndpoint(options.endpoint ?? profile.endpoint);
-  const payload = await readJson(options.transaction, "signed transaction");
+  const payload = await readJson(transactionPath, "signed transaction");
   const { transaction, verified } = normalizeSignedTransactionArtifact(
     payload,
     "signed transaction",
@@ -2267,7 +2281,7 @@ async function broadcastCommand(options) {
     transaction,
     options,
   );
-  const out = await writeJson(options.out ?? DEFAULT_BROADCAST_OUT, {
+  const out = await writeJson(outPath, {
     schema: BROADCAST_RESULT_SCHEMA,
     broadcast_at: new Date().toISOString(),
     tron_network: profile.key,
@@ -2451,13 +2465,14 @@ async function createTriggerStep(context, key, artifact, contractAddress, functi
 
 async function deployCommand(options) {
   if (!options.verifier) throw new Error("--verifier is required");
+  const outPath = options.out ?? DEFAULT_DEPLOYMENT_OUT;
+  const secretPath = options.secret ?? DEFAULT_SECRET_OUT;
+  assertDistinctResolvedPaths(outPath, "--out", options.verifier, "--verifier");
+  assertDistinctResolvedPaths(outPath, "--out", secretPath, "--secret");
   const profile = resolveTronNetworkProfile(options);
-  const broadcast = options.broadcast === "true";
-  if (options.broadcast !== undefined && !["true", "false"].includes(options.broadcast)) {
-    throw new Error("--broadcast must be true or false");
-  }
+  const broadcast = optionEnabled(options, "broadcast", false);
   if (broadcast) requireBroadcastConfirmation(options, profile, "deploy");
-  const deployer = await loadDeployerSecret(options.secret ?? DEFAULT_SECRET_OUT);
+  const deployer = await loadDeployerSecret(secretPath);
   assertDeployerSecretNetwork(deployer, profile);
   const endpoint = normalizeTronEndpoint(options.endpoint ?? profile.endpoint);
   let fundingReadiness = null;
@@ -2589,7 +2604,7 @@ async function deployCommand(options) {
             : `Re-run with --tron-network ${profile.key} --broadcast true --confirm-testnet ${profile.key} after funding the deployer.`,
         ],
   };
-  const out = await writeJson(options.out ?? DEFAULT_DEPLOYMENT_OUT, plan);
+  const out = await writeJson(outPath, plan);
   console.log(JSON.stringify({
     wrote: out,
     broadcast,
@@ -4376,8 +4391,19 @@ function buildMergedTairaXorRouteConfigToml(
 }
 
 async function routeManifestCommand(options) {
+  const outPath = options.out ?? DEFAULT_ROUTE_MANIFEST_OUT;
+  const evidencePath = options.evidence ?? DEFAULT_EVIDENCE_OUT;
+  const contractPath = options["taira-contract"] ?? DEFAULT_TAIRA_CONTRACT_OUT;
+  assertDistinctResolvedPaths(outPath, "--out", evidencePath, "--evidence");
+  assertDistinctResolvedPaths(outPath, "--out", contractPath, "--taira-contract");
+  if (options.verifier) {
+    assertDistinctResolvedPaths(outPath, "--out", options.verifier, "--verifier");
+  }
+  if (options["live-evidence"]) {
+    assertDistinctResolvedPaths(outPath, "--out", options["live-evidence"], "--live-evidence");
+  }
   const manifest = await buildTairaXorRouteManifestDraft(options);
-  const out = await writeJson(options.out ?? DEFAULT_ROUTE_MANIFEST_OUT, manifest, 0o644);
+  const out = await writeJson(outPath, manifest, 0o644);
   console.log(JSON.stringify({
     wrote: out,
     routeId: manifest.routeId,
@@ -4395,8 +4421,16 @@ async function routeManifestCommand(options) {
 }
 
 async function routeConfigCommand(options) {
-  const manifest = await readJson(options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT, "route manifest");
+  const manifestPath = options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT;
   const baseConfigPath = options["base-config"] ?? null;
+  const outPath =
+    options.out ??
+    (baseConfigPath ? DEFAULT_ROUTE_FULL_CONFIG_OUT : DEFAULT_ROUTE_CONFIG_OUT);
+  assertDistinctResolvedPaths(outPath, "--out", manifestPath, "--manifest");
+  if (baseConfigPath) {
+    assertDistinctResolvedPaths(outPath, "--out", baseConfigPath, "--base-config");
+  }
+  const manifest = await readJson(manifestPath, "route manifest");
   const toml = baseConfigPath
     ? buildMergedTairaXorRouteConfigToml(
         await readText(baseConfigPath, "base TAIRA config"),
@@ -4405,8 +4439,7 @@ async function routeConfigCommand(options) {
       )
     : buildTairaXorRouteConfigToml(manifest, options);
   const out = await writeText(
-    options.out ??
-      (baseConfigPath ? DEFAULT_ROUTE_FULL_CONFIG_OUT : DEFAULT_ROUTE_CONFIG_OUT),
+    outPath,
     toml,
     0o644,
   );
@@ -4604,6 +4637,7 @@ export {
   buildTairaXorRouteManifestDraft,
   bytesToHex,
   compileTairaBurnRecordContract,
+  deployCommand,
   estimateDeploymentFunding,
   generateDeployer,
   hexToBytes,

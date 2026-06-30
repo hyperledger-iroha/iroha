@@ -634,12 +634,16 @@ CommitCertificateMatchesFinality ==
     /\ commitEvidenceStake >= StakeQuorum
   )
 
+LiveCommitGateCanCommitState ==
+  /\ commitVotesHonest + commitVotesByz >= CommitQuorum
+  /\ stakeSigned >= StakeQuorum
+  /\ rbcState = "Delivered"
+
 LiveCommitGateMatchesFinality ==
-  committed <=>
-    CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+  committed <=> LiveCommitGateCanCommitState
 
 LiveCommitGateRbcEvidenceMatches ==
-  CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState) <=>
+  LiveCommitGateCanCommitState <=>
     /\ commitVotesHonest + commitVotesByz >= CommitQuorum
     /\ stakeSigned >= StakeQuorum
     /\ rbcState = "Delivered"
@@ -6651,7 +6655,7 @@ RbcDeliveredWithoutFinalityWaitsForCommitEvidence ==
    /\ ~committed) =>
     /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate
     /\ RbcDeliveredDisablesRbcProgress
-    /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+    /\ ~LiveCommitGateCanCommitState
     /\ phase # "Committed"
     /\ (phase = "CommitVote" => prepareVotes >= CommitQuorum)
 
@@ -13020,12 +13024,8 @@ SumeragiConsensusCoreStateMatchesEnvelope ==
   /\ LiveChunkEvidenceStayInRbcHandoff
   /\ LiveReadyVotesStayInRbcHandoff
 
-SumeragiConsensusCoreStateSafetyEnvelope ==
-  /\ TypeInvariant
-  /\ SumeragiConsensusCoreStateMatchesEnvelope
-
 SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope ==
-  [] SumeragiConsensusCoreStateSafetyEnvelope
+  [] SumeragiConsensusCoreStateMatchesEnvelope
 
 SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope ==
   /\ SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope

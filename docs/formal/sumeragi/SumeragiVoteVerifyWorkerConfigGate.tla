@@ -176,13 +176,16 @@ VoteVerifyWorkerQueueCapsExact ==
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
 
+VoteVerifyWorkerOutputMatches ==
+  ActualOutput = SpecOutput
+
 VoteVerifyWorkerConfigExactness ==
-  /\ ActualOutput = SpecOutput
+  /\ VoteVerifyWorkerOutputMatches
   /\ VoteVerifyWorkerThreadsExact
   /\ VoteVerifyWorkerQueueCapsExact
 
 VoteVerifyWorkerConfigCoreSafety ==
-  ActualOutput = SpecOutput
+  VoteVerifyWorkerOutputMatches
   /\ AutoThreadsUseAvailable
   /\ ExplicitThreadsPreserved
   /\ ZeroWorkCapDerivation

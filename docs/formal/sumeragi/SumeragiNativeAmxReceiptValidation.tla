@@ -385,12 +385,12 @@ NativeAmxReceiptValidationExactness ==
   /\ NativeAmxReceiptCaseGroupsComplete
   /\ NativeAmxReceiptAcceptanceExact
   /\ NativeAmxReceiptContextExact
-  /\ NativeAmxReceiptHeaderExact
-  /\ NativeAmxReceiptParticipantExact
-  /\ NativeAmxReceiptQcBodyExact
-  /\ NativeAmxReceiptValidatorSetExact
-  /\ NativeAmxReceiptSignerBitmapExact
-  /\ NativeAmxReceiptQuorumSignatureExact
+  /\ ReceiptHeaderMatchesContext
+  /\ ParticipantSetMatchesPlan
+  /\ QcBodyMatchesReceipt
+  /\ QcValidatorSetAuthenticated
+  /\ QcSignerBitmapWellFormed
+  /\ QcQuorumAndSignatureRequired
 
 NativeAmxReceiptValidationCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -363,8 +363,7 @@ RoundGapSafetyAnchors ==
   /\ SnapshotAnchors
 
 RoundGapStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllCandidatesMatchSpec
   /\ RoundGapSafetyAnchors
 
 RoundGapStatusCorrectnessEnvelope ==

@@ -191,13 +191,15 @@ SpecBitmapBoundaryAnchors ==
   /\ CountSetBits \in SpecActions(CommitCountsBitsNotBytes)
   /\ CountBytes \notin SpecActions(CommitCountsBitsNotBytes)
 
-Safety ==
+PrecommitVoteCountActionsMatchSpec ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+Safety ==
+  PrecommitVoteCountActionsMatchSpec
+
 PrecommitVoteCountExactness ==
-  /\ \A c \in Candidates:
-    ImplementationActions(c) = SpecActions(c)
+  /\ PrecommitVoteCountActionsMatchSpec
   /\ SpecReturnClassification
   /\ SpecPhaseGateAnchors
   /\ SpecBitmapBoundaryAnchors

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import sys
@@ -1646,6 +1647,49 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
     MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
     assert errors == []
 
+    summary["status"] = "blocked"
+    MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary status must match aggregate diagnostics" in diagnostics
+
+    errors = []
+    summary["status"] = "ready"
+    summary["errors"] = ["drifted aggregate diagnostic"]
+    MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary status must match aggregate diagnostics" in diagnostics
+
+    errors = []
+    summary["status"] = "ready"
+    summary["errors"] = []
+    ready_summary = copy.deepcopy(summary)
+    ready_summary["deployment"] = {}
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary ready deployment must include deployment_id and environment"
+        in diagnostics
+    )
+
+    errors = []
+    ready_summary = copy.deepcopy(summary)
+    ready_summary["recognized_summary_count"] = 0
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary ready recognized_summary_count must match required gate count"
+        in diagnostics
+    )
+
+    errors = []
+    ready_summary = copy.deepcopy(summary)
+    ready_summary["required"]["gateway_load"]["valid"] = False
+    ready_summary["required"]["gateway_load"]["errors"] = ["invalid required row"]
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary ready rows must all be present and valid" in diagnostics
+
+    errors = []
     summary["private_key"] = "runtime-only-key-material"
     summary["status"] = "done"
     summary["required_gates"] = ["gateway_load", "shadow_gate"]
@@ -1728,6 +1772,11 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     summary["required"]["gateway_load"]["valid"] = False
     summary["required"]["gateway_load"]["errors"] = []
     summary["required"]["gateway_load"]["sha256"] = "AB" * 32
+    summary["required"]["gateway_load"]["thresholds"] = {"bad\nkey": False}
+    summary["required"]["gateway_load"]["oldest_generated_at_unix"] = GENERATED_AT + 1
+    summary["required"]["gateway_load"]["newest_generated_at_unix"] = GENERATED_AT
+    summary["required"]["gateway_load"]["deployment_id"] = " runtime-only-deployment"
+    summary["required"]["gateway_load"]["environment"] = "prod\nsecret"
     summary["required"]["reputation"]["present"] = True
     summary["required"]["reputation"]["private_key"] = "runtime-only-key-material"
     MODULE.validate_aggregate_required_row_output(
@@ -1755,6 +1804,26 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     )
     assert "gateway_load aggregate invalid row errors must not be empty" in diagnostics
     assert (
+        "gateway_load aggregate invalid row newest_generated_at_unix must be >= oldest_generated_at_unix"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row thresholds keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row thresholds.<invalid> must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row deployment_id must be canonical when present"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row environment must be canonical when present"
+        in diagnostics
+    )
+    assert (
         "reputation aggregate required row fields must match the schema-closed output contract"
         in diagnostics
     )
@@ -1770,6 +1839,8 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     assert "runtime-only-key-material" not in diagnostics
     assert "private-key-placeholder drift" not in diagnostics
     assert "AB" * 32 not in diagnostics
+    assert "runtime-only-deployment" not in diagnostics
+    assert "prod\nsecret" not in diagnostics
 
 
 def test_duplicate_gate_summary_fails(tmp_path: Path) -> None:

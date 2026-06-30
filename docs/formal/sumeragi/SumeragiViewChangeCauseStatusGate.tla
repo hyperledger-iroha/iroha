@@ -421,8 +421,7 @@ SafetyAnchors ==
   /\ ResetAfterRecordsClearsAllAnchors
 
 ViewChangeCauseStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllViewChangeCauseCandidatesMatchSpec
   /\ SafetyAnchors
 
 ViewChangeCauseStatusCorrectnessEnvelope ==

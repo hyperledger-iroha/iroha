@@ -73,9 +73,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "69e406aca3672add2345c400cc20778d1ac1a35882f423e2be1e8136fbfcac92",
-        "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
-        "ios-arm64_x86_64-simulator": "d0f651e6dc837bff7e92b05c9bf1e3a2988fc6995cabee6e3aaa269a01ecd1b5"
+        "macos-arm64": "2f38fb6148149d0aa553ddc85152b9549a6bb2cd4a656595122d8061fca2eb77",
+        "ios-arm64": "3d7fa50896516294ccea5cd10f1e9b7e0e5121ab982388fa351debb8377adf95",
+        "ios-arm64_x86_64-simulator": "be078b0de44bec3e835dba2618d738c7cd280a78b730966eca3db032ec6e2e88"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -5063,20 +5063,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        let normalizedFeeSponsor = try feeSponsor.map {
+            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
+        }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let nonceValue = nonce ?? 0
         let nonceFlag: UInt8 = nonce == nil ? 0 : 1
-        let normalizedFeeSponsor: String?
-        if let rawFeeSponsor = feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !rawFeeSponsor.isEmpty
-        {
-            normalizedFeeSponsor = rawFeeSponsor
-        } else {
-            normalizedFeeSponsor = nil
-        }
         let requiresFeeSponsorBridge = normalizedFeeSponsor != nil
         let useAlg = algorithm != .ed25519
         if useAlg {

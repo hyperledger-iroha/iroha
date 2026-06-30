@@ -17300,9 +17300,7 @@ export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
   rho?: BinaryLike;
-  diversifierHex?: string;
-  diversifier_hex?: string;
-  diversifier?: BinaryLike;
+  diversifierHex: string;
   leafIndex?: number;
   leaf_index?: number;
 }
@@ -19339,9 +19337,8 @@ export function deriveConfidentialKeysetFromHex(
 
 export function deriveConfidentialOwnerTagV2(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: {
-    diversifierHex?: string;
-    diversifier?: ArrayBufferView | ArrayBuffer | Buffer;
+  options: {
+    diversifierHex: string;
   },
 ): Buffer;
 

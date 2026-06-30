@@ -241,27 +241,23 @@ def test_read_evidence_bytes_rejects_directory_before_open(tmp_path: Path) -> No
         raise AssertionError("expected directory evidence read to fail")
 
 
-def test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink(
+def test_load_evidence_json_with_sha256_or_record_error_accepts_parent_symlink(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
     symlink_root = tmp_path / "evidence-root"
     target = target_root / "evidence.json"
+    raw = b'{"schema":"test"}'
     target_root.mkdir()
-    target.write_text('{"schema":"test"}', encoding="utf-8")
+    target.write_bytes(raw)
     symlink_root.symlink_to(target_root, target_is_directory=True)
 
     evidence = symlink_root / "evidence.json"
     errors: list[str] = []
     loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
 
-    assert loaded is None
-    assert errors == [
-        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: "
-        "evidence file parent must not be a symlink"
-    ]
-    assert str(evidence) not in errors[0]
-    assert str(symlink_root) not in errors[0]
+    assert loaded == ({"schema": "test"}, hashlib.sha256(raw).hexdigest())
+    assert errors == []
 
 
 def test_validate_evidence_file_for_read_records_inspection_failure(

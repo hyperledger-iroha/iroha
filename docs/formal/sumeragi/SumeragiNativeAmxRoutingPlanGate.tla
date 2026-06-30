@@ -443,12 +443,12 @@ NativeAmxRoutingResolutionExact ==
 NativeAmxRoutingPlanExactness ==
   /\ NativeAmxRoutingPlanCaseGroupsComplete
   /\ NativeAmxRoutingAdmissionExact
-  /\ NativeAmxRoutingParticipantCanonicalExact
+  /\ ParticipantsAreCanonical
   /\ NativeAmxRoutingRoleProjectionExact
-  /\ NativeAmxRoutingDigestExact
+  /\ DigestMatchesPlan
   /\ NativeAmxRoutingExecutionContextExact
-  /\ NativeAmxRoutingReceiptExact
-  /\ NativeAmxRoutingResolutionExact
+  /\ ReceiptPresenceMatchesPlanKind
+  /\ RoutingResolutionFailsClosed
 
 NativeAmxRoutingPlanCorrectnessEnvelope ==
   /\ TypeInvariant

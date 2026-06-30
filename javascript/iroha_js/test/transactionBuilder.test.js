@@ -2369,6 +2369,21 @@ baseTest("confidential proof builders reject padded chain IDs and hex fields bef
           /inputs\[0\]\.diversifier must not contain surrounding whitespace/u,
         ],
         [
+          "missing input diversifier",
+          { inputs: [{ amount: "7", rhoHex: rho }] },
+          /inputs\[0\]\.diversifier is required/u,
+        ],
+        [
+          "input diversifier snake alias",
+          { inputs: [{ amount: "7", rhoHex: rho, diversifier_hex: diversifier }] },
+          /inputs\[0\]\.diversifier must use canonical diversifierHex/u,
+        ],
+        [
+          "input diversifier raw alias",
+          { inputs: [{ amount: "7", rhoHex: rho, diversifier: Buffer.alloc(32, 0x52) }] },
+          /inputs\[0\]\.diversifier must use canonical diversifierHex/u,
+        ],
+        [
           "output amount",
           { outputs: [{ amount: "7\n", rhoHex: rho, ownerTagHex: ownerTag }] },
           /outputs\[0\]\.amount must not contain surrounding whitespace/u,

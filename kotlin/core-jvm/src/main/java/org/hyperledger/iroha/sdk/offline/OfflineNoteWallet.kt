@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.time.Duration
 import java.util.Base64
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
@@ -419,11 +418,10 @@ object OfflineNoteReceiveRequestCodec {
 
     @JvmStatic
     fun decodeText(text: String): OfflineNoteReceiveRequest {
-        val trimmed = text.trim()
-        require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note receive request prefix missing" }
+        require(text.startsWith(TEXT_PREFIX)) { "Offline Note receive request prefix missing" }
         return decodeNorito(
             strictBase64UrlDecode(
-                trimmed.substring(TEXT_PREFIX.length),
+                text.substring(TEXT_PREFIX.length),
                 "Offline Note receive request payload",
             )
         )
@@ -547,7 +545,7 @@ class OfflineNotePaymentToken(
         audit.outputClaimForNoteCommitment(noteCommitment)
 
     fun outputClaimForNoteCommitmentHex(noteCommitmentHex: String): OfflineNote.AuditOutputClaim? =
-        outputClaimForNoteCommitment(hexBytes(noteCommitmentHex.trim(), "note_commitment"))
+        outputClaimForNoteCommitment(lowerHex32Bytes(noteCommitmentHex, "note_commitment"))
 
     fun containsOutputNoteCommitment(noteCommitment: ByteArray): Boolean =
         outputClaimForNoteCommitment(noteCommitment) != null
@@ -588,11 +586,10 @@ object OfflineNotePaymentTokenCodec {
 
     @JvmStatic
     fun decodeText(text: String): OfflineNotePaymentToken {
-        val trimmed = text.trim()
-        require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note payment token prefix missing" }
+        require(text.startsWith(TEXT_PREFIX)) { "Offline Note payment token prefix missing" }
         return decodeNorito(
             strictBase64UrlDecode(
-                trimmed.substring(TEXT_PREFIX.length),
+                text.substring(TEXT_PREFIX.length),
                 "Offline Note payment token payload",
             )
         )
@@ -806,11 +803,10 @@ object OfflineNoteReceiptAckCodec {
 
     @JvmStatic
     fun decodeText(text: String): OfflineNoteReceiptAck {
-        val trimmed = text.trim()
-        require(trimmed.startsWith(TEXT_PREFIX)) { "Offline Note receipt ACK prefix missing" }
+        require(text.startsWith(TEXT_PREFIX)) { "Offline Note receipt ACK prefix missing" }
         return decodeNorito(
             strictBase64UrlDecode(
-                trimmed.substring(TEXT_PREFIX.length),
+                text.substring(TEXT_PREFIX.length),
                 "Offline Note receipt ACK payload",
             )
         )
@@ -922,8 +918,10 @@ class OfflineNoteExplorerInstructionOutcome @JvmOverloads constructor(
     private val _encodedInstruction = encodedInstruction.copyOf()
 
     init {
-        require(kind.trim().isNotEmpty()) { "kind must not be blank" }
-        require(transactionStatus.trim().isNotEmpty()) { "transactionStatus must not be blank" }
+        require(kind.isNotEmpty() && kind.trim() == kind) { "kind must be an exact non-empty string" }
+        require(transactionStatus.isNotEmpty() && transactionStatus.trim() == transactionStatus) {
+            "transactionStatus must be an exact non-empty string"
+        }
         require(_encodedInstruction.isNotEmpty()) { "encodedInstruction must not be empty" }
     }
 
@@ -1016,16 +1014,18 @@ class OfflineNoteOutcomeIndex {
         const val KIND_ISSUE: String = "IssueOfflineNote"
         const val KIND_REDEEM: String = "RedeemOfflineNote"
         const val KIND_AUDIT: String = "AuditOfflineNote"
+        const val STATUS_COMMITTED: String = "Committed"
+        const val STATUS_REJECTED: String = "Rejected"
 
         @JvmStatic
         fun fromExplorerOutcomes(outcomes: List<OfflineNoteExplorerInstructionOutcome>): OfflineNoteOutcomeIndex {
             val index = OfflineNoteOutcomeIndex()
             for (outcome in outcomes) {
-                val committed = outcome.transactionStatus.equals("committed", ignoreCase = true)
-                val rejected = outcome.transactionStatus.equals("rejected", ignoreCase = true)
+                val committed = outcome.transactionStatus == STATUS_COMMITTED
+                val rejected = outcome.transactionStatus == STATUS_REJECTED
                 if (!committed && !rejected) continue
                 when {
-                    outcome.kind.equals(KIND_ISSUE, ignoreCase = true) -> {
+                    outcome.kind == KIND_ISSUE -> {
                         val issue = OfflineNote.decodeIssueInstruction(outcome.encodedInstruction())
                         if (committed) {
                             index.recordCommittedIssue(issue, outcome.transactionHashHex)
@@ -1033,7 +1033,7 @@ class OfflineNoteOutcomeIndex {
                             index.recordRejectedIssue(issue, outcome.transactionHashHex)
                         }
                     }
-                    outcome.kind.equals(KIND_AUDIT, ignoreCase = true) -> {
+                    outcome.kind == KIND_AUDIT -> {
                         val audit = OfflineNote.decodeAuditInstruction(outcome.encodedInstruction())
                         if (committed) {
                             index.recordCommittedAudit(audit, outcome.transactionHashHex)
@@ -1041,7 +1041,7 @@ class OfflineNoteOutcomeIndex {
                             index.recordRejectedAudit(audit, outcome.transactionHashHex)
                         }
                     }
-                    outcome.kind.equals(KIND_REDEEM, ignoreCase = true) -> {
+                    outcome.kind == KIND_REDEEM -> {
                         val redeem = OfflineNote.decodeRedeemInstruction(outcome.encodedInstruction())
                         if (committed) {
                             index.recordCommittedRedeem(redeem, outcome.transactionHashHex)
@@ -1201,7 +1201,7 @@ class ToriiOfflineNoteOutcomeProvider @JvmOverloads constructor(
                 kind = requiredString(obj, "kind"),
                 transactionStatus = requiredString(obj, "transaction_status"),
                 transactionHashHex = obj["transaction_hash"] as? String,
-                encodedInstruction = hexBytes(encoded, "encoded"),
+                encodedInstruction = exactLowerHexBytes(encoded, "encoded"),
             )
         }
     }
@@ -2158,7 +2158,9 @@ private fun requiredString(value: Map<String, Any?>, field: String): String {
 }
 
 private fun strictBase64UrlDecode(value: String, field: String): ByteArray {
-    require(value.trim().isNotEmpty() && !value.contains("=")) { "$field must be unpadded base64url" }
+    require(value.isNotEmpty() && value.trim() == value && !value.contains("=")) {
+        "$field must be unpadded base64url"
+    }
     require(value.all(::isBase64UrlCharacter)) { "$field must be unpadded base64url" }
     return Base64.getUrlDecoder().decode(value)
 }
@@ -2166,18 +2168,33 @@ private fun strictBase64UrlDecode(value: String, field: String): ByteArray {
 private fun isBase64UrlCharacter(value: Char): Boolean =
     value in 'A'..'Z' || value in 'a'..'z' || value in '0'..'9' || value == '-' || value == '_'
 
-private fun hexBytes(value: String, field: String): ByteArray {
-    val normalized = value.removePrefix("0x").removePrefix("0X").lowercase(Locale.ROOT)
-    require(normalized.length % 2 == 0) { "$field must have an even hex length" }
-    val out = ByteArray(normalized.length / 2)
+private fun exactLowerHexBytes(value: String, field: String): ByteArray {
+    require(value.isNotEmpty() && value.length % 2 == 0) { "$field must be non-empty even lowercase hex" }
+    require(value.all(::isLowerHexCharacter)) { "$field must be lowercase hex" }
+    val out = ByteArray(value.length / 2)
     for (index in out.indices) {
-        val hi = Character.digit(normalized[index * 2], 16)
-        val lo = Character.digit(normalized[index * 2 + 1], 16)
-        require(hi >= 0 && lo >= 0) { "$field must be hex" }
+        val hi = Character.digit(value[index * 2], 16)
+        val lo = Character.digit(value[index * 2 + 1], 16)
         out[index] = ((hi shl 4) or lo).toByte()
     }
     return out
 }
+
+private fun lowerHex32Bytes(value: String, field: String): ByteArray {
+    require(value.length == 64 && value.all(::isLowerHexCharacter)) {
+        "$field must be 32-byte lowercase hex"
+    }
+    val out = ByteArray(32)
+    for (index in out.indices) {
+        val hi = Character.digit(value[index * 2], 16)
+        val lo = Character.digit(value[index * 2 + 1], 16)
+        out[index] = ((hi shl 4) or lo).toByte()
+    }
+    return out
+}
+
+private fun isLowerHexCharacter(value: Char): Boolean =
+    value in '0'..'9' || value in 'a'..'f'
 
 private fun hexLower(bytes: ByteArray): String {
     val chars = CharArray(bytes.size * 2)

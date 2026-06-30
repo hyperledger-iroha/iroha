@@ -4675,6 +4675,17 @@ test("confidential v2 derivation helpers reject padded chain and asset IDs befor
         }),
       /diversifier must not contain surrounding whitespace/u,
     );
+    assert.throws(
+      () => deriveConfidentialOwnerTagV2(spendKey),
+      /diversifier is required/u,
+    );
+    assert.throws(
+      () =>
+        deriveConfidentialOwnerTagV2(spendKey, {
+          diversifier: rho,
+        }),
+      /diversifier must use canonical diversifierHex/u,
+    );
   });
 
   assert.deepEqual(calls, []);

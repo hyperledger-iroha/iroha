@@ -515,7 +515,7 @@ object OfflineNoteNearbyTransportPolicy {
 }
 
 class OfflineNoteNearbyPairingChallenge(assetName: String) {
-    val assetName: String = assetName.trim()
+    val assetName: String = assetName
 
     init {
         require(this.assetName in ASSET_NAMES) { "Unsupported nearby pairing challenge" }
@@ -539,7 +539,7 @@ class OfflineNoteNearbyPairingChallenge(assetName: String) {
 
         @JvmStatic
         fun fromAssetName(value: String): OfflineNoteNearbyPairingChallenge =
-            OfflineNoteNearbyPairingChallenge(value.trim())
+            OfflineNoteNearbyPairingChallenge(value)
 
         @JvmStatic
         fun random(): OfflineNoteNearbyPairingChallenge =

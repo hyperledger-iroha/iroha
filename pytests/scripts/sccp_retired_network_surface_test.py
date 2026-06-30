@@ -374,7 +374,12 @@ def _decoded_retired_network_match_is_allowed(
 
 
 def _decode_retired_network_surface_text(text: str) -> str:
-    decoded = html_unescape(text)
+    decoded = text
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
     for _ in range(3):
         next_decoded = url_unquote(decoded)
         if next_decoded == decoded:
@@ -487,11 +492,17 @@ def test_retired_network_patterns_catch_html_entity_obfuscation_examples() -> No
     encoded_family = "".join(
         ("Sub", "&#115;", "trate", "/", "Pol", "&#107;", "adot")
     )
+    nested_encoded_family = "".join(
+        ("Sub", "&amp;#115;", "trate", "/", "Pol", "&amp;#107;", "adot")
+    )
     encoded_runtime = "".join(("sp", "&#95;", _RUNTIME))
+    nested_encoded_runtime = "".join(("sp", "&amp;#95;", _RUNTIME))
     adversarial_examples = (
         f"operator added {encoded_family} relayer support",
+        f"operator added {nested_encoded_family} route manifest",
         f"operator added {encoded_family} route manifest",
         f"operator added {encoded_runtime} proof codec",
+        f"operator added {nested_encoded_runtime} proof codec",
     )
 
     for index, text in enumerate(adversarial_examples):
@@ -502,6 +513,13 @@ def test_retired_network_patterns_catch_html_entity_obfuscation_examples() -> No
     approved_examples = (
         SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
         f"the exact escaped {encoded_family} no-support sentence remains pinned",
+        "".join(
+            (
+                "SCCP will not support ",
+                nested_encoded_family,
+                " networks for now.",
+            )
+        ),
     )
     for index, text in enumerate(approved_examples):
         assert _decoded_retired_network_surface_violations(

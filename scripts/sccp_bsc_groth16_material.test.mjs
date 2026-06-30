@@ -42,6 +42,7 @@ import {
   main,
   materializeBscGroth16Material,
   preflightBscGroth16Material,
+  runBscGroth16ProofSelfTest,
   signBscGroth16AttestationRole,
   snarkjsVerificationKeyToBscVerifierMaterial,
   verifyBscGroth16AttestationHandoff,
@@ -66,6 +67,25 @@ const REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA =
   BSC_GROTH16_REPRODUCIBLE_BUILD_TRANSCRIPT_SCHEMA;
 const BN254_BASE_FIELD_MODULUS =
   "21888242871839275222246405745257275088696311157297823662689037894645226208583";
+const malformedBooleanOptionValues = Object.freeze([
+  " TRUE",
+  "true ",
+  "false ",
+  "TRUE",
+  "False",
+  "1",
+  "0",
+  "yes",
+  "on",
+  "",
+  null,
+  true,
+  false,
+  1,
+  0,
+  new String("true"),
+  Object.freeze({ toString: () => "true" }),
+]);
 
 const TEST_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
 const TEST_ATTESTATION_PUBLIC_KEY_PEM = TEST_ATTESTATION_SIGNER.publicKey.export({
@@ -1298,6 +1318,105 @@ test("materialize writes verifier material but fails closed without production a
   }
 });
 
+test("materialize rejects copied input collisions with fixed outputs before writing artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-materialize-collision-"));
+  try {
+    const outDir = join(root, "out");
+    await mkdir(outDir, { recursive: true });
+    const verifierOutputCollision = join(
+      outDir,
+      "testnet-bsc-groth16-verifier-key.json",
+    );
+    const manifestOutputCollision = join(
+      outDir,
+      "testnet-bsc-groth16-material.manifest.json",
+    );
+    const zkeyPath = join(root, "input.final.zkey");
+    const verifierKeyPath = join(root, "verification_key.json");
+    const duplicateR1csPath = join(root, "duplicate-a", "same-name.artifact");
+    const duplicateZkeyPath = join(root, "duplicate-b", "same-name.artifact");
+    const files = [
+      [verifierOutputCollision, "r1cs sentinel\n"],
+      [manifestOutputCollision, "zkey sentinel\n"],
+      [zkeyPath, "zkey input\n"],
+      [verifierKeyPath, "verification key input\n"],
+      [duplicateR1csPath, "duplicate r1cs input\n"],
+      [duplicateZkeyPath, "duplicate zkey input\n"],
+    ];
+    for (const [pathName, text] of files) {
+      await mkdir(dirname(pathName), { recursive: true });
+      await writeFile(pathName, text);
+    }
+
+    await assert.rejects(
+      () =>
+        main([
+          "materialize",
+          "--bsc-network",
+          "testnet",
+          "--circuit-profile",
+          BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
+          "--r1cs",
+          verifierOutputCollision,
+          "--zkey",
+          zkeyPath,
+          "--snarkjs-verifier-key",
+          verifierKeyPath,
+          "--out-dir",
+          outDir,
+        ]),
+      /BSC Groth16 verifier key output must not be the same path as --r1cs/u,
+    );
+    await assert.rejects(
+      () =>
+        main([
+          "materialize",
+          "--bsc-network",
+          "testnet",
+          "--circuit-profile",
+          BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
+          "--r1cs",
+          join(root, "safe.r1cs"),
+          "--zkey",
+          manifestOutputCollision,
+          "--snarkjs-verifier-key",
+          verifierKeyPath,
+          "--out-dir",
+          outDir,
+        ]),
+      /BSC Groth16 material manifest output must not be the same path as --zkey/u,
+    );
+    await assert.rejects(
+      () =>
+        main([
+          "materialize",
+          "--bsc-network",
+          "testnet",
+          "--circuit-profile",
+          BSC_SIGNAL_BINDING_CIRCUIT_PROFILE,
+          "--r1cs",
+          duplicateR1csPath,
+          "--zkey",
+          duplicateZkeyPath,
+          "--snarkjs-verifier-key",
+          verifierKeyPath,
+          "--out-dir",
+          outDir,
+        ]),
+      /--zkey must not write the same path as --r1cs/u,
+    );
+    for (const [pathName, text] of files) {
+      assert.equal(await readFile(pathName, "utf8"), text);
+    }
+    await assert.rejects(
+      () => readFile(join(outDir, "same-name.artifact"), "utf8"),
+      { code: "ENOENT" },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("materialize rejects zkeys that fail Powers-of-Tau verification", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-zkey-verify-"));
   try {
@@ -1397,6 +1516,77 @@ test("generate refuses local setup unless explicitly constrained to testnet cand
       ]),
     /only allowed for testnet candidates/u,
   );
+});
+
+test("generate rejects malformed local setup boolean options before setup work", async () => {
+  for (const value of malformedBooleanOptionValues) {
+    await assert.rejects(
+      () =>
+        generateBscGroth16Material({
+          "bsc-network": "testnet",
+          "create-local-ptau-power": "8",
+          "allow-local-testnet-setup": value,
+        }),
+      /--allow-local-testnet-setup must be true or false/u,
+    );
+  }
+});
+
+test("generate rejects output path collisions before writing artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-generate-collision-"));
+  try {
+    const outDir = join(root, "out");
+    await mkdir(outDir, { recursive: true });
+    const r1csCollision = join(
+      outDir,
+      `${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE}.r1cs`,
+    );
+    const r1csSentinel = "ptau sentinel must not be replaced";
+    await writeFile(r1csCollision, r1csSentinel);
+
+    await assert.rejects(
+      () =>
+        generateBscGroth16Material({
+          "bsc-network": "testnet",
+          ptau: r1csCollision,
+          "out-dir": outDir,
+        }),
+      /BSC Groth16 R1CS output must not be the same path as --ptau/u,
+    );
+    assert.equal(await readFile(r1csCollision, "utf8"), r1csSentinel);
+    await assert.rejects(
+      () =>
+        readFile(join(outDir, `${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE}.circom`)),
+      /ENOENT/u,
+    );
+
+    const transcriptCollision = join(
+      root,
+      "testnet-bsc-groth16-material.manifest.json",
+    );
+    const transcriptSentinel = "transcript sentinel must not be copied";
+    await writeFile(transcriptCollision, transcriptSentinel);
+    const ptau = join(root, "phase2.ptau");
+    await writeFile(ptau, "ptau");
+    await assert.rejects(
+      () =>
+        generateBscGroth16Material({
+          "bsc-network": "testnet",
+          ptau,
+          "trusted-setup-transcript": transcriptCollision,
+          "out-dir": outDir,
+        }),
+      /trusted setup transcript output must not write the same path as BSC Groth16 material manifest output/u,
+    );
+    assert.equal(await readFile(transcriptCollision, "utf8"), transcriptSentinel);
+    await assert.rejects(
+      () =>
+        readFile(join(outDir, `${BSC_SIGNAL_BINDING_CIRCUIT_PROFILE}.circom`)),
+      /ENOENT/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("generate uses checked-in canonical full-message source when source is omitted", async () => {
@@ -1549,6 +1739,30 @@ test("toolchain-fingerprint refuses unresolved executable paths", async () => {
         }),
       /Circom compiler command .* could not be resolved to a readable executable/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("toolchain-fingerprint rejects transcript output path collisions before reading artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-toolchain-collision-"));
+  try {
+    const transcriptPath = join(root, "reproducible-build-transcript.json");
+    const transcriptBytes = "not a reproducible build transcript\n";
+    await writeFile(transcriptPath, transcriptBytes);
+
+    await assert.rejects(
+      () =>
+        main([
+          "toolchain-fingerprint",
+          "--transcript",
+          transcriptPath,
+          "--out",
+          transcriptPath,
+        ]),
+      /--out must not be the same path as --transcript/u,
+    );
+    assert.equal(await readFile(transcriptPath, "utf8"), transcriptBytes);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -3783,6 +3997,67 @@ test("attestation-request emits deterministic unsigned role payloads", async () 
   }
 });
 
+test("attestation-request rejects output path collisions before reading artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-collision-"));
+  try {
+    const sentinelFiles = {
+      manifest: {
+        path: join(root, "candidate-manifest.json"),
+        bytes: "not a Groth16 material manifest\n",
+      },
+      semanticReview: {
+        path: join(root, "semantic-review-evidence.json"),
+        bytes: "not semantic review evidence\n",
+      },
+      circuitSecurityAudit: {
+        path: join(root, "circuit-security-audit-evidence.json"),
+        bytes: "not circuit security audit evidence\n",
+      },
+    };
+    for (const file of Object.values(sentinelFiles)) {
+      await writeFile(file.path, file.bytes);
+    }
+    const baseArgs = [
+      "attestation-request",
+      "--manifest",
+      sentinelFiles.manifest.path,
+      "--semantic-review-evidence",
+      sentinelFiles.semanticReview.path,
+      "--circuit-security-audit-evidence",
+      sentinelFiles.circuitSecurityAudit.path,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+    ];
+    const cases = [
+      {
+        out: sentinelFiles.manifest.path,
+        pattern: /--out must not be the same path as --manifest/u,
+      },
+      {
+        out: sentinelFiles.semanticReview.path,
+        pattern: /--out must not be the same path as --semantic-review-evidence/u,
+      },
+      {
+        out: sentinelFiles.circuitSecurityAudit.path,
+        pattern:
+          /--out must not be the same path as --circuit-security-audit-evidence/u,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await assert.rejects(
+        () => main([...baseArgs, "--out", testCase.out]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("evidence-template writes manifest-bound drafts that remain unsigned blockers", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-evidence-template-"));
   try {
@@ -3911,6 +4186,124 @@ test("evidence-template writes manifest-bound drafts that remain unsigned blocke
         }),
       /already exists; pass --overwrite true/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("template writers reject generated output path collisions before replacing artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-template-collision-"));
+  try {
+    const transcriptDir = join(root, "transcripts");
+    const trustedSetupTranscriptPath = join(
+      transcriptDir,
+      "trusted-setup-transcript.json",
+    );
+    const reproducibleBuildTranscriptPath = join(
+      transcriptDir,
+      "reproducible-build-transcript.json",
+    );
+    const transcriptInputs = {
+      r1cs: trustedSetupTranscriptPath,
+      safeR1cs: join(root, "safe.r1cs"),
+      zkey: join(root, "input.zkey"),
+      ptau: join(root, "input.ptau"),
+      verifier: join(root, "verification-key.json"),
+      circuitSource: join(root, "circuit.circom"),
+    };
+    for (const [pathName, text] of [
+      [transcriptInputs.r1cs, "r1cs sentinel\n"],
+      [transcriptInputs.safeR1cs, "safe r1cs sentinel\n"],
+      [transcriptInputs.zkey, "zkey sentinel\n"],
+      [transcriptInputs.ptau, "ptau sentinel\n"],
+      [transcriptInputs.verifier, "verifier sentinel\n"],
+      [transcriptInputs.circuitSource, "circuit sentinel\n"],
+    ]) {
+      await mkdir(dirname(pathName), { recursive: true });
+      await writeFile(pathName, text);
+    }
+
+    const transcriptBaseArgs = [
+      "transcript-template",
+      "--bsc-network",
+      "testnet",
+      "--zkey",
+      transcriptInputs.zkey,
+      "--ptau",
+      transcriptInputs.ptau,
+      "--snarkjs-verifier-key",
+      transcriptInputs.verifier,
+      "--circuit-source",
+      transcriptInputs.circuitSource,
+      "--out-dir",
+      transcriptDir,
+      "--overwrite",
+      "true",
+    ];
+    await assert.rejects(
+      () =>
+        main([
+          ...transcriptBaseArgs,
+          "--r1cs",
+          transcriptInputs.r1cs,
+        ]),
+      /trusted setup transcript template must not be the same path as --r1cs/u,
+    );
+    await assert.rejects(
+      () =>
+        main([
+          ...transcriptBaseArgs,
+          "--r1cs",
+          transcriptInputs.safeR1cs,
+          "--out",
+          trustedSetupTranscriptPath,
+        ]),
+      /BSC Groth16 transcript template index must not write the same path as trusted setup transcript template/u,
+    );
+    assert.equal(await readFile(transcriptInputs.r1cs, "utf8"), "r1cs sentinel\n");
+    await assert.rejects(
+      () => readFile(reproducibleBuildTranscriptPath, "utf8"),
+      { code: "ENOENT" },
+    );
+
+    const candidateRoot = join(root, "candidate");
+    await mkdir(candidateRoot, { recursive: true });
+    const { result } = await writeAttestationRequestCandidate(candidateRoot, {
+      evidence: false,
+    });
+    const evidenceDir = join(root, "review-evidence");
+    const semanticReportPath = join(evidenceDir, "semantic-review-report.md");
+    await assert.rejects(
+      () =>
+        main([
+          "evidence-template",
+          "--manifest",
+          result.manifest,
+          "--out-dir",
+          evidenceDir,
+          "--out",
+          semanticReportPath,
+        ]),
+      /BSC Groth16 evidence template index must not write the same path as semantic review report template/u,
+    );
+    const manifestCollisionPath = semanticReportPath;
+    await mkdir(dirname(manifestCollisionPath), { recursive: true });
+    const manifestText = await readFile(result.manifest, "utf8");
+    await writeFile(manifestCollisionPath, manifestText);
+    await assert.rejects(
+      () =>
+        main([
+          "evidence-template",
+          "--manifest",
+          manifestCollisionPath,
+          "--out-dir",
+          evidenceDir,
+          "--overwrite",
+          "true",
+        ]),
+      /semantic review report template must not be the same path as --manifest/u,
+    );
+    assert.equal(await readFile(manifestCollisionPath, "utf8"), manifestText);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -4296,6 +4689,148 @@ test("handoff-bundle writes a hash-bound public readiness packet", async () => {
       staleVerifiedHandoff.referenceBlockers.join("\n"),
       /BSC Groth16 transcript template package sha256 must match handoff reference/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("handoff-bundle rejects output path collisions before reading artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-handoff-collision-"));
+  try {
+    const sentinelFiles = {
+      manifest: {
+        path: join(root, "material-manifest.json"),
+        bytes: "not a material manifest\n",
+      },
+      transcriptPackage: {
+        path: join(root, "transcript-template-package.json"),
+        bytes: "not a transcript package\n",
+      },
+      evidencePackage: {
+        path: join(root, "evidence-template-package.json"),
+        bytes: "not an evidence package\n",
+      },
+      requestPackage: {
+        path: join(root, "attestation-request.json"),
+        bytes: "not an attestation request\n",
+      },
+    };
+    for (const file of Object.values(sentinelFiles)) {
+      await writeFile(file.path, file.bytes);
+    }
+    const baseArgs = [
+      "handoff-bundle",
+      "--manifest",
+      sentinelFiles.manifest.path,
+      "--transcript-template-package",
+      sentinelFiles.transcriptPackage.path,
+      "--evidence-template-package",
+      sentinelFiles.evidencePackage.path,
+      "--request",
+      sentinelFiles.requestPackage.path,
+    ];
+    const cases = [
+      {
+        out: sentinelFiles.manifest.path,
+        pattern: /--out must not be the same path as --manifest/u,
+      },
+      {
+        out: sentinelFiles.transcriptPackage.path,
+        pattern:
+          /--out must not be the same path as --transcript-template-package/u,
+      },
+      {
+        out: sentinelFiles.evidencePackage.path,
+        pattern: /--out must not be the same path as --evidence-template-package/u,
+      },
+      {
+        out: sentinelFiles.requestPackage.path,
+        pattern: /--out must not be the same path as --request/u,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await assert.rejects(
+        () => main([...baseArgs, "--out", testCase.out]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("template writers reject malformed overwrite option values before replacing artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-overwrite-"));
+  try {
+    const { inputs, result } = await writeAttestationRequestCandidate(root, {
+      evidence: false,
+    });
+
+    for (const [index, overwrite] of malformedBooleanOptionValues.entries()) {
+      const transcriptDir = join(root, `transcript-overwrite-${index}`);
+      const transcriptOut = join(root, `transcript-index-${index}.json`);
+      const transcriptSentinel = `transcript sentinel ${index}\n`;
+      await writeFile(transcriptOut, transcriptSentinel);
+      await assert.rejects(
+        () =>
+          writeBscGroth16TranscriptTemplates({
+            "bsc-network": "testnet",
+            r1cs: inputs.r1cs,
+            zkey: inputs.zkey,
+            ptau: inputs.ptau,
+            "snarkjs-verifier-key": inputs.verificationKeyPath,
+            "circuit-source": inputs.circuitSource,
+            "witness-wasm": inputs.witnessWasm,
+            "out-dir": transcriptDir,
+            out: transcriptOut,
+            overwrite,
+          }),
+        /--overwrite must be true or false/u,
+      );
+      assert.equal(await readFile(transcriptOut, "utf8"), transcriptSentinel);
+      await assert.rejects(
+        () => readFile(join(transcriptDir, "trusted-setup-transcript.json"), "utf8"),
+        { code: "ENOENT" },
+      );
+
+      const evidenceDir = join(root, `evidence-overwrite-${index}`);
+      const evidenceOut = join(root, `evidence-index-${index}.json`);
+      const evidenceSentinel = `evidence sentinel ${index}\n`;
+      await writeFile(evidenceOut, evidenceSentinel);
+      await assert.rejects(
+        () =>
+          writeBscGroth16EvidenceTemplates({
+            manifest: result.manifest,
+            "out-dir": evidenceDir,
+            out: evidenceOut,
+            overwrite,
+          }),
+        /--overwrite must be true or false/u,
+      );
+      assert.equal(await readFile(evidenceOut, "utf8"), evidenceSentinel);
+      await assert.rejects(
+        () => readFile(join(evidenceDir, "semantic-review-report.md"), "utf8"),
+        { code: "ENOENT" },
+      );
+
+      const handoffOut = join(root, `handoff-${index}.json`);
+      const handoffSentinel = `handoff sentinel ${index}\n`;
+      await writeFile(handoffOut, handoffSentinel);
+      await assert.rejects(
+        () =>
+          writeBscGroth16AttestationHandoff({
+            manifest: result.manifest,
+            out: handoffOut,
+            overwrite,
+          }),
+        /--overwrite must be true or false/u,
+      );
+      assert.equal(await readFile(handoffOut, "utf8"), handoffSentinel);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -5505,6 +6040,31 @@ test("sign-attestation refuses request package shadow fields and duplicate alias
 test("sign-attestation refuses mismatched fingerprints, non-Ed25519 keys, and key overwrite outputs", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-sign-key-"));
   try {
+    const sentinelRequestPath = join(root, "sentinel-request.json");
+    const sentinelPrivateKeyPath = join(root, "sentinel-key.pem");
+    const sentinelRequestBytes = "not an attestation request package\n";
+    const sentinelPrivateKeyBytes = "not an Ed25519 private key\n";
+    await writeFile(sentinelRequestPath, sentinelRequestBytes);
+    await writeFile(sentinelPrivateKeyPath, sentinelPrivateKeyBytes);
+
+    await assert.rejects(
+      () =>
+        main([
+          "sign-attestation",
+          "--request",
+          sentinelRequestPath,
+          "--role",
+          "semantic",
+          "--private-key-pem",
+          sentinelPrivateKeyPath,
+          "--out",
+          sentinelRequestPath,
+        ]),
+      /--out must not be the same path as --request/u,
+    );
+    assert.equal(await readFile(sentinelRequestPath, "utf8"), sentinelRequestBytes);
+    assert.equal(await readFile(sentinelPrivateKeyPath, "utf8"), sentinelPrivateKeyBytes);
+
     const { result } = await writeAttestationRequestCandidate(root);
     const requestPath = join(root, "request.json");
     const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
@@ -6287,6 +6847,110 @@ test("proof-self-test writes a manifest-bound SnarkJS proof report", async () =>
   }
 });
 
+test("proof-self-test rejects output path collisions before parsing artifacts or running SnarkJS", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-collision-"));
+  try {
+    const sentinelFiles = {
+      manifest: {
+        path: join(root, "material-manifest.json"),
+        bytes: "not a material manifest\n",
+      },
+      witnessWasm: {
+        path: join(root, "witness.wasm"),
+        bytes: "not witness wasm\n",
+      },
+    };
+    for (const file of Object.values(sentinelFiles)) {
+      await writeFile(file.path, file.bytes);
+    }
+
+    for (const testCase of [
+      {
+        out: sentinelFiles.manifest.path,
+        pattern: /--out must not be the same path as --manifest/u,
+      },
+      {
+        out: sentinelFiles.witnessWasm.path,
+        pattern: /--out must not be the same path as --witness-wasm/u,
+      },
+    ]) {
+      await assert.rejects(
+        () =>
+          main([
+            "proof-self-test",
+            "--manifest",
+            sentinelFiles.manifest.path,
+            "--witness-wasm",
+            sentinelFiles.witnessWasm.path,
+            "--out",
+            testCase.out,
+          ]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
+
+    const candidateRoot = join(root, "candidate");
+    const candidate = await writePreflightCandidate(candidateRoot);
+    const witnessWasm = join(
+      candidate.outDir,
+      `${BSC_FULL_SCCP_CIRCUIT_PROFILE}_js`,
+      `${BSC_FULL_SCCP_CIRCUIT_PROFILE}.wasm`,
+    );
+    const artifactCases = [
+      {
+        out: candidate.circuitSource,
+        label: "material manifest circuitSource",
+      },
+      {
+        out: candidate.r1cs,
+        label: "material manifest r1cs",
+      },
+      {
+        out: candidate.zkey,
+        label: "material manifest provingKey",
+      },
+      {
+        out: candidate.snarkjsVerificationKey,
+        label: "material manifest snarkjsVerificationKey",
+      },
+      {
+        out: candidate.bscVerifierKey,
+        label: "material manifest bscVerifierKey",
+      },
+    ];
+    const artifactBytes = new Map(
+      await Promise.all(
+        artifactCases.map(async (testCase) => [
+          testCase.out,
+          await readFile(testCase.out),
+        ]),
+      ),
+    );
+
+    for (const testCase of artifactCases) {
+      await assert.rejects(
+        () =>
+          main([
+            "proof-self-test",
+            "--manifest",
+            candidate.manifest,
+            "--witness-wasm",
+            witnessWasm,
+            "--out",
+            testCase.out,
+          ]),
+        new RegExp(`--out must not be the same path as ${testCase.label}`, "u"),
+      );
+      assert.deepEqual(await readFile(testCase.out), artifactBytes.get(testCase.out));
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("proof-self-test rejects manifests that are not production-ready", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-unready-"));
   try {
@@ -6513,6 +7177,36 @@ test("proof-self-test refuses mainnet candidate flag on testnet reports", async 
         ]),
       /--allow-unready-mainnet-candidate is only allowed for mainnet candidate proof reports/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("proof-self-test rejects malformed unready-candidate boolean options", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-boolean-"));
+  try {
+    const candidate = await writePreflightCandidate(root, {
+      manifest: {
+        productionReady: false,
+        productionBlockers: ["candidate awaits external ceremony attestations"],
+      },
+    });
+
+    for (const key of [
+      "allow-unready-candidate",
+      "allow-unready-mainnet-candidate",
+    ]) {
+      for (const value of malformedBooleanOptionValues) {
+        await assert.rejects(
+          () =>
+            runBscGroth16ProofSelfTest({
+              manifest: candidate.manifest,
+              [key]: value,
+            }),
+          new RegExp(`--${key} must be true or false`, "u"),
+        );
+      }
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -6938,6 +7632,86 @@ test("finalize-attestations materializes production-ready manifests from signed 
       finalized.requestSignedPayloadSha256,
       requestResult.signedPayloadSha256,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("finalize-attestations rejects out-dir collisions before reading signed inputs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-finalize-collision-"));
+  try {
+    const sentinelFiles = {
+      request: {
+        path: join(root, "request.json"),
+        bytes: "not an attestation request package\n",
+      },
+      semantic: {
+        path: join(root, "semantic-attestation.json"),
+        bytes: "not a semantic attestation\n",
+      },
+      security: {
+        path: join(root, "security-attestation.json"),
+        bytes: "not a security attestation\n",
+      },
+      setup: {
+        path: join(root, "setup-attestation.json"),
+        bytes: "not a setup attestation\n",
+      },
+      reproducible: {
+        path: join(root, "reproducible-attestation.json"),
+        bytes: "not a reproducible attestation\n",
+      },
+    };
+    for (const file of Object.values(sentinelFiles)) {
+      await writeFile(file.path, file.bytes);
+    }
+    const baseArgs = [
+      "finalize-attestations",
+      "--request",
+      sentinelFiles.request.path,
+      "--semantic-attestation",
+      sentinelFiles.semantic.path,
+      "--circuit-security-attestation",
+      sentinelFiles.security.path,
+      "--trusted-setup-attestation",
+      sentinelFiles.setup.path,
+      "--reproducible-build-attestation",
+      sentinelFiles.reproducible.path,
+    ];
+    const cases = [
+      {
+        outDir: sentinelFiles.request.path,
+        pattern: /--out-dir must not be the same path as --request/u,
+      },
+      {
+        outDir: sentinelFiles.semantic.path,
+        pattern: /--out-dir must not be the same path as --semantic-attestation/u,
+      },
+      {
+        outDir: sentinelFiles.security.path,
+        pattern:
+          /--out-dir must not be the same path as --circuit-security-attestation/u,
+      },
+      {
+        outDir: sentinelFiles.setup.path,
+        pattern: /--out-dir must not be the same path as --trusted-setup-attestation/u,
+      },
+      {
+        outDir: sentinelFiles.reproducible.path,
+        pattern:
+          /--out-dir must not be the same path as --reproducible-build-attestation/u,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await assert.rejects(
+        () => main([...baseArgs, "--out-dir", testCase.outDir]),
+        testCase.pattern,
+      );
+      for (const file of Object.values(sentinelFiles)) {
+        assert.equal(await readFile(file.path, "utf8"), file.bytes);
+      }
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

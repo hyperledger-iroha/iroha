@@ -346,8 +346,11 @@ P2pRefreshIdleSkipExact ==
   \A c \in IdleSkipCases:
     ActualCase(c) = SpecCase(c)
 
+P2pTopologyRefreshOutputMatches ==
+  ActualOutput = SpecOutput
+
 P2pTopologyRefreshExactness ==
-  /\ ActualOutput = SpecOutput
+  /\ P2pTopologyRefreshOutputMatches
   /\ P2pRefreshDecisionExact
   /\ P2pRefreshAdvertisementExact
   /\ P2pRefreshLocalRemovalExact

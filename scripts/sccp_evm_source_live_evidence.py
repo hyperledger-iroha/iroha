@@ -47,6 +47,8 @@ PUBLIC_SUMMARY_FIELDS = (
 def default_block_tag_for_domain(domain: int) -> str:
     """Return the default live-code block tag for an EVM-family source lane."""
 
+    if type(domain) is not int:
+        raise argparse.ArgumentTypeError("domain must be an EVM-family source lane")
     return "finalized" if domain == SCCP_DOMAIN_ETH else "latest"
 
 
@@ -114,7 +116,7 @@ def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -344,7 +346,8 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
-    if decoded.get("id") != 1:
+    response_id = decoded.get("id")
+    if type(response_id) is not int or response_id != 1:
         raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
@@ -383,7 +386,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
     try:
         return bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"{method} returned non-canonical lowercase 0x hex data"
         ) from None
@@ -396,6 +399,9 @@ def _rpc_fixed_hex_data(
     byte_length: int,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("EVM source-live RPC fixed hex nonzero must be a boolean")
+
     raw = _rpc_hex_data(result, method=method)
     if len(raw) != byte_length:
         raise RuntimeError(f"{method} returned {len(raw)} bytes; expected {byte_length}")
@@ -417,7 +423,7 @@ def _guarded_rpc_fixed_hex_data(
             method=method,
             byte_length=byte_length,
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(blocker) from None
 
 
@@ -1118,7 +1124,11 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
             f"EVM source RPC chain id metadata must be {expected_rpc_chain_id} "
             f"for {expected_chain}"
         )
-    if source_bridge.get("expected_rpc_chain_id") != expected_rpc_chain_id:
+    source_expected_rpc_chain_id = source_bridge.get("expected_rpc_chain_id")
+    if (
+        type(source_expected_rpc_chain_id) is not int
+        or source_expected_rpc_chain_id != expected_rpc_chain_id
+    ):
         raise ValueError("expected source RPC chain id metadata must match the lane")
 
     evidence = _load_evidence_module(domain)
@@ -1388,8 +1398,10 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     if not isinstance(source_bridge, dict):
         return ["source bridge evidence"]
     missing: list[str] = []
+    source_domain = source_bridge.get("domain")
+    is_eth_source = type(source_domain) is int and source_domain == SCCP_DOMAIN_ETH
     if (
-        source_bridge.get("domain") == SCCP_DOMAIN_ETH
+        is_eth_source
         and summary.get("block_tag") != "finalized"
     ):
         missing.append("--block-tag finalized")
@@ -1409,7 +1421,7 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
         if source_bridge.get("deployment_transaction_contract_creation") is not True:
             missing.append("deployment transaction contract-creation verification")
         if (
-            source_bridge.get("domain") == SCCP_DOMAIN_ETH
+            is_eth_source
             and source_bridge.get("deployment_receipt_block_finalized") is not True
         ):
             missing.append("deployment receipt finality verification")
@@ -1421,7 +1433,7 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
             and source_bridge.get("deployment_transaction_block_matches") is True
             and source_bridge.get("deployment_transaction_contract_creation") is True
             and (
-                source_bridge.get("domain") != SCCP_DOMAIN_ETH
+                not is_eth_source
                 or source_bridge.get("deployment_receipt_block_finalized") is True
             )
             and not _source_bridge_deployment_receipt_is_verified(source_bridge)
@@ -1776,13 +1788,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

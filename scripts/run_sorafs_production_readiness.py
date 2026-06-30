@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -19,6 +20,7 @@ from check_sorafs_production_readiness import (  # noqa: E402
     DEFAULT_REQUIRED_GATES,
     GATE_BY_NAME,
     SUMMARY_SCHEMA,
+    canonical_string,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_gates,
@@ -36,9 +38,25 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_existing_files,
     require_runner_non_negative_int,
     require_runner_positive_int,
+    render_runner_plan,
     run_command_plan,
     validate_runner_preflight,
     write_runner_plan,
+)
+
+
+PLAN_SCHEMA = "sorafs.production_readiness.collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "required_gates",
+        "thresholds",
+        "deployment_context",
+        "external_summaries",
+        "summary_contract",
+        "steps",
+    }
 )
 
 
@@ -116,6 +134,10 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append(
                 "missing required production readiness summary input"
             )
+        elif len(paths) > 1:
+            errors.append(
+                "production readiness runner requires exactly one summary input per required gate"
+            )
     required_gate_names = set(args.required_gates)
     for gate, paths in paths_by_gate.items():
         if paths and gate not in required_gate_names:
@@ -132,6 +154,17 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         )
     require_runner_positive_int(args, "now_unix", errors, allow_none=True)
     require_runner_non_negative_int(args, "max_summary_artifact_age_secs", errors)
+    if args.deployment_id is None or args.environment is None:
+        errors.append(
+            "production readiness runner requires --deployment-id and --environment"
+        )
+    elif (
+        canonical_string(args.deployment_id) is None
+        or canonical_string(args.environment) is None
+    ):
+        errors.append(
+            "production readiness runner deployment context must use canonical labels"
+        )
     return errors
 
 
@@ -181,7 +214,7 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         deployment_context["environment"] = args.environment
 
     return {
-        "schema": "sorafs.production_readiness.collection_plan.v1",
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "required_gates": list(args.required_gates),
         "thresholds": thresholds,
@@ -207,6 +240,100 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the production-readiness collection-plan envelope."""
+
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return ["production readiness runner plan must be an object"]
+    if set(rendered) != PLAN_FIELDS:
+        errors.append(
+            "production readiness runner plan fields must match the schema-closed contract"
+        )
+    if rendered.get("schema") != PLAN_SCHEMA:
+        errors.append("production readiness runner plan schema must match the contract")
+    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
+        errors.append(
+            "production readiness runner plan verifier schema must match aggregate schema"
+        )
+    required_gates = list(args.required_gates)
+    if rendered.get("required_gates") != required_gates:
+        errors.append("production readiness runner plan required_gates must match args")
+
+    thresholds = rendered.get("thresholds")
+    expected_thresholds: dict[str, int] = {
+        "max_summary_artifact_age_secs": args.max_summary_artifact_age_secs,
+    }
+    if args.now_unix is not None:
+        expected_thresholds["now_unix"] = args.now_unix
+    if thresholds != expected_thresholds:
+        errors.append("production readiness runner plan thresholds must match args")
+
+    deployment_context = rendered.get("deployment_context")
+    expected_deployment_context = {
+        "deployment_id": args.deployment_id,
+        "environment": args.environment,
+    }
+    if deployment_context != expected_deployment_context:
+        errors.append(
+            "production readiness runner plan deployment_context must match args"
+        )
+    elif any(
+        canonical_string(value) is None
+        for value in expected_deployment_context.values()
+    ):
+        errors.append(
+            "production readiness runner plan deployment_context must be canonical"
+        )
+
+    external_summaries = rendered.get("external_summaries")
+    paths_by_gate = summary_paths_by_gate(args)
+    expected_external_summaries = {
+        gate: [str(paths[0])]
+        for gate, paths in paths_by_gate.items()
+        if gate in required_gates and len(paths) == 1
+    }
+    if external_summaries != expected_external_summaries:
+        errors.append(
+            "production readiness runner plan external_summaries must contain exactly one summary per required gate"
+        )
+
+    summary_contract = rendered.get("summary_contract")
+    expected_summary_contract = {
+        gate: {
+            "schema": GATE_BY_NAME[gate].schema,
+            "required_kinds": list(GATE_BY_NAME[gate].required_kinds),
+        }
+        for gate in required_gates
+    }
+    if summary_contract != expected_summary_contract:
+        errors.append(
+            "production readiness runner plan summary_contract must match required gates"
+        )
+
+    expected_steps = [
+        {
+            "label": step.label,
+            "artifact": None if step.artifact is None else str(step.artifact),
+            "command": step.command,
+        }
+        for step in plan
+    ]
+    if rendered.get("steps") != expected_steps:
+        errors.append("production readiness runner plan steps must match command plan")
+    try:
+        render_runner_plan(rendered)
+    except (TypeError, ValueError):
+        errors.append(
+            "production readiness runner plan must be strict JSON renderable"
+        )
+    return errors
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -297,6 +424,10 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     rendered_plan = plan_json(plan, args)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
+    if plan_errors:
+        emit_runner_error_lines(plan_errors)
+        return 2
     if args.dry_run:
         render_errors = write_runner_plan(rendered_plan)
         if render_errors:

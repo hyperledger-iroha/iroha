@@ -69,6 +69,41 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
+    func testValidateRequiresCanonicalDataspaceScopeSuffix() throws {
+        let authority = try i105(seed: 2)
+        XCTAssertNoThrow(
+            try TransactionInputValidator.validate(chainId: "0000",
+                                                   authorityId: authority,
+                                                   assetDefinitionId: "\(sampleAid)#dataspace:0")
+        )
+        XCTAssertNoThrow(
+            try TransactionInputValidator.validate(chainId: "0000",
+                                                   authorityId: authority,
+                                                   assetDefinitionId: "\(sampleAid)#dataspace:42")
+        )
+
+        for suffix in [
+            "dataspace:",
+            "dataspace:+1",
+            "dataspace:01",
+            "dataspace:-1",
+            "dataspace:1.0",
+            "DATASPACE:1",
+            "dataspace:18446744073709551616",
+        ] {
+            let value = "\(sampleAid)#\(suffix)"
+            XCTAssertThrowsError(
+                try TransactionInputValidator.validate(chainId: "0000",
+                                                       authorityId: authority,
+                                                       assetDefinitionId: value),
+                "Expected non-canonical dataspace scope to fail: \(suffix)"
+            ) { error in
+                XCTAssertEqual(error as? TransactionInputError,
+                               .malformedAssetDefinitionId(value))
+            }
+        }
+    }
+
     func testAssetDefinitionAddressCodecRejectsInvalidChecksum() {
         XCTAssertEqual(
             AssetDefinitionAddressCodec.canonicalDefinitionLiteral(" \(sampleAid) "),

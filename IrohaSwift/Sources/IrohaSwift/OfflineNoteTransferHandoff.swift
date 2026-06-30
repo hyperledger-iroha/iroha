@@ -238,18 +238,17 @@ public enum OfflineNoteTransferTextPayloadCodec {
         _ value: String,
         expectedKind: OfflineNoteTextPayloadKind? = nil
     ) throws -> (kind: OfflineNoteTextPayloadKind, payload: Data) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let kind: OfflineNoteTextPayloadKind
         let encoded: Substring
-        if trimmed.hasPrefix(receiveRequestPrefix) {
+        if value.hasPrefix(receiveRequestPrefix) {
             kind = .receiveRequest
-            encoded = trimmed.dropFirst(receiveRequestPrefix.count)
-        } else if trimmed.hasPrefix(paymentTokenPrefix) {
+            encoded = value.dropFirst(receiveRequestPrefix.count)
+        } else if value.hasPrefix(paymentTokenPrefix) {
             kind = .paymentToken
-            encoded = trimmed.dropFirst(paymentTokenPrefix.count)
-        } else if trimmed.hasPrefix(receiptAckPrefix) {
+            encoded = value.dropFirst(paymentTokenPrefix.count)
+        } else if value.hasPrefix(receiptAckPrefix) {
             kind = .receiptAck
-            encoded = trimmed.dropFirst(receiptAckPrefix.count)
+            encoded = value.dropFirst(receiptAckPrefix.count)
         } else {
             throw OfflineNoteTransferTextPayloadCodecError.unknownPrefix
         }
@@ -278,17 +277,21 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     public static func payloadKind(for value: String) -> OfflineQrPayloadKind {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix(receiveRequestPrefix) {
+        if hasExactTextPayload(value, prefix: receiveRequestPrefix) {
             return OfflineNoteTextPayloadKind.receiveRequest.qrPayloadKind
         }
-        if trimmed.hasPrefix(paymentTokenPrefix) {
+        if hasExactTextPayload(value, prefix: paymentTokenPrefix) {
             return OfflineNoteTextPayloadKind.paymentToken.qrPayloadKind
         }
-        if trimmed.hasPrefix(receiptAckPrefix) {
+        if hasExactTextPayload(value, prefix: receiptAckPrefix) {
             return OfflineNoteTextPayloadKind.receiptAck.qrPayloadKind
         }
         return .unspecified
+    }
+
+    private static func hasExactTextPayload(_ value: String, prefix: String) -> Bool {
+        guard value.hasPrefix(prefix) else { return false }
+        return base64UrlDecode(String(value.dropFirst(prefix.count))) != nil
     }
 
     private static func validateReceiveRequest(_ value: String) throws {
@@ -321,7 +324,8 @@ public enum OfflineNoteTransferTextPayloadCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains("="),
               value.unicodeScalars.allSatisfy({ scalar in
                   let byte = scalar.value

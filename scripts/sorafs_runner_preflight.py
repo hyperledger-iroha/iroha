@@ -694,6 +694,35 @@ def validate_command_plan_step_shapes(plan: Any) -> list[str]:
     return errors
 
 
+def validate_runner_plan_steps(rendered_plan: Any, command_plan: Any) -> list[str]:
+    """Validate rendered collection-plan steps against the command plan."""
+
+    if not isinstance(rendered_plan, Mapping):
+        return ["runner plan must be an object"]
+    command_steps = command_plan_steps(command_plan)
+    if command_steps is None or validate_command_plan_step_shapes(command_plan):
+        return [COMMAND_PLAN_SHAPE_DIAGNOSTIC]
+    expected_steps: list[dict[str, object]] = []
+    for step in command_steps:
+        artifact = getattr(step, "artifact", None)
+        expected_steps.append(
+            {
+                "label": getattr(step, "label"),
+                "artifact": None if artifact is None else str(artifact),
+                "command": getattr(step, "command"),
+            }
+        )
+    if rendered_plan.get("steps") != expected_steps:
+        return ["runner plan steps must match command plan"]
+    try:
+        render_runner_plan(rendered_plan)
+    except (TypeError, ValueError) as error:
+        return [
+            f"failed to render runner plan JSON: {error_diagnostic_label(error)}"
+        ]
+    return []
+
+
 def runner_arg_label(field: str) -> str:
     """Return the CLI option label for an argparse namespace field."""
 

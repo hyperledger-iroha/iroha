@@ -251,6 +251,30 @@ def full_toml_args(material):
     )
 
 
+def test_evm_destination_json_summary_rejects_non_boolean_runtime_readiness(
+    monkeypatch,
+) -> None:
+    """Runtime-bytecode readiness helper drift must not coerce into TOML readiness."""
+
+    module = load_evidence_module()
+    material = evm_runtime_material(module, domain=1)
+    args = full_toml_args(material)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_runtime_bytecode_evidence_ready", lambda _args: "ready")
+        try:
+            module._json_summary(args, material.destination_binding_hash, True)
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "EVM destination runtime bytecode readiness must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "EVM destination JSON summary accepted non-boolean runtime readiness"
+            )
+
+
 def test_evm_destination_domain_parser_accepts_eth_and_bsc_only():
     module = load_evidence_module()
 
@@ -467,10 +491,45 @@ def test_evm_destination_direct_parsers_redact_parser_causes(tmp_path):
         raise AssertionError("missing secret EVM destination runtime file was accepted")
 
 
+def test_evm_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
+    module = load_evidence_module()
+    outside = tmp_path / "secret-token-evm-runtime-outside.hex"
+    outside.write_text("0x6080604052\n", encoding="utf-8")
+    symlink_input = tmp_path / "secret-token-evm-runtime-link.hex"
+    symlink_input.symlink_to(outside)
+    directory_input = tmp_path / "secret-token-evm-runtime-dir.hex"
+    directory_input.mkdir()
+    missing_input = tmp_path / "secret-token-evm-runtime-missing.hex"
+
+    for path in (symlink_input, directory_input, missing_input):
+        try:
+            module.parse_runtime_bytecode_file(
+                str(path),
+                label="bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            suppress_context = exc.__suppress_context__
+        else:
+            raise AssertionError("EVM runtime bytecode file shape was accepted")
+
+        assert rendered == "bridge runtime bytecode file cannot be read"
+        assert "secret-token" not in rendered
+        assert "IsADirectoryError" not in rendered
+        assert "FileNotFoundError" not in rendered
+        assert suppress_context is True
+
+
 def test_evm_destination_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token EVM destination hex TypeError detail"
             if exception_type is TypeError
@@ -506,12 +565,114 @@ def test_evm_destination_direct_parsers_redact_helper_exit_parser_causes(monkeyp
                     assert rendered == f"{label} must be hex"
                     assert "secret-token" not in rendered
                     assert exception_type.__name__ not in rendered
+                    if exception_type is module.argparse.ArgumentTypeError:
+                        assert (
+                            "ArgumentTypeError" not in rendered
+                        ), "EVM destination hex ArgumentTypeError detail leaked"
                     assert exc.__cause__ is None
                     assert exc.__suppress_context__ is True
                 else:
                     raise AssertionError(
                         f"{label} parser {exception_type.__name__} was accepted"
                     )
+
+
+def test_evm_destination_nonzero_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="network id",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "EVM destination fixed hex nonzero must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed EVM destination fixed-hex nonzero control accepted"
+            )
+
+        try:
+            module._require_fixed_bytes(
+                bytes(32),
+                label="network_id",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "EVM destination fixed bytes nonzero must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed EVM destination fixed-bytes nonzero control accepted"
+            )
+
+
+def test_evm_destination_boolean_controls_reject_non_booleans():
+    module = load_evidence_module()
+    material = evm_runtime_material(module)
+    args = full_toml_args(material)
+
+    route_canary_kwargs = {
+        "route_allowlist_hash": material.route_allowlist_hash,
+        "bridge_address": material.bridge_address,
+        "transaction_hash": material.route_canary_transaction_hash,
+        "log_index": material.route_canary_log_index,
+        "receipt_block_number": material.route_canary_receipt_block_number,
+        "receipt_block_hash": material.route_canary_receipt_block_hash,
+        "block_receipts_root": material.route_canary_block_receipts_root,
+        "call_data_sha256": material.route_canary_call_data_sha256,
+        "message_id": material.route_canary_message_id,
+        "payload_hash": material.route_canary_payload_hash,
+        "source_domain": module.SCCP_DOMAIN_SORA,
+        "target_domain": material.domain,
+        "commitment_root": material.route_canary_commitment_root,
+        "finality_height": material.route_canary_finality_height,
+        "finality_block_hash": material.route_canary_finality_block_hash,
+        "statement_hash": material.route_canary_statement_hash,
+        "proof_version": material.route_canary_proof_version,
+        "proof_source_domain": material.route_canary_proof_source_domain,
+        "destination_binding_hash": material.destination_binding_hash,
+        "verifier_backend_hash": module.evm_verifier_backend_hash(),
+        "proof_family_hash": module.evm_proof_family_hash(),
+        "network_id": material.network_id,
+        "receipt_block_finalized": True,
+        "bsc_network": material.bsc_network,
+    }
+
+    for control in (1, "true", None):
+        try:
+            module.evm_route_canary_transaction_evidence_hash(
+                used_message_proof=control,
+                **route_canary_kwargs,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "used_message_proof must be a boolean for EVM route canaries"
+            )
+        else:
+            raise AssertionError(
+                "malformed EVM route-canary used-message-proof control accepted"
+            )
+
+        try:
+            module._json_summary(
+                args,
+                material.destination_binding_hash,
+                control,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "EVM destination JSON expected_matches must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed EVM destination JSON expected-matches control accepted"
+            )
 
 
 def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
@@ -1876,6 +2037,9 @@ def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail():
             assert "secret-token" not in rendered
             assert "must be hex" not in rendered
             assert exc.__cause__ is None
+            assert (
+                exc.__suppress_context__ is True
+            ), "EVM destination runtime metadata context leaked"
         else:
             raise AssertionError(
                 "invalid copied EVM runtime bytecode evidence was accepted"

@@ -175,13 +175,16 @@ QcVerifyWorkerQueueCapsExact ==
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
 
+QcVerifyWorkerOutputMatches ==
+  ActualOutput = SpecOutput
+
 QcVerifyWorkerConfigExactness ==
-  /\ ActualOutput = SpecOutput
+  /\ QcVerifyWorkerOutputMatches
   /\ QcVerifyWorkerThreadsExact
   /\ QcVerifyWorkerQueueCapsExact
 
 QcVerifyWorkerConfigFastSafety ==
-  /\ ActualOutput = SpecOutput
+  /\ QcVerifyWorkerOutputMatches
   /\ AutoThreadsUseAvailable
   /\ ExplicitThreadsPreserved
   /\ ZeroWorkCapDerivation

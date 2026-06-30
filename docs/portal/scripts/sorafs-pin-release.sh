@@ -47,7 +47,7 @@ append_asset_descriptor() {
   local car_path="${18}"
   local plan_path="${19}"
   python3 - "$target" <<'PY'
-import json, sys, pathlib
+import json, os, pathlib, stat, sys
 
 (
     path,
@@ -93,16 +93,80 @@ entry = {
 }
 
 target = pathlib.Path(path)
-if target.exists():
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def fail(message: str) -> None:
+    raise SystemExit(f"sorafs pin release descriptor {message}")
+
+def validate_descriptor_path(path: pathlib.Path) -> None:
     try:
-        existing = json.loads(target.read_text(encoding="utf-8"))
+        if path.is_symlink():
+            fail(f"`{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                fail(f"parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                fail(f"parent `{parent}` must be a directory")
+    except OSError as exc:
+        fail(f"`{path}` could not be inspected: {exc}")
+
+def read_descriptor(path: pathlib.Path):
+    validate_descriptor_path(path)
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return []
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(f"`{path}` must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            fail(f"`{path}` must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return json.load(handle)
     except json.JSONDecodeError as exc:  # pragma: no cover
         raise SystemExit(f"failed to parse {path}: {exc}") from exc
-else:
-    existing = []
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS pin release descriptor")
+        view = view[written:]
+
+def write_descriptor(path: pathlib.Path, payload) -> None:
+    validate_descriptor_path(path)
+    rendered = json.dumps(payload, indent=2, allow_nan=False).encode("utf-8")
+    fd = os.open(path, write_open_flags(), 0o666)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            fail(f"`{path}` must be a regular file")
+        write_all(fd, rendered)
+    finally:
+        os.close(fd)
+
+existing = read_descriptor(target)
+if not isinstance(existing, list):
+    fail(f"`{target}` must contain a JSON array")
 
 existing.append(entry)
-target.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+write_descriptor(target, existing)
 PY
 }
 

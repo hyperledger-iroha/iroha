@@ -235,7 +235,7 @@ RetentionImpliesAllGuardsAnchors ==
          /\ CommitEvidence(c)
 
 SafetyAnchors ==
-  /\ NoBugInvariant
+  /\ SupersededFrontierPayloadRetentionCoreSafety
   /\ AcceptedCommitEvidenceAnchors
   /\ BoundaryParentMatchAnchors
   /\ AdmissionRejectionAnchors

@@ -251,7 +251,7 @@ ActualEvidenceAttached(c) == ActualOutput(c)[10]
 ActualPreviousRosterRecovery(c) == ActualOutput(c)[11]
 
 AllFinalizeCasesMatchSpec ==
-  ValidationFailureFinalizeMatchesSpec
+  /\ ValidationFailureFinalizeMatchesSpec
 
 PrevHeightDeferralBoundaryAnchors ==
   /\ ActualKind("future_prev_height") = "deferred"
@@ -317,7 +317,7 @@ CleanupAnchorCases ==
   /\ ActualQcCacheCleared("signature")
 
 SafetyAnchors ==
-  /\ AllFinalizeCasesMatchSpec
+  /\ ValidationFailureFinalizeMatchesSpec
   /\ PrevHeightDeferralBoundaryAnchors
   /\ DeferredCasesSuppressInvalidSideEffects
   /\ InvalidCasesRunCleanupAnchors

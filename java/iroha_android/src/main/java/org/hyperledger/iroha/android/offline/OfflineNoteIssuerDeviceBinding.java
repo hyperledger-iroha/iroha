@@ -19,8 +19,8 @@ public final class OfflineNoteIssuerDeviceBinding {
       final String deviceId,
       final String offlinePublicKey,
       final Map<String, Object> deviceBinding) {
-    this.deviceId = requireNonBlank(deviceId, "deviceId");
-    this.offlinePublicKey = requireNonBlank(offlinePublicKey, "offlinePublicKey");
+    this.deviceId = requireExactNonEmptyText(deviceId, "deviceId");
+    this.offlinePublicKey = requireExactNonEmptyText(offlinePublicKey, "offlinePublicKey");
     rejectRetiredDeviceBindingAliases(Objects.requireNonNull(deviceBinding, "deviceBinding"));
     this.deviceBinding = deepCopyObject(deviceBinding);
     final Object bindingDeviceId = this.deviceBinding.get("device_id");
@@ -44,8 +44,15 @@ public final class OfflineNoteIssuerDeviceBinding {
 
   public String attestationKeyId() {
     final Object keyId = deviceBinding.get("attestation_key_id");
-    if (keyId instanceof String value && !value.trim().isEmpty()) {
-      return value.trim();
+    if (keyId instanceof String value) {
+      if (value.isEmpty()) {
+        throw new IllegalStateException("device_binding.attestation_key_id is required");
+      }
+      if (!isExactNonEmptyText(value)) {
+        throw new IllegalStateException(
+            "device_binding.attestation_key_id must be exact non-empty text");
+      }
+      return value;
     }
     throw new IllegalStateException("device_binding.attestation_key_id is required");
   }
@@ -99,10 +106,14 @@ public final class OfflineNoteIssuerDeviceBinding {
     throw new IllegalStateException("Unsupported JSON value: " + value.getClass());
   }
 
-  private static String requireNonBlank(final String value, final String field) {
-    if (value == null || value.trim().isEmpty()) {
-      throw new IllegalArgumentException(field + " must not be blank");
+  private static String requireExactNonEmptyText(final String value, final String field) {
+    if (value == null || !isExactNonEmptyText(value)) {
+      throw new IllegalArgumentException(field + " must be exact non-empty text");
     }
     return value;
+  }
+
+  private static boolean isExactNonEmptyText(final String value) {
+    return !value.isEmpty() && value.equals(value.trim());
   }
 }

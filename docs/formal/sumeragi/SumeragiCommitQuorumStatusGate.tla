@@ -391,8 +391,7 @@ SafetyAnchors ==
   /\ TypedProjectionAnchors
 
 CommitQuorumStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllCommitQuorumStatusCandidatesMatchSpec
   /\ SafetyAnchors
 
 CommitQuorumStatusCorrectnessEnvelope ==

@@ -689,10 +689,10 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
 /**
  * Derive the confidential v2 owner tag from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
- * @param {{diversifierHex?: string, diversifier?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
+ * @param {{diversifierHex: string}} options
  * @returns {Buffer}
  */
-export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {
+export function deriveConfidentialOwnerTagV2(spendKey, options) {
   const native = ensureConfidentialV2Native(
     resolveNativeBinding(),
     "deriveConfidentialOwnerTagV2",
@@ -701,13 +701,13 @@ export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {
   if (spendKeyBuffer.length !== 32) {
     throw new Error("confidential spend key must be 32 bytes");
   }
-  const diversifierHex =
-    options?.diversifierHex !== undefined || options?.diversifier !== undefined
-      ? normalizeFixed32HexInput(
-          options.diversifierHex ?? options.diversifier,
-          "diversifier",
-        )
-      : undefined;
+  if (options?.diversifier !== undefined) {
+    throw new Error("diversifier must use canonical diversifierHex");
+  }
+  if (options?.diversifierHex === undefined) {
+    throw new Error("diversifier is required");
+  }
+  const diversifierHex = normalizeFixed32HexInput(options.diversifierHex, "diversifier");
   return Buffer.from(native.deriveConfidentialOwnerTagV2(spendKeyBuffer, diversifierHex));
 }
 

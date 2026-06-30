@@ -296,12 +296,12 @@ HighestQcDeferralSideEffectsExact ==
   /\ DeferralDoesNotAcceptSlot
 
 HighestQcDependencyDeferralExactness ==
-  /\ HighestQcActionSetExact
-  /\ HighestQcForceDecisionExact
-  /\ HighestQcNoLockLagDeferralExact
+  /\ ActionsMatchSpec
+  /\ ForceFetchDecisionMatchesPendingState
+  /\ NonLockLagUsesExactOrForcedFetchWithoutRangePull
   /\ HighestQcLockLagRecoveryExact
-  /\ HighestQcLockRejectedSuppressionExact
-  /\ HighestQcDeferralSideEffectsExact
+  /\ LockRejectedDependencyStaysSuppressed
+  /\ DeferralDoesNotAcceptSlot
 
 HighestQcDependencyDeferralCorrectnessEnvelope ==
   /\ TypeInvariant

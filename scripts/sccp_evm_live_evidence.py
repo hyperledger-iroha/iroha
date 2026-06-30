@@ -218,6 +218,8 @@ def parse_block_tag(value: str) -> str:
 
 
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
+    if type(domain) is not int:
+        raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id")
     try:
         return EXPECTED_RPC_CHAIN_IDS[domain]
     except (KeyError, SystemExit, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError):
@@ -229,6 +231,8 @@ def _default_rpc_chain_id_for_domain(domain: int) -> int:
 def default_block_tag_for_domain(domain: int) -> str:
     """Return the default live-read block tag for an EVM-family destination lane."""
 
+    if type(domain) is not int:
+        raise argparse.ArgumentTypeError("domain must be an EVM-family SCCP lane")
     return "finalized" if domain == evidence.SCCP_DOMAIN_ETH else "latest"
 
 
@@ -298,7 +302,8 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
-    if decoded.get("id") != 1:
+    response_id = decoded.get("id")
+    if type(response_id) is not int or response_id != 1:
         raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
@@ -322,7 +327,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
     try:
         return bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"{method} returned non-canonical lowercase 0x hex data"
         ) from None
@@ -344,6 +349,9 @@ def _rpc_quantity(result: Any, *, method: str) -> int:
 
 
 def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("EVM live exact hex nonzero must be a boolean")
+
     if not isinstance(value, str):
         raise RuntimeError(f"{label} must be hex")
     if value != value.strip():
@@ -359,7 +367,7 @@ def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> by
         raise RuntimeError(f"{label} must be canonical lowercase 0x hex")
     try:
         parsed = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(f"{label} must be canonical lowercase 0x hex") from None
     if nonzero and not any(parsed):
         raise RuntimeError(f"{label} must not be zero")
@@ -372,6 +380,9 @@ def _parse_exact_hex32_blob(
     label: str,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("EVM live exact hex32 nonzero must be a boolean")
+
     parsed = _parse_exact_hex_blob(value, label=label, nonzero=False)
     if len(parsed) != 32:
         raise RuntimeError(f"{label} must be 32 bytes")
@@ -886,7 +897,7 @@ def _route_canary_message_proof_event_summary(
             log.get("address"),
             label="route-canary log address",
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return None
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics:
@@ -898,7 +909,7 @@ def _route_canary_message_proof_event_summary(
             topics[0],
             label="route-canary log topic0",
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return None
     if log_address != bridge_address or topic0 != EVM_MESSAGE_PROOF_ACCEPTED_TOPIC:
         return None
@@ -1707,7 +1718,11 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
             f"EVM RPC chain id metadata must be {expected_rpc_chain_id} "
             f"for {expected_chain}"
         )
-    if destination.get("expected_rpc_chain_id") != expected_rpc_chain_id:
+    destination_expected_rpc_chain_id = destination.get("expected_rpc_chain_id")
+    if (
+        type(destination_expected_rpc_chain_id) is not int
+        or destination_expected_rpc_chain_id != expected_rpc_chain_id
+    ):
         raise ValueError("expected RPC chain id metadata must match the lane")
 
     bridge_address = _summary_address(
@@ -1783,9 +1798,17 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
         != expected_family_hash
     ):
         raise ValueError("proof family hash metadata is not stark-fri-v1")
-    if destination.get("source_domain") != evidence.SCCP_DOMAIN_SORA:
+    destination_source_domain = destination.get("source_domain")
+    if (
+        type(destination_source_domain) is not int
+        or destination_source_domain != evidence.SCCP_DOMAIN_SORA
+    ):
         raise ValueError("destination source domain metadata must be SORA")
-    if destination.get("target_domain") != domain:
+    destination_target_domain = destination.get("target_domain")
+    if (
+        type(destination_target_domain) is not int
+        or destination_target_domain != domain
+    ):
         raise ValueError("destination target domain metadata must match domain")
 
     expected_binding_hash = evidence.evm_destination_binding_hash(
@@ -1861,8 +1884,10 @@ def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     destination = summary.get("destination_bridge")
     if not isinstance(destination, dict):
         return ["destination bridge evidence"]
+    destination_domain = destination.get("domain")
     if (
-        destination.get("domain") == evidence.SCCP_DOMAIN_ETH
+        type(destination_domain) is int
+        and destination_domain == evidence.SCCP_DOMAIN_ETH
         and summary.get("block_tag") != "finalized"
     ):
         missing.append("--block-tag finalized")
@@ -1945,6 +1970,8 @@ def _validate_route_allowlist_hash(
     *,
     include_route_canary: bool = True,
 ) -> dict[str, Any]:
+    if type(include_route_canary) is not bool:
+        raise ValueError("include_route_canary must be a boolean")
     route_allowlist_hash = getattr(args, "route_allowlist_hash", None)
     if route_allowlist_hash is None:
         return {}
@@ -2456,13 +2483,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

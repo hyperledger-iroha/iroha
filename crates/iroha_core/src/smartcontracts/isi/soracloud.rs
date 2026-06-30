@@ -1203,7 +1203,7 @@ fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes
             SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
         );
     }
-    envelope_bytes
+    if envelope_bytes
         .split(|byte| !is_text_byte(byte))
         .any(|decorated_text| {
             !decorated_text.is_empty()
@@ -1213,6 +1213,13 @@ fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes
                     SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
                 )
         })
+    {
+        return true;
+    }
+    soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(
+        envelope_bytes,
+        SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
+    )
 }
 
 fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
@@ -1222,6 +1229,23 @@ fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
     let mut lower = Vec::with_capacity(text.len());
     lower.extend(text.iter().map(u8::to_ascii_lowercase));
     soracloud_ascii_text_contains_placeholder_marker(&lower, markers)
+}
+
+fn soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(
+    bytes: &[u8],
+    markers: &[&[u8]],
+) -> bool {
+    let mut collapsed_text = Vec::with_capacity(bytes.len());
+    collapsed_text.extend(
+        bytes
+            .iter()
+            .filter(|byte| byte.is_ascii_alphanumeric())
+            .map(u8::to_ascii_lowercase),
+    );
+    !collapsed_text.is_empty()
+        && soracloud_collapsed_placeholder_markers(markers)
+            .iter()
+            .any(|marker| ascii_windows_contains(&collapsed_text, marker))
 }
 
 const SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES: usize = 5;
@@ -20554,6 +20578,71 @@ mod tests {
         .expect("sample external-review full-bootstrap release audit package and digest")
     }
 
+    fn release_audit_package_digest_alias_cases(
+        package: &iroha_crypto::fhe_bfv::BfvFullBootstrapReleaseAuditPackageV1,
+    ) -> Vec<(Hash, &'static str)> {
+        let payload = &package.record.signoff.payload;
+        vec![
+            (package.record_digest, "distinct from package record digest"),
+            (
+                package.manifest_digest,
+                "distinct from package manifest digest",
+            ),
+            (
+                payload.release_audit_evidence_digest,
+                "distinct from signed release evidence digest",
+            ),
+            (
+                payload.centered_scale_round_source_chain_digest,
+                "distinct from signed centered scale-round source-chain digest",
+            ),
+            (
+                payload.artifact_bundle_digest,
+                "distinct from signed artifact bundle digest",
+            ),
+            (
+                payload.evaluator_artifact_set_digest,
+                "distinct from signed evaluator artifact set digest",
+            ),
+            (
+                payload.proof_key_pair_commitment,
+                "distinct from signed proof-key pair commitment",
+            ),
+            (
+                payload.prover_key_digest,
+                "distinct from signed prover-key digest",
+            ),
+            (
+                payload.verifier_key_digest,
+                "distinct from signed verifier-key digest",
+            ),
+            (
+                payload.prover_native_payload_digest,
+                "distinct from signed prover native payload digest",
+            ),
+            (
+                payload.verifier_native_payload_digest,
+                "distinct from signed verifier native payload digest",
+            ),
+            (
+                payload.native_circuit_fingerprint,
+                "distinct from signed native circuit fingerprint",
+            ),
+            (
+                payload.generated_circuit_body_digest,
+                "distinct from signed generated circuit body digest",
+            ),
+            (
+                payload.audit_report_digest,
+                "distinct from signed audit report digest",
+            ),
+            (
+                payload.audit_evidence_archive_digest,
+                "distinct from signed evidence archive digest",
+            ),
+        ]
+    }
+
     #[cfg(feature = "zk-stark")]
     fn signed_full_bootstrap_release_audit_package_with_artifact_bytes(
         params: &BfvParameters,
@@ -22290,6 +22379,27 @@ mod tests {
                 panic!(
                     "{label} binary-fragmented placeholder native STARK envelope bytes must fail"
                 );
+            };
+            assert_invalid_parameter_contains(err, "placeholder");
+        }
+
+        let marker_split_placeholder = b"native verifier metadata operator your\xffproof payload";
+        for (label, max_bytes) in [
+            (
+                "FHE full-bootstrap material",
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            ),
+            (
+                "FHE full-bootstrap execution",
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+            ),
+        ] {
+            let Err(err) = validate_soracloud_fhe_stark_native_envelope_bytes(
+                label,
+                marker_split_placeholder,
+                max_bytes,
+            ) else {
+                panic!("{label} binary-split placeholder native STARK envelope bytes must fail");
             };
             assert_invalid_parameter_contains(err, "placeholder");
         }
@@ -32846,7 +32956,42 @@ mod tests {
             )
             .expect("trusted release audit package authorizes native proof generation");
         assert_eq!(proofs.len(), input.slots.len());
-        for proof in proofs {
+        let expected_claim_proofs = sample_full_bootstrap_execution_proofs_for_claims(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            input_bound,
+            output_bound,
+            crate::zk::hash_vk(&vk_box),
+        );
+        let expected_statement_hashes = expected_claim_proofs
+            .iter()
+            .map(|proof| proof.statement_hash)
+            .collect::<Vec<_>>();
+        let generated_statement_hashes = proofs
+            .iter()
+            .map(|proof| proof.statement_hash)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            generated_statement_hashes, expected_statement_hashes,
+            "audited execution prover must emit one statement per canonical output-slot claim"
+        );
+        for (left_index, left_hash) in generated_statement_hashes.iter().enumerate() {
+            for (right_index, right_hash) in generated_statement_hashes
+                .iter()
+                .enumerate()
+                .skip(left_index + 1)
+            {
+                assert_ne!(
+                    left_hash, right_hash,
+                    "audited execution prover collapsed slot {left_index} and {right_index} statements"
+                );
+            }
+        }
+        for proof in &proofs {
             proof
                 .validate()
                 .expect("audited full-bootstrap execution proof validates");
@@ -32946,12 +33091,163 @@ mod tests {
             )
             .expect("trusted release audit package authorizes bounded-noise proof generation");
         assert_eq!(proofs.len(), input.slots.len());
-        for proof in proofs {
+        let expected_claim_proofs =
+            sample_full_bootstrap_execution_proofs_for_claims_with_bound_mode(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,
+                input_bound,
+                output_bound,
+                crate::zk::hash_vk(&vk_box),
+            );
+        let expected_statement_hashes = expected_claim_proofs
+            .iter()
+            .map(|proof| proof.statement_hash)
+            .collect::<Vec<_>>();
+        let generated_statement_hashes = proofs
+            .iter()
+            .map(|proof| proof.statement_hash)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            generated_statement_hashes, expected_statement_hashes,
+            "bounded audited execution prover must emit canonical bounded-mode output-slot claims"
+        );
+        for proof in &proofs {
             proof
                 .validate()
                 .expect("bounded audited full-bootstrap execution proof validates");
             assert_eq!(proof.proof.vk_commitment, Some(crate::zk::hash_vk(&vk_box)));
         }
+
+        let mut drifted_output = output.clone();
+        drifted_output.slots[0].c0[0] =
+            (drifted_output.slots[0].c0[0] + 1) % params.ciphertext_modulus;
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &drifted_output,
+                BfvCiphertextBoundModeV1::BoundedNoise,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "bounded release-audited execution proof generation must reject output drift",
+            );
+        assert_invalid_parameter_contains(err, "release-audited bounded-noise output mismatch");
+
+        let drifted_output_bound = if output_bound == u128::MAX {
+            output_bound - 1
+        } else {
+            output_bound + 1
+        };
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::BoundedNoise,
+                input_bound,
+                drifted_output_bound,
+                &vk_box,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "bounded release-audited execution proof generation must reject bound drift",
+            );
+        assert_invalid_parameter_contains(err, "release-audited output bound");
+
+        let mut downgraded_package = release_audit_package.clone();
+        downgraded_package
+            .record
+            .evidence
+            .proof_profile
+            .binds_fri_queries_to_air_commitment_roots = false;
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::BoundedNoise,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &downgraded_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "bounded release-audited execution proof generation must reject AIR-root query downgrades",
+            );
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(err, "AIR-root query binding");
+
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::BoundedNoise,
+                input_bound,
+                output_bound,
+                &vk_box,
+                &release_audit_package,
+                Hash::new(b"stale-bounded-execution-release-audit-package-digest"),
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "bounded release-audited execution proof generation must reject stale package digests",
+            );
+        assert_invalid_parameter_contains(err, "release audit package digest mismatch");
+
+        let wrong_vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
+        let err =
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+                &params,
+                &evaluation_keys,
+                &transcript,
+                &artifacts,
+                &input,
+                &output,
+                BfvCiphertextBoundModeV1::BoundedNoise,
+                input_bound,
+                output_bound,
+                &wrong_vk_box,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err(
+                "bounded release-audited execution proof generation must reject wrong verifier keys",
+            );
+        assert_invalid_parameter_contains(err, "verifier key must match governed artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -39079,6 +39375,251 @@ mod tests {
         .expect_err("valid full-bootstrap artifacts without release audit must fail before output");
         assert_invalid_parameter_contains(err, "release audit package context");
 
+        let stale_digest_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: Hash::new(
+                b"stale-soracloud-exact-full-bootstrap-runtime-release-audit-digest",
+            ),
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&stale_digest_release_audit),
+        )
+        .expect_err("exact runtime path must reject stale release audit package digests");
+        assert_invalid_parameter_contains(err.clone(), "release audit package");
+        assert_invalid_parameter_contains(err, "digest mismatch");
+
+        for (sentinel_digest, expected) in [
+            (Hash::prehashed([0_u8; Hash::LENGTH]), "zero hash"),
+            (
+                Hash::new(b"not production ready"),
+                "placeholder full-bootstrap digest",
+            ),
+            (
+                Hash::new(b"governed material digest before placeholder: template"),
+                "placeholder full-bootstrap digest",
+            ),
+            (
+                Hash::new(
+                    [
+                        b" \n\t".as_slice(),
+                        b"governed material digest before placeholder: ".as_slice(),
+                        b"template".as_slice(),
+                    ]
+                    .concat(),
+                ),
+                "placeholder full-bootstrap digest",
+            ),
+        ] {
+            let sentinel_digest_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+                package: &release_audit_package,
+                expected_package_digest: sentinel_digest,
+                trusted_reviewer_id: "sora-zk-audit-wg-2026",
+                trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+            };
+            let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+                &params,
+                &evaluation_keys,
+                &job,
+                std::slice::from_ref(&input),
+                &[1],
+                Some(&artifacts),
+                Some(&sentinel_digest_release_audit),
+            )
+            .expect_err("exact runtime path must reject release audit digest sentinels");
+            assert_invalid_parameter_contains(err.clone(), "caller-pinned package digest");
+            assert_invalid_parameter_contains(err, expected);
+        }
+
+        for (aliased_digest, expected) in
+            release_audit_package_digest_alias_cases(&release_audit_package)
+        {
+            let aliased_digest_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+                package: &release_audit_package,
+                expected_package_digest: aliased_digest,
+                trusted_reviewer_id: "sora-zk-audit-wg-2026",
+                trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+            };
+            let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+                &params,
+                &evaluation_keys,
+                &job,
+                std::slice::from_ref(&input),
+                &[1],
+                Some(&artifacts),
+                Some(&aliased_digest_release_audit),
+            )
+            .expect_err("exact runtime path must reject release audit package digest aliases");
+            assert_invalid_parameter_contains(err.clone(), "caller-pinned package digest");
+            assert_invalid_parameter_contains(err, expected);
+        }
+
+        let wrong_reviewer_id_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026-untrusted-runtime",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&wrong_reviewer_id_release_audit),
+        )
+        .expect_err("exact runtime path must reject release audit reviewer-id drift");
+        assert_invalid_parameter_contains(err.clone(), "release audit signoff reviewer id");
+        assert_invalid_parameter_contains(err, "trusted reviewer");
+
+        let placeholder_reviewer_id_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "not-production-ready-reviewer",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&placeholder_reviewer_id_release_audit),
+        )
+        .expect_err("exact runtime path must reject placeholder reviewer ids");
+        assert_invalid_parameter_contains(err.clone(), "reviewer id");
+        assert_invalid_parameter_contains(err, "placeholder");
+
+        let other_reviewer_key_pair = checked_keypair();
+        let wrong_reviewer_key_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: other_reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&wrong_reviewer_key_release_audit),
+        )
+        .expect_err("exact runtime path must reject release audit reviewer-key drift");
+        assert_invalid_parameter_contains(err.clone(), "release audit signoff reviewer public key");
+        assert_invalid_parameter_contains(err, "trusted reviewer");
+
+        let non_ed25519_reviewer_key_pair =
+            KeyPair::try_from_seed(vec![0x54; 32], iroha_crypto::Algorithm::BlsNormal)
+                .expect("fixture seed derives BLS reviewer keypair");
+        let non_ed25519_reviewer_key_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: non_ed25519_reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&non_ed25519_reviewer_key_release_audit),
+        )
+        .expect_err("exact runtime path must reject non-Ed25519 reviewer keys");
+        assert_invalid_parameter_contains(err.clone(), "trusted reviewer public key");
+        assert_invalid_parameter_contains(err, "Ed25519");
+
+        let mut report_tamper_package = release_audit_package.clone();
+        report_tamper_package
+            .audit_report_bytes
+            .extend_from_slice(b"; exact runtime report byte tamper after signing");
+        let report_tamper_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &report_tamper_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&report_tamper_release_audit),
+        )
+        .expect_err("exact runtime path must reject tampered audit report bytes");
+        assert_invalid_parameter_contains(err, "release audit report bytes digest mismatch");
+
+        let mut archive_tamper_package = release_audit_package.clone();
+        archive_tamper_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; exact runtime archive byte tamper after signing");
+        let archive_tamper_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &archive_tamper_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&archive_tamper_release_audit),
+        )
+        .expect_err("exact runtime path must reject tampered audit archive bytes");
+        assert_invalid_parameter_contains(
+            err,
+            "release audit evidence archive bytes digest mismatch",
+        );
+
+        let governed_material = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .and_then(|key| key.full_bootstrap_material.as_ref())
+            .expect("sample full-bootstrap material");
+        let (machine_generated_package, machine_generated_package_digest) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
+                &params,
+                governed_material,
+                &artifacts,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            )
+            .expect("build deterministic exact release audit package and digest");
+        let machine_generated_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &machine_generated_package,
+            expected_package_digest: machine_generated_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+            Some(&machine_generated_release_audit),
+        )
+        .expect_err("exact runtime path must reject machine-generated audit packages");
+        assert_invalid_parameter_contains(err, "machine-generated");
+
         let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
             &params,
             &evaluation_keys,
@@ -39209,6 +39750,36 @@ mod tests {
 
         let complete_policy = policy.clone();
 
+        let governed_material = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .and_then(|key| key.full_bootstrap_material.as_ref())
+            .expect("sample full-bootstrap key carries governed material");
+        let (machine_generated_package, machine_generated_package_digest) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
+                &params,
+                governed_material,
+                &artifacts,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            )
+            .expect("build deterministic machine-generated release audit package and digest");
+        let mut machine_generated_policy = complete_policy.clone();
+        machine_generated_policy.full_bootstrap_release_audit_package =
+            Some(machine_generated_package);
+        machine_generated_policy.full_bootstrap_release_audit_package_digest =
+            Some(machine_generated_package_digest);
+        let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+            &params,
+            &evaluation_keys,
+            &job,
+            Some(&artifacts),
+            &machine_generated_policy,
+        )
+        .expect_err("runtime release audit policy must reject machine-generated packages");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(err, "machine-generated");
+
         let mut missing_digest_policy = complete_policy.clone();
         missing_digest_policy.full_bootstrap_release_audit_package_digest = None;
         let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
@@ -39328,6 +39899,28 @@ mod tests {
         .expect_err("stale policy-pinned release audit digest must fail runtime preflight");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "digest mismatch");
+
+        for (aliased_digest, expected) in
+            release_audit_package_digest_alias_cases(&release_audit_package)
+        {
+            let mut aliased_digest_policy = complete_policy.clone();
+            aliased_digest_policy.full_bootstrap_release_audit_package_digest =
+                Some(aliased_digest);
+            let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+                &params,
+                &evaluation_keys,
+                &job,
+                Some(&artifacts),
+                &aliased_digest_policy,
+            )
+            .expect_err("runtime release audit policy must reject package digest aliases");
+            assert_invalid_parameter_contains(
+                err.clone(),
+                "release audit package failed validation",
+            );
+            assert_invalid_parameter_contains(err.clone(), "caller-pinned package digest");
+            assert_invalid_parameter_contains(err, expected);
+        }
 
         let mut report_tamper_policy = complete_policy.clone();
         let mut report_tamper_package = release_audit_package.clone();
@@ -39586,6 +40179,250 @@ mod tests {
             "bounded valid full-bootstrap artifacts without release audit must fail before output",
         );
         assert_invalid_parameter_contains(err, "release audit package context");
+
+        let stale_digest_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: Hash::new(
+                b"stale-soracloud-bounded-full-bootstrap-runtime-release-audit-digest",
+            ),
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&stale_digest_release_audit),
+        )
+        .expect_err("bounded runtime path must reject stale release audit package digests");
+        assert_invalid_parameter_contains(err.clone(), "release audit package");
+        assert_invalid_parameter_contains(err, "digest mismatch");
+
+        for (sentinel_digest, expected) in [
+            (Hash::prehashed([0_u8; Hash::LENGTH]), "zero hash"),
+            (
+                Hash::new(b"not production ready"),
+                "placeholder full-bootstrap digest",
+            ),
+            (
+                Hash::new(b"governed material digest before placeholder: template"),
+                "placeholder full-bootstrap digest",
+            ),
+            (
+                Hash::new(
+                    [
+                        b" \n\t".as_slice(),
+                        b"governed material digest before placeholder: ".as_slice(),
+                        b"template".as_slice(),
+                    ]
+                    .concat(),
+                ),
+                "placeholder full-bootstrap digest",
+            ),
+        ] {
+            let sentinel_digest_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+                package: &release_audit_package,
+                expected_package_digest: sentinel_digest,
+                trusted_reviewer_id: "sora-zk-audit-wg-2026",
+                trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+            };
+            let err =
+                execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+                    &params,
+                    &evaluation_keys,
+                    &job,
+                    std::slice::from_ref(&input),
+                    &[input_bound],
+                    Some(&artifacts),
+                    Some(&sentinel_digest_release_audit),
+                )
+                .expect_err("bounded runtime path must reject release audit digest sentinels");
+            assert_invalid_parameter_contains(err.clone(), "caller-pinned package digest");
+            assert_invalid_parameter_contains(err, expected);
+        }
+
+        for (aliased_digest, expected) in
+            release_audit_package_digest_alias_cases(&release_audit_package)
+        {
+            let aliased_digest_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+                package: &release_audit_package,
+                expected_package_digest: aliased_digest,
+                trusted_reviewer_id: "sora-zk-audit-wg-2026",
+                trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+            };
+            let err =
+                execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+                    &params,
+                    &evaluation_keys,
+                    &job,
+                    std::slice::from_ref(&input),
+                    &[input_bound],
+                    Some(&artifacts),
+                    Some(&aliased_digest_release_audit),
+                )
+                .expect_err(
+                    "bounded runtime path must reject release audit package digest aliases",
+                );
+            assert_invalid_parameter_contains(err.clone(), "caller-pinned package digest");
+            assert_invalid_parameter_contains(err, expected);
+        }
+
+        let wrong_reviewer_id_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026-untrusted-runtime",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&wrong_reviewer_id_release_audit),
+        )
+        .expect_err("bounded runtime path must reject release audit reviewer-id drift");
+        assert_invalid_parameter_contains(err.clone(), "release audit signoff reviewer id");
+        assert_invalid_parameter_contains(err, "trusted reviewer");
+
+        let placeholder_reviewer_id_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "not-production-ready-reviewer",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&placeholder_reviewer_id_release_audit),
+        )
+        .expect_err("bounded runtime path must reject placeholder reviewer ids");
+        assert_invalid_parameter_contains(err.clone(), "reviewer id");
+        assert_invalid_parameter_contains(err, "placeholder");
+
+        let other_reviewer_key_pair = checked_keypair();
+        let wrong_reviewer_key_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: other_reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&wrong_reviewer_key_release_audit),
+        )
+        .expect_err("bounded runtime path must reject release audit reviewer-key drift");
+        assert_invalid_parameter_contains(err.clone(), "release audit signoff reviewer public key");
+        assert_invalid_parameter_contains(err, "trusted reviewer");
+
+        let non_ed25519_reviewer_key_pair =
+            KeyPair::try_from_seed(vec![0x55; 32], iroha_crypto::Algorithm::BlsNormal)
+                .expect("fixture seed derives BLS reviewer keypair");
+        let non_ed25519_reviewer_key_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &release_audit_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: non_ed25519_reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&non_ed25519_reviewer_key_release_audit),
+        )
+        .expect_err("bounded runtime path must reject non-Ed25519 reviewer keys");
+        assert_invalid_parameter_contains(err.clone(), "trusted reviewer public key");
+        assert_invalid_parameter_contains(err, "Ed25519");
+
+        let mut report_tamper_package = release_audit_package.clone();
+        report_tamper_package
+            .audit_report_bytes
+            .extend_from_slice(b"; bounded runtime report byte tamper after signing");
+        let report_tamper_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &report_tamper_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&report_tamper_release_audit),
+        )
+        .expect_err("bounded runtime path must reject tampered audit report bytes");
+        assert_invalid_parameter_contains(err, "release audit report bytes digest mismatch");
+
+        let mut archive_tamper_package = release_audit_package.clone();
+        archive_tamper_package
+            .audit_evidence_archive_bytes
+            .extend_from_slice(b"; bounded runtime archive byte tamper after signing");
+        let archive_tamper_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &archive_tamper_package,
+            expected_package_digest: release_audit_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&archive_tamper_release_audit),
+        )
+        .expect_err("bounded runtime path must reject tampered audit archive bytes");
+        assert_invalid_parameter_contains(
+            err,
+            "release audit evidence archive bytes digest mismatch",
+        );
+
+        let (machine_generated_package, machine_generated_package_digest) =
+            iroha_crypto::fhe_bfv::bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
+                &params,
+                &material,
+                &artifacts,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.private_key(),
+            )
+            .expect("build deterministic bounded release audit package and digest");
+        let machine_generated_release_audit = BfvFullBootstrapReleaseAuditRuntimeContext {
+            package: &machine_generated_package,
+            expected_package_digest: machine_generated_package_digest,
+            trusted_reviewer_id: "sora-zk-audit-wg-2026",
+            trusted_reviewer_public_key: reviewer_key_pair.public_key(),
+        };
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+            Some(&machine_generated_release_audit),
+        )
+        .expect_err("bounded runtime path must reject machine-generated audit packages");
+        assert_invalid_parameter_contains(err, "machine-generated");
 
         let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
             &params,

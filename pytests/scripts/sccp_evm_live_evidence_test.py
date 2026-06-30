@@ -808,6 +808,11 @@ def test_evm_json_rpc_rejects_envelope_drift():
             "string JSON-RPC id was accepted",
         ),
         (
+            {"jsonrpc": "2.0", "id": True, "result": "0x38"},
+            "response id",
+            "boolean JSON-RPC id was accepted",
+        ),
+        (
             {"id": 1, "result": "0x38"},
             "protocol version",
             "missing JSON-RPC protocol version was accepted",
@@ -1027,6 +1032,38 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         + '"'
         in rendered
     )
+
+
+def test_live_evm_route_allowlist_rejects_non_boolean_canary_gate():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    args = SimpleNamespace(
+        domain=module.evidence.SCCP_DOMAIN_ETH,
+        route_allowlist_hash=route_allowlist_hash,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+    )
+    destination = {
+        "expected_destination_binding_hash_matches": True,
+        "destination_binding_hash": "0x" + fake.destination_binding.hex(),
+    }
+
+    for include_route_canary in (1, "true", None):
+        try:
+            module._validate_route_allowlist_hash(
+                args,
+                destination,
+                include_route_canary=include_route_canary,
+            )
+        except ValueError as exc:
+            assert str(exc) == "include_route_canary must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean EVM route canary inclusion gate was accepted"
+            )
 
 
 def test_live_evm_full_toml_redacts_generated_parser_exception_cause(monkeypatch):
@@ -1627,7 +1664,10 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
 
     for field, forged_value, expected_message in (
         ("rpc_chain_id", 56, "RPC chain id"),
+        ("expected_rpc_chain_id", True, "expected RPC chain id"),
         ("verifier_backend_hash", "0x" + "bb" * 32, "backend"),
+        ("source_domain", False, "source domain"),
+        ("target_domain", True, "target domain"),
         ("bridge_runtime_bytecode_hex", "0x6001", "bridge runtime"),
         ("expected_network_id", "0x" + "44" * 32, "expected network id"),
     ):
@@ -1662,6 +1702,9 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
             assert "secret-token" not in rendered
             assert "must be hex" not in rendered
             assert exc.__cause__ is None
+            assert (
+                exc.__suppress_context__ is True
+            ), "EVM live runtime metadata context leaked"
         else:
             raise AssertionError(f"EVM full TOML accepted invalid {field} metadata")
 
@@ -2087,7 +2130,13 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
 def test_evm_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
     module = load_live_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         class SecretBytes:
             @staticmethod
@@ -2134,6 +2183,35 @@ def test_evm_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
                 )
 
 
+def test_evm_live_hex_nonzero_controls_reject_non_booleans():
+    """EVM live fixed-hex nonzero policy must not accept truthy aliases."""
+
+    module = load_live_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module._parse_exact_hex_blob(
+                "0x" + "00" * 20,
+                label="bridge address",
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "EVM live exact hex nonzero must be a boolean"
+        else:
+            raise AssertionError("malformed EVM live exact-hex nonzero control accepted")
+
+        try:
+            module._parse_exact_hex32_blob(
+                "0x" + "00" * 32,
+                label="route-canary receipt blockHash",
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "EVM live exact hex32 nonzero must be a boolean"
+        else:
+            raise AssertionError("malformed EVM live hex32 nonzero control accepted")
+
+
 def test_evm_live_route_canary_prefilter_redacts_parser_helper_failures(monkeypatch):
     module = load_live_module()
     log = {
@@ -2156,7 +2234,13 @@ def test_evm_live_route_canary_prefilter_redacts_parser_helper_failures(monkeypa
     }
 
     for helper_name in ("_parse_exact_address", "_parse_exact_hex32_blob"):
-        for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
 
             def fail_parser(*_args, exception_type=exception_type, **_kwargs):
                 raise exception_type(
@@ -2214,6 +2298,14 @@ def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
             else:
                 raise AssertionError("secret EVM live chain-id lookup was accepted")
 
+    for alias_domain in (True, False):
+        try:
+            module._default_rpc_chain_id_for_domain(alias_domain)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == "domain must have a canonical RPC chain id"
+        else:
+            raise AssertionError("boolean EVM live chain-id domain was accepted")
+
     for exception_type in (
         module.argparse.ArgumentTypeError,
         SystemExit,
@@ -2246,6 +2338,23 @@ def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
                 assert exc.__suppress_context__ is True
             else:
                 raise AssertionError("secret EVM live network-id lookup was accepted")
+
+
+def test_live_evm_default_block_tag_rejects_boolean_domain():
+    module = load_live_module()
+
+    assert (
+        module.default_block_tag_for_domain(module.evidence.SCCP_DOMAIN_ETH)
+        == "finalized"
+    )
+    assert module.default_block_tag_for_domain(module.evidence.SCCP_DOMAIN_BSC) == "latest"
+    for alias_domain in (True, False):
+        try:
+            module.default_block_tag_for_domain(alias_domain)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == "domain must be an EVM-family SCCP lane"
+        else:
+            raise AssertionError("boolean EVM live block-tag domain was accepted")
 
 
 def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():

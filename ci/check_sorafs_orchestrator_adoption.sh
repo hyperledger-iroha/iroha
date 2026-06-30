@@ -183,6 +183,14 @@ def write_open_flags() -> int:
         | getattr(os, "O_NOFOLLOW", 0)
     )
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS adoption artifact")
+        view = view[written:]
+
 def validate_adoption_path(path: pathlib.Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"[sorafs-adoption] {label} must not be a symlink: {path}")
@@ -232,9 +240,7 @@ def write_adoption_text(path: pathlib.Path, body: str, label: str) -> None:
     validate_adoption_path(path, label)
     fd = os.open(path, write_open_flags(), 0o666)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(body)
+        write_all(fd, body.encode("utf-8"))
     finally:
         if fd >= 0:
             os.close(fd)
@@ -456,6 +462,14 @@ def write_open_flags() -> int:
         | getattr(os, "O_NOFOLLOW", 0)
     )
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS adoption artifact")
+        view = view[written:]
+
 def validate_adoption_path(path: Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"[sorafs-adoption] {label} must not be a symlink: {path}")
@@ -480,12 +494,10 @@ def write_adoption_json(path: Path, payload: dict, label: str) -> None:
     validate_adoption_path(path, label)
     ensure_adoption_directory(path.parent, f"{label} parent directory")
     validate_adoption_path(path, label)
+    rendered = (json.dumps(payload, indent=2, allow_nan=False) + "\n").encode("utf-8")
     fd = os.open(path, write_open_flags(), 0o666)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
+        write_all(fd, rendered)
     finally:
         if fd >= 0:
             os.close(fd)

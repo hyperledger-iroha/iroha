@@ -184,6 +184,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/Halo2PastaTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineProofVerifierTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift"
@@ -303,13 +304,20 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Halo2Prover.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/NativeOfflineNoteProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashTextCodec.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequestCodec.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiptAckCodec.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteNearbyEnvelope.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteIssuerDeviceBinding.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java"
@@ -324,6 +332,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashPolicyV1.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteExplorerInstructionOutcome.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteOutcomeIndex.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalEntry.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalException.java"
@@ -467,6 +476,8 @@ on:
       - "java/norito_java/src/main/java/org/hyperledger/iroha/norito/SchemaHash.java"
       - "java/norito_java/src/main/java/org/hyperledger/iroha/norito/TypeAdapter.java"
       - "java/norito_java/src/main/java/org/hyperledger/iroha/norito/Varint.java"
+      - "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStore.kt"
+      - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
       - "kotlin/offline-wallet-lab-app/**"
       - "kotlin/settings.gradle.kts"
@@ -552,12 +563,15 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/Varint.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Halo2Prover.java"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/NativeOfflineNoteProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineBearerCashWallet.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteTransportProtocols.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineQrStream.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
@@ -566,6 +580,11 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSetupRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLoadRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRefreshRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashSyncRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashRedeemRequest.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt"
@@ -987,6 +1006,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-registration-certificate-payload
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-v2-retired-ios-app-attest-profile
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-key-refill-attestation-alias
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-cash-api-note-commitment-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-cash-api-redemption-hash-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-retired-qr-prefix-wording
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-append-availability-probe
@@ -1138,6 +1159,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sns-domain-selector-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-account-asset-scope-selector-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-asset-selector-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-verdict-id-hex-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-open-verify-public-input-hash-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-fail-closed
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch
@@ -1255,8 +1278,24 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-witness-codecs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bearer-cash-policy-validation
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-bearer-cash-text-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-nearby-pairing-challenge-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-outcome-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-outcome-encoded-instruction-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-transfer-text-payload-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-qr-stream-text-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-bearer-cash-text-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-outcome-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-payment-token-commitment-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-payment-token-commitment-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-request-strictness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-compact-certificate-profile
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-recursive-proof-strictness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-device-binding-alias-strictness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-attestation-payload-strictness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-signed-payload-strictness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-state-collection-strictness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-amount-normalization
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-max-inputs-strictness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-input-claim-strictness
@@ -1276,6 +1315,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-retired-offline-note-transaction-builders
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-classic-offline-note-fixture-labels
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-retired-state-migration
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-commitment-hex-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-draft-proof-replacement
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-wallet-input-cap
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-wallet-positive-amounts

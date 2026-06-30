@@ -304,6 +304,8 @@ def inspect_regular_file(
         if path.is_symlink():
             errors.append(f"{label} `{path_label}` must not be a symlink")
             return None
+        if not validate_no_symlink_parent_chain(path, label, errors):
+            return None
         if not validate_evidence_parent_chain(path, errors, label=label):
             return None
         return path.is_file()
@@ -330,6 +332,8 @@ def inspect_directory(
         if path.is_symlink():
             errors.append(f"{label} `{path_label}` must not be a symlink")
             return None
+        if not validate_no_symlink_parent_chain(path, label, errors):
+            return None
         if not validate_evidence_parent_chain(path, errors, label=label):
             return None
         return path.is_dir()
@@ -339,6 +343,30 @@ def inspect_directory(
             f"{_error_label(error, path_label=path_label)}"
         )
         return None
+
+
+def validate_no_symlink_parent_chain(
+    path: Path,
+    label: str,
+    errors: list[str],
+) -> bool:
+    """Reject symlinked ancestors before trusting generated fixture paths."""
+
+    for parent in (path.parent, *path.parent.parents):
+        parent_label = _path_label(parent)
+        try:
+            if parent.is_symlink():
+                errors.append(
+                    f"{label} parent `{parent_label}` must not be a symlink"
+                )
+                return False
+        except (OSError, RuntimeError) as error:
+            errors.append(
+                f"failed to inspect {label} parent `{parent_label}`: "
+                f"{_error_label(error, path_label=parent_label)}"
+            )
+            return False
+    return True
 
 
 def read_file_bytes(

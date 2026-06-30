@@ -312,6 +312,12 @@ AcceptedMatchesSpec ==
       rootBStake
     )
 
+MixedRootStakeMeetsQuorum ==
+  StakeQuorum(rootAStake + rootBStake, totalStake)
+
+WrongContextStakeMeetsQuorum ==
+  StakeQuorum(rootAStake + wrongContextStake, totalStake)
+
 MixedRootsCannotSatisfyPermissionedQuorum ==
   /\ mode = "Permissioned"
   /\ rootASigners < CommitQuorum(validators)
@@ -323,7 +329,7 @@ MixedRootsCannotSatisfyStakeQuorum ==
   /\ mode = "Npos"
   /\ ~StakeQuorum(rootAStake, totalStake)
   /\ ~StakeQuorum(rootBStake, totalStake)
-  /\ StakeQuorum(rootAStake + rootBStake, totalStake)
+  /\ MixedRootStakeMeetsQuorum
   => ~accepted
 
 WrongContextCannotSatisfyRootQuorum ==
@@ -337,7 +343,7 @@ WrongContextCannotSatisfyStakeQuorum ==
   /\ mode = "Npos"
   /\ rootBStake = 0
   /\ ~StakeQuorum(rootAStake, totalStake)
-  /\ StakeQuorum(rootAStake + wrongContextStake, totalStake)
+  /\ WrongContextStakeMeetsQuorum
   => ~accepted
 
 ValidationRootMismatchRejected ==

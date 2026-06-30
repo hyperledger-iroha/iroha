@@ -1117,9 +1117,8 @@ extension OfflineNorito {
                 maxSplits: 1,
                 omittingEmptySubsequences: false
             ).dropFirst().first,
-            scope.lowercased().hasPrefix("dataspace:"),
-            !rawDataspace.isEmpty,
-            let parsedDataspaceId = UInt64(rawDataspace) else {
+            scope.hasPrefix("dataspace:"),
+            let parsedDataspaceId = parseCanonicalDataspaceId(rawDataspace) else {
                 return nil
             }
             dataspaceId = parsedDataspaceId
@@ -1129,6 +1128,18 @@ extension OfflineNorito {
             accountId: accountId,
             dataspaceId: dataspaceId
         )
+    }
+
+    private static func parseCanonicalDataspaceId(_ raw: Substring) -> UInt64? {
+        let text = String(raw)
+        guard !text.isEmpty,
+              (text == "0" || !text.hasPrefix("0")),
+              text.unicodeScalars.allSatisfy({ scalar in
+                  scalar.value >= 48 && scalar.value <= 57
+              }) else {
+            return nil
+        }
+        return UInt64(text)
     }
 
     static func decodeString(_ data: Data) throws -> String {

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -22,6 +23,8 @@ import org.hyperledger.iroha.android.client.ClientResponse;
  * inputs; production offline payments use Kagemusha.
  */
 public final class OfflineNoteWallet {
+  private static final int MAX_NUMERIC_SCALE = 28;
+  private static final int MAX_NUMERIC_BYTES = 64;
   private static final AtomicInteger LOAD_THREAD_COUNTER = new AtomicInteger();
   private static final ExecutorService LOAD_EXECUTOR =
       Executors.newCachedThreadPool(
@@ -416,14 +419,15 @@ public final class OfflineNoteWallet {
     if (issuerClient == null) {
       return failedFuture(new IllegalStateException("Offline Note issuer client is required for load"));
     }
+    final String canonicalAmount;
     try {
-      requirePositivePaymentAmount(amount);
+      canonicalAmount = canonicalPositivePaymentAmountString(amount);
     } catch (final Throwable error) {
       return failedFuture(error);
     }
     final String assetId = walletAssetId(assetDefinitionId, accountId);
     final CompletableFuture<OfflineNoteWalletNote> result = new CompletableFuture<>();
-    issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), amount)
+    issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)
         .whenComplete(
             (context, prepareError) ->
                 LOAD_EXECUTOR.execute(
@@ -452,14 +456,18 @@ public final class OfflineNoteWallet {
                                 context.localRevision());
                         noteCommitment =
                             deriveNoteCommitment(
-                                context.keyCertificate(), assetId, amount, noteSecret, origin);
+                                context.keyCertificate(),
+                                assetId,
+                                canonicalAmount,
+                                noteSecret,
+                                origin);
                         request =
                             new OfflineNoteIssueRequest(
                                 chainId,
                                 accountId,
                                 assetDefinition(assetId),
                                 assetId,
-                                amount,
+                                canonicalAmount,
                                 context,
                                 noteCommitment);
                       } catch (final Throwable error) {
@@ -506,7 +514,7 @@ public final class OfflineNoteWallet {
                                                   chainId,
                                                   accountId,
                                                   assetId,
-                                                  amount,
+                                                  canonicalAmount,
                                                   certificate,
                                                   noteCommitment,
                                                   noteSecret,
@@ -526,7 +534,7 @@ public final class OfflineNoteWallet {
 
   public OfflineNoteReceiveRequest prepareReceive(
       final String assetDefinitionId, final String amount) {
-    requirePositivePaymentAmount(amount);
+    final String canonicalAmount = canonicalPositivePaymentAmountString(amount);
     final String paymentRequestId = idGenerator.nextId("payment-request");
     final OfflineNote.KeyCertificate keyCertificate =
         requireOwnerCertificateSigner().freshOwnerCertificate(accountId);
@@ -536,14 +544,14 @@ public final class OfflineNoteWallet {
     final OfflineNote.CommitmentOrigin.P2pOutput origin =
         new OfflineNote.CommitmentOrigin.P2pOutput(paymentRequestId, 0);
     final byte[] outputCommitment =
-        deriveNoteCommitment(keyCertificate, assetId, amount, noteSecret, origin);
+        deriveNoteCommitment(keyCertificate, assetId, canonicalAmount, noteSecret, origin);
     final long now = clock.getAsLong();
     final OfflineNoteWalletNote pending =
         new OfflineNoteWalletNote(
             chainId,
             accountId,
             assetId,
-            amount,
+            canonicalAmount,
             keyCertificate,
             outputCommitment,
             noteSecret,
@@ -1188,11 +1196,93 @@ public final class OfflineNoteWallet {
   }
 
   private static BigDecimal requirePositivePaymentAmount(final String amount) {
-    final BigDecimal value = decimal(amount);
+    final BigDecimal value = decimal(canonicalPositivePaymentAmountString(amount));
     if (value.signum() <= 0) {
       throw new IllegalArgumentException("Offline Note payment amount must be positive");
     }
     return value;
+  }
+
+  static String canonicalPositivePaymentAmountString(final String amount) {
+    final String canonical = canonicalPaymentAmountString(amount);
+    if (decimal(canonical).signum() <= 0) {
+      throw new IllegalArgumentException("Offline Note payment amount must be positive");
+    }
+    return canonical;
+  }
+
+  private static String canonicalPaymentAmountString(final String amount) {
+    final String value = Objects.requireNonNull(amount, "amount");
+    if (value.isEmpty() || !trimWhitespace(value).equals(value)) {
+      throw new IllegalArgumentException("Offline Note payment amount must be an exact amount string");
+    }
+
+    int index = 0;
+    boolean negative = false;
+    final char first = value.charAt(index);
+    if (first == '-' || first == '+') {
+      negative = first == '-';
+      index++;
+    }
+
+    boolean seenDot = false;
+    int scale = 0;
+    final StringBuilder digits = new StringBuilder();
+    while (index < value.length()) {
+      final char c = value.charAt(index++);
+      if (c == '.') {
+        if (seenDot) {
+          throw new IllegalArgumentException(
+              "Offline Note payment amount must contain at most one decimal point");
+        }
+        seenDot = true;
+        continue;
+      }
+      if (c < '0' || c > '9') {
+        throw new IllegalArgumentException(
+            "Offline Note payment amount must contain only decimal digits");
+      }
+      digits.append(c);
+      if (seenDot) {
+        scale++;
+        if (scale > MAX_NUMERIC_SCALE) {
+          throw new IllegalArgumentException(
+              "Offline Note payment amount scale exceeds "
+                  + MAX_NUMERIC_SCALE);
+        }
+      }
+    }
+    if (digits.length() == 0) {
+      throw new IllegalArgumentException(
+          "Offline Note payment amount must contain at least one digit");
+    }
+
+    BigInteger mantissa = new BigInteger(digits.toString());
+    if (negative) {
+      mantissa = mantissa.negate();
+    }
+    if (mantissa.toByteArray().length > MAX_NUMERIC_BYTES) {
+      throw new IllegalArgumentException(
+          "Offline Note payment amount mantissa exceeds "
+              + MAX_NUMERIC_BYTES
+              + " signed bytes");
+    }
+
+    String normalizedDigits = digits.toString().replaceFirst("^0+", "");
+    if (normalizedDigits.isEmpty()) {
+      normalizedDigits = "0";
+    }
+    final boolean canonicalNegative = negative && !"0".equals(normalizedDigits);
+    if (scale == 0) {
+      return canonicalNegative ? "-" + normalizedDigits : normalizedDigits;
+    }
+    final StringBuilder formatted = new StringBuilder(normalizedDigits);
+    while (formatted.length() <= scale) {
+      formatted.insert(0, '0');
+    }
+    final int splitAt = formatted.length() - scale;
+    final String body = formatted.substring(0, splitAt) + "." + formatted.substring(splitAt);
+    return canonicalNegative ? "-" + body : body;
   }
 
   private static String canonicalDecimal(final BigDecimal value) {
