@@ -15266,6 +15266,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-kotlin-offline-wallet-amount-normalization",
     "--negative-control-kotlin-offline-wallet-max-inputs-strictness",
     "--negative-control-kotlin-offline-wallet-input-claim-strictness",
+    "--negative-control-swift-offline-note-issued-claim-exactness",
+    "--negative-control-kotlin-offline-note-issued-claim-amount-exactness",
+    "--negative-control-android-offline-note-issued-claim-asset-exactness",
+    "--negative-control-android-offline-note-issued-claim-amount-exactness",
     "--negative-control-offline-readiness-artifact-contract",
     "--negative-control-offline-cash-issuer-key-exactness",
     "--negative-control-android-offline-transfer-persistence-coverage",
@@ -15282,6 +15286,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-bridge-retired-offline-note-transaction-builders",
     "--negative-control-mobile-classic-offline-note-fixture-labels",
     "--negative-control-mobile-wallet-note-retired-state-migration",
+    "--negative-control-swift-wallet-note-json-amount-exactness",
     "--negative-control-mobile-wallet-note-commitment-hex-exactness",
     "--negative-control-mobile-offline-note-draft-proof-replacement",
     "--negative-control-mobile-offline-note-wallet-input-cap",
@@ -15513,6 +15518,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobileWalletNoteRetiredStateMigrationBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-wallet-note-retired-state-migration":'),
+    guard.indexOf('if mode == "--negative-control-swift-wallet-note-json-amount-exactness":'),
+  );
+  const swiftWalletNoteJsonAmountExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-wallet-note-json-amount-exactness":'),
     guard.indexOf('if mode == "--negative-control-mobile-wallet-note-commitment-hex-exactness":'),
   );
   const mobileWalletNoteCommitmentHexExactnessBranch = guard.slice(
@@ -15560,6 +15569,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     guard,
     /def check_mobile_wallet_note_state_strictness\(texts, errors\):[\s\S]*?Swift Offline Note wallet-note state decoder retired aliases[\s\S]*?Android Java Offline Note wallet-note state decoder retired aliases[\s\S]*?Swift Offline Note wallet-note retired state rejection tests[\s\S]*?Android Java Offline Note wallet-note retired state rejection tests[\s\S]*?Offline Note wallet-note retired state README wording/u,
     "SDK parity guard must pin wallet-note retired state rejection across mobile SDKs and docs",
+  );
+  assert.match(
+    guard,
+    /def check_swift_wallet_note_json_amount_exactness\(texts, errors\):[\s\S]*?Swift Offline Note wallet-note direct asset\/amount exactness source[\s\S]*?Swift Offline Note wallet-note JSON amount exactness source[\s\S]*?Swift Offline Note wallet-note JSON amount exactness tests[\s\S]*?--negative-control-swift-wallet-note-json-amount-exactness/u,
+    "SDK parity guard must pin Swift wallet-note direct and JSON asset/amount exactness source and tests",
   );
   assert.match(
     guard,
@@ -15618,8 +15632,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /check_mobile_sccp_runner_coverage\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_issuers\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_submitters\(texts, errors\)[\s\S]*?check_swift_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_bridge_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_mobile_classic_offline_note_fixture_labels\(texts, errors\)[\s\S]*?check_mobile_wallet_note_state_strictness\(texts, errors\)[\s\S]*?check_mobile_offline_note_draft_proof_replacement\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_input_cap\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_positive_amounts\(texts, errors\)[\s\S]*?check_javascript_torii_runner_coverage\(texts, errors\)/u,
-    "SDK parity guard must run retired Offline Note issuer, submitter, Swift builder, bridge builder, fixture-label, wallet-note state, draft-proof, input-cap, and positive-amount checks with the mobile coverage checks",
+    /check_mobile_sccp_runner_coverage\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_issuers\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_submitters\(texts, errors\)[\s\S]*?check_swift_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_bridge_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_mobile_classic_offline_note_fixture_labels\(texts, errors\)[\s\S]*?check_mobile_wallet_note_state_strictness\(texts, errors\)[\s\S]*?check_swift_wallet_note_json_amount_exactness\(texts, errors\)[\s\S]*?check_mobile_offline_note_draft_proof_replacement\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_input_cap\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_positive_amounts\(texts, errors\)[\s\S]*?check_javascript_torii_runner_coverage\(texts, errors\)/u,
+    "SDK parity guard must run retired Offline Note issuer, submitter, Swift builder, bridge builder, fixture-label, wallet-note state, Swift wallet-note amount, draft-proof, input-cap, and positive-amount checks with the mobile coverage checks",
   );
   assert.match(
     mobileRetiredOfflineNoteIssuersBranch,
@@ -15812,6 +15826,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Mobile wallet-note retired state migration negative control must use shared exact-diagnostic detection",
   );
   assert.match(
+    swiftWalletNoteJsonAmountExactnessBranch,
+    /source\s*=\s*"IrohaSwift\/Sources\/IrohaSwift\/OfflineNoteSecureStore\.swift"[\s\S]*?wallet\s*=\s*"IrohaSwift\/Sources\/IrohaSwift\/OfflineNoteWallet\.swift"[\s\S]*?test\s*=\s*"IrohaSwift\/Tests\/IrohaSwiftTests\/OfflineNoteTests\.swift"[\s\S]*?mutations\s*=\s*\([\s\S]*?wallet,[\s\S]*?guard assetId == canonicalAssetId else \{[\s\S]*?guard true \|\| assetId == canonicalAssetId else \{[\s\S]*?wallet,[\s\S]*?guard amount == canonicalAmount else \{[\s\S]*?guard true \|\| amount == canonicalAmount else \{[\s\S]*?source,[\s\S]*?try validateCanonicalAssetId\(assetId\)[\s\S]*?asset id exactness check removed[\s\S]*?source,[\s\S]*?try validateCanonicalAmount\(amount\)[\s\S]*?amount exactness check removed[\s\S]*?source,[\s\S]*?guard amount == canonicalAmount else \{[\s\S]*?guard true \|\| amount == canonicalAmount else \{[\s\S]*?test,[\s\S]*?nonCanonicalAssetObject\["asset_id"\][\s\S]*?nonCanonicalAssetObject\["asset_id"\] = note\.assetId[\s\S]*?test,[\s\S]*?nonCanonicalAmountObject\["amount"\][\s\S]*?nonCanonicalAmountObject\["amount"\] = note\.amount/u,
+    "Swift wallet-note JSON amount exactness negative control must mutate direct, JSON, and test markers",
+  );
+  assert.match(
+    swiftWalletNoteJsonAmountExactnessBranch,
+    /Swift Offline Note wallet-note direct asset\/amount exactness source[\s\S]*?Swift Offline Note wallet-note JSON amount exactness source[\s\S]*?Swift Offline Note wallet-note JSON amount exactness tests/u,
+    "Swift wallet-note JSON amount exactness negative control must require exact direct, JSON, and test diagnostics",
+  );
+  assert.match(
+    swiftWalletNoteJsonAmountExactnessBranch,
+    /finally:[\s\S]*?mutated\[target\]\s*=\s*current[\s\S]*?negative control rejected Swift wallet-note JSON amount exactness drift[\s\S]*?raise SystemExit\(0\)/u,
+    "Swift wallet-note JSON amount exactness negative control must restore and only pass after detected drift",
+  );
+  assert.match(
     guard,
     /def check_mobile_wallet_note_state_strictness\(texts, errors\):[\s\S]*?value\.length\(\) != 64[\s\S]*?lowercaseHexDigit\(value\.charAt\(i \* 2\), field\)[\s\S]*?Android Java Offline Note wallet-note commitment hex exactness source[\s\S]*?walletNoteJsonCodecRejectsNonExactCommitmentHex[\s\S]*?Android Java Offline Note wallet-note commitment hex exactness tests/u,
     "SDK parity guard must pin Android Java wallet-note commitment hex exactness source and tests",
@@ -15868,12 +15897,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileOfflineNoteWalletPositiveAmountsBranch,
-    /Swift Offline Note wallet positive amount source[\s\S]*?Kotlin Offline Note wallet positive amount source[\s\S]*?Android Java Offline Note wallet positive amount source[\s\S]*?Swift Offline Note wallet positive amount tests[\s\S]*?Kotlin Offline Note wallet positive amount tests[\s\S]*?Android Java Offline Note wallet positive amount tests/u,
-    "Mobile Offline Note wallet positive amount negative control must require exact Swift, Kotlin, and Android source/test diagnostics",
+    /Swift Offline Note wallet positive amount source[\s\S]*?Kotlin Offline Note wallet positive amount source[\s\S]*?Android Java Offline Note wallet positive amount source[\s\S]*?Android Java Offline Note receive request positive amount source[\s\S]*?Swift Offline Note wallet positive amount tests[\s\S]*?Kotlin Offline Note wallet positive amount tests[\s\S]*?Android Java Offline Note wallet positive amount tests/u,
+    "Mobile Offline Note wallet positive amount negative control must require exact Swift, Kotlin, Android wallet, and Android receive-request source/test diagnostics",
   );
   assert.match(
     mobileOfflineNoteWalletPositiveAmountsBranch,
-    /guard !parsed\.isNegative && parsed\.digits != "0" else[\s\S]*?guard !parsed\.isNegative else[\s\S]*?require\(value\.signum\(\) > 0\)[\s\S]*?require\(value\.signum\(\) >= 0\)[\s\S]*?if \(decimal\(canonical\)\.signum\(\) <= 0\) \{[\s\S]*?if \(decimal\(canonical\)\.signum\(\) < 0\) \{[\s\S]*?RejectsNonPositiveReceiveAndPaymentAmounts[\s\S]*?AllowsNonPositiveReceiveAndPaymentAmounts/u,
+    /guard !parsed\.isNegative && parsed\.digits != "0" else[\s\S]*?guard !parsed\.isNegative else[\s\S]*?require\(value\.signum\(\) > 0\)[\s\S]*?require\(value\.signum\(\) >= 0\)[\s\S]*?if \(decimal\(canonical\)\.signum\(\) <= 0\) \{[\s\S]*?if \(decimal\(canonical\)\.signum\(\) < 0\) \{[\s\S]*?let canonicalAmount = try canonicalPositivePaymentAmountString\(amount\)[\s\S]*?let canonicalAmount = amount[\s\S]*?CanonicalizesLoadAndReceiveAmounts[\s\S]*?PreservesNonCanonicalLoadAndReceiveAmounts[\s\S]*?RejectsNonPositiveReceiveAndPaymentAmounts[\s\S]*?AllowsNonPositiveReceiveAndPaymentAmounts/u,
     "Mobile Offline Note wallet positive amount negative control must weaken source comparisons and mutate test names",
   );
   assertContainsAll(
@@ -15881,6 +15910,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "testOfflineNoteWalletRejectsNonPositiveLoadAmounts",
       "testOfflineNoteWalletAllowsNonPositiveLoadAmounts",
+      "testOfflineNoteWalletCanonicalizesLoadAndReceiveAmounts",
+      "testOfflineNoteWalletPreservesNonCanonicalLoadAndReceiveAmounts",
       "walletRejectsNonPositiveLoadAmounts",
       "walletAllowsNonPositiveLoadAmounts",
       "private static void walletRejectsNonPositiveLoadAmounts",
@@ -15889,6 +15920,24 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "private static void walletAllowsMalformedLoadAndReceiveAmounts",
     ],
     "Mobile Offline Note wallet positive amount negative control must mutate load source and test coverage",
+  );
+  assertContainsAll(
+    mobileOfflineNoteWalletPositiveAmountsBranch,
+    [
+      "let canonicalAmount = try Self.canonicalPositiveAmountString(amount)",
+      "guard true || amount == canonicalAmount else",
+      'require(amount == canonicalAmount) { \\"amount must be canonical\\" }',
+      'require(true || amount == canonicalAmount) { \\"amount must be canonical\\" }',
+      "if (!amount.equals(canonicalAmount)) {",
+      "if (false && !amount.equals(canonicalAmount)) {",
+      'for nonCanonicalAmount in ["010", "+10"]',
+      'for nonCanonicalAmount in ["10"]',
+      'listOf("010", "+10").forEach { nonCanonicalAmount ->',
+      'listOf("10").forEach { nonCanonicalAmount ->',
+      'for (final String nonCanonicalAmount : Arrays.asList("010", "+10"))',
+      'for (final String nonCanonicalAmount : Arrays.asList("10"))',
+    ],
+    "Mobile Offline Note wallet positive amount negative control must mutate direct receive-request exactness",
   );
   assert.match(
     mobileOfflineNoteWalletPositiveAmountsBranch,
@@ -27214,6 +27263,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const kotlinOfflineWalletInputClaimStrictnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kotlin-offline-wallet-input-claim-strictness":'),
+    guard.indexOf('if mode == "--negative-control-swift-offline-note-issued-claim-exactness":'),
+  );
+  const swiftOfflineNoteIssuedClaimExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-offline-note-issued-claim-exactness":'),
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-note-issued-claim-amount-exactness":'),
+  );
+  const kotlinOfflineNoteIssuedClaimAmountExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-note-issued-claim-amount-exactness":'),
+    guard.indexOf('if mode == "--negative-control-android-offline-note-issued-claim-asset-exactness":'),
+  );
+  const androidOfflineNoteIssuedClaimAssetExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-offline-note-issued-claim-asset-exactness":'),
+    guard.indexOf('if mode == "--negative-control-android-offline-note-issued-claim-amount-exactness":'),
+  );
+  const androidOfflineNoteIssuedClaimAmountExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-offline-note-issued-claim-amount-exactness":'),
     guard.indexOf('if mode == "--negative-control-offline-readiness-artifact-contract":'),
   );
   assert.match(
@@ -27353,8 +27418,33 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Kotlin offline wallet input-claim strictness source",
       "Kotlin offline wallet input-claim strictness tests",
       "--negative-control-kotlin-offline-wallet-input-claim-strictness",
+      "def check_swift_offline_note_issued_claim_exactness(texts, errors):",
+      "check_swift_offline_note_issued_claim_exactness(texts, errors)",
+      "Swift Offline Note issued-claim exactness source",
+      "Swift Offline Note V2 issued-claim exactness source",
+      "Swift Offline Note issued-claim exactness tests",
+      "Swift Offline Note V2 issued-claim exactness tests",
+      "--negative-control-swift-offline-note-issued-claim-exactness",
+      "def check_kotlin_offline_note_issued_claim_amount_exactness(texts, errors):",
+      "check_kotlin_offline_note_issued_claim_amount_exactness(texts, errors)",
+      "Kotlin Offline Note issued-claim amount exactness source",
+      "Kotlin Offline Note wallet amount canonicalization source",
+      "Kotlin Offline Note issued-claim amount exactness tests",
+      "--negative-control-kotlin-offline-note-issued-claim-amount-exactness",
+      "def check_android_offline_note_issued_claim_asset_exactness(texts, errors):",
+      "check_android_offline_note_issued_claim_asset_exactness(texts, errors)",
+      "Android Java Offline Note issued-claim asset exactness source",
+      "Android Java Offline Note issued-claim asset exactness tests",
+      "--negative-control-android-offline-note-issued-claim-asset-exactness",
+      "def check_android_offline_note_issued_claim_amount_exactness(texts, errors):",
+      "check_android_offline_note_issued_claim_amount_exactness(texts, errors)",
+      "Android Java Offline Note issued-claim amount exactness source",
+      "Android Java Offline Note wallet-note amount canonical storage source",
+      "Android Java Offline Note wallet-note JSON amount exactness source",
+      "Android Java Offline Note issued-claim amount exactness tests",
+      "--negative-control-android-offline-note-issued-claim-amount-exactness",
     ],
-    "SDK parity guard must run Kotlin offline wallet compact certificate, recursive proof, device binding, attestation payload, signed payload, amount normalization, and input-claim checks",
+    "SDK parity guard must run Kotlin offline wallet compact certificate, recursive proof, device binding, attestation payload, signed payload, amount normalization, input-claim checks, Swift/Kotlin Offline Note issued-claim amount checks, and Android issued-claim asset/amount checks",
   );
   assert.match(
     kotlinOfflineWalletCompactCertificateProfileBranch,
@@ -27490,6 +27580,66 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     kotlinOfflineWalletInputClaimStrictnessBranch,
     /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Kotlin offline wallet input-claim strictness drift[\s\S]*?raise\s+SystemExit\(0\)/u,
     "Kotlin offline wallet input-claim strictness negative control must restore and only pass after detected drift",
+  );
+  assert.match(
+    swiftOfflineNoteIssuedClaimExactnessBranch,
+    /mutations\s*=\s*\([\s\S]*?OfflineNote\.swift[\s\S]*?guard assetId == canonicalAssetId else \{[\s\S]*?guard true \|\| assetId == canonicalAssetId else \{[\s\S]*?OfflineNote\.swift[\s\S]*?guard amount == canonicalAmount else \{[\s\S]*?guard true \|\| amount == canonicalAmount else \{[\s\S]*?OfflineNoteV2\.swift[\s\S]*?guard assetId == canonicalAssetId else \{[\s\S]*?guard true \|\| assetId == canonicalAssetId else \{[\s\S]*?OfflineNoteV2\.swift[\s\S]*?guard amount == canonicalAmount else \{[\s\S]*?guard true \|\| amount == canonicalAmount else \{[\s\S]*?OfflineNoteTests\.swift[\s\S]*?amount: "05\.5000"[\s\S]*?amount: "5\.5000"[\s\S]*?OfflineNoteV2Tests\.swift[\s\S]*?amount: "05\.5000"[\s\S]*?amount: "5\.5000"/u,
+    "Swift Offline Note issued-claim exactness negative control must mutate V1/V2 source and tests",
+  );
+  assert.match(
+    swiftOfflineNoteIssuedClaimExactnessBranch,
+    /Swift Offline Note issued-claim exactness source[\s\S]*?Swift Offline Note V2 issued-claim exactness source[\s\S]*?Swift Offline Note issued-claim exactness tests[\s\S]*?Swift Offline Note V2 issued-claim exactness tests/u,
+    "Swift Offline Note issued-claim exactness negative control must require exact diagnostics",
+  );
+  assert.match(
+    swiftOfflineNoteIssuedClaimExactnessBranch,
+    /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Swift Offline Note issued-claim exactness drift[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Swift Offline Note issued-claim exactness negative control must restore and only pass after detected drift",
+  );
+  assert.match(
+    kotlinOfflineNoteIssuedClaimAmountExactnessBranch,
+    /mutations\s*=\s*\([\s\S]*?OfflineNote\.kt[\s\S]*?require\(amount == canonicalAmount\) \{ "amount must be canonical" \}[\s\S]*?check\(amount == canonicalAmount\) \{ "amount must be canonical" \}[\s\S]*?OfflineNoteWallet\.kt[\s\S]*?this\.amount = canonicalAmount[\s\S]*?this\.amount = amount[\s\S]*?OfflineNoteWallet\.kt[\s\S]*?canonicalAmount = canonicalPositivePaymentAmountString\(amount\)[\s\S]*?canonicalAmount = amount[\s\S]*?OfflineNoteTest\.kt[\s\S]*?issuedClaimsRejectNonCanonicalAssetIdsAndAmounts[\s\S]*?issuedClaimsAcceptNonCanonicalAssetIdsAndAmounts[\s\S]*?walletCanonicalizesLoadAndReceiveAmounts[\s\S]*?walletPreservesNonCanonicalLoadAndReceiveAmounts/u,
+    "Kotlin Offline Note issued-claim amount exactness negative control must mutate claim, wallet, load, and test markers",
+  );
+  assert.match(
+    kotlinOfflineNoteIssuedClaimAmountExactnessBranch,
+    /Kotlin Offline Note issued-claim amount exactness source[\s\S]*?Kotlin Offline Note wallet amount canonicalization source[\s\S]*?Kotlin Offline Note issued-claim amount exactness tests/u,
+    "Kotlin Offline Note issued-claim amount exactness negative control must require exact diagnostics",
+  );
+  assert.match(
+    kotlinOfflineNoteIssuedClaimAmountExactnessBranch,
+    /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Kotlin Offline Note issued-claim amount exactness drift[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Kotlin Offline Note issued-claim amount exactness negative control must restore and only pass after detected drift",
+  );
+  assert.match(
+    androidOfflineNoteIssuedClaimAssetExactnessBranch,
+    /mutations\s*=\s*\([\s\S]*?OfflineNote\.java[\s\S]*?if \(!assetId\.equals\(canonicalAssetId\)\) \{[\s\S]*?if \(false && !assetId\.equals\(canonicalAssetId\)\) \{[\s\S]*?OfflineNoteTest\.java[\s\S]*?issuedClaimsRejectNonCanonicalAssetIds[\s\S]*?issuedClaimsAcceptNonCanonicalAssetIds/u,
+    "Android Java Offline Note issued-claim asset exactness negative control must mutate source and test markers",
+  );
+  assert.match(
+    androidOfflineNoteIssuedClaimAssetExactnessBranch,
+    /Android Java Offline Note issued-claim asset exactness source[\s\S]*?Android Java Offline Note issued-claim asset exactness tests/u,
+    "Android Java Offline Note issued-claim asset exactness negative control must require exact diagnostics",
+  );
+  assert.match(
+    androidOfflineNoteIssuedClaimAssetExactnessBranch,
+    /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Android Java Offline Note issued-claim asset exactness drift[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Android Java Offline Note issued-claim asset exactness negative control must restore and only pass after detected drift",
+  );
+  assert.match(
+    androidOfflineNoteIssuedClaimAmountExactnessBranch,
+    /mutations\s*=\s*\([\s\S]*?OfflineNote\.java[\s\S]*?if \(!amount\.equals\(this\.canonicalAmount\)\) \{[\s\S]*?if \(false && !amount\.equals\(this\.canonicalAmount\)\) \{[\s\S]*?OfflineNoteWalletNoteJsonCodec\.java[\s\S]*?if \(!amount\.equals\(OfflineNote\.canonicalAmountString\(amount\)\)\) \{[\s\S]*?if \(false && !amount\.equals\(OfflineNote\.canonicalAmountString\(amount\)\)\) \{[\s\S]*?OfflineNoteTest\.java[\s\S]*?issuedClaimsRejectNonCanonicalAmounts[\s\S]*?issuedClaimsAcceptNonCanonicalAmounts[\s\S]*?walletNoteJsonCodecRejectsNonCanonicalAmount[\s\S]*?walletNoteJsonCodecAcceptsNonCanonicalAmount/u,
+    "Android Java Offline Note issued-claim amount exactness negative control must mutate source, JSON source, and test markers",
+  );
+  assert.match(
+    androidOfflineNoteIssuedClaimAmountExactnessBranch,
+    /Android Java Offline Note issued-claim amount exactness source[\s\S]*?Android Java Offline Note wallet-note JSON amount exactness source[\s\S]*?Android Java Offline Note issued-claim amount exactness tests/u,
+    "Android Java Offline Note issued-claim amount exactness negative control must require exact diagnostics",
+  );
+  assert.match(
+    androidOfflineNoteIssuedClaimAmountExactnessBranch,
+    /finally:[\s\S]*?mutated_texts\[target\]\s*=\s*original[\s\S]*?negative control rejected Android Java Offline Note issued-claim amount exactness drift[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Android Java Offline Note issued-claim amount exactness negative control must restore and only pass after detected drift",
   );
   const offlineReadinessArtifactContractBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-readiness-artifact-contract":'),

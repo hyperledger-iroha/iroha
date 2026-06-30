@@ -25,26 +25,30 @@ and completed history lives in [`status.md`](./status.md).
 	  `app_attest_public_key_base64` assertion-key aliases instead of preserving
 	  them, and Kotlin/JVM offline wallet amount normalization must reject
   malformed values instead of coercing them to zero;
-  Kotlin/JVM and Swift payment-token input claims must validate fixed hash
-  fields as exact lowercase 32-byte hex text, canonical asset IDs, amount
-  strings, and optional `claim_hash` values through the canonical issued-claim
-  hash path instead of remaining passive or permissive DTO fields;
+  Kotlin/JVM and Swift payment-token input claims plus Swift, Kotlin/JVM, and
+  Java Android issued claims must validate fixed hash fields as exact lowercase
+  32-byte hex text, canonical asset IDs, amount strings, and optional
+  `claim_hash` values through the canonical issued-claim hash path instead of
+  remaining passive or permissive DTO fields;
 	  Swift, Kotlin Android secure-store, and Java Android wallet-note JSON
 	  decoders must reject retired `spendPending`, `SPEND_PENDING`,
 	  `changePending`, and `CHANGE_PENDING` state spellings instead of migrating
-	  them, Java Android persisted wallet-note `note_commitment_hex` must be exact
-	  lowercase 32-byte hex instead of being lowercased during decode, with Kotlin
-	  docs mirroring the same first-release storage contract;
+	  them, Swift direct and persisted wallet-note fields must reject
+	  non-canonical asset ids and amount text, Java Android persisted wallet-note
+	  JSON must reject non-canonical amount text, Java Android persisted
+	  wallet-note `note_commitment_hex` must be exact lowercase 32-byte hex
+	  instead of being lowercased during decode, with Kotlin docs mirroring the
+	  same first-release storage contract;
   Kotlin/JVM spendable-note selection must
   reject nonpositive `maxInputs` instead of coercing them to one; Swift,
   Kotlin/JVM, and Java Android Offline Note wallets must retain the four-input
   payment cap and reject five-note payments before token construction or note
   state mutation, and must reject zero or negative load, receive, and payment
   amounts before issuer refill preparation, pending receive notes, or
-  payment-token construction can touch randomness or stored note state; Java
-  Android load and receive request paths must canonicalize exact decimal amount
-  strings and reject whitespace, exponent notation, malformed decimals, and
-  nonpositive values before issuer or wallet state is touched;
+  payment-token construction can touch randomness or stored note state; Swift,
+  Kotlin/JVM, and Java Android load and receive request paths must canonicalize
+  positive decimal amount strings before issuer requests, commitment
+  derivation, receive requests, or wallet state are touched;
   Swift, Kotlin/JVM, and Java Android Offline Bearer Cash policies must reject
   nonpositive and inverted custody-hop, lineage-step, QR/stream payload,
   Android key-pool, and transport payload-byte limits instead of accepting
@@ -80,10 +84,14 @@ and completed history lives in [`status.md`](./status.md).
   `proof_backend`, exact lowercase 32-byte `public_inputs_hash_hex` values,
   and canonical non-empty standard base64 `proof_bytes_base64`, without
   object-shaped or `backend:name` verifier-key aliases; Swift payload text
-  amounts, including nested payment-token input claims decoded from JSON, must
-  reject malformed amount strings instead of preserving them, and input-claim
-  `claim_hash` values must match the canonical issued-claim hash; Swift and
-  Kotlin/JVM compact certificates must reject retired assertion-key aliases
+	  amounts, including nested payment-token input claims decoded from JSON, must
+	  reject malformed amount strings instead of preserving them, and input-claim
+	  `claim_hash` values must match the canonical issued-claim hash; direct
+	  Swift, Kotlin/JVM, and Java Android Offline Note receive requests must reject
+	  non-canonical positive amount spellings and non-canonical asset ids while
+	  wallet-local load/receive paths canonicalize user input before persistence;
+	  Swift and
+	  Kotlin/JVM compact certificates must reject retired assertion-key aliases
 	  such as `app_attest_public_key_base64` and require canonical
 	  `assertion_public_key`; Kotlin/JVM wallet device-binding JSON plus Swift,
 	  Kotlin/JVM, and Java Android raw Torii issuer-device-binding inputs must
@@ -118,6 +126,7 @@ and completed history lives in [`status.md`](./status.md).
 	  `--negative-control-mobile-retired-offline-note-issuers` plus
 	  `--negative-control-mobile-retired-qr-prefix-wording` plus
 	  `--negative-control-mobile-wallet-note-retired-state-migration` plus
+	  `--negative-control-swift-wallet-note-json-amount-exactness` plus
 	  `--negative-control-mobile-wallet-note-commitment-hex-exactness` plus
 	  `--negative-control-mobile-offline-note-wallet-input-cap` plus
   `--negative-control-mobile-offline-note-wallet-positive-amounts` plus
@@ -141,7 +150,11 @@ and completed history lives in [`status.md`](./status.md).
 	  `--negative-control-kotlin-offline-wallet-amount-normalization` plus
   `--negative-control-kotlin-offline-wallet-max-inputs-strictness` plus
   `--negative-control-mobile-bearer-cash-policy-validation` plus
-  `--negative-control-kotlin-offline-wallet-input-claim-strictness` modes
+  `--negative-control-kotlin-offline-wallet-input-claim-strictness` plus
+  `--negative-control-swift-offline-note-issued-claim-exactness` plus
+  `--negative-control-kotlin-offline-note-issued-claim-amount-exactness` plus
+  `--negative-control-android-offline-note-issued-claim-asset-exactness` plus
+  `--negative-control-android-offline-note-issued-claim-amount-exactness` modes
   prove that
   zero-signature synthesis, non-canonical base64 aliases, malformed Kotlin/JVM
   compact wallet certificate key/signature fields, retired
@@ -150,7 +163,14 @@ and completed history lives in [`status.md`](./status.md).
 	  attestation receipt or device-proof platform/hash/base64/signature drift,
 	  passive Kotlin/JVM signed wallet payload hash/amount/signature drift,
 	  passive Kotlin/JVM wallet state collection normalization drift,
-	  passive Kotlin/JVM input-claim asset-id/amount/hash drift, retired wallet-note state
+	  passive Kotlin/JVM input-claim asset-id/amount/hash drift, Swift
+	  issued-claim asset-id/amount drift, Kotlin/JVM issued-claim amount drift,
+	  Kotlin/JVM Offline Note wallet amount
+	  normalization drift, Android Java
+	  issued-claim asset-id/amount drift, Swift wallet-note direct asset/amount
+	  drift, Swift or Android Java wallet-note amount JSON normalization drift,
+	  Swift/Kotlin/JVM/Java Android wallet load/receive amount preservation
+	  drift, retired wallet-note state
   migrations, retired QR prefix wording drift, substring platform matching,
   fake registration certificates, old Swift canonical-auth test naming,
   nonpositive spend-selection input coercion, mobile Offline Note wallet

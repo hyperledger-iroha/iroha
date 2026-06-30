@@ -114,6 +114,23 @@ public final class OfflineNote {
     return encodeWithHeader(value, ISSUED_CLAIM_SCHEMA, ISSUED_CLAIM_ADAPTER);
   }
 
+  public static String canonicalAssetId(final String assetId) {
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    writeAssetId(encoder, assetId);
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoder.toByteArray(), NoritoHeader.COMPACT_LEN);
+    final String canonical = readAssetId(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(
+          "Trailing bytes after Offline Note asset id canonicalization");
+    }
+    return canonical;
+  }
+
+  public static String canonicalAmountString(final String amount) {
+    return parseNumeric(amount).canonicalString;
+  }
+
   public static byte[] encodeRedeem(final Redeem value) {
     return encodeWithHeader(value, REDEEM_SCHEMA, REDEEM_ADAPTER);
   }
@@ -1093,12 +1110,18 @@ public final class OfflineNote {
       this.noteCommitment = copy(noteCommitment, "noteCommitment");
       this.keyCertificatePayloadHash =
           copy(keyCertificatePayloadHash, "keyCertificatePayloadHash");
-      this.assetId = Objects.requireNonNull(assetId, "assetId");
-      this.amount = Objects.requireNonNull(amount, "amount");
-      this.canonicalAmount = parseNumeric(amount).canonicalString;
+      this.canonicalAmount = canonicalAmountString(amount);
+      if (!amount.equals(this.canonicalAmount)) {
+        throw new IllegalArgumentException("amount must be canonical");
+      }
+      this.amount = this.canonicalAmount;
       requireHash(this.noteCommitment, "note_commitment");
       requireHash(this.keyCertificatePayloadHash, "key_certificate_payload_hash");
-      parseAssetId(assetId);
+      final String canonicalAssetId = canonicalAssetId(assetId);
+      if (!assetId.equals(canonicalAssetId)) {
+        throw new IllegalArgumentException("asset_id must be canonical");
+      }
+      this.assetId = canonicalAssetId;
     }
 
     public String domain() {

@@ -46,6 +46,7 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     case unsupportedRecursiveProofBackend(expected: String, actual: String)
     case unsupportedDomain(field: String, expected: String, actual: String)
     case unsupportedDeviceAttestationProfile(String)
+    case nonCanonicalField(field: String)
 
     public var errorDescription: String? {
         switch self {
@@ -91,6 +92,8 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
             return "\(field) must be \(expected), got \(actual)."
         case let .unsupportedDeviceAttestationProfile(reason):
             return "Unsupported Offline V2 device attestation profile: \(reason)."
+        case let .nonCanonicalField(field):
+            return "\(field) must be canonical."
         }
     }
 }
@@ -706,8 +709,16 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
         self.domain = domain
         self.noteCommitment = noteCommitment
         self.keyCertificatePayloadHash = keyCertificatePayloadHash
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteV2Error.nonCanonicalField(field: "asset_id")
+        }
+        let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        guard amount == canonicalAmount else {
+            throw OfflineNoteV2Error.nonCanonicalField(field: "amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
     }
 
     public static func fromIssue(_ issue: OfflineNoteIssueV2) throws -> OfflineNoteIssuedClaimV2 {

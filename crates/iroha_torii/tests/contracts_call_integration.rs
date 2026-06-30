@@ -234,7 +234,7 @@ seiyaku ContractCallNestedTransferCallerTest {{
   }}
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -265,7 +265,7 @@ seiyaku ContractCallNestedTransferVaultTest {{
   }}
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }}
 }}

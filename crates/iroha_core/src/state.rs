@@ -77390,8 +77390,8 @@ mod tests {
                 if (dst_domain != name("wonderland.universal")) {
                   return;
                 }
-                transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount);
-                transfer_asset(src, dst, asset_definition("__GOLD_ASSET_DEFINITION_ID__"), payout);
+                transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount, dataspace_id("0"));
+                transfer_asset(src, dst, asset_definition("__GOLD_ASSET_DEFINITION_ID__"), payout, dataspace_id("0"));
               }
 
               kotoage fn main(ev: Json) permission(alias_transfer_run) {
