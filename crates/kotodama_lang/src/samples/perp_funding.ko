@@ -19,10 +19,10 @@ seiyaku PerpFunding {
                             funding_bps: int) permission(Admin) {
     let pay = funding_payment(position_size, mark_price, index_price, funding_bps);
     if pay > 0 {
-      transfer_asset(trader, insurance_fund, stable_asset, pay);
+      transfer_asset(trader, insurance_fund, stable_asset, pay, dataspace_id("0"));
     } else {
       let receive = 0 - pay; // absolute value
-      transfer_asset(insurance_fund, trader, stable_asset, receive);
+      transfer_asset(insurance_fund, trader, stable_asset, receive, dataspace_id("0"));
     }
   }
 

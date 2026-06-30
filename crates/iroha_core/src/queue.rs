@@ -144,7 +144,8 @@ pub(crate) fn execution_context_for_routing_plan(
     )
 }
 
-fn resolve_routing_plan_against_catalogs(
+/// Resolve every coordinator and participant leg in a full routing plan against active catalogs.
+pub(crate) fn resolve_routing_plan_against_catalogs(
     plan: RoutingPlan,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
@@ -8368,6 +8369,192 @@ pub mod tests {
             replay_queue.routing_policy.read().rules[0].lane,
             current_route.lane_id,
             "journal replay must synchronize from committed Nexus before comparing plans"
+        );
+        drop(replay_queue);
+
+        let final_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_stale_dataspace_rebind_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let lane = LaneId::new(3);
+        let old_dataspace = DataSpaceId::new(7);
+        let current_dataspace = DataSpaceId::new(8);
+        let stale_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane,
+                    dataspace_id: old_dataspace,
+                    alias: "shared-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let current_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane,
+                    dataspace_id: current_dataspace,
+                    alias: "shared-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("current lane catalog");
+        let stale_dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: old_dataspace,
+                alias: "old-dataspace".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("stale dataspace catalog");
+        let current_dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: current_dataspace,
+                alias: "current-dataspace".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("current dataspace catalog");
+        let matcher = LaneRoutingMatcher {
+            account: None,
+            instruction: Some("unregister::account".to_owned()),
+            description: None,
+        };
+
+        let mut current_nexus = state.nexus_snapshot();
+        current_nexus.enabled = true;
+        current_nexus.lane_catalog = current_lane_catalog.clone();
+        current_nexus.dataspace_catalog = current_dataspace_catalog.clone();
+        current_nexus.fees.base_fee = Numeric::zero();
+        current_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane,
+            dataspace: Some(current_dataspace),
+            matcher: matcher.clone(),
+        }];
+        state
+            .set_nexus(current_nexus.clone())
+            .expect("apply current Nexus dataspace rebind state");
+
+        let mut stale_nexus = current_nexus;
+        stale_nexus.lane_catalog = stale_lane_catalog.clone();
+        stale_nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_lane_catalog);
+        stale_nexus.dataspace_catalog = stale_dataspace_catalog.clone();
+        stale_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane,
+            dataspace: Some(old_dataspace),
+            matcher,
+        }];
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            authority_id.clone(),
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Unregister::account(authority_id))],
+            Metadata::default(),
+        );
+        let hash = tx.hash();
+        let stale_plan = queue
+            .router
+            .read()
+            .try_route_plan_with_state(&tx, &state)
+            .and_then(|plan| {
+                resolve_routing_plan_against_catalogs(
+                    plan,
+                    &stale_nexus.lane_catalog,
+                    &stale_nexus.dataspace_catalog,
+                )
+            })
+            .expect("stale plan resolves against stale Nexus catalogs");
+        assert_eq!(
+            stale_plan.coordinator_route(),
+            RoutingDecision::new(lane, old_dataspace)
+        );
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &stale_plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
+        drop(queue);
+
+        let replay_queue = Queue::test(config_factory(), &time_source);
+        replay_queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        assert_eq!(
+            replay_queue
+                .dataspace_catalog
+                .read()
+                .by_id(old_dataspace)
+                .map(|entry| entry.alias.as_str()),
+            Some("old-dataspace"),
+            "restart fixture should begin with stale queue-local dataspace catalog"
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        assert!(
+            replay_queue
+                .dataspace_catalog
+                .read()
+                .by_id(old_dataspace)
+                .is_none(),
+            "journal replay must synchronize away from the stale dataspace catalog"
+        );
+        assert_eq!(
+            replay_queue
+                .lane_catalog
+                .read()
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == lane)
+                .map(|entry| entry.dataspace_id),
+            Some(current_dataspace),
+            "journal replay must synchronize the lane's committed dataspace binding"
         );
         drop(replay_queue);
 

@@ -47,7 +47,8 @@ fn roundtrip_transfer_asset() {
             account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
             account_id("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K"),
             asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-            1
+            1,
+            dataspace_id("0")
           );
         }
     "#;

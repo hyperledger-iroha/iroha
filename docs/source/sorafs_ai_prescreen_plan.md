@@ -821,12 +821,13 @@ Completed local foundations:
   workflow, juror notification transport, commit/reveal executor, moderation
   transparency source-entry, Governance DAG, and end-to-end workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
-  offending artifacts in the emitted summary.
+  offending artifacts in the emitted summary. The checker exports its required
+  top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.
 - Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
   collection planner/runner that composes existing runner, committee, operator,
   notification, executor, and transparency canaries before invoking the gate;
-  its dry-run JSON includes an `evidence_contract` map with the schema and
-  required payload fields for every SFM-4a evidence kind.
+  its dry-run JSON includes the checker-backed `evidence_contract` map with the
+  schema and required payload fields for every SFM-4a evidence kind.
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.

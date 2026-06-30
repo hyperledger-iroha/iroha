@@ -34,7 +34,9 @@ from sorafs_runner_preflight import (  # noqa: E402
     run_command_plan,
     require_existing_files,
     require_runner_non_negative_int,
+    require_runner_passthrough_args,
     require_runner_positive_int,
+    require_runner_url_args,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -63,6 +65,8 @@ def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    require_runner_passthrough_args(args, ("sorafs_cli_bin",), (), errors)
+    require_runner_url_args(args, ("torii_url",), errors)
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     if not args.provider_id:
         errors.append("at least one --provider-id is required")

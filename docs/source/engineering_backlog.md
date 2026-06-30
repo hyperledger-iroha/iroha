@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-29
+Last updated: 2026-06-30
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -70,8 +70,17 @@ components cannot be relabelled as live canary evidence or message/finality
 transcript material in raw all-lanes evidence, copied all-lanes public
 summaries, bundled public `cryptographic_evidence`, or
 standalone readiness public crypto rows; the standalone readiness CLI also
-suppresses the forged hash from public JSON when that rejection fires. The same
-source-material template replay paths now convert template-loader
+suppresses the forged hash from public JSON when that rejection fires. Public
+TRON route-canary transcript evidence now also carries the transaction id,
+transaction owner address, signature SHA-256, and recovered signature address;
+standalone readiness, release-bundle pre-render validation, and strict bundle
+verification all require non-zero canonical transaction/signature hashes,
+non-zero canonical `0x41` owner/recovered addresses, recovered-owner equality,
+empty TRON-only cells for non-TRON or absent route-canary rows, and binding back
+to the embedded all-lanes route-canary evidence. The template-hash role
+separation, Markdown row schema, and embedded-lane binding regressions pin those
+TRON transcript fields while the live verifier deployment blockers remain open.
+The same source-material template replay paths now convert template-loader
 `argparse.ArgumentTypeError`, `SystemExit`, `RuntimeError`, `TypeError`, and
 `ValueError` failures into fixed template-material validation blockers in
 copied all-lanes summaries, release bundle pre-render checks, strict bundle
@@ -278,7 +287,12 @@ Standalone copied route-canary records now use the strict domain-specific field
 sets, so EVM, Solana, TON, and TRON canary fields cannot be replayed into the
 wrong launch lane before public summaries are rendered, and omitted
 domain-specific route-canary fields now fail with bounded missing-field blockers
-even for diagnostic not-ready lanes. Other fixed nested copied lane objects
+even for diagnostic not-ready lanes. Direct all-lanes release-checklist
+validation now rejects unexpected copied route-canary fields, including
+`route_canary.blockers`, with fixed schema blockers before live-canary or
+no-unresolved checklist items can pass, so copied operator text, sensitive field
+names, malformed field names, or non-string keys cannot be silently ignored or
+echoed. Other fixed nested copied lane objects
 now do the same for omitted source-record hash, source-adapter gate/audit,
 EVM live metadata, destination-binding, and route-allowlist fields before
 public summaries are rendered. Copied EVM live metadata and destination-family
@@ -289,6 +303,23 @@ not-required material, gate-to-audit, and hash-role semantics for diagnostic
 not-ready lanes before public summaries are rendered. Copied source-record,
 destination-binding, route-allowlist, and route-canary commitment hashes must
 also remain canonical non-zero bytes32 values on diagnostic not-ready lanes.
+Release-checklist validation now canonicalizes copied source-adapter gate
+blockers before interpreting `required`/`ready` flag types, so malformed gate
+flags cannot mask scalar, sensitive-name, duplicate, or valid operator blockers
+from governed-deployment and no-unresolved checklist evidence.
+The same release-checklist path now requires claimed-present source verifier
+material and source-adapter deployment records to carry canonical non-zero
+source-record hashes, and requires claimed-present destination binding and
+route allowlist summaries to carry canonical non-zero actual and expected
+hashes with actual/expected equality, so copied readiness flags cannot certify
+missing, zero, malformed, or drifted hash-bound source, rollout, or route
+evidence.
+Direct release-checklist lane schema validation now also rejects unexpected
+fields at the copied lane root, `records`, `source_record_hashes`,
+`source_adapter_gate`, `evm_live_metadata`, `destination_binding`, and
+`route_allowlist` levels, and rejects malformed copied `source_record_hashes`
+or EVM live metadata containers, so schema drift cannot be ignored before
+category checklist and `no_unresolved_blockers` gates are computed.
 The active Ethereum launch lane is ready-required even inside not-ready
 aggregate diagnostics, so copied active-lane `production_ready`, record flags,
 source-gate readiness, and blockers cannot be downgraded before public
@@ -365,6 +396,74 @@ source, `evidence_bound = true`, and route/destination hashes matching the
 sibling lane records before Markdown or public JSON output is written; the
 active launch lane cannot bypass those route-canary semantic checks by marking
 its copied standalone or bundled lane summary not-ready.
+Direct all-lanes release-checklist validation now also requires copied
+route-canary `route_allowlist_hash` and `destination_binding_hash` fields to be
+canonical non-zero bytes32 values that match their sibling route and
+destination summaries before the live-route-canary or no-unresolved checklist
+items can pass, so `evidence_bound = true` cannot hide missing, zero,
+malformed, or drifted canary bindings.
+The same direct checklist path now rejects copied route-canary `evidence_hash`
+values that replay the same lane's source-record hashes, destination binding
+hash, route allowlist hash, source-adapter gate hash, or source-adapter gate
+audit hashes before live-route-canary or no-unresolved checklist items can
+pass.
+Direct release-checklist validation now also requires copied route-canary
+proof-context scalars to stay lane-specific: EVM receipt/log/proof constants,
+TRON block/log/proof constants plus owner/recovered-owner addresses, Solana
+ProgramData address/slot, and TON last-transaction LT must all keep canonical
+production shapes before live-route-canary or no-unresolved checklist items can
+pass.
+Direct release-checklist validation now also requires copied EVM, TRON, and TON
+route-canary transcript hashes to remain canonical non-zero bytes32 values and
+role-separated from governed lane hashes and sibling transcript hashes before
+live-route-canary or no-unresolved checklist items can pass.
+The same direct checklist path now rejects built-in source-material template
+hashes copied into route-canary evidence or transcript fields, and template
+hash loader failures collapse to fixed checklist blockers without leaking
+helper exception text.
+Direct release-checklist validation now also requires copied destination
+bindings to carry canonical keys, exact recomputed flags, and hashes that
+recompute from those keys, while copied route-allowlist hashes must recompute
+from the copied source material, source-adapter deployment, and destination
+hashes. Route recompute helper failures collapse to fixed checklist blockers
+before governed-deployment, route, or no-unresolved checklist items can pass.
+Direct release-checklist top-level lane blockers now also keep their category
+boundaries explicit: valid non-route lane blockers only hold the
+no-unresolved gate, route-canary lane blockers hold the live-canary gate too,
+and encoded sensitive, control-character, Markdown-unsafe, or duplicate lane
+blocker text collapses to fixed diagnostics without leaking copied operator
+text.
+Route-canary lane-blocker classification now uses the same decoded, casefolded
+public blocker key as duplicate detection, so safe case variants or encoded
+spaces in copied route-canary blockers cannot bypass the live-canary gate while
+unsafe decoded blockers still collapse to fixed diagnostics.
+Deployment and route-allowlist lane-blocker classification now uses the same
+decoded, casefolded public blocker key, so safe case variants or encoded spaces
+cannot bypass the governed-deployment or route checklist gates.
+The same direct checklist path now canonicalizes root preflight blockers before
+seeding `no_unresolved_blockers`, so scalar roots, non-string entries, encoded
+sensitive/control/Markdown-unsafe text, and decoded duplicate root blockers
+become fixed diagnostics instead of leaking copied root text.
+Direct release-checklist lane labels now only include copied `chain` text when
+it is one of the known SCCP launch-chain spellings; malformed, unsupported, or
+hostile chain strings fall back to bounded `lane`/`domain N` labels before
+metadata, canary, or unresolved blockers are rendered.
+Direct release-checklist source-record validation now also rejects copied source
+adapter deployment hashes that reuse the copied source verifier material hash,
+so canonical non-zero but role-replayed source records cannot satisfy the
+source-record or no-unresolved gates.
+Direct governed-deployment validation now also rejects destination binding
+hashes that replay copied source verifier material or source adapter deployment
+hashes, so self-consistent destination hash pairs cannot satisfy governed
+deployment or no-unresolved readiness when they reuse source roles.
+Direct route-allowlist validation now also rejects route hashes that replay
+copied source verifier material, source adapter deployment, or destination
+binding hashes, so self-consistent route hash pairs cannot satisfy route or
+no-unresolved readiness when they reuse governed roles.
+Direct route-canary validation now also emits the exact unbound-evidence
+blocker whenever `evidence_bound` is not `true`, even when copied top-level lane
+blockers already mention route-canary work, so copied blockers cannot mask the
+evidence-bound failure.
 Active EVM route-canary proof metadata must likewise keep target domain, proof
 version, proof source domain, message-proof usage, and finalized receipt state
 exact in standalone copied summaries and pre-render bundle validation even when
@@ -793,6 +892,15 @@ Standalone release-readiness and strict-verifier active-lane checklist blocker
 validation now also numbers repeated duplicate-string diagnostics for distinct
 copied lane blocker groups, so encoded active-lane duplicate groups stay
 visible without leaking copied blocker text into category diagnostics.
+The same active-lane category routing now classifies deployment, route-allowlist,
+and route-canary copied lane blockers with the decoded, casefolded public
+blocker key, so safe case variants or encoded spaces cannot bypass the
+category-specific active checklist item while unsafe decoded blockers still
+collapse to fixed diagnostics.
+Active-launch blocker collection now scopes copied domain-prefixed blockers
+with the same decoded public key, so encoded or case-varied non-active domain
+blockers cannot be reclassified as active launch blockers while active-domain
+and unscoped lane blockers still fail closed.
 Standalone release-readiness and strict-verifier active-launch blocker
 collection now also numbers repeated duplicate-string diagnostics for distinct
 copied top-level evidence blocker groups and active-lane blocker groups, so
@@ -1020,8 +1128,9 @@ empty-component, or duplicate `UnitTest` ids, `Execution` ids, `UnitTestResult`
 `testId`/`executionId` bindings, requires every `UnitTest` definition to carry
 an id and every present `Execution` definition to carry an id, and requires each
 accepted `UnitTestResult` to carry a unique SCCP `testName`; direct `Results`
-children must all be `UnitTestResult` rows and direct `TestDefinitions`
-children must all be `UnitTest` definitions; every `UnitTestResult` outcome
+children must all be leaf `UnitTestResult` rows, direct `TestDefinitions`
+children must all be `UnitTest` definitions, each `UnitTest` must contain only
+direct leaf `Execution` and `TestMethod` children, and every `UnitTestResult` outcome
 must be present and literal `Passed`, and any present `isExecuted` flag must be
 unpadded literal lowercase `true`, not a truthy numeric, padded,
 control-bearing, or case-variant alias, so one passed SCCP result row cannot be
@@ -1078,6 +1187,26 @@ boundary: production-ready route manifests reject to-do/deferred-work,
 `your-*` placeholder material in both string values and field names before TOML
 rendering, and the strict release/source-inventory gates pin the implementation
 plus direct adversarial tests.
+BSC/TRON production route manifests must also keep deployment evidence hashes
+role-separated from verifier code, verifier key, destination binding, proof
+artifact, and proving-key hashes before runtime config admission or route
+manifest ISI execution can accept a production-ready route.
+BSC/TRON runtime route-manifest admission also rejects copied post-deploy
+source/route-canary evidence roles: `post_deploy_route_canary_evidence_hash`
+cannot replay `post_deploy_source_bridge_config_hash`, and
+`post_deploy_route_canary_transaction_id` cannot replay
+`post_deploy_source_event_transaction_id`, matching the deploy-script
+fail-closed evidence boundary before production-ready manifests can mutate
+state.
+BSC runtime route-manifest admission also keeps browser-prover sidecar hashes
+role-separated from route/verifier/proof/deployment hashes and from each other,
+so a copied `module_hash` or `manifest_hash` cannot replace verifier, binding,
+proof, native-prover, deployment-evidence, or sibling browser-prover material
+after the generated route manifest reaches the node.
+BSC runtime route-manifest admission also treats browser-prover
+`module_specifier` as canonical generated-manifest text: when present it must be
+non-empty and have no surrounding whitespace, so the node rejects padded or empty
+specifiers instead of silently trimming them.
 TRON route-config handoff also rejects duplicate camelCase/snake_case aliases
 for required route-manifest containers and scalars, including production flags,
 post-deploy evidence, destination rollout/binding domains and hashes, fixed

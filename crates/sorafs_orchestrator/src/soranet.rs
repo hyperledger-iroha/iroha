@@ -2696,10 +2696,17 @@ mod tests {
 
         let err =
             RelayDirectory::from_guard_directory_bytes(&bytes).expect_err("hash mismatch expected");
-        assert!(matches!(
-            err,
-            GuardDirectoryError::CertificateDirectoryHashMismatch { .. }
-        ));
+        match err {
+            GuardDirectoryError::CertificateDirectoryHashMismatch { .. } => {}
+            GuardDirectoryError::Decode { source } => {
+                let message = source.to_string();
+                assert!(
+                    message.contains("directory_hash"),
+                    "unexpected decode error: {message}"
+                );
+            }
+            other => panic!("unexpected guard directory error: {other:?}"),
+        }
     }
 
     fn relay_id(byte: u8) -> [u8; 32] {

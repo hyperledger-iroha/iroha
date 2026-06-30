@@ -8,6 +8,6 @@ seiyaku DetailAndTransfer {
     let from = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let to = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
     let asset = asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
-    transfer_asset(from, to, asset, 10);
+    transfer_asset(from, to, asset, 10, dataspace_id("0"));
   }
 }

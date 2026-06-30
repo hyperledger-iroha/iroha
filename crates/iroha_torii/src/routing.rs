@@ -20351,6 +20351,7 @@ async fn submit_contract_call_request(
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let payload_digest_hex = contract_payload_digest_hex(normalized_payload.as_ref());
 
     let metadata = build_contract_call_metadata(
         &manifest,
@@ -20390,17 +20391,32 @@ async fn submit_contract_call_request(
             submitted: true,
             dataspace: dataspace.clone(),
             contract_address: Some(contract_address.clone()),
-            code_hash_hex,
-            abi_hash_hex,
+            code_hash_hex: code_hash_hex.clone(),
+            abi_hash_hex: abi_hash_hex.clone(),
             creation_time_ms,
             transaction_ttl_ms,
             tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
             entrypoint: response_entrypoint.clone(),
+            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
+                status: "submitted",
+                dataspace: &dataspace,
+                contract_alias: contract_alias.as_ref(),
+                contract_address: &contract_address,
+                code_hash_hex: &code_hash_hex,
+                abi_hash_hex: &abi_hash_hex,
+                tx_hash_hex: Some(tx_hash_hex),
+                entrypoint: response_entrypoint.clone(),
+                entrypoint_hash_hex: Some(entrypoint_hash_hex),
+                gas_limit,
+                gas_asset_id: gas_asset_id.clone(),
+                fee_sponsor: fee_sponsor_literal.clone(),
+                payload_digest_hex: &payload_digest_hex,
+            }),
         });
     }
 
@@ -20457,17 +20473,32 @@ async fn submit_contract_call_request(
             submitted: true,
             dataspace: dataspace.clone(),
             contract_address: Some(contract_address.clone()),
-            code_hash_hex,
-            abi_hash_hex,
+            code_hash_hex: code_hash_hex.clone(),
+            abi_hash_hex: abi_hash_hex.clone(),
             creation_time_ms,
             transaction_ttl_ms,
             tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
             entrypoint: response_entrypoint.clone(),
+            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
+                status: "submitted",
+                dataspace: &dataspace,
+                contract_alias: contract_alias.as_ref(),
+                contract_address: &contract_address,
+                code_hash_hex: &code_hash_hex,
+                abi_hash_hex: &abi_hash_hex,
+                tx_hash_hex: Some(tx_hash_hex),
+                entrypoint: response_entrypoint.clone(),
+                entrypoint_hash_hex: Some(entrypoint_hash_hex),
+                gas_limit,
+                gas_asset_id: gas_asset_id.clone(),
+                fee_sponsor: fee_sponsor_literal.clone(),
+                payload_digest_hex: &payload_digest_hex,
+            }),
         });
     }
 
@@ -20480,10 +20511,10 @@ async fn submit_contract_call_request(
     Ok(ContractCallResponseDto {
         ok: true,
         submitted: false,
-        dataspace,
-        contract_address: Some(contract_address),
-        code_hash_hex,
-        abi_hash_hex,
+        dataspace: dataspace.clone(),
+        contract_address: Some(contract_address.clone()),
+        code_hash_hex: code_hash_hex.clone(),
+        abi_hash_hex: abi_hash_hex.clone(),
         creation_time_ms,
         transaction_ttl_ms,
         tx_hash_hex: None,
@@ -20492,7 +20523,22 @@ async fn submit_contract_call_request(
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
-        entrypoint: response_entrypoint,
+        entrypoint: response_entrypoint.clone(),
+        operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
+            status: "pending_signature",
+            dataspace: &dataspace,
+            contract_alias: contract_alias.as_ref(),
+            contract_address: &contract_address,
+            code_hash_hex: &code_hash_hex,
+            abi_hash_hex: &abi_hash_hex,
+            tx_hash_hex: None,
+            entrypoint: response_entrypoint,
+            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            gas_limit,
+            gas_asset_id,
+            fee_sponsor: fee_sponsor_literal,
+            payload_digest_hex: &payload_digest_hex,
+        }),
     })
 }
 
@@ -30636,6 +30682,9 @@ pub struct DeployContractDto {
     /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
+    /// Optional governance manifest approvers, in addition to the transaction authority.
+    #[norito(default)]
+    pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -30723,6 +30772,9 @@ pub struct DeployContractBundleDto {
     /// Optional transaction time-to-live in milliseconds applied to deploy and init transactions.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
+    /// Optional governance manifest approvers, in addition to the transaction authority.
+    #[norito(default)]
+    pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
     /// Contracts to deploy as part of the bundle.
     pub contracts: Vec<DeployContractBundleContractDto>,
     /// Optional initialization calls to run after deployment.
@@ -31270,6 +31322,23 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
 }
 
 #[cfg(feature = "app_api")]
+fn insert_gov_manifest_approvers_metadata(
+    metadata: &mut Metadata,
+    approvers: &[iroha_data_model::account::AccountId],
+) {
+    if approvers.is_empty() {
+        return;
+    }
+    let key = Name::from_str("gov_manifest_approvers")
+        .expect("static metadata key `gov_manifest_approvers`");
+    let accounts = approvers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    metadata.insert(key, IrohaJson::new(accounts));
+}
+
+#[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -31711,6 +31780,57 @@ pub struct ContractCallSimulateDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Public, normalized evidence for a contract operation.
+pub struct OperationReceiptDto {
+    pub operation_kind: String,
+    pub status: String,
+    pub transport: String,
+    pub dataspace: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_hash_hex: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gas_limit: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gas_used: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gas_asset_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub fee_sponsor: Option<String>,
+    pub payload_digest_hex: String,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload returned after enqueuing a contract call transaction.
 pub struct ContractCallResponseDto {
@@ -31755,6 +31875,55 @@ pub struct ContractCallResponseDto {
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+    /// Public normalized operation evidence.
+    pub operation_receipt: OperationReceiptDto,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_payload_digest_hex(payload: Option<&IrohaJson>) -> String {
+    let canonical = payload
+        .and_then(|value| norito::json::to_json(value).ok())
+        .unwrap_or_default();
+    hex::encode(blake3_hash(canonical.as_bytes()).as_bytes())
+}
+
+#[cfg(feature = "app_api")]
+struct ContractCallReceiptInput<'a> {
+    status: &'a str,
+    dataspace: &'a str,
+    contract_alias: Option<&'a iroha_data_model::smart_contract::ContractAlias>,
+    contract_address: &'a iroha_data_model::smart_contract::ContractAddress,
+    code_hash_hex: &'a str,
+    abi_hash_hex: &'a str,
+    tx_hash_hex: Option<String>,
+    entrypoint: Option<String>,
+    entrypoint_hash_hex: Option<String>,
+    gas_limit: u64,
+    gas_asset_id: Option<String>,
+    fee_sponsor: Option<String>,
+    payload_digest_hex: &'a str,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_call_operation_receipt(input: ContractCallReceiptInput<'_>) -> OperationReceiptDto {
+    OperationReceiptDto {
+        operation_kind: "contract_call".to_owned(),
+        status: input.status.to_owned(),
+        transport: "torii".to_owned(),
+        dataspace: input.dataspace.to_owned(),
+        contract_alias: input.contract_alias.map(ToString::to_string),
+        contract_address: Some(input.contract_address.to_string()),
+        code_hash_hex: Some(input.code_hash_hex.to_owned()),
+        abi_hash_hex: Some(input.abi_hash_hex.to_owned()),
+        tx_hash_hex: input.tx_hash_hex,
+        entrypoint: input.entrypoint,
+        entrypoint_hash_hex: input.entrypoint_hash_hex,
+        gas_limit: Some(input.gas_limit),
+        gas_used: None,
+        gas_asset_id: input.gas_asset_id,
+        fee_sponsor: input.fee_sponsor,
+        payload_digest_hex: input.payload_digest_hex.to_owned(),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -34019,6 +34188,7 @@ async fn submit_contract_deploy_request(
         contract_alias,
         lease_expiry_ms,
         transaction_ttl_ms,
+        gov_manifest_approvers,
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
@@ -34088,7 +34258,8 @@ async fn submit_contract_deploy_request(
         deploy_nonce_key,
         dm::Json::new(next_nonce),
     )));
-    let metadata = metadata_with_default_gas_asset(&state);
+    let mut metadata = metadata_with_default_gas_asset(&state);
+    insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
     if let Some(transaction_ttl_ms) = transaction_ttl_ms {
         builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
@@ -34334,6 +34505,7 @@ async fn execute_contract_bundle_request(
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
                     transaction_ttl_ms: req.transaction_ttl_ms,
+                    gov_manifest_approvers: req.gov_manifest_approvers.clone(),
                 },
                 Some(deploy_nonce),
                 "/v1/contracts/deploy-bundle",
@@ -34487,6 +34659,7 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         contract_alias,
         lease_expiry_ms,
         transaction_ttl_ms,
+        gov_manifest_approvers,
     } = req;
     DeployContractBundleDto {
         bundle_name: "single-contract-deploy".to_owned(),
@@ -34494,6 +34667,7 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         private_key,
         default_dataspace: None,
         transaction_ttl_ms,
+        gov_manifest_approvers,
         contracts: vec![DeployContractBundleContractDto {
             name: contract_alias.to_string(),
             contract_alias,
@@ -34507,20 +34681,29 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
 }
 
 #[cfg(feature = "app_api")]
-const SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS: &[&str] = &[
-    "name",
-    "contract_alias",
-    "contract_address",
-    "previous_contract_address",
-    "upgraded",
-    "dataspace",
-    "deploy_nonce",
-    "code_hash_hex",
-    "abi_hash_hex",
-    "tx_hash_hex",
-    "pipeline_status",
-    "status",
-];
+#[cfg(feature = "app_api")]
+fn deploy_operation_receipt(
+    contract: &DeployContractBundleContractReceiptDto,
+) -> OperationReceiptDto {
+    OperationReceiptDto {
+        operation_kind: "contract_deploy".to_owned(),
+        status: contract.status.clone(),
+        transport: "torii".to_owned(),
+        dataspace: contract.dataspace.clone(),
+        contract_alias: Some(contract.contract_alias.to_string()),
+        contract_address: Some(contract.contract_address.to_string()),
+        code_hash_hex: Some(contract.code_hash_hex.clone()),
+        abi_hash_hex: Some(contract.abi_hash_hex.clone()),
+        tx_hash_hex: contract.tx_hash_hex.clone(),
+        entrypoint: None,
+        entrypoint_hash_hex: None,
+        gas_limit: None,
+        gas_used: None,
+        gas_asset_id: None,
+        fee_sponsor: None,
+        payload_digest_hex: hex::encode(blake3_hash(contract.code_hash_hex.as_bytes()).as_bytes()),
+    }
+}
 
 #[cfg(feature = "app_api")]
 fn single_contract_deploy_receipt_json(
@@ -34534,18 +34717,14 @@ fn single_contract_deploy_receipt_json(
     let Some(contract) = receipt.contracts.first() else {
         return Ok(value);
     };
-    let contract_value = norito::json::to_value(contract).map_err(|err| {
+    let operation_receipt = deploy_operation_receipt(contract);
+    let operation_receipt_value = norito::json::to_value(&operation_receipt).map_err(|err| {
         conversion_error(format!(
-            "failed to encode single contract deploy receipt item: {err}"
+            "failed to encode single contract deploy operation receipt: {err}"
         ))
     })?;
-    if let (Some(root), Some(contract_object)) = (value.as_object_mut(), contract_value.as_object())
-    {
-        for field in SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS {
-            if let Some(field_value) = contract_object.get(*field).cloned() {
-                root.insert((*field).to_owned(), field_value);
-            }
-        }
+    if let Some(root) = value.as_object_mut() {
+        root.insert("operation_receipt".to_owned(), operation_receipt_value);
     }
     Ok(value)
 }
@@ -34772,6 +34951,7 @@ mod contract_bundle_tests {
             private_key,
             default_dataspace: None,
             transaction_ttl_ms: None,
+            gov_manifest_approvers: Vec::new(),
             contracts: vec![DeployContractBundleContractDto {
                 name: "demo.greeter".to_owned(),
                 contract_alias: sample_alias("greeter::universal"),
@@ -38109,6 +38289,7 @@ mod deploy_tests {
             contract_alias: "fixture::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
             transaction_ttl_ms: None,
+            gov_manifest_approvers: Vec::new(),
         };
 
         #[cfg(feature = "telemetry")]
@@ -88596,6 +88777,47 @@ mod nexus_lane_lifecycle_tests {
             queue.queue_limits().for_lane(LaneId::SINGLE),
             before_limits,
             "rejected default-lane retire plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_same_plan_default_lane_replacement_without_queue_refresh()
+    {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                LaneId::SINGLE,
+                "fresh-default-route",
+                987_654,
+            )],
+            retire: vec![LaneId::SINGLE],
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("same-plan default-lane replacement must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("lane lifecycle plan cannot replace routing default lane 0")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected default-lane replacement plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(LaneId::SINGLE),
+            before_limits,
+            "rejected default-lane replacement plan must not refresh queue limits"
         );
     }
 

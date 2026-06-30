@@ -19,7 +19,10 @@ use iroha_crypto as _; // for Hash types in new APIs
 use iroha_data_model::{
     Identifiable,
     account::AccountId,
-    asset::id::{AssetDefinitionId, AssetId},
+    asset::{
+        AssetBalanceScope,
+        id::{AssetDefinitionId, AssetId},
+    },
     domain::DomainId,
     escrow::EscrowId,
     isi::{
@@ -1890,17 +1893,23 @@ fn main(account: AccountId) {
         let asset_definition =
             iroha_data_model::asset::id::AssetDefinitionId::parse_address_literal(asset_literal)
                 .expect("asset definition literal");
-        let from_asset =
-            iroha_data_model::asset::id::AssetId::of(asset_definition.clone(), from.clone());
-        let to_asset =
-            iroha_data_model::asset::id::AssetId::of(asset_definition.clone(), to.clone());
+        let from_asset = iroha_data_model::asset::id::AssetId::with_scope(
+            asset_definition.clone(),
+            from.clone(),
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+        );
+        let to_asset = iroha_data_model::asset::id::AssetId::with_scope(
+            asset_definition.clone(),
+            to.clone(),
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+        );
         let src = format!(
             r#"
 fn main() {{
-  transfer_asset(account_id("{from_literal}"), account_id("{to_literal}"), asset_definition("{asset_literal}"), 1);
+  transfer_asset(account_id("{from_literal}"), account_id("{to_literal}"), asset_definition("{asset_literal}"), 1, dataspace_id("0"));
   mint_asset(account_id("{to_literal}"), asset_definition("{asset_literal}"), 2);
   burn_asset(account_id("{from_literal}"), asset_definition("{asset_literal}"), 1);
-  call transfer_asset(account_id("{to_literal}"), account_id("{from_literal}"), asset_definition("{asset_literal}"), 1);
+  call transfer_asset(account_id("{to_literal}"), account_id("{from_literal}"), asset_definition("{asset_literal}"), 1, dataspace_id("0"));
   call mint_asset(account_id("{from_literal}"), asset_definition("{asset_literal}"), 2);
   call burn_asset(account_id("{to_literal}"), asset_definition("{asset_literal}"), 1);
 }}
@@ -1914,7 +1923,10 @@ fn main() {{
         let code = &bytes[parsed.code_offset..];
 
         for (syscall, label) in [
-            (ivm_abi::syscalls::SYSCALL_TRANSFER_ASSET, "TRANSFER_ASSET"),
+            (
+                ivm_abi::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED,
+                "TRANSFER_ASSET_SCOPED",
+            ),
             (ivm_abi::syscalls::SYSCALL_MINT_ASSET, "MINT_ASSET"),
             (ivm_abi::syscalls::SYSCALL_BURN_ASSET, "BURN_ASSET"),
         ] {
@@ -1954,10 +1966,10 @@ fn main() {{
             (
                 r#"
 fn main(account: AccountId) {
-  transfer_asset(account, account, name("not_asset"), 1);
+  transfer_asset(account, account, name("not_asset"), 1, dataspace_id("0"));
 }
 "#,
-                "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)",
+                "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId)",
             ),
             (
                 r#"
@@ -6669,7 +6681,7 @@ fn main() {{
 fn main() {{
   let caller = sysvar_authority();
   let asset = asset_definition("{asset_literal}");
-  transfer_asset(caller, caller, asset, 1);
+  transfer_asset(caller, caller, asset, 1, dataspace_id("0"));
   set_account_detail(caller, name("status"), json("{{}}"));
 }}
 "#
@@ -6682,7 +6694,10 @@ fn main() {{
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        let authority_asset = format!("asset:{asset_literal}:$authority");
+        let authority_asset = format!(
+            "asset:{asset_literal}:$authority:dataspace:{}",
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+        );
         let authority_detail = "account.detail:$authority:status".to_owned();
 
         assert!(hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
@@ -6891,7 +6906,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@paynet"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@paynet"), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -6921,7 +6936,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@"), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -6951,7 +6966,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -6981,7 +6996,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank."), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank."), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -7010,7 +7025,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@paynet"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@paynet"), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -7040,7 +7055,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@"), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -7070,7 +7085,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -7100,7 +7115,7 @@ fn main() {{
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank."), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank."), asset_definition("{asset_literal}"), 1, dataspace_id("0")); }}"#
         );
 
         let compiler = test_mode_compiler();
@@ -7129,7 +7144,7 @@ fn main() {{
         let src = r#"
 seiyaku Test {
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
-    transfer_asset(from, to, asset, amount);
+    transfer_asset(from, to, asset, amount, dataspace_id("0"));
   }
 }
 "#;
@@ -8758,7 +8773,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
-    transfer_asset(from, to, asset, amount);
+    transfer_asset(from, to, asset, amount, dataspace_id("0"));
   }
 }
 "#;
@@ -8789,7 +8804,7 @@ seiyaku Test {
             r#"
 seiyaku Test {{
   kotoage fn move(from: AccountId, to: AccountId, amount: int) permission(Admin) {{
-    transfer_asset(from, to, asset_definition("{asset_literal}"), amount);
+    transfer_asset(from, to, asset_definition("{asset_literal}"), amount, dataspace_id("0"));
   }}
 }}
 "#
@@ -8844,7 +8859,7 @@ seiyaku Test {{
 
   kotoage fn move(from: AccountId, to: AccountId, amount: int) permission(Admin) {{
     let asset = settlement_asset();
-    transfer_asset(from, to, asset, amount);
+    transfer_asset(from, to, asset, amount, dataspace_id("0"));
   }}
 }}
 "#
@@ -8879,7 +8894,7 @@ seiyaku Test {{
 seiyaku Test {
   #[access(read="*", write="*")]
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
-    transfer_asset(from, to, asset, amount);
+    transfer_asset(from, to, asset, amount, dataspace_id("0"));
   }
 }
 "#;
@@ -8899,7 +8914,7 @@ seiyaku Test {
 seiyaku Test {{
   #[access(read="{account_key}", write="{account_key}")]
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {{
-    transfer_asset(from, to, asset, amount);
+    transfer_asset(from, to, asset, amount, dataspace_id("0"));
   }}
 }}
 "#
@@ -11912,6 +11927,7 @@ impl Compiler {
                             to,
                             asset,
                             amount,
+                            dataspace,
                         } => {
                             // Pointer-ABI: accept literal pointers (from string_map) or runtime pointers.
                             let r_amt = src_reg(amount, scratch1, &mut code)?;
@@ -11943,15 +11959,24 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
                             push_word(&mut code, encode_addi(13, r_amt, 0)?);
-                            // Mirror TLVs for r10, r11, r12 into INPUT
+                            if let Some(dataspace_str) = string_map
+                                .get(&(func_idx, *dataspace))
+                                .map(|s| DataKey(DataKind::DataSpaceId, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 14, dataspace_str);
+                            } else {
+                                let r_dataspace = src_reg(dataspace, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(14, r_dataspace, 0)?);
+                            }
+                            // Mirror TLVs for r10, r11, r12, r14 into INPUT.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             // r10
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            // Preserve the `from` account TLV pointer (x14) before it gets reused
-                            push_word(&mut code, encode_addi(14, 10, 0)?);
+                            // Preserve the `from` account TLV pointer (x15) before x10 gets reused.
+                            push_word(&mut code, encode_addi(15, 10, 0)?);
                             // r11
                             push_word(&mut code, encode_addi(10, 11, 0)?);
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -11964,11 +11989,15 @@ impl Compiler {
                             push_word(&mut code, encode_addi(10, 13, 0)?);
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             push_word(&mut code, encode_addi(13, 10, 0)?);
-                            // Restore `from` pointer into r10 before issuing the syscall
+                            // r14 (dataspace)
                             push_word(&mut code, encode_addi(10, 14, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+                            // Restore `from` pointer into r10 before issuing the syscall
+                            push_word(&mut code, encode_addi(10, 15, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_TRANSFER_ASSET as u8,
+                                syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
@@ -16898,15 +16927,34 @@ fn record_isi_access(
             record_anonymous_asset_escrow_lifecycle_access(access_set, &escrow_id);
         }
         ir::Instr::TransferAsset {
-            from, to, asset, ..
+            from,
+            to,
+            asset,
+            dataspace,
+            ..
         } => {
             let from =
                 account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *from);
             let to =
                 account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to);
             if let Some(asset_def) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_rw_for_optional_account_hint(access_set, &asset_def, from.as_ref());
-                add_asset_rw_for_optional_account_hint(access_set, &asset_def, to.as_ref());
+                if let Some(dataspace) = parse_dataspace_temp(string_map, func_idx, *dataspace) {
+                    add_scoped_asset_rw_for_optional_account_hint(
+                        access_set,
+                        &asset_def,
+                        from.as_ref(),
+                        dataspace,
+                    );
+                    add_scoped_asset_rw_for_optional_account_hint(
+                        access_set,
+                        &asset_def,
+                        to.as_ref(),
+                        dataspace,
+                    );
+                } else {
+                    add_asset_rw_for_optional_account_hint(access_set, &asset_def, from.as_ref());
+                    add_asset_rw_for_optional_account_hint(access_set, &asset_def, to.as_ref());
+                }
             } else {
                 add_dynamic_asset_definition_rw_for_optional_account_hint(
                     access_set,
@@ -18524,6 +18572,23 @@ fn key_asset_for_account_hint(
     }
 }
 
+fn key_scoped_asset_for_account_hint(
+    definition: &AssetDefinitionId,
+    account: &AccountAccessHint,
+    dataspace: iroha_data_model::nexus::DataSpaceId,
+) -> String {
+    match account {
+        AccountAccessHint::Literal(account) => key_asset(&AssetId::with_scope(
+            definition.clone(),
+            account.clone(),
+            AssetBalanceScope::Dataspace(dataspace),
+        )),
+        AccountAccessHint::Authority => {
+            format!("asset:{definition}:{AUTHORITY_PLACEHOLDER}:dataspace:{dataspace}")
+        }
+    }
+}
+
 fn key_nft(id: &NftId) -> String {
     format!("nft:{id}")
 }
@@ -18848,6 +18913,22 @@ fn add_asset_rw_for_account_hint(
     add_asset_def_r(set, definition);
 }
 
+fn add_scoped_asset_rw_for_account_hint(
+    set: &mut AccessSets,
+    definition: &AssetDefinitionId,
+    account: &AccountAccessHint,
+    dataspace: iroha_data_model::nexus::DataSpaceId,
+) {
+    set.reads.insert(ASSET_WILDCARD_KEY.to_string());
+    set.writes.insert(ASSET_WILDCARD_KEY.to_string());
+    let key = key_scoped_asset_for_account_hint(definition, account, dataspace);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+    add_account_hint_r(set, account);
+    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_def_r(set, definition);
+}
+
 fn add_dynamic_asset_account_rw(set: &mut AccessSets, definition: &AssetDefinitionId) {
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
@@ -18882,6 +18963,19 @@ fn add_asset_rw_for_optional_account_hint(
 ) {
     if let Some(account) = account {
         add_asset_rw_for_account_hint(set, definition, account);
+    } else {
+        add_dynamic_asset_account_rw(set, definition);
+    }
+}
+
+fn add_scoped_asset_rw_for_optional_account_hint(
+    set: &mut AccessSets,
+    definition: &AssetDefinitionId,
+    account: Option<&AccountAccessHint>,
+    dataspace: iroha_data_model::nexus::DataSpaceId,
+) {
+    if let Some(account) = account {
+        add_scoped_asset_rw_for_account_hint(set, definition, account, dataspace);
     } else {
         add_dynamic_asset_account_rw(set, definition);
     }

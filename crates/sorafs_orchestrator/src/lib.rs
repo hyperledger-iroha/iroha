@@ -3457,7 +3457,11 @@ fn verify_fetch_against_manifest(
         });
     }
 
-    validate_manifest(context.manifest, &PinPolicyConstraints::default())
+    let constraints = PinPolicyConstraints {
+        require_council_signatures: true,
+        ..PinPolicyConstraints::default()
+    };
+    validate_manifest(context.manifest, &constraints)
         .map_err(|err| ManifestVerificationError::ManifestValidation(err.to_string()))?;
 
     let payload = outcome.assemble_payload();
@@ -6733,7 +6737,8 @@ mod tests {
     #[test]
     fn build_scoreboard_persists_json() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let persist_path = temp.path().join("scoreboard.json");
+        let temp_root = temp.path().canonicalize().expect("canonical tempdir");
+        let persist_path = temp_root.join("scoreboard.json");
 
         let payload = vec![0xAB; 8192];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");

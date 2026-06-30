@@ -6,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{
     CarBuildPlan, CarChunk, ChunkStore, DirectoryChunkSinkOutput, InMemoryPayload,
@@ -29,6 +32,37 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
             .map_err(|err| format!("failed to write text to stdout: {err}"))?;
         return Ok(());
     }
+    let mut file = open_output_file(path, "text output")?;
+    file.write_all(text.as_bytes())
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open {label} {}: {err}", path.display()))?;
+    let metadata = file.metadata().map_err(|err| {
+        format!(
+            "failed to inspect {label} {} after open: {err}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write {label} {}: output must be a regular file",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
         && !parent.exists()
@@ -36,8 +70,105 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
     }
-    fs::write(path, text.as_bytes())
-        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("output {} must not be a symlink", path.display()));
+            }
+            if metadata.is_dir() {
+                return Err(format!("output {} must not be a directory", path.display()));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect output {}: {err}",
+                path.display()
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!(
+                            "output parent {} must not be a symlink",
+                            ancestor.display()
+                        ));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(format!(
+                            "output parent {} must be a directory",
+                            ancestor.display()
+                        ));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect output parent {}: {err}",
+                        ancestor.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 fn run() -> Result<(), String> {
@@ -112,8 +243,7 @@ fn run() -> Result<(), String> {
         let json = to_string_pretty(&Value::Array(profiles)).map_err(|err| err.to_string())? + "\n";
 
         if let Some(path) = json_out {
-            fs::write(&path, json.as_bytes())
-                .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+            write_text(&path, &json)?;
         }
 
         print!("{json}");
@@ -215,8 +345,7 @@ fn run() -> Result<(), String> {
         if let Some(path) = &proof_out {
             let mut serialized = to_string_pretty(&proof_value).map_err(|err| err.to_string())?;
             serialized.push('\n');
-            fs::write(path, serialized.as_bytes())
-                .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+            write_text(path, &serialized)?;
         }
         proof_json = Some(proof_value);
     }
@@ -475,8 +604,65 @@ fn parse_u64(value: &str) -> Result<u64, std::num::ParseIntError> {
 mod tests {
     use norito::json::Value;
     use sorafs_chunker::ChunkProfile;
+    use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn write_text_creates_parent_and_writes_all_bytes() {
+        let temp = tempdir().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let output_path = temp_path.join("nested").join("report.json");
+
+        write_text(&output_path, "{\"ok\":true}\n").expect("write text");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            b"{\"ok\":true}\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_output() {
+        let temp = tempdir().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let target_path = temp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("report.json");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_parent() {
+        let temp = tempdir().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("report.json");
+
+        let err = write_text(&output_path, "changed\n").expect_err("reject symlink parent");
+
+        assert!(
+            err.contains("parent") && err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !real_dir.join("report.json").exists(),
+            "symlink parent should not receive output"
+        );
+    }
 
     #[test]
     fn default_descriptor_matches_known_values() {

@@ -15012,6 +15012,7 @@ class ToriiClient(_BaseToriiClient):
         scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
+        gov_manifest_approvers: Optional[Iterable[str]] = None,
     ) -> Any:
         """Deploy a compiled contract through the typed Torii endpoint wrapper.
 
@@ -15025,14 +15026,23 @@ class ToriiClient(_BaseToriiClient):
         if code_file is not None:
             with open(os.fspath(code_file), "rb") as handle:
                 resolved_code_b64 = base64.b64encode(handle.read()).decode("ascii")
-        typed_response = _BaseToriiClient.deploy_contract(
-            self,
-            authority=authority,
-            private_key=private_key,
-            code_b64=str(resolved_code_b64),
-            contract_alias=contract_alias,
-            lease_expiry_ms=lease_expiry_ms,
-        )
+        request: Dict[str, Any] = {
+            "authority": authority,
+            "private_key": private_key,
+            "code_b64": str(resolved_code_b64),
+            "contract_alias": contract_alias,
+        }
+        if lease_expiry_ms is not None:
+            request["lease_expiry_ms"] = lease_expiry_ms
+        if gov_manifest_approvers is not None:
+            approvers = [
+                str(approver).strip()
+                for approver in gov_manifest_approvers
+                if str(approver).strip()
+            ]
+            if approvers:
+                request["gov_manifest_approvers"] = approvers
+        typed_response = self.deploy_contract(request)
         if not wait:
             return self._contract_response_payload(typed_response)
         return self._wait_for_contract_response(

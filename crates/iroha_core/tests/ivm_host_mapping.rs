@@ -239,7 +239,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
     run_syscall(
         &mut vm,
-        ivm_sys::SYSCALL_TRANSFER_ASSET,
+        ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
         &[
             (10, ptr_from),
             (11, ptr_to),
@@ -358,7 +358,7 @@ fn host_batches_transfer_v1_calls() {
     run_syscall(&mut vm, ivm_sys::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &[]);
     run_syscall(
         &mut vm,
-        ivm_sys::SYSCALL_TRANSFER_ASSET,
+        ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
         &[
             (10, ptr_from),
             (11, ptr_to_a),
@@ -368,7 +368,7 @@ fn host_batches_transfer_v1_calls() {
     );
     run_syscall(
         &mut vm,
-        ivm_sys::SYSCALL_TRANSFER_ASSET,
+        ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
         &[
             (10, ptr_from),
             (11, ptr_to_b),

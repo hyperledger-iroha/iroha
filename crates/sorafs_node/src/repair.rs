@@ -8,12 +8,16 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashMap, VecDeque},
     fs, io,
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
         atomic::{AtomicU64, Ordering},
     },
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use blake3::hash;
 use hex;
@@ -346,15 +350,38 @@ impl FileRepairStore {
     }
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("missing parent directory"))?;
+    validate_atomic_output_path(path)?;
+    fs::create_dir_all(parent).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to create output parent `{}`: {err}",
+                parent.display()
+            ),
+        )
+    })?;
+    validate_atomic_output_path(path)?;
     let counter = REPAIR_STORE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = temp_path_for_atomic(path, std::process::id(), counter);
-    fs::write(&tmp_path, data)?;
-    fs::rename(tmp_path, path)?;
-    Ok(())
+
+    let write_result = (|| -> io::Result<()> {
+        let mut file = open_atomic_temp_file(&tmp_path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        validate_atomic_output_path(path)?;
+        fs::rename(&tmp_path, path)?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    write_result
 }
 
 fn archive_corrupt_store(path: &Path) -> Result<(), io::Error> {
@@ -376,6 +403,141 @@ fn temp_path_for_atomic(path: &Path, pid: u32, counter: u64) -> PathBuf {
         Some(name) => candidate.with_file_name(format!(".{name}")),
         None => candidate,
     }
+}
+
+fn open_atomic_temp_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    set_no_follow_flag(&mut options);
+    let file = options.open(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to create atomic temp `{}`: {err}", path.display()),
+        )
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to inspect atomic temp `{}` after open: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "atomic temp `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a symlink",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a directory",
+                    path.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!("failed to inspect output `{}`: {err}", path.display()),
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        )));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        )));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to inspect output parent `{}`: {err}",
+                            ancestor.display()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 impl RepairStore for FileRepairStore {
@@ -3275,6 +3437,10 @@ mod tests {
     use std::fs;
     use tempfile::{TempDir, tempdir};
 
+    fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
+        temp_dir.path().canonicalize().expect("canonical tempdir")
+    }
+
     fn report(
         ticket: &str,
         manifest_digest: [u8; 32],
@@ -3348,7 +3514,8 @@ mod tests {
 
     fn manager_with_config(config: RepairConfig) -> (RepairManager, TempDir) {
         let temp_dir = tempdir().expect("tempdir");
-        let config = config.with_default_state_dir(temp_dir.path());
+        let temp_path = canonical_temp_path(&temp_dir);
+        let config = config.with_default_state_dir(&temp_path);
         let manager = RepairManager::new_with_config(config);
         (manager, temp_dir)
     }
@@ -3394,7 +3561,9 @@ mod tests {
             .register_por_verdict(&verdict, 1)
             .expect("register por verdict");
 
-        let store_path = temp_dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let store_path = canonical_temp_path(&temp_dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
         let bytes = fs::read(&store_path).expect("read repair store");
         let snapshot: RepairStoreSnapshot =
             norito::decode_from_bytes(&bytes).expect("decode repair store");
@@ -3409,7 +3578,8 @@ mod tests {
     #[test]
     fn auditor_nonce_replay_rejection_persists() {
         let temp_dir = tempdir().expect("tempdir");
-        let config = RepairConfig::default().with_default_state_dir(temp_dir.path());
+        let temp_path = canonical_temp_path(&temp_dir);
+        let config = RepairConfig::default().with_default_state_dir(&temp_path);
         let manager = RepairManager::new_with_config(config.clone());
         let auditor_account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
@@ -3439,7 +3609,7 @@ mod tests {
             }
         ));
 
-        let store_path = temp_dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let store_path = temp_path.join("repair").join(REPAIR_STORE_FILE_NAME);
         let bytes = fs::read(&store_path).expect("read repair store");
         let snapshot: RepairStoreSnapshot =
             norito::decode_from_bytes(&bytes).expect("decode repair store");
@@ -4631,7 +4801,9 @@ mod tests {
     #[test]
     fn file_store_compare_and_set_updates_task() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let path = canonical_temp_path(&dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
         let store = FileRepairStore::load_or_new(path).expect("store");
         let report = report("REP-900", [0x10; 32], [0x20; 32], 1_700_000_000);
         let task = task_internal(report.clone());
@@ -4668,7 +4840,9 @@ mod tests {
     #[test]
     fn file_store_audit_sequence_increments() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let path = canonical_temp_path(&dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
         let store = FileRepairStore::load_or_new(path).expect("store");
         let first = store.next_audit_sequence();
         let second = store.next_audit_sequence();
@@ -4679,7 +4853,9 @@ mod tests {
     #[test]
     fn file_store_persists_tasks_and_history() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let path = canonical_temp_path(&dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
         let store = FileRepairStore::load_or_new(path.clone()).expect("store");
 
         let report = report("REP-950", [0x44; 32], [0x55; 32], 1_700_111_000);
@@ -4719,10 +4895,76 @@ mod tests {
         assert_eq!(next_sequence, 2);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_rejects_symlink_output() {
+        let dir = tempdir().expect("tempdir");
+        let temp_path = canonical_temp_path(&dir);
+        let target_path = temp_path.join("target.to");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join(REPAIR_STORE_FILE_NAME);
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_atomic(&output_path, b"replace").expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_rejects_symlink_parent() {
+        let dir = tempdir().expect("tempdir");
+        let temp_path = canonical_temp_path(&dir);
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join(REPAIR_STORE_FILE_NAME);
+
+        let err = write_atomic(&output_path, b"replace").expect_err("reject symlink parent");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join(REPAIR_STORE_FILE_NAME).exists(),
+            "symlink parent should not receive output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_atomic_temp_file_rejects_preexisting_symlink() {
+        let dir = tempdir().expect("tempdir");
+        let temp_path = canonical_temp_path(&dir);
+        let target_path = temp_path.join("target.tmp");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let tmp_path = temp_path.join(".repair_state.to.tmp");
+        std::os::unix::fs::symlink(&target_path, &tmp_path).expect("create symlink");
+
+        let err = open_atomic_temp_file(&tmp_path).expect_err("reject temp symlink");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("failed to create atomic temp"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
     #[test]
     fn archive_corrupt_store_moves_file_aside() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let path = canonical_temp_path(&dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
         fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         fs::write(&path, b"corrupt").expect("write corrupt store");
 

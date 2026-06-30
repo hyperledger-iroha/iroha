@@ -80,6 +80,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -1479,13 +1482,126 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .map_err(|err| format!("failed to write binary payload to stdout: {err}"))?;
         return Ok(());
     }
+    let mut file = open_output_file(path, "binary payload")?;
+    file.write_all(bytes)
+        .map_err(|err| format!("failed to write {path:?}: {err}"))
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open {label} {path:?}: {err}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect {label} {path:?} after open: {err}"))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write {label} {path:?}: output must be a regular file"
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
         && !parent.exists()
     {
         fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
     }
-    fs::write(path, bytes).map_err(|err| format!("failed to write {path:?}: {err}"))
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("output {path:?} must not be a symlink"));
+            }
+            if metadata.is_dir() {
+                return Err(format!("output {path:?} must not be a directory"));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!("output parent {ancestor:?} must not be a symlink"));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(format!("output parent {ancestor:?} must be a directory"));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect output parent {ancestor:?}: {err}"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 struct StreamingWriter {
@@ -1496,15 +1612,7 @@ struct StreamingWriter {
 
 impl StreamingWriter {
     fn create(path: &Path) -> Result<Self, String> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-            && !parent.exists()
-        {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-        }
-        let file = File::create(path)
-            .map_err(|err| format!("failed to create output file {path:?}: {err}"))?;
+        let file = open_output_file(path, "output file")?;
         Ok(Self {
             writer: BufWriter::new(file),
             hasher: Hasher::new(),
@@ -1832,14 +1940,7 @@ fn write_car_archive(
             chunks.len()
         ));
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    let file =
-        File::create(path).map_err(|err| format!("failed to create CAR file {path:?}: {err}"))?;
+    let file = open_output_file(path, "CAR file")?;
     let mut writer = BufWriter::new(file);
     let mut cursor = ChunkCursor::new(chunks);
     let stats = CarStreamingWriter::new(plan)
@@ -1954,13 +2055,9 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
             .map_err(|err| format!("failed to write to stdout: {err}"))?;
         return Ok(());
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    fs::write(path, text.as_bytes()).map_err(|err| format!("failed to write {path:?}: {err}"))
+    let mut file = open_output_file(path, "text output")?;
+    file.write_all(text.as_bytes())
+        .map_err(|err| format!("failed to write {path:?}: {err}"))
 }
 
 fn load_provider_advert(
@@ -2842,9 +2939,106 @@ mod tests {
         TransportHintV1, TransportProtocol, hybrid_envelope::HybridKemBundleV1,
         provider_advert::ProviderCapabilitySoranetPqV1,
     };
-    use tempfile::{NamedTempFile, tempdir};
+    use tempfile::{NamedTempFile, TempDir, tempdir};
 
     use super::*;
+
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
+
+    fn plan_chunks(payload: &[u8], plan: &CarBuildPlan) -> Vec<Vec<u8>> {
+        plan.chunks
+            .iter()
+            .map(|chunk| {
+                let start = chunk.offset as usize;
+                let end = start + chunk.length as usize;
+                payload[start..end].to_vec()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn write_binary_creates_parent_and_writes_all_bytes() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("nested").join("payload.bin");
+
+        write_binary(&output_path, b"sorafs-fetch-output").expect("write binary output");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            b"sorafs-fetch-output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("report.json");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_writer_rejects_symlink_parent() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("assembled.bin");
+
+        let err = match StreamingWriter::create(&output_path) {
+            Ok(_) => panic!("symlink parent should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.contains("parent") && err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !real_dir.join("assembled.bin").exists(),
+            "symlink parent should not receive output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_car_archive_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let payload = b"sorafs-fetch-car-output".to_vec();
+        let plan = CarBuildPlan::single_file(&payload).expect("plan");
+        let chunks = plan_chunks(&payload, &plan);
+        let target_path = temp_path.join("target.car");
+        fs::write(&target_path, b"unchanged").expect("write target");
+        let car_path = temp_path.join("payload.car");
+        std::os::unix::fs::symlink(&target_path, &car_path).expect("create symlink");
+
+        let err = match write_car_archive(&plan, &chunks, &car_path) {
+            Ok(_) => panic!("symlink output should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged");
+    }
 
     fn cargo_bin_path(bin_name: &str) -> PathBuf {
         let env_var = format!("CARGO_BIN_EXE_{bin_name}");
@@ -3560,8 +3754,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_applies_provider_advert() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 8 * 1024);
 
         let plan =
@@ -3578,14 +3772,14 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
         )
         .expect("write plan");
 
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -3655,7 +3849,7 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
-        let output_path = tempdir.path().join("assembled.bin");
+        let output_path = temp_path.join("assembled.bin");
 
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
@@ -3772,8 +3966,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_persists_scoreboard() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 8 * 1024);
 
         let plan =
@@ -3790,14 +3984,14 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
         )
         .expect("write plan");
 
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -3859,7 +4053,7 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
-        let telemetry_path = tempdir.path().join("telemetry.json");
+        let telemetry_path = temp_path.join("telemetry.json");
         let mut telemetry_entry = Map::new();
         telemetry_entry.insert("provider_id".into(), Value::String(to_hex(&provider_id)));
         telemetry_entry.insert("qos_score".into(), Value::from(92.0));
@@ -3876,8 +4070,8 @@ mod tests {
         )
         .expect("write telemetry");
 
-        let scoreboard_path = tempdir.path().join("scoreboard.json");
-        let output_path = tempdir.path().join("assembled.bin");
+        let scoreboard_path = temp_path.join("scoreboard.json");
+        let output_path = temp_path.join("assembled.bin");
 
         sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
@@ -3927,10 +4121,10 @@ mod tests {
 
     #[test]
     fn fetch_cli_score_policy_filters_providers() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path_alpha = tempdir.path().join("alpha.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path_alpha = temp_path.join("alpha.bin");
         let payload = write_payload(&payload_path_alpha, 8 * 1024);
-        let payload_path_beta = tempdir.path().join("beta.bin");
+        let payload_path_beta = temp_path.join("beta.bin");
         fs::write(&payload_path_beta, &payload).expect("write beta payload");
 
         let plan =
@@ -3947,7 +4141,7 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
@@ -4031,8 +4225,8 @@ mod tests {
             transport_hints: Some(sample_transport_hints()),
         };
 
-        let advert_path_alpha = tempdir.path().join("alpha.advert");
-        let advert_path_beta = tempdir.path().join("beta.advert");
+        let advert_path_alpha = temp_path.join("alpha.advert");
+        let advert_path_beta = temp_path.join("beta.advert");
         for (body, path, key_byte) in [
             (advert_alpha, &advert_path_alpha, 0xA1u8),
             (advert_beta, &advert_path_beta, 0xB2u8),
@@ -4057,8 +4251,8 @@ mod tests {
             fs::write(path, advert_bytes).expect("write advert");
         }
 
-        let metrics_path = tempdir.path().join("providers.json");
-        let output_path = tempdir.path().join("assembled.bin");
+        let metrics_path = temp_path.join("providers.json");
+        let output_path = temp_path.join("assembled.bin");
 
         sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
@@ -4123,8 +4317,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_rejects_provider_without_range_capability() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
@@ -4140,7 +4334,7 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
@@ -4205,7 +4399,7 @@ mod tests {
             allow_unknown_capabilities: false,
         };
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
         let assert = sorafs_fetch_cmd()
@@ -4221,8 +4415,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_verifies_car_when_manifest_available() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 8 * 1024);
 
         let plan =
@@ -4284,14 +4478,14 @@ mod tests {
         report_obj.insert("payload_len".into(), Value::from(payload.len() as u64));
         report_obj.insert("manifest".into(), Value::Object(manifest_obj));
 
-        let manifest_path = tempdir.path().join("report.json");
+        let manifest_path = temp_path.join("report.json");
         fs::write(
             &manifest_path,
             (to_string_pretty(&Value::Object(report_obj)).expect("json") + "\n").as_bytes(),
         )
         .expect("write manifest report");
 
-        let car_path = tempdir.path().join("payload.car");
+        let car_path = temp_path.join("payload.car");
 
         let assert = sorafs_fetch_cmd()
             .arg(format!("--manifest-report={}", manifest_path.display()))
@@ -4322,8 +4516,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_rejects_corrupted_payload_when_manifest_provided() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
 
         let plan =
@@ -4383,7 +4577,7 @@ mod tests {
         report_obj.insert("payload_len".into(), Value::from(payload.len() as u64));
         report_obj.insert("manifest".into(), Value::Object(manifest_obj));
 
-        let manifest_path = tempdir.path().join("report.json");
+        let manifest_path = temp_path.join("report.json");
         fs::write(
             &manifest_path,
             (to_string_pretty(&Value::Object(report_obj)).expect("json") + "\n").as_bytes(),
@@ -4489,8 +4683,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_rejects_unknown_capabilities_without_allow_flag() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
@@ -4506,7 +4700,7 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
@@ -4581,7 +4775,7 @@ mod tests {
             allow_unknown_capabilities: false,
         };
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
         let assert = sorafs_fetch_cmd()
@@ -4597,8 +4791,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_ignores_unknown_capabilities_when_allowed() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
@@ -4614,7 +4808,7 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
@@ -4689,7 +4883,7 @@ mod tests {
             allow_unknown_capabilities: true,
         };
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
         let assert = sorafs_fetch_cmd()
@@ -4725,8 +4919,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_exposes_soranet_pq_labels() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
@@ -4742,7 +4936,7 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
@@ -4825,7 +5019,7 @@ mod tests {
             allow_unknown_capabilities: false,
         };
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
         let assert = sorafs_fetch_cmd()
@@ -4872,8 +5066,8 @@ mod tests {
 
     #[test]
     fn fetch_cli_rejects_stale_provider_advert() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload_path = tempdir.path().join("payload.bin");
+        let (_tempdir, temp_path) = canonical_tempdir();
+        let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
@@ -4889,7 +5083,7 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-        let plan_path = tempdir.path().join("plan.json");
+        let plan_path = temp_path.join("plan.json");
         fs::write(
             &plan_path,
             (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
@@ -4961,7 +5155,7 @@ mod tests {
             allow_unknown_capabilities: false,
         };
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
-        let advert_path = tempdir.path().join("provider.advert");
+        let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
 
         let assert = sorafs_fetch_cmd()

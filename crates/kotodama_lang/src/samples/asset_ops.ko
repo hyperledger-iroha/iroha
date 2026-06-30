@@ -13,7 +13,8 @@ seiyaku AssetOps {
       alice,
       bob,
       coin,
-      500
+      500,
+      dataspace_id("0")
     );
     burn_asset(
       bob,

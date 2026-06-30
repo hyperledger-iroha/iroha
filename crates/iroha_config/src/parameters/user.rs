@@ -4449,12 +4449,13 @@ impl SccpRouteBrowserProverManifestRef {
 
     fn parse(self, role: &str, strict_hashes: bool) -> actual::SccpRouteBrowserProverManifestRef {
         let module_url = Self::parse_module_url(role, &self.module_url);
-        let module_specifier = self
-            .module_specifier
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+        let module_specifier = self.module_specifier.map(|value| {
+            assert!(
+                !value.is_empty() && value.trim() == value,
+                "SCCP route manifest {role} browser prover module_specifier must be a non-empty canonical string"
+            );
+            value
+        });
         let expected_exports = self
             .expected_exports
             .into_iter()
@@ -5605,6 +5606,115 @@ impl SccpRouteManifest {
                 );
             }
         }
+        if let Some(deployment_hash) = deployment_evidence_sha256.as_deref() {
+            for (label, value) in [
+                ("verifier_code_hash", verifier_code_hash.as_str()),
+                ("verifier_key_hash", verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    destination_binding_hash.as_str(),
+                ),
+            ] {
+                assert!(
+                    !deployment_hash.trim().eq_ignore_ascii_case(value.trim()),
+                    "SCCP route manifest deployment_evidence_sha256 must not equal {label}"
+                );
+            }
+            for (label, value) in [
+                ("proof_artifact_hash", proof_artifact_hash.as_deref()),
+                ("proving_key_hash", proving_key_hash.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    assert!(
+                        !deployment_hash.trim().eq_ignore_ascii_case(value.trim()),
+                        "SCCP route manifest deployment_evidence_sha256 must not equal {label}"
+                    );
+                }
+            }
+        }
+        for (label, value, previous_label, previous_value) in [
+            (
+                "post_deploy_route_canary_evidence_hash",
+                post_deploy_route_canary_evidence_hash.as_deref(),
+                "post_deploy_source_bridge_config_hash",
+                post_deploy_source_bridge_config_hash.as_deref(),
+            ),
+            (
+                "post_deploy_route_canary_transaction_id",
+                post_deploy_route_canary_transaction_id.as_deref(),
+                "post_deploy_source_event_transaction_id",
+                post_deploy_source_event_transaction_id.as_deref(),
+            ),
+        ] {
+            if let (Some(value), Some(previous_value)) = (value, previous_value) {
+                assert!(
+                    !value.trim().eq_ignore_ascii_case(previous_value.trim()),
+                    "SCCP route manifest {label} must not equal {previous_label}"
+                );
+            }
+        }
+        if is_bsc_route {
+            let mut route_hash_roles = Vec::<(&str, &str)>::new();
+            route_hash_roles.extend([
+                ("verifier_code_hash", verifier_code_hash.as_str()),
+                ("verifier_key_hash", verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    destination_binding_hash.as_str(),
+                ),
+            ]);
+            for (label, value) in [
+                ("proof_artifact_hash", proof_artifact_hash.as_deref()),
+                ("proving_key_hash", proving_key_hash.as_deref()),
+                (
+                    "deployment_evidence_sha256",
+                    deployment_evidence_sha256.as_deref(),
+                ),
+                (
+                    "native_evm_prover_bundle_hash",
+                    native_evm_prover_bundle_hash.as_deref(),
+                ),
+            ] {
+                if let Some(value) = value {
+                    route_hash_roles.push((label, value));
+                }
+            }
+            for (label, reference) in [
+                (
+                    "destination_browser_prover",
+                    destination_browser_prover.as_ref(),
+                ),
+                ("source_browser_prover", source_browser_prover.as_ref()),
+            ] {
+                if let Some(reference) = reference {
+                    route_hash_roles.extend([
+                        (
+                            if label == "destination_browser_prover" {
+                                "destination_browser_prover.module_hash"
+                            } else {
+                                "source_browser_prover.module_hash"
+                            },
+                            reference.module_hash.as_str(),
+                        ),
+                        (
+                            if label == "destination_browser_prover" {
+                                "destination_browser_prover.manifest_hash"
+                            } else {
+                                "source_browser_prover.manifest_hash"
+                            },
+                            reference.manifest_hash.as_str(),
+                        ),
+                    ]);
+                }
+            }
+            let mut seen_route_hashes = BTreeMap::<String, &str>::new();
+            for (label, value) in route_hash_roles {
+                let normalized = value.trim().to_ascii_lowercase();
+                if let Some(previous_label) = seen_route_hashes.insert(normalized, label) {
+                    panic!("SCCP route manifest {label} must not equal {previous_label}");
+                }
+            }
+        }
         assert!(
             !(self.production_ready && uses_diagnostic_verifier_key_hash),
             "SCCP BSC route manifest production_ready cannot be true with diagnostic verifier material"
@@ -6272,6 +6382,32 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
+    #[should_panic(expected = "module_specifier must be a non-empty canonical string")]
+    fn bsc_browser_prover_rejects_padded_module_specifier() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_specifier = Some(" @sora/sccp-bsc-destination-prover ".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_specifier must be a non-empty canonical string")]
+    fn bsc_browser_prover_rejects_empty_module_specifier() {
+        let mut manifest = route_manifest();
+        manifest
+            .source_browser_prover
+            .as_mut()
+            .expect("source prover fixture")
+            .module_specifier = Some(String::new());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
     #[should_panic(expected = "expected_exports must not be empty")]
     fn bsc_browser_prover_rejects_empty_export_list() {
         let mut manifest = route_manifest();
@@ -6387,6 +6523,199 @@ mod sccp_route_manifest_user_config_tests {
         manifest.proving_key_hash = Some(manifest.verifier_key_hash.clone());
 
         let _ = manifest.parse();
+    }
+
+    #[test]
+    fn bsc_route_rejects_deployment_evidence_hash_role_replay() {
+        let baseline = production_ready_route_manifest();
+        let cases = [
+            ("verifier_code_hash", baseline.verifier_code_hash.clone()),
+            ("verifier_key_hash", baseline.verifier_key_hash.clone()),
+            (
+                "destination_binding_hash",
+                baseline.destination_binding_hash.clone(),
+            ),
+            (
+                "proof_artifact_hash",
+                baseline
+                    .proof_artifact_hash
+                    .clone()
+                    .expect("fixture has proof artifact hash"),
+            ),
+            (
+                "proving_key_hash",
+                baseline
+                    .proving_key_hash
+                    .clone()
+                    .expect("fixture has proving key hash"),
+            ),
+        ];
+
+        for (label, replay_hash) in cases {
+            let mut manifest = production_ready_route_manifest();
+            manifest.deployment_evidence_sha256 = Some(replay_hash);
+
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("deployment evidence hash role replay must be rejected");
+            let message = if let Some(message) = panic.downcast_ref::<String>() {
+                message.as_str()
+            } else if let Some(message) = panic.downcast_ref::<&str>() {
+                message
+            } else {
+                "unknown panic"
+            };
+            assert!(
+                message.contains(&format!(
+                    "deployment_evidence_sha256 must not equal {label}"
+                )),
+                "unexpected panic for {label}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_routes_reject_reused_post_deploy_hash_roles() {
+        let cases: [(&str, fn() -> SccpRouteManifest); 2] = [
+            ("BSC", production_ready_route_manifest),
+            ("TRON", production_ready_tron_route_manifest),
+        ];
+
+        for (route_family, fixture) in cases {
+            let mut manifest = fixture();
+            manifest.post_deploy_route_canary_evidence_hash =
+                manifest.post_deploy_source_bridge_config_hash.clone();
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("route canary evidence hash replay must be rejected");
+            let message = if let Some(message) = panic.downcast_ref::<String>() {
+                message.as_str()
+            } else if let Some(message) = panic.downcast_ref::<&str>() {
+                message
+            } else {
+                "unknown panic"
+            };
+            assert!(
+                message.contains(
+                    "post_deploy_route_canary_evidence_hash must not equal \
+                     post_deploy_source_bridge_config_hash"
+                ),
+                "unexpected {route_family} evidence-hash panic: {message}"
+            );
+
+            let mut manifest = fixture();
+            manifest.post_deploy_route_canary_transaction_id =
+                manifest.post_deploy_source_event_transaction_id.clone();
+            manifest.post_deploy_route_canary_explorer_url =
+                manifest.post_deploy_source_event_explorer_url.clone();
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("route canary transaction id replay must be rejected");
+            let message = if let Some(message) = panic.downcast_ref::<String>() {
+                message.as_str()
+            } else if let Some(message) = panic.downcast_ref::<&str>() {
+                message
+            } else {
+                "unknown panic"
+            };
+            assert!(
+                message.contains(
+                    "post_deploy_route_canary_transaction_id must not equal \
+                     post_deploy_source_event_transaction_id"
+                ),
+                "unexpected {route_family} transaction-id panic: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn bsc_route_rejects_browser_prover_hash_role_replay() {
+        let baseline = production_ready_route_manifest();
+        let destination_module_hash = baseline
+            .destination_browser_prover
+            .as_ref()
+            .expect("fixture has destination browser prover")
+            .module_hash
+            .clone();
+        let cases = [
+            (
+                "destination_browser_prover.module_hash",
+                "verifier_code_hash",
+                baseline.verifier_code_hash.clone(),
+            ),
+            (
+                "destination_browser_prover.manifest_hash",
+                "destination_binding_hash",
+                baseline.destination_binding_hash.clone(),
+            ),
+            (
+                "source_browser_prover.module_hash",
+                "destination_browser_prover.module_hash",
+                destination_module_hash,
+            ),
+            (
+                "source_browser_prover.manifest_hash",
+                "native_evm_prover_bundle_hash",
+                baseline
+                    .native_evm_prover_bundle_hash
+                    .clone()
+                    .expect("fixture has native prover bundle hash"),
+            ),
+        ];
+
+        for (label, previous_label, replay_hash) in cases {
+            let mut manifest = production_ready_route_manifest();
+            match label {
+                "destination_browser_prover.module_hash" => {
+                    manifest
+                        .destination_browser_prover
+                        .as_mut()
+                        .expect("destination prover")
+                        .module_hash = replay_hash;
+                }
+                "destination_browser_prover.manifest_hash" => {
+                    manifest
+                        .destination_browser_prover
+                        .as_mut()
+                        .expect("destination prover")
+                        .manifest_hash = replay_hash;
+                }
+                "source_browser_prover.module_hash" => {
+                    manifest
+                        .source_browser_prover
+                        .as_mut()
+                        .expect("source prover")
+                        .module_hash = replay_hash;
+                }
+                "source_browser_prover.manifest_hash" => {
+                    manifest
+                        .source_browser_prover
+                        .as_mut()
+                        .expect("source prover")
+                        .manifest_hash = replay_hash;
+                }
+                _ => unreachable!("test case labels are exhaustive"),
+            }
+
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("browser prover hash role replay must be rejected");
+            let message = if let Some(message) = panic.downcast_ref::<String>() {
+                message.as_str()
+            } else if let Some(message) = panic.downcast_ref::<&str>() {
+                message
+            } else {
+                "unknown panic"
+            };
+            assert!(
+                message.contains(&format!("{label} must not equal {previous_label}")),
+                "unexpected panic for {label}: {message}"
+            );
+        }
     }
 
     #[test]

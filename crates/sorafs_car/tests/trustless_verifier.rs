@@ -1,15 +1,28 @@
-use std::{fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::decode_from_bytes;
 use norito::json::Value;
 use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig};
 use sorafs_manifest::{ManifestV1, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX};
+use tempfile::{Builder, TempDir};
 
 fn workspace_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../")
         .join(relative)
+}
+
+fn canonical_temp_base() -> PathBuf {
+    env::temp_dir()
+        .canonicalize()
+        .expect("canonical system temp dir")
+}
+
+fn tempdir() -> Result<TempDir, std::io::Error> {
+    Builder::new()
+        .prefix("soranet-trustless-verifier-")
+        .tempdir_in(canonical_temp_base())
 }
 
 #[test]
@@ -100,6 +113,49 @@ fn trustless_verifier_emits_reference_validation_outcome() {
         outcome.get("code").and_then(Value::as_str),
         Some("SFS-OK-000")
     );
+    assert_eq!(
+        outcome.get("generated_at").and_then(Value::as_u64),
+        Some(123)
+    );
+}
+
+#[test]
+fn trustless_verifier_writes_validation_outcome_json_out() {
+    let temp = tempdir().expect("tempdir");
+    let outcome_path = temp.path().join("validation_outcome.json");
+    let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
+    let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
+    let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
+
+    let output = cargo_bin_cmd!("soranet_trustless_verifier")
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path is utf-8"),
+            "--car",
+            car.to_str().expect("CAR path is utf-8"),
+            "--config",
+            config.to_str().expect("config path is utf-8"),
+            "--validation-outcome",
+            "--generated-at",
+            "123",
+            "--json-out",
+            outcome_path.to_str().expect("outcome path is utf-8"),
+        ])
+        .output()
+        .expect("run trustless verifier");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should be suppressed when --json-out is used"
+    );
+
+    let outcome_bytes = fs::read(&outcome_path).expect("read validation outcome");
+    let outcome: Value = norito::json::from_slice(&outcome_bytes).expect("parse outcome json");
+    assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
         outcome.get("generated_at").and_then(Value::as_u64),
         Some(123)

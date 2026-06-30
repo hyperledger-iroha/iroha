@@ -1,10 +1,23 @@
 import { Buffer } from "buffer";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
+import {
+  entropyToMnemonic,
+  generateMnemonic,
+  mnemonicToEntropy,
+  mnemonicToSeedSync,
+  validateMnemonic,
+} from "@scure/bip39";
+import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
 const ED25519_PRIVATE_KEY_LENGTH = 64;
+const RECOVERY_PHRASE_ENTROPY_LENGTHS = Object.freeze(new Set([16, 32]));
+const RECOVERY_PHRASE_STRENGTH_BY_WORD_COUNT = Object.freeze({
+  12: 128,
+  24: 256,
+});
 
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
@@ -184,6 +197,75 @@ export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) 
     throw new Error(`unsupported crypto algorithm: ${algorithm}`);
   }
   return normalized;
+}
+
+function recoveryPhraseDetails(phrase) {
+  const normalized = normalizeRecoveryPhrase(phrase);
+  const words = Object.freeze(normalized.split(" "));
+  return Object.freeze({
+    phrase: normalized,
+    words,
+    wordCount: words.length,
+  });
+}
+
+function assertRecoveryPhraseWordCount(wordCount) {
+  const strength = RECOVERY_PHRASE_STRENGTH_BY_WORD_COUNT[wordCount];
+  if (!strength) {
+    throw new Error("recovery phrase word count must be 12 or 24");
+  }
+  return strength;
+}
+
+function assertValidRecoveryPhrase(phrase) {
+  const normalized = normalizeRecoveryPhrase(phrase);
+  assertRecoveryPhraseWordCount(normalized.split(" ").length);
+  if (!validateMnemonic(normalized, englishWordlist)) {
+    throw new Error("Invalid recovery phrase");
+  }
+  return normalized;
+}
+
+export function normalizeRecoveryPhrase(phrase) {
+  if (typeof phrase !== "string") {
+    throw new TypeError("recovery phrase must be a string");
+  }
+  return phrase.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function validateRecoveryPhrase(phrase) {
+  try {
+    assertValidRecoveryPhrase(phrase);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function generateRecoveryPhrase(options = {}) {
+  const wordCount = options.wordCount ?? 24;
+  const strength = assertRecoveryPhraseWordCount(wordCount);
+  return recoveryPhraseDetails(generateMnemonic(englishWordlist, strength));
+}
+
+export function entropyToRecoveryPhrase(entropy) {
+  const buffer = toBuffer(entropy, "entropy");
+  if (!RECOVERY_PHRASE_ENTROPY_LENGTHS.has(buffer.length)) {
+    throw new Error("recovery phrase entropy must be 16 or 32 bytes");
+  }
+  return recoveryPhraseDetails(entropyToMnemonic(buffer, englishWordlist));
+}
+
+export function recoveryPhraseToEntropy(phrase) {
+  return Buffer.from(mnemonicToEntropy(assertValidRecoveryPhrase(phrase), englishWordlist));
+}
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
+  return Buffer.from(mnemonicToSeedSync(assertValidRecoveryPhrase(phrase)).subarray(0, ED25519_SEED_LENGTH));
+}
+
+export function ed25519SeedToRecoveryPhrase(privateKey) {
+  return entropyToRecoveryPhrase(extractSeed(privateKey));
 }
 
 /**

@@ -22,7 +22,6 @@ from html import unescape as html_unescape
 from urllib.parse import unquote
 import hashlib
 import json
-import stat
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -33,6 +32,7 @@ SCRIPT_DIR = REPO_ROOT / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from path_safety import first_symlinked_existing_path_component  # noqa: E402
 from sccp_client_loader import load_sccp_module  # noqa: E402
 
 
@@ -223,16 +223,8 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
 
 
 def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
-    current = Path(path.anchor) if path.is_absolute() else Path(".")
-    parts = path.parts[1:] if path.is_absolute() else path.parts
-    for part in parts:
-        current = current / part
-        try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            break
-        if stat.S_ISLNK(mode):
-            raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
+    if first_symlinked_existing_path_component(path) is not None:
+        raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
 
 
 def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:

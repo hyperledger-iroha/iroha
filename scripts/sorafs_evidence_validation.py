@@ -13,12 +13,59 @@ from sorafs_checker_preflight import record_artifact_error
 from sorafs_evidence_fingerprint import artifact_fingerprint
 from sorafs_evidence_paths import is_explicit_evidence_path
 from sorafs_evidence_sensitivity import visit_sensitive_fields
+from sorafs_path_identity import resolve_path_identity
 
 
 _T = TypeVar("_T")
 
 SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 UNKNOWN_REQUIRED_EVIDENCE_KIND = "<unknown>"
+
+
+def is_archive_portable_artifact_path(label: str) -> bool:
+    """Return whether an artifact label is portable inside release archives."""
+
+    if (
+        not label
+        or label != label.strip()
+        or label.startswith(("/", "\\"))
+        or "\\" in label
+        or any(ord(character) < 32 or ord(character) == 127 for character in label)
+    ):
+        return False
+    if len(label) >= 2 and label[1] == ":" and label[0].isalpha():
+        return False
+    return all(part and part not in {".", ".."} for part in label.split("/"))
+
+
+def archive_artifact_path_label(path: Path, evidence_dirs: list[Path]) -> Path:
+    """Return an archive-portable label for a rollout evidence artifact."""
+
+    for directory in evidence_dirs:
+        resolution_errors: list[str] = []
+        resolved_path = resolve_path_identity(
+            path,
+            resolution_errors,
+            label="evidence path",
+        )
+        resolved_directory = resolve_path_identity(
+            directory,
+            resolution_errors,
+            label="evidence directory",
+        )
+        if resolved_path is None or resolved_directory is None:
+            continue
+        try:
+            relative_path = resolved_path.relative_to(resolved_directory)
+        except ValueError:
+            continue
+        label = relative_path.as_posix()
+        if is_archive_portable_artifact_path(label):
+            return Path(label)
+    name_label = path.name
+    if is_archive_portable_artifact_path(name_label):
+        return Path(name_label)
+    return Path("evidence.json")
 
 
 def _require_error_list(errors: Any) -> list[str]:

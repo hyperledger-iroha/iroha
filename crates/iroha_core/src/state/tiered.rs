@@ -18,7 +18,7 @@ use std::{
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::{nexus::LaneId, prelude::Name};
+use iroha_data_model::prelude::Name;
 use mv::storage::StorageReadOnly;
 use norito::{
     core::NoritoSerialize,
@@ -1509,30 +1509,14 @@ impl TieredStateBackend {
     /// Validate lane snapshot geometry changes that can fail without mutating tiered state.
     ///
     /// # Errors
-    /// Returns an error if a required tiered snapshot, relabel, or retirement path is blocked by
-    /// an incompatible filesystem entry.
+    /// Returns an error if a required tiered snapshot, replacement, relabel, or retirement path is
+    /// blocked by an incompatible filesystem entry.
     pub fn preflight_lane_geometry(
         &self,
         previous: &LaneConfig,
         current: &LaneConfig,
+        replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
         relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
-    ) -> Result<()> {
-        self.preflight_lane_geometry_with_replacements(
-            previous,
-            current,
-            relabelled,
-            &BTreeSet::new(),
-        )
-    }
-
-    /// Validate lane snapshot geometry changes while treating selected same-id lanes as
-    /// fresh replacements instead of relabels.
-    pub fn preflight_lane_geometry_with_replacements(
-        &self,
-        previous: &LaneConfig,
-        current: &LaneConfig,
-        relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
-        replaced_lane_ids: &BTreeSet<LaneId>,
     ) -> Result<()> {
         if !self.enabled {
             return Ok(());
@@ -1551,13 +1535,17 @@ impl TieredStateBackend {
         for entry in current.entries() {
             current_map.insert(entry.lane_id, entry);
         }
+        let replacement_ids: BTreeSet<_> = replacements
+            .iter()
+            .map(|(_, current)| current.lane_id)
+            .collect();
 
         let lanes_root = root.join("lanes");
         Self::preflight_dir_path(&lanes_root)?;
 
         for (id, entry) in &current_map {
             let dir = lane_snapshot_dir(&lanes_root, entry);
-            let replaced = replaced_lane_ids.contains(id);
+            let replaced = replacement_ids.contains(id);
             if !replaced && previous_map.contains_key(id) && dir.exists() {
                 Self::preflight_dir_path(&dir)?;
                 continue;
@@ -1585,7 +1573,7 @@ impl TieredStateBackend {
 
         let retired_root = root.join("retired").join("lanes");
         for (id, entry) in &previous_map {
-            if current_map.contains_key(id) && !replaced_lane_ids.contains(id) {
+            if current_map.contains_key(id) && !replacement_ids.contains(id) {
                 continue;
             }
             let dir = lane_snapshot_dir(&lanes_root, entry);
@@ -1620,17 +1608,7 @@ impl TieredStateBackend {
         &mut self,
         previous: &LaneConfig,
         current: &LaneConfig,
-    ) -> Result<()> {
-        self.reconcile_lane_geometry_with_replacements(previous, current, &BTreeSet::new())
-    }
-
-    /// Ensure tiered snapshot directories reflect lane geometry, treating selected
-    /// same-id lanes as fresh replacements.
-    pub fn reconcile_lane_geometry_with_replacements(
-        &mut self,
-        previous: &LaneConfig,
-        current: &LaneConfig,
-        replaced_lane_ids: &BTreeSet<LaneId>,
+        replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
         if !self.enabled {
             return Ok(());
@@ -1649,15 +1627,19 @@ impl TieredStateBackend {
         for entry in current.entries() {
             current_map.insert(entry.lane_id, entry);
         }
+        let replacement_ids: BTreeSet<_> = replacements
+            .iter()
+            .map(|(_, current)| current.lane_id)
+            .collect();
 
         let added: Vec<&LaneConfigEntry> = current_map
             .iter()
-            .filter(|(id, _)| !previous_map.contains_key(id) || replaced_lane_ids.contains(id))
+            .filter(|(id, _)| !previous_map.contains_key(id) && !replacement_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
         let retired: Vec<&LaneConfigEntry> = previous_map
             .iter()
-            .filter(|(id, _)| !current_map.contains_key(id) || replaced_lane_ids.contains(id))
+            .filter(|(id, _)| !current_map.contains_key(id) && !replacement_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
 
@@ -1669,24 +1651,16 @@ impl TieredStateBackend {
             )
         })?;
 
-        for entry in retired
-            .iter()
-            .copied()
-            .filter(|entry| replaced_lane_ids.contains(&entry.lane_id))
-        {
-            self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
+        for (previous, _) in replacements {
+            self.retire_lane_snapshot_dir(&root, &lanes_root, previous)?;
         }
 
-        for entry in added
-            .iter()
-            .copied()
-            .filter(|entry| !replaced_lane_ids.contains(&entry.lane_id))
-        {
+        for entry in added {
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
 
         for entry in current.entries() {
-            if replaced_lane_ids.contains(&entry.lane_id) {
+            if replacement_ids.contains(&entry.lane_id) {
                 continue;
             }
             let dir = lane_snapshot_dir(&lanes_root, entry);
@@ -1702,19 +1676,11 @@ impl TieredStateBackend {
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
 
-        for entry in added
-            .iter()
-            .copied()
-            .filter(|entry| replaced_lane_ids.contains(&entry.lane_id))
-        {
-            self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
+        for (_, current) in replacements {
+            self.ensure_lane_snapshot_dir(&lanes_root, current)?;
         }
 
-        for entry in retired
-            .iter()
-            .copied()
-            .filter(|entry| !replaced_lane_ids.contains(&entry.lane_id))
-        {
+        for entry in retired {
             self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
         }
 
@@ -5669,7 +5635,7 @@ mod tests {
         let extended_cfg = RuntimeLaneConfig::from_catalog(&extended_catalog);
 
         backend
-            .reconcile_lane_geometry(&initial_cfg, &extended_cfg)
+            .reconcile_lane_geometry(&initial_cfg, &extended_cfg, &[])
             .expect("lane add reconcile");
 
         let lanes_root = temp.path().join("lanes");
@@ -5681,7 +5647,7 @@ mod tests {
         );
 
         backend
-            .reconcile_lane_geometry(&extended_cfg, &initial_cfg)
+            .reconcile_lane_geometry(&extended_cfg, &initial_cfg, &[])
             .expect("lane retire reconcile");
 
         assert!(
@@ -5715,7 +5681,7 @@ mod tests {
         .expect("initial catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
         backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg)
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg, &[])
             .expect("provision initial snapshot");
 
         let old_entry = initial_cfg
@@ -5776,7 +5742,7 @@ mod tests {
         .expect("initial catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
         backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg)
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg, &[])
             .expect("provision initial snapshot");
         let old_entry = initial_cfg
             .entry(LaneId::SINGLE)
@@ -5799,7 +5765,7 @@ mod tests {
         fs::create_dir_all(&target_dir).expect("seed conflicting relabel target");
 
         let err = backend
-            .preflight_lane_geometry(&initial_cfg, &updated_cfg, &[(old_entry, new_entry)])
+            .preflight_lane_geometry(&initial_cfg, &updated_cfg, &[], &[(old_entry, new_entry)])
             .expect_err("occupied relabel target must fail preflight");
 
         assert!(
@@ -5832,7 +5798,7 @@ mod tests {
                 .expect("two-lane catalog");
         let two_lane_cfg = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
         backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &two_lane_cfg)
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &two_lane_cfg, &[])
             .expect("provision lane snapshots");
 
         let retired_lane_root = temp.path().join("retired").join("lanes");
@@ -5842,7 +5808,7 @@ mod tests {
         fs::write(&retired_lane_root, b"blocker").expect("retired root blocker");
 
         let err = backend
-            .preflight_lane_geometry(&two_lane_cfg, &RuntimeLaneConfig::default(), &[])
+            .preflight_lane_geometry(&two_lane_cfg, &RuntimeLaneConfig::default(), &[], &[])
             .expect_err("retired root file must fail preflight");
 
         assert!(

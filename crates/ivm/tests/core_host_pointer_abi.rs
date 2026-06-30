@@ -1,4 +1,5 @@
 use iroha_crypto::{Hash, PublicKey};
+use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::numeric::Numeric;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
 use norito::to_bytes;
@@ -62,6 +63,11 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
 fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
     make_tlv(PointerType::NoritoBytes as u16, 1, &buf)
+}
+
+fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
+    let buf = to_bytes(&dataspace).expect("encode DataSpaceId into Norito");
+    make_tlv(PointerType::DataSpaceId as u16, 1, &buf)
 }
 
 #[test]
@@ -181,7 +187,13 @@ fn transfer_asset_validates_tlvs() {
         .preload_input(amount_offset, &amount)
         .expect("preload input");
     vm.set_register(13, Memory::INPUT_START + amount_offset);
-    let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET);
+    let dataspace = make_dataspace_tlv(DataSpaceId::UNIVERSAL);
+    let dataspace_offset = amount_offset + amount.len() as u64 + 8;
+    vm.memory
+        .preload_input(dataspace_offset, &dataspace)
+        .expect("preload dataspace");
+    vm.set_register(14, Memory::INPUT_START + dataspace_offset);
+    let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer_asset tlvs should validate");
 }
@@ -221,7 +233,7 @@ fn transfer_asset_rejects_wrong_asset_type() {
         .preload_input(amount_offset, &amount)
         .expect("preload input");
     vm.set_register(13, Memory::INPUT_START + amount_offset);
-    let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET);
+    let prog = encode_prog_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED);
     vm.load_program(&prog).unwrap();
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));

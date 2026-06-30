@@ -88,11 +88,26 @@ Helper operand polarity checks unwrap one-line `LET` helper aliases.
 Transitive exactness predicate chains must not hide undefined helpers.
 Quantified exactness helper formulas must not hide undefined helpers.
 Quantified exactness helper formulas must not be vacuous.
+Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts.
+Quantified helper restatement checks reject pure top-level boolean compositions.
+Quantified helper restatement checks reject identity-literal gates.
+Quantified helper restatement checks propagate known truth values.
+Quantified helper bound-domain checks include comma-shared bindings.
+Quantified helper bound-domain checks skip tuple-pattern component domains.
+Quantified helper singleton-domain checks preserve tuple literal elements.
+Top-level relation and boolean scans preserve tuple literal operators.
+Top-level boolean/equality detector helpers preserve tuple literal operators.
+Top-level keyword scans preserve tuple literal keywords.
+Top-level CASE branch scans preserve tuple literal arms and conditions.
+Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
 Quantified exactness helper formulas must use their bound identifiers.
+Quantified unused-bound checks include later binding groups.
+Quantified bound identifier scans include later tuple-pattern binding groups.
 Quantified exactness helper formulas must not select predicates with control flow.
 Quantified exactness helper formulas must not appear below top-level negation operands.
 Quantified exactness helper formulas are checked through boolean operands.
 Negated quantified helper checks unwrap one-line `LET` helper aliases.
+Negated quantified helper checks split top-level boolean operands before peeling negation.
 Quantified helper body checks unwrap one-line `LET` helper aliases.
 Quantified helper body control-flow checks reject non-transparent `LET` bodies.
 Existential quantified exactness helper formulas must not weaken exactness chains.
@@ -123,6 +138,7 @@ Quantified-predicate exactness boolean-composition helper operands are checked t
 Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals.
 Exactness boolean-composition checks unwrap one-line `LET` helper aliases.
 Unary-temporal exactness helper wrappers must not hide quantified formulas.
+Unary-temporal quantified and control-flow checks split top-level boolean operands before peeling temporal wrappers.
 Unary-temporal quantified checks unwrap one-line `LET` helper aliases.
 Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases.
 Transitive exactness predicate chains must not hide literal or alias helpers;
@@ -143,7 +159,9 @@ Compound boolean-only temporal helper wrappers count as literal helpers too.
 Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
 Helper reference traversal unwraps one-line `LET` helper aliases.
 LET helper alias unwrapping preserves static unary result wrappers.
+LET binding scans preserve tuple literal definition bodies.
 LET helper alias unwrapping resolves chained one-line bindings.
+LET alias substitution respects later quantified binding groups.
 LET helper alias unwrapping substitutes simple chained binding references.
 Temporal literal checks unwrap one-line `LET` helper aliases.
 Non-named correctness-envelope conjuncts are rejected even when mixed with named
@@ -178,7 +196,21 @@ hide `TypeInvariant`, generic correctness, or `*Exactness` identifiers.
 Transitive allowlisted temporal helper chains must not hide undefined helpers.
 Quantified temporal helper formulas must not hide undefined helpers.
 Quantified temporal helper formulas must not be vacuous.
+Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts.
+Quantified helper restatement checks reject pure top-level boolean compositions.
+Quantified helper restatement checks reject identity-literal gates.
+Quantified helper restatement checks propagate known truth values.
+Quantified helper bound-domain checks include comma-shared bindings.
+Quantified helper bound-domain checks skip tuple-pattern component domains.
+Quantified helper singleton-domain checks preserve tuple literal elements.
+Top-level relation and boolean scans preserve tuple literal operators.
+Top-level boolean/equality detector helpers preserve tuple literal operators.
+Top-level keyword scans preserve tuple literal keywords.
+Top-level CASE branch scans preserve tuple literal arms and conditions.
+Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
 Quantified temporal helper formulas must use their bound identifiers.
+Quantified unused-bound checks include later binding groups.
+Quantified bound identifier scans include later tuple-pattern binding groups.
 Quantified temporal helper formulas must not select predicates with control flow.
 Quantified helper body control-flow checks reject non-transparent `LET` bodies.
 Quantified temporal helper formulas must not appear below top-level negation operands.
@@ -30561,7 +30593,51 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   helpers below their direct conjuncts, including when raw-predicate,
   parameterized-call, or quantified-predicate helper operands are hidden behind
   single or stacked top-level negation or unary-temporal wrappers.
+  Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain,
+  self-membership, or empty-set membership facts such as
+  `\A c \in {}: c = ready`, `\A c \in {1}: c = 1`,
+  `\A c \in Cases: c \in Cases`, or `\A c \in Cases: c \in {c}`,
+  and must not use empty-set membership facts
+  such as `\A c \in Cases: c \notin {}`. Pure top-level boolean compositions
+  of those restatements, such as
+  `\A c \in Cases: c \in Cases /\ c \notin {}` or
+  `\A c \in {1}: c = 1 /\ 1 = c`, are vacuous too, as are identity-literal
+  gates such as `\A c \in Cases: TRUE /\ c \in Cases`,
+  `\A c \in {1}: FALSE \/ c = 1`, and
+  `\A c \in {1}: TRUE => c = 1`. Restatement truth values must propagate
+  through boolean operators too, so helpers such as
+  `\A c \in Cases: c \notin Cases => FALSE` and
+  `\A c \in {1}: c # 1 <=> FALSE` remain vacuous. Bound-domain checks must
+  also apply to comma-shared quantifier bindings such as
+  `\A c, d \in Cases: c \in Cases` and
+  `\A c, d \in {1}: c = 1`. Tuple-pattern components are not treated as
+  direct members of the tuple domain, so `\A <<c, d>> \in Pairs: c \in Pairs`
+  is not a restated bound-domain fact. Tuple literals inside explicit singleton
+  domains must remain intact, so `\A t \in {<<1, 2>>}: t = <<1, 2>>` is still
+  a vacuous singleton-domain restatement. Top-level relation and boolean scans
+  must not split operators inside tuple literals such as
+  `<<c \in Cases, tail>>` or `<<Left /\ Right, tail>>`; boolean/equality
+  detector helpers must use the same tuple-aware classification so
+  `<<Left \/ Right, tail>>`, `<<Left => Right, tail>>`, and
+  `<<c = c, tail>>` do not count as top-level operators. Top-level keyword
+  scans must likewise ignore tuple-internal keywords such as
+  `<<left ELSE right, tail>>` and `<<left IN right, tail>>`. CASE branch
+  scans must also preserve tuple-literal arms and conditions such as
+  `<<CASE nested -> Left [] OTHER -> Right, tail>>`, and must distinguish
+  unary temporal boxes from arm separators in formulas such as
+  `CASE ready -> [] Left [] OTHER -> Right`. Unused-bound checks must still
+  include tuple components, later binding groups, and later tuple-pattern
+  binding groups, so
+  `\A c \in Cases, d \in Other: Predicate(c)` cannot satisfy a quantified
+  helper obligation while omitting `d`, and
+  `\A c \in Cases, <<d, e>> \in Pairs: Predicate(c, d)` cannot omit `e`.
+  Negated quantified helper checks split top-level boolean operands before
+  peeling negation, so `~Q /\ R` does not mark `R` as negated while
+  `~(Q /\ R)` still marks both quantified operands as negated.
   Unary-temporal helper wrappers must also not hide inline quantified formulas;
+  unary-temporal quantified and control-flow checks split top-level boolean
+  operands before peeling temporal wrappers, so `[]Q /\ R` does not mark `R`
+  as temporal while `[](Q /\ R)` still marks both operands as temporal.
   name quantified model predicates before composing exactness chains. Repeated
   helper conjunct checks traverse unary-temporal wrappers and compare
   same-polarity helper names.
@@ -30606,7 +30682,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
   Compound boolean-only temporal helper wrappers count as literal helpers too.
   Temporal literal checks unwrap one-line `LET` helper aliases.
+  LET binding scans preserve tuple literal definition bodies such as
+  `LET selected == <<left == right, tail>> IN selected`.
   LET helper alias unwrapping resolves chained one-line bindings.
+  LET alias substitution respects later quantified binding groups such as
+  `\A c \in Cases, selected \in Other: Predicate(selected)`.
   LET helper alias unwrapping substitutes simple chained binding references.
   Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
   The same
@@ -30657,7 +30737,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   every allowlisted temporal helper-chain depth. Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
   Compound boolean-only temporal helper wrappers count as literal helpers too.
   Temporal literal checks unwrap one-line `LET` helper aliases.
+  LET binding scans preserve tuple literal definition bodies such as
+  `LET selected == <<left == right, tail>> IN selected`.
   LET helper alias unwrapping resolves chained one-line bindings.
+  LET alias substitution respects later quantified binding groups such as
+  `\A c \in Cases, selected \in Other: Predicate(selected)`.
   LET helper alias unwrapping substitutes simple chained binding references.
   Compound `[]`/`<>` temporal helper bodies are traversed for helper
   references; do not hide helper obligations inside temporal conjunction
