@@ -35,6 +35,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_existing_dirs,
     require_existing_files,
     require_runner_positive_int,
+    validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
 )
@@ -420,8 +421,13 @@ def main(argv: list[str] | None = None) -> int:
         emit_runner_error_lines(errors)
         return 2
     plan = build_command_plan(args)
+    rendered_plan = plan_json(plan, args)
+    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    if plan_errors:
+        emit_runner_error_lines(plan_errors)
+        return 2
     if args.dry_run:
-        plan_errors = write_runner_plan(plan_json(plan, args))
+        plan_errors = write_runner_plan(rendered_plan)
         if plan_errors:
             emit_runner_error_lines(plan_errors)
             return 2

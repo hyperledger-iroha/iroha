@@ -85,6 +85,10 @@ class OfflineToriiClientReadinessTest {
     private fun malformedCanonicalBodies(): List<Pair<String, String>> = listOf(
         canonicalReadinessBody(compactAvailable = "\"true\"") to
             "offline_kagemusha_recursive_compact_available must be a boolean",
+        canonicalReadinessBody(extra = "\"offline_note\": \"true\",") to
+            "offline_note must be a boolean",
+        canonicalReadinessBody(extra = "\"offline_sync_optional\": 1,") to
+            "offline_sync_optional must be a boolean",
         canonicalReadinessBody(compactMode = "\" recursive_compact_v1\"") to
             "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
         canonicalReadinessBody(compactBridge = "\"007\"") to

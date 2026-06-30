@@ -2455,7 +2455,10 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
 
     assert "def render_runner_plan" in helper
     assert "def write_runner_plan" in helper
+    assert "def validate_runner_plan_steps" in helper
     assert "runner plan must be an object" in helper
+    assert "runner plan steps must match command plan" in helper
+    assert "render_runner_plan(rendered_plan)" in helper
     assert 'json.dumps(plan, indent=2, sort_keys=True, allow_nan=False) + "\\n"' in helper
     assert "sys.stdout.write(render_runner_plan(plan))" in helper
     assert "except (TypeError, ValueError) as error" in helper
@@ -2463,9 +2466,24 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
     assert "failed to render runner plan JSON: {error}" not in helper
     assert "failed to render runner plan JSON: {error_diagnostic_label(error)}" in helper
     assert "test_render_runner_plan_rejects_non_object_plan" in helper_test
+    assert "test_validate_runner_plan_steps_matches_command_plan" in helper_test
+    assert "test_validate_runner_plan_steps_rejects_non_object_and_drift" in helper_test
+    assert "test_validate_runner_plan_steps_rejects_unrenderable_plan" in helper_test
     assert "test_write_runner_plan_reports_non_object_plan_without_stdout" in helper_test
     assert "test_write_runner_plan_sanitizes_malformed_render_error" in helper_test
+    assert all("validate_runner_plan_steps," in read(path) for path in RUNNERS)
+    assert all("rendered_plan = plan_json(plan, args)" in read(path) for path in RUNNERS)
+    assert all(
+        "plan_errors = validate_runner_plan_steps(rendered_plan, plan)" in read(path)
+        for path in RUNNERS
+    )
+    assert all(
+        read(path).index("plan_errors = validate_runner_plan_steps(rendered_plan, plan)")
+        < read(path).index("if args.dry_run:")
+        for path in RUNNERS
+    )
     assert all("plan_errors = write_runner_plan" in read(path) for path in RUNNERS)
+    assert all("write_runner_plan(rendered_plan)" in read(path) for path in RUNNERS)
     assert all("emit_runner_error_lines(plan_errors)" in read(path) for path in RUNNERS)
     assert missing == []
     assert unguarded == []
@@ -2544,9 +2562,14 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
     assert "DEPLOYMENT_CONTEXT_ARTIFACT_PARENT_DIAGNOSTIC" in runner
     assert "validate_deployment_context_artifact_parent" in runner
     assert "def deployment_context_write_open_flags" in runner
+    assert "def write_all_deployment_context_bytes" in runner
+    assert "view = memoryview(payload)" in runner
+    assert "written = os.write(fd, view)" in runner
+    assert "if written <= 0:" in runner
+    assert "write_all_deployment_context_bytes(fd, rendered)" in runner
     assert "validate_runner_input_parent_chain" in runner
     assert "os.open(path, deployment_context_write_open_flags())" in runner
-    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" in runner
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in runner
     assert "path.write_text(render_runner_plan(payload)" not in runner
     assert "failed to read generated evidence artifact `{path}`: {error}" not in runner
     assert "failed to write deployment context into `{path}`: {error}" not in runner
@@ -2554,6 +2577,7 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
     assert "failed to write deployment context into `{}" not in runner
     assert "test_generated_artifact_read_error_is_sanitized" in runner_test
     assert "test_deployment_context_write_uses_no_follow_descriptor_open" in runner_test
+    assert "test_deployment_context_write_retries_short_os_write" in runner_test
     assert "test_deployment_context_write_error_is_sanitized" in runner_test
     assert "test_deployment_context_write_rejects_symlink_swap_before_open" in runner_test
     assert (
@@ -2573,16 +2597,22 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert "def read_open_flags" in packager
     assert "def write_open_flags" in packager
     assert "def write_manifest_no_follow" in packager
+    assert "def write_all(fd, chunk)" in packager
     assert "O_NOFOLLOW" in packager
     assert "path.lstat()" in packager
     assert "os.open(path, read_open_flags())" in packager
     assert "os.open(path, write_open_flags(), 0o666)" in packager
     assert "os.fstat(fd)" in packager
+    assert "json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)" in packager
+    assert "written = os.write(fd, view)" in packager
+    assert "write_all(fd, rendered)" in packager
     assert "write_manifest_no_follow(manifest_path, manifest)" in packager
     assert "validate_archive_path(archive_path, \"release package archive\")" in packager
     assert "os.open(archive_path, write_open_flags(), 0o666)" in packager
     assert "path.open(\"rb\")" not in packager
     assert "archive_path.open(\"wb\")" not in packager
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in packager
+    assert "json.dump(payload" not in packager
     assert "with open(sys.argv[1]" not in packager
     assert "root.rglob(\"*\")" in packager
     assert "for path in scan_stage_entries(stage_dir)" in packager
@@ -2602,15 +2632,24 @@ def test_sorafs_orchestrator_fixture_builder_uses_no_follow_io() -> None:
     assert "def ensure_fixture_directory" in builder
     assert "def read_open_flags" in builder
     assert "def write_open_flags" in builder
+    assert "def write_all(fd: int, chunk: bytes) -> None" in builder
     assert "def fixture_file_size" in builder
     assert "os.open(plan_path, read_open_flags())" in builder
     assert "os.open(path, write_open_flags(), 0o666)" in builder
+    assert "json.dumps(payload, indent=2, allow_nan=False)" in builder
+    assert "written = os.write(fd, view)" in builder
+    assert "write_all(fd, rendered)" in builder
+    assert '"reputation_score_bps": 10_000' in builder
     assert "os.fstat(fd).st_size" in builder
     assert "plan_path.open(" not in builder
     assert "path.open(\"w\"" not in builder
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in builder
+    assert "json.dump(payload" not in builder
     assert "stat().st_size" not in builder
     assert "test_load_chunker_fixture_rejects_symlink_before_open" in builder_test
     assert "test_write_json_uses_no_follow_descriptor_open" in builder_test
+    assert "test_write_json_completes_partial_descriptor_writes" in builder_test
+    assert "test_build_telemetry_includes_reputation_score" in builder_test
     assert "test_ensure_fixture_directory_rejects_symlink_before_create" in builder_test
     assert "test_fixture_file_size_uses_no_follow_descriptor_fstat" in builder_test
 
@@ -2626,16 +2665,23 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "def require_codegen_file" in replay
     assert "def read_open_flags" in replay
     assert "def write_open_flags" in replay
+    assert "def write_all(fd: int, chunk: bytes) -> None" in replay
     assert 'getattr(os, "O_NOFOLLOW", 0)' in replay
     assert "os.open(path, read_open_flags())" in replay
     assert "os.open(path, write_open_flags(), 0o666)" in replay
+    assert "json.dumps(payload, indent=2, allow_nan=False)" in replay
+    assert "written = os.write(fd, view)" in replay
+    assert "write_all(fd, rendered)" in replay
     assert "payload_path = require_codegen_file(" in replay
     assert "plan_path = require_codegen_file(" in replay
     assert 'path.open("r"' not in replay
     assert 'path.open("w"' not in replay
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in replay
+    assert "json.dump(payload" not in replay
     assert "test_load_json_uses_no_follow_descriptor_open" in replay_test
     assert "test_load_json_rejects_symlink_before_open" in replay_test
     assert "test_write_json_uses_no_follow_descriptor_open" in replay_test
+    assert "test_write_json_completes_partial_descriptor_writes" in replay_test
     assert "test_write_json_rejects_symlinked_parent_before_create" in replay_test
     assert "test_require_codegen_file_rejects_symlink_before_subprocess" in replay_test
 
@@ -2654,11 +2700,19 @@ def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
     assert "def validate_adoption_path" in adoption
     assert "def ensure_adoption_directory" in adoption
     assert "def require_adoption_file" in adoption
+    assert adoption.count("def write_all(fd: int, chunk: bytes) -> None") >= 2
+    assert "view = memoryview(chunk)" in adoption
+    assert "written = os.write(fd, view)" in adoption
+    assert 'write_all(fd, body.encode("utf-8"))' in adoption
+    assert "json.dumps(payload, indent=2, allow_nan=False)" in adoption
+    assert "write_all(fd, rendered)" in adoption
     assert "write_adoption_text(config_path" in adoption
     assert "write_adoption_json(note_path" in adoption
     assert 'require_nonempty_file "${CONFIG_PATH}" "fixture config"' in adoption
     assert 'path.open("r"' not in adoption
     assert 'config_path.open("w"' not in adoption
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in adoption
+    assert "json.dump(payload" not in adoption
     assert "note_path.write_text" not in adoption
 
 
@@ -2673,6 +2727,7 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
     assert "def require_sdk_file" in sdk_gate
     assert "def read_text_artifact" in sdk_gate
     assert "def write_text_artifact" in sdk_gate
+    assert sdk_gate.count("def write_all(fd: int, chunk: bytes) -> None") >= 3
     assert 'getattr(os, "O_NOFOLLOW", 0)' in sdk_gate
     assert "stat.S_ISREG(path_stat.st_mode)" in sdk_gate
     assert "os.open(source, read_open_flags())" in sdk_gate
@@ -2680,10 +2735,15 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
     assert "os.open(path, read_open_flags())" in sdk_gate
     assert "os.open(path, write_open_flags(), 0o666)" in sdk_gate
     assert "os.open(path, append_open_flags(), 0o666)" in sdk_gate
-    assert "os.write(fd" in sdk_gate
+    assert "view = memoryview(chunk)" in sdk_gate
+    assert "written = os.write(fd, view)" in sdk_gate
+    assert "write_all(write_fd, chunk)" in sdk_gate
+    assert 'write_all(fd, body.encode("utf-8"))' in sdk_gate
+    assert 'write_all(fd, ("\\t".join(fields) + "\\n").encode("utf-8"))' in sdk_gate
     assert "write_text_artifact(\n    summary_path" in sdk_gate
     assert "write_text_artifact(\n    matrix_path" in sdk_gate
     assert "with open(" not in sdk_gate
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in sdk_gate
     assert ".write_text(" not in sdk_gate
     assert ".read_text(" not in sdk_gate
     assert 'cp "${source_file}" "${target_file}"' not in sdk_gate
@@ -2697,10 +2757,25 @@ def test_sorafs_gateway_denylist_gate_uses_no_follow_io() -> None:
     assert "copy_file_no_follow()" in denylist_gate
     assert "require_nonempty_file()" in denylist_gate
     assert "first_bundle_json()" in denylist_gate
+    assert "run_xtask()" in denylist_gate
+    assert 'cargo run -p xtask --bin xtask --quiet -- "$@"' in denylist_gate
+    assert "cargo run -p iroha_cli --bin iroha3 --quiet --" in denylist_gate
+    assert '-c "${ROOT_DIR}/defaults/client.toml"' in denylist_gate
+    assert "app sorafs gateway evidence" in denylist_gate
+    assert '--denylist "${new_json}"' in denylist_gate
     assert "def read_open_flags() -> int" in denylist_gate
     assert "def write_open_flags() -> int" in denylist_gate
     assert "def validate_path" in denylist_gate
     assert "def require_regular_file" in denylist_gate
+    assert "def write_all(fd: int, chunk: bytes) -> None" in denylist_gate
+    assert "view = memoryview(chunk)" in denylist_gate
+    assert "written = os.write(fd, view)" in denylist_gate
+    assert "if written <= 0:" in denylist_gate
+    assert "write_all(write_fd, chunk)" in denylist_gate
+    assert "json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)" in denylist_gate
+    assert "write_all(fd, rendered)" in denylist_gate
+    assert "old_only_entry = {" in denylist_gate
+    assert "Retired CI denylist diff control" in denylist_gate
     assert 'getattr(os, "O_NOFOLLOW", 0)' in denylist_gate
     assert "path.lstat()" in denylist_gate
     assert "stat.S_ISREG(path_stat.st_mode)" in denylist_gate
@@ -2716,8 +2791,13 @@ def test_sorafs_gateway_denylist_gate_uses_no_follow_io() -> None:
     assert "require_nonempty_file \"${diff_report}\" \"diff report\"" in denylist_gate
     assert "with open(" not in denylist_gate
     assert "json.load(open(" not in denylist_gate
+    assert "json.dump(payload" not in denylist_gate
+    assert "cargo xtask sorafs-gateway" not in denylist_gate
     assert 'cp "${SAMPLE_JSON}" "${new_json}"' not in denylist_gate
     assert 'cp "${evidence_json}" "${evidence_copy_path}"' not in denylist_gate
+    assert "os.write(write_fd, chunk)" not in denylist_gate
+    assert "parent.is_symlink()" not in denylist_gate
+    assert "parent must not be a symlink" not in denylist_gate
     assert '[[ ! -s "${diff_report}" ]]' not in denylist_gate
     assert 'ls "${old_out}"/*.json | head -n1' not in denylist_gate
 
@@ -2792,6 +2872,31 @@ def test_sorafs_docs_portal_package_summary_uses_no_follow_read() -> None:
     assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in packager
     assert "for raw in read_summary_lines_no_follow(summary_path)" in packager
     assert "with open(summary_path" not in packager
+
+
+def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
+    pin_release = read(REPO_ROOT / "docs" / "portal" / "scripts" / "sorafs-pin-release.sh")
+
+    assert "def read_open_flags() -> int" in pin_release
+    assert "def write_open_flags() -> int" in pin_release
+    assert "def validate_descriptor_path" in pin_release
+    assert "def read_descriptor" in pin_release
+    assert "def write_descriptor" in pin_release
+    assert "def write_all(fd: int, chunk: bytes) -> None" in pin_release
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in pin_release
+    assert "path.lstat()" in pin_release
+    assert "stat.S_ISREG(path_stat.st_mode)" in pin_release
+    assert "os.open(path, read_open_flags())" in pin_release
+    assert "os.open(path, write_open_flags(), 0o666)" in pin_release
+    assert "os.fstat(fd)" in pin_release
+    assert "json.load(handle)" in pin_release
+    assert "json.dumps(payload, indent=2, allow_nan=False)" in pin_release
+    assert "written = os.write(fd, view)" in pin_release
+    assert "write_all(fd, rendered)" in pin_release
+    assert "target.read_text" not in pin_release
+    assert "target.write_text" not in pin_release
+    assert ".read_text(" not in pin_release
+    assert ".write_text(" not in pin_release
 
 
 def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
@@ -3408,8 +3513,12 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "failed to render checker summary JSON: {error_diagnostic_label(error)}" in helper
     assert "def write_checker_summary" in helper
     assert "def checker_summary_write_open_flags" in helper
+    assert "def write_all_checker_summary_bytes" in helper
+    assert "view = memoryview(payload)" in helper
+    assert "written = os.write(fd, view)" in helper
     assert "os.open(summary_out, checker_summary_write_open_flags(), 0o666)" in helper
-    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" in helper
+    assert 'write_all_checker_summary_bytes(fd, summary_text.encode("utf-8"))' in helper
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in helper
     assert "summary_out.write_text" not in helper
     assert "checker summary text must be a string" in helper
     assert "failed to create --summary-out parent" in helper
@@ -3483,6 +3592,10 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     )
     assert "test_write_checker_summary_rejects_non_string_text" in helper_test
     assert "test_write_checker_summary_uses_no_follow_descriptor_open" in helper_test
+    assert (
+        "test_write_checker_summary_completes_partial_descriptor_writes"
+        in helper_test
+    )
     assert "test_write_checker_summary_rejects_summary_symlink" in helper_test
     assert (
         "test_write_checker_summary_rejects_parent_chain_symlink_before_create"
@@ -3642,6 +3755,9 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "parent_label = f\"{evidence_label} parent\"" in helper
     assert "EVIDENCE_FILE_PATH_DIAGNOSTIC" in helper
     assert "path.is_symlink()" in helper
+    assert "parent.is_symlink()" not in helper
+    assert "EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC" not in helper
+    assert "EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC" not in helper
     assert "EVIDENCE_FILE_SYMLINK_DIAGNOSTIC" in helper
     assert "must exist and be a file" in helper
     assert "must exist and be a directory" in helper
@@ -3675,7 +3791,10 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "test_missing_explicit_evidence_file_fails_closed" in helper_test
     assert "test_explicit_evidence_directory_fails_closed" in helper_test
     assert "test_explicit_evidence_symlink_fails_closed" in helper_test
-    assert "test_explicit_evidence_parent_symlink_fails_closed" in helper_test
+    assert (
+        "test_explicit_evidence_parent_symlink_directory_is_accepted"
+        in helper_test
+    )
     assert "test_discovered_json_directory_fails_closed_without_hiding_files" in helper_test
     assert "test_discovered_json_symlink_fails_closed_without_hiding_files" in helper_test
     assert "test_noncanonical_evidence_file_labels_are_sanitized" in helper_test
@@ -3684,7 +3803,10 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "test_evidence_file_parent_inspection_failure_fails_closed" in helper_test
     assert "test_discovered_evidence_file_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_directory_symlink_fails_closed" in helper_test
-    assert "test_evidence_directory_parent_symlink_fails_closed" in helper_test
+    assert (
+        "test_evidence_directory_parent_symlink_directory_is_accepted"
+        in helper_test
+    )
     assert (
         "test_evidence_directory_symlink_inspection_failure_fails_closed"
         in helper_test
@@ -3754,7 +3876,7 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         "test_is_explicit_evidence_path_rejects_symlink_candidate" in helper_test
     )
     assert (
-        "test_is_explicit_evidence_path_rejects_parent_symlink_candidate"
+        "test_is_explicit_evidence_path_accepts_parent_symlink_candidate"
         in helper_test
     )
     assert (
@@ -3772,7 +3894,7 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         "test_scan_evidence_directory_json_rejects_symlink_directory" in helper_test
     )
     assert (
-        "test_scan_evidence_directory_json_rejects_parent_symlink_directory"
+        "test_scan_evidence_directory_json_accepts_parent_symlink_directory"
         in helper_test
     )
     assert (
@@ -3783,7 +3905,7 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         in helper_test
     )
     assert (
-        "test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed"
+        "test_reserved_output_conflict_evidence_directory_parent_symlink_is_accepted"
         in helper_test
     )
     assert (
@@ -3795,7 +3917,7 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         in helper_test
     )
     assert (
-        "test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed"
+        "test_reserved_output_conflict_explicit_evidence_parent_symlink_is_accepted"
         in helper_test
     )
     assert (
@@ -3812,12 +3934,13 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     )
     assert "test_reserved_output_conflict_scan_failure_fails_closed" in helper_test
     assert (
-        "test_reserved_output_conflict_scan_stops_after_reserved_output_parent_symlink"
+        "test_reserved_output_conflict_scan_accepts_reserved_output_parent_symlink"
         in helper_test
     )
     assert "test_reserved_output_path_identities_rejects_symlink" in helper_test
     assert (
-        "test_reserved_output_path_identities_rejects_parent_symlink" in helper_test
+        "test_reserved_output_path_identities_accepts_parent_symlink_directory"
+        in helper_test
     )
     assert (
         "test_reserved_output_path_identities_symlink_inspection_failure"
@@ -3913,7 +4036,7 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "test_read_evidence_bytes_rejects_symlink_before_open" in helper_test
     assert "test_read_evidence_bytes_rejects_directory_before_open" in helper_test
     assert (
-        "test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink"
+        "test_load_evidence_json_with_sha256_or_record_error_accepts_parent_symlink"
         in helper_test
     )
     assert (
@@ -9089,6 +9212,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "`scripts/check_sorafs_production_readiness.py` is the final aggregate SoraFS promotion gate",
         "sorafs.production_readiness.aggregate_gate.v1",
         "`scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane summary paths",
+        "requires exactly one summary input per required gate",
+        "requires an explicit canonical `--deployment-id`/`--environment` pair",
+        "validates the schema-closed collection plan envelope against the built command plan before dry-run output or execution",
         "artifact/load-error lists",
         "no extra `required` rows",
         "top-level evidence/artifact counts consistent with the validated rows",
@@ -9112,8 +9238,11 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "require top-level recognized-artifact inventory and validate it against the per-kind required-row artifact counts and `(kind, path, sha256)` identities plus matching required artifact metadata instead of ignoring it",
         "validate schema-closed aggregate lane rows with canonical path, lowercase SHA-256, count, timestamp, list, and error shapes before release review",
         "validate the schema-closed aggregate summary envelope before writing the final production-readiness report",
+        "require aggregate status to match canonical aggregate diagnostics",
+        "require ready aggregate summaries to carry complete deployment context and only present, valid required rows",
         "require aggregate recognized-summary counts to match present required rows",
         "validate final aggregate required rows for exact present and missing row output contracts",
+        "validate invalid aggregate required-row metadata before blocked rows are emitted for release review",
         "pin deterministic missing-row diagnostics for absent lane summaries",
         "pin deterministic duplicate-summary diagnostics for duplicate lane summaries",
         "count every duplicate lane-summary input while keeping one duplicate row diagnostic per gate",
@@ -9239,6 +9368,13 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "AGGREGATE_SUMMARY_FIELDS" in checker
     assert "AGGREGATE_MISSING_GATE_ROW_FIELDS" in checker
     assert "validate_aggregate_required_row_output" in checker
+    assert (
+        "aggregate invalid row newest_generated_at_unix must be >= oldest_generated_at_unix"
+        in checker
+    )
+    assert "aggregate invalid row deployment_id must be canonical when present" in checker
+    assert "aggregate invalid row environment must be canonical when present" in checker
+    assert "aggregate invalid row {threshold_error}" in checker
     assert "deterministic missing summary diagnostic" in checker
     assert "validate_duplicate_summary_diagnostics" in checker
     assert "deterministic duplicate summary diagnostic exactly once" in checker
@@ -9247,11 +9383,31 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "unknown-schema diagnostics must match discovered unknown summaries" in checker
     assert "unrequired-gate diagnostics must match explicit unrequired summaries" in checker
     assert "validate_aggregate_summary_output" in checker
+    assert "aggregate summary status must match aggregate diagnostics" in checker
+    assert "summary.get(\"status\") != evidence_gate_status(error_values)" in checker
+    assert (
+        "aggregate summary ready deployment must include deployment_id and environment"
+        in checker
+    )
+    assert (
+        "aggregate summary ready recognized_summary_count must match required gate count"
+        in checker
+    )
+    assert "aggregate summary ready rows must all be present and valid" in checker
     assert "recognized_summary_count must match present required rows" in checker
     assert "test_aggregate_required_row_output_shape_is_validated" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_aggregate_summary_output_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "drifted aggregate diagnostic" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "invalid required row" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "runtime-only-deployment" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert ".schema must be canonical when present" in checker
@@ -9319,6 +9475,44 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "max_summary_artifact_age_secs" in checker
     assert "summary_contract" in runner
     assert "supplied for unrequired" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def validate_plan_json" in runner
+    assert "production readiness runner plan must be an object" in runner
+    assert "render_runner_plan(rendered)" in runner
+    assert "production readiness runner plan must be strict JSON renderable" in runner
+    assert "production readiness runner plan fields must match the schema-closed contract" in runner
+    assert "production readiness runner plan steps must match command plan" in runner
+    assert runner.index(
+        "plan_errors = validate_plan_json(rendered_plan, plan, args)"
+    ) < runner.index("if args.dry_run:")
+    assert "production readiness runner requires exactly one summary input per required gate" in runner
+    assert "production readiness runner requires --deployment-id and --environment" in runner
+    assert (
+        "production readiness runner deployment context must use canonical labels"
+        in runner
+    )
+    assert "canonical_string(args.deployment_id)" in runner
+    assert "test_partial_deployment_context_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_malformed_deployment_context_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_duplicate_required_summary_flag_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_execution_rejects_non_object_plan_before_running" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_execution_rejects_unrenderable_plan_before_running" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_execution_rejects_plan_validation_drift_before_running" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
     assert "--evidence-dir artifacts/sorafs/production-readiness/summaries" in direct_example
     assert "--gateway-load-summary artifacts/sorafs/gateway-load/summary.json" in runner_example
     assert "--dry-run" in runner_example

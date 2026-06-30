@@ -25691,7 +25691,11 @@ impl State {
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
         let previous_lane_config = self.nexus.read().lane_config.clone();
         let lanes_to_reset = lanes_requiring_state_reset(&previous_lane_config, &nexus.lane_config);
-        self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
+        self.apply_lane_geometry_updates(
+            &previous_lane_config,
+            &nexus.lane_config,
+            &BTreeSet::new(),
+        )?;
         let active_reset_lanes = Self::active_reset_lanes(&lanes_to_reset, &nexus.lane_config);
         let reset_height = self.block_hashes.view().len() as u64;
         *self.nexus.write() = nexus;
@@ -25984,6 +25988,7 @@ impl State {
             self.apply_lane_geometry_updates(
                 &lifecycle_update.previous_lane_config,
                 &lifecycle_update.updated_lane_config,
+                &lifecycle_update.replaced_lane_ids,
             )?;
             let lanes_to_reset = lifecycle_update.lanes_to_reset.clone();
             {
@@ -26090,18 +26095,24 @@ impl State {
         &self,
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
+        replaced_lane_ids: &BTreeSet<LaneId>,
     ) -> Result<(), LaneLifecycleError> {
-        let diff = lane_topology_diff(previous, current);
+        let diff = lane_topology_diff(previous, current, replaced_lane_ids);
         self.kura
             .preflight_lane_segments(&diff.added, &diff.retired, &diff.relabelled)
             .map_err(|err| LaneLifecycleError::Storage(format!("kura preflight: {err}")))?;
         {
             let mut backend = self.tiered_backend.lock();
             backend
-                .preflight_lane_geometry(previous, current, &diff.relabelled)
+                .preflight_lane_geometry_with_replacements(
+                    previous,
+                    current,
+                    &diff.relabelled,
+                    replaced_lane_ids,
+                )
                 .map_err(|err| LaneLifecycleError::Storage(format!("tiered preflight: {err:?}")))?;
             backend
-                .reconcile_lane_geometry(previous, current)
+                .reconcile_lane_geometry_with_replacements(previous, current, replaced_lane_ids)
                 .map_err(|err| LaneLifecycleError::Storage(format!("tiered: {err:?}")))?;
             if !diff.relabelled.is_empty() {
                 backend
@@ -26177,7 +26188,11 @@ impl State {
         pending: &PendingAutoscaleLaneLifecycle,
     ) -> Result<(), LaneLifecycleError> {
         let update = &pending.catalog_update;
-        self.apply_lane_geometry_updates(&update.previous_lane_config, &update.updated_lane_config)
+        self.apply_lane_geometry_updates(
+            &update.previous_lane_config,
+            &update.updated_lane_config,
+            &update.replaced_lane_ids,
+        )
     }
 
     fn active_da_commitments_for_current_nexus(
@@ -26748,6 +26763,7 @@ struct LaneLifecycleCatalogUpdate {
     previous_lane_config: iroha_config::parameters::actual::LaneConfig,
     updated_lane_config: iroha_config::parameters::actual::LaneConfig,
     lanes_to_reset: BTreeSet<LaneId>,
+    replaced_lane_ids: BTreeSet<LaneId>,
 }
 
 struct PendingDaCommitmentBundle {
@@ -26860,6 +26876,7 @@ fn prepare_lane_lifecycle_update(
         previous_lane_config,
         updated_lane_config,
         lanes_to_reset,
+        replaced_lane_ids,
     })
 }
 
@@ -27190,6 +27207,7 @@ fn lanes_requiring_state_reset(
 fn lane_topology_diff<'a>(
     previous: &'a iroha_config::parameters::actual::LaneConfig,
     current: &'a iroha_config::parameters::actual::LaneConfig,
+    replaced_lane_ids: &BTreeSet<LaneId>,
 ) -> LaneTopologyDiff<'a> {
     let mut previous_map = BTreeMap::new();
     for entry in previous.entries() {
@@ -27203,18 +27221,21 @@ fn lane_topology_diff<'a>(
 
     let added = current_map
         .iter()
-        .filter(|(id, _)| !previous_map.contains_key(id))
+        .filter(|(id, _)| !previous_map.contains_key(id) || replaced_lane_ids.contains(id))
         .map(|(_, entry)| *entry)
         .collect();
     let retired = previous_map
         .iter()
-        .filter(|(id, _)| !current_map.contains_key(id))
+        .filter(|(id, _)| !current_map.contains_key(id) || replaced_lane_ids.contains(id))
         .map(|(_, entry)| *entry)
         .collect();
 
     let relabelled = current_map
         .iter()
         .filter_map(|(id, current_entry)| {
+            if replaced_lane_ids.contains(id) {
+                return None;
+            }
             previous_map.get(id).and_then(|previous_entry| {
                 (previous_entry.kura_segment != current_entry.kura_segment)
                     .then_some((*previous_entry, *current_entry))
@@ -52390,7 +52411,7 @@ mod tests {
         let previous = RuntimeLaneConfig::from_catalog(&initial_catalog);
         let current = RuntimeLaneConfig::from_catalog(&updated_catalog);
 
-        let diff = super::lane_topology_diff(&previous, &current);
+        let diff = super::lane_topology_diff(&previous, &current, &BTreeSet::new());
         assert!(diff.added.is_empty(), "alias change should not add lanes");
         assert!(
             diff.retired.is_empty(),
@@ -52402,6 +52423,49 @@ mod tests {
         assert!(
             super::lanes_requiring_state_reset(&previous, &current).is_empty(),
             "pure storage relabels must not reset lane runtime or economic state"
+        );
+    }
+
+    #[test]
+    fn lane_topology_diff_treats_forced_replacements_as_retire_and_add() {
+        let lane_count = nonzero!(2_u32);
+        let initial_catalog = LaneCatalog::new(
+            lane_count,
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "old-lane".to_string(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("initial catalog");
+        let updated_catalog = LaneCatalog::new(
+            lane_count,
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "fresh-lane".to_string(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("updated catalog");
+
+        let previous = RuntimeLaneConfig::from_catalog(&initial_catalog);
+        let current = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let replaced = BTreeSet::from([LaneId::new(1)]);
+
+        let diff = super::lane_topology_diff(&previous, &current, &replaced);
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.added[0].lane_id, LaneId::new(1));
+        assert_eq!(diff.retired.len(), 1);
+        assert_eq!(diff.retired[0].lane_id, LaneId::new(1));
+        assert!(
+            diff.relabelled.is_empty(),
+            "same-plan lane replacement must not relabel old storage into the fresh lane"
         );
     }
 
@@ -52623,7 +52687,7 @@ mod tests {
         assert!(old_dir.exists(), "expected original directory to exist");
 
         state
-            .apply_lane_geometry_updates(&initial_config, &updated_config)
+            .apply_lane_geometry_updates(&initial_config, &updated_config, &BTreeSet::new())
             .expect("lane geometry update");
 
         let new_dir = updated_entry.blocks_dir(&store_root);
@@ -58467,7 +58531,114 @@ mod tests {
     }
 
     #[test]
-    fn apply_lane_lifecycle_relabel_kura_conflict_preserves_catalog_and_tiered_storage() {
+    fn apply_lane_lifecycle_same_plan_replace_archives_old_storage_before_provisioning_fresh_lane()
+    {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let cold_root = temp_dir.path().join("cold");
+        let initial_config = RuntimeLaneConfig::default();
+        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        *state.tiered_backend.lock() =
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+
+        let lane_id = LaneId::new(1);
+        let source_lane = LaneConfig {
+            id: lane_id,
+            alias: "same-plan-source".to_string(),
+            ..LaneConfig::default()
+        };
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![source_lane.clone()],
+                retire: Vec::new(),
+            })
+            .expect("seed source lane");
+        let source_catalog = state.nexus_snapshot().lane_catalog;
+        let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
+        let source_entry = source_config
+            .entry(lane_id)
+            .expect("source lane entry exists");
+        let source_blocks_dir = source_entry.blocks_dir(&store_root);
+        let source_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
+        let old_kura_marker = source_blocks_dir.join("old-incarnation-marker");
+        std::fs::write(&old_kura_marker, b"old kura data").expect("seed old Kura marker");
+        let old_tiered_marker = source_snapshot_dir.join("old-incarnation-marker");
+        std::fs::write(&old_tiered_marker, b"old tiered data").expect("seed old tiered marker");
+
+        let replacement_lane = LaneConfig {
+            alias: "same-plan-fresh".to_string(),
+            ..source_lane
+        };
+        let replacement_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), replacement_lane.clone()],
+        )
+        .expect("replacement lane catalog");
+        let replacement_config = RuntimeLaneConfig::from_catalog(&replacement_catalog);
+        let replacement_entry = replacement_config
+            .entry(lane_id)
+            .expect("replacement lane entry exists");
+        let replacement_blocks_dir = replacement_entry.blocks_dir(&store_root);
+        let replacement_snapshot_dir = cold_root
+            .join("lanes")
+            .join(&replacement_entry.kura_segment);
+
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![replacement_lane],
+                retire: vec![lane_id],
+            })
+            .expect("same-plan replacement should archive old storage then provision fresh lane");
+
+        assert!(
+            !source_blocks_dir.exists(),
+            "old Kura segment should be archived during same-plan replacement"
+        );
+        assert!(
+            replacement_blocks_dir.exists(),
+            "fresh Kura segment should be provisioned after replacement"
+        );
+        assert!(
+            !replacement_blocks_dir
+                .join("old-incarnation-marker")
+                .exists(),
+            "fresh Kura segment must not inherit old-incarnation marker files"
+        );
+        assert!(
+            !source_snapshot_dir.exists(),
+            "old tiered snapshot segment should be archived during same-plan replacement"
+        );
+        assert!(
+            replacement_snapshot_dir.exists(),
+            "fresh tiered snapshot segment should be provisioned after replacement"
+        );
+        assert!(
+            !replacement_snapshot_dir
+                .join("old-incarnation-marker")
+                .exists(),
+            "fresh tiered snapshot segment must not inherit old-incarnation marker files"
+        );
+        assert!(
+            std::fs::read_dir(store_root.join("retired").join("blocks"))
+                .expect("retired Kura blocks root exists")
+                .next()
+                .is_some(),
+            "old Kura segment should be retained as retired historical storage"
+        );
+        assert!(
+            std::fs::read_dir(cold_root.join("retired").join("lanes"))
+                .expect("retired tiered lanes root exists")
+                .next()
+                .is_some(),
+            "old tiered segment should be retained as retired historical storage"
+        );
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_replacement_target_conflict_preserves_catalog_and_tiered_storage() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
         let cold_root = temp_dir.path().join("cold");
@@ -58528,7 +58699,7 @@ mod tests {
                 additions: vec![relabelled_lane],
                 retire: vec![lane_id],
             })
-            .expect_err("Kura relabel target conflict should abort lifecycle plan");
+            .expect_err("replacement target conflict should abort lifecycle plan");
 
         assert!(matches!(err, LaneLifecycleError::Storage(_)));
         assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);

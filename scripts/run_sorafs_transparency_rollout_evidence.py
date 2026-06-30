@@ -45,6 +45,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_positive_int,
     render_runner_plan,
     validate_runner_input_parent_chain,
+    validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
 )
@@ -292,6 +293,17 @@ def validate_deployment_context_artifact_parent(path: Path) -> list[str]:
     return [DEPLOYMENT_CONTEXT_ARTIFACT_PARENT_DIAGNOSTIC]
 
 
+def write_all_deployment_context_bytes(fd: int, payload: bytes) -> None:
+    """Write all rendered deployment-context artifact bytes."""
+
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short deployment-context artifact write")
+        view = view[written:]
+
+
 def write_deployment_context_artifact(path: Path, payload: dict[str, object]) -> list[str]:
     """Rewrite a generated artifact after stamping reviewed deployment context."""
 
@@ -300,12 +312,9 @@ def write_deployment_context_artifact(path: Path, payload: dict[str, object]) ->
         return parent_errors
     fd = -1
     try:
-        rendered = render_runner_plan(payload)
+        rendered = render_runner_plan(payload).encode("utf-8")
         fd = os.open(path, deployment_context_write_open_flags())
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1
-        with handle:
-            handle.write(rendered)
+        write_all_deployment_context_bytes(fd, rendered)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         del error
         return [DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC]
@@ -514,8 +523,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     plan = build_command_plan(args)
+    rendered_plan = plan_json(plan, args)
+    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    if plan_errors:
+        emit_runner_error_lines(plan_errors)
+        return 2
     if args.dry_run:
-        plan_errors = write_runner_plan(plan_json(plan, args))
+        plan_errors = write_runner_plan(rendered_plan)
         if plan_errors:
             emit_runner_error_lines(plan_errors)
             return 2

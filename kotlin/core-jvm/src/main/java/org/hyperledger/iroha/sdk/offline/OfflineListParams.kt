@@ -47,7 +47,7 @@ class OfflineListParams(
         require(!(requireVerdict && onlyMissingVerdict)) {
             "`requireVerdict` cannot be combined with `onlyMissingVerdict`"
         }
-        require(!(onlyMissingVerdict && !verdictIdHex.isNullOrBlank())) {
+        require(!(onlyMissingVerdict && verdictIdHex != null)) {
             "`verdictIdHex` cannot be combined with `onlyMissingVerdict`"
         }
     }
@@ -69,7 +69,7 @@ class OfflineListParams(
         if (this.policyExpiresAfterMs != null)
             params["policy_expires_after_ms"] = this.policyExpiresAfterMs.toString()
         if (platformPolicy != null) params["platform_policy"] = platformPolicy.slug
-        if (!verdictIdHex.isNullOrBlank()) params["verdict_id_hex"] = verdictIdHex.lowercase()
+        verdictIdHex?.let { params["verdict_id_hex"] = requireExactLowerHex(it, "verdictIdHex") }
         if (requireVerdict) params["require_verdict"] = "true"
         if (onlyMissingVerdict) params["only_missing_verdict"] = "true"
         return params
@@ -83,6 +83,16 @@ class OfflineListParams(
     private fun requireExactNonEmpty(value: String, field: String): String {
         require(value.isNotBlank()) { "$field must not be blank" }
         require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+        return value
+    }
+
+    private fun requireExactLowerHex(value: String, field: String): String {
+        require(value.isNotEmpty()) { "$field must not be empty" }
+        require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+        require(value.length % 2 == 0) { "$field must be even-length lowercase hex" }
+        require(value.all { it in '0'..'9' || it in 'a'..'f' }) {
+            "$field must be even-length lowercase hex"
+        }
         return value
     }
 }

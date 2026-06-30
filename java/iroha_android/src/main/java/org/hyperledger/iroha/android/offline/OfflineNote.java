@@ -2649,11 +2649,35 @@ public final class OfflineNote {
       if (!parts[2].startsWith("dataspace:")) {
         throw new IllegalArgumentException("asset scope must use dataspace:<id>");
       }
-      dataspaceId = Long.parseLong(parts[2].substring("dataspace:".length()));
+      dataspaceId = parseDataspaceId(parts[2].substring("dataspace:".length()));
     } else {
       dataspaceId = null;
     }
     return new ParsedAssetId(parts[1], definitionBytes, dataspaceId);
+  }
+
+  private static long parseDataspaceId(final String value) {
+    if (!isCanonicalUnsignedDecimal(value)) {
+      throw new IllegalArgumentException("asset scope must use canonical dataspace:<id>");
+    }
+    try {
+      return Long.parseLong(value);
+    } catch (final NumberFormatException ex) {
+      throw new IllegalArgumentException("asset scope dataspace id must fit in signed 64-bit range", ex);
+    }
+  }
+
+  private static boolean isCanonicalUnsignedDecimal(final String value) {
+    if (value.isEmpty() || (value.length() > 1 && value.charAt(0) == '0')) {
+      return false;
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (ch < '0' || ch > '9') {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static NumericValue parseNumeric(final String value) {

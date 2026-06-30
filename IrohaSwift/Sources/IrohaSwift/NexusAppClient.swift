@@ -541,8 +541,11 @@ private enum SwiftNexusTransferPayloadEncoder {
         metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] = .number(Double(request.policyVersion))
         metadata[IrohaValidationFeeTransactionMetadataKey.policyHash] = .string(normalizedPolicyHash)
         metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] = .number(1)
-        if let feeSponsor = request.principal.feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !feeSponsor.isEmpty {
+        if let rawFeeSponsor = request.principal.feeSponsor {
+            let feeSponsor = try TransactionInputValidator.sanitizeAccountId(
+                rawFeeSponsor,
+                field: "feeSponsor"
+            )
             metadata[feeSponsorMetadataKey] = .string(feeSponsor)
         }
         if let memo = request.principal.description?.trimmingCharacters(in: .whitespacesAndNewlines),

@@ -46,12 +46,11 @@ object OfflineQrStream {
 
         @JvmStatic
         fun decode(value: String, encoding: FrameEncoding): ByteArray {
-            val trimmed = value.trim()
             val payload = if (encoding == FrameEncoding.BASE64) {
-                require(trimmed.startsWith(PREFIX)) { "QR text prefix missing" }
-                trimmed.substring(PREFIX.length)
+                require(value.startsWith(PREFIX)) { "QR text prefix missing" }
+                value.substring(PREFIX.length)
             } else {
-                trimmed
+                value
             }
             return java.util.Base64.getDecoder().decode(payload)
         }

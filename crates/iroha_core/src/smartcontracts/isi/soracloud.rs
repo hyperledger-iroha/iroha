@@ -4159,16 +4159,10 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     {
         return None;
     }
-    let material_envelope =
-        validate_bfv_full_bootstrap_proof_key_material_envelope_bytes_for_key_v1(
-            &key,
-            &key.key_material,
-        )
-        .ok()?;
-    let native_material = decode_bfv_full_bootstrap_native_proof_key_material_v1(
-        &material_envelope.native_key_material,
-    )
-    .ok()?;
+    let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
+        norito::decode_from_bytes(&key.key_material).ok()?;
+    let native_material: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1 =
+        norito::decode_from_bytes(&material_envelope.native_key_material).ok()?;
     if let Ok(native_payload) = norito::decode_from_bytes::<
         iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
     >(&native_material.native_payload)
@@ -20323,9 +20317,6 @@ mod tests {
             norito::to_bytes(&native_material).expect("encode retargeted native verifier material");
         key.key_material = norito::to_bytes(&material_envelope)
             .expect("encode retargeted verifier-key material envelope");
-        key.key_material_commitment =
-            iroha_crypto::fhe_bfv::bfv_full_bootstrap_proof_key_material_commitment_v1(&key)
-                .expect("commit retargeted verifier-key material");
         artifact.payload =
             norito::to_bytes(&key).expect("encode retargeted verifier-key artifact payload");
         artifacts.verifier_key =

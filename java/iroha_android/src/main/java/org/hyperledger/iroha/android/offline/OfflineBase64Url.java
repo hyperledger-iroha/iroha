@@ -9,7 +9,7 @@ final class OfflineBase64Url {
 
   static byte[] decodeUnpadded(final String value, final String field) {
     final String payload = Objects.requireNonNull(value, field);
-    if (payload.trim().isEmpty() || payload.indexOf('=') >= 0) {
+    if (payload.isEmpty() || payload.indexOf('=') >= 0) {
       throw new IllegalArgumentException(field + " must be unpadded base64url");
     }
     for (int index = 0; index < payload.length(); index++) {

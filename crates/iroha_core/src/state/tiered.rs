@@ -18,7 +18,7 @@ use std::{
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::prelude::Name;
+use iroha_data_model::{nexus::LaneId, prelude::Name};
 use mv::storage::StorageReadOnly;
 use norito::{
     core::NoritoSerialize,
@@ -1517,6 +1517,23 @@ impl TieredStateBackend {
         current: &LaneConfig,
         relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
+        self.preflight_lane_geometry_with_replacements(
+            previous,
+            current,
+            relabelled,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// Validate lane snapshot geometry changes while treating selected same-id lanes as
+    /// fresh replacements instead of relabels.
+    pub fn preflight_lane_geometry_with_replacements(
+        &self,
+        previous: &LaneConfig,
+        current: &LaneConfig,
+        relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
+        replaced_lane_ids: &BTreeSet<LaneId>,
+    ) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -1540,22 +1557,35 @@ impl TieredStateBackend {
 
         for (id, entry) in &current_map {
             let dir = lane_snapshot_dir(&lanes_root, entry);
-            if previous_map.contains_key(id) && dir.exists() {
+            let replaced = replaced_lane_ids.contains(id);
+            if !replaced && previous_map.contains_key(id) && dir.exists() {
                 Self::preflight_dir_path(&dir)?;
                 continue;
             }
-            if previous_map
-                .get(id)
-                .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists())
+            if !replaced
+                && previous_map
+                    .get(id)
+                    .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists())
             {
                 continue;
+            }
+            if replaced
+                && previous_map.get(id).is_some_and(|prev| {
+                    let old_dir = lane_snapshot_dir(&lanes_root, prev);
+                    old_dir != dir && dir.exists()
+                })
+            {
+                return Err(eyre::eyre!(
+                    "tiered-state: lane snapshot replacement target already exists: {path}",
+                    path = dir.display()
+                ));
             }
             Self::preflight_dir_path(&dir)?;
         }
 
         let retired_root = root.join("retired").join("lanes");
         for (id, entry) in &previous_map {
-            if current_map.contains_key(id) {
+            if current_map.contains_key(id) && !replaced_lane_ids.contains(id) {
                 continue;
             }
             let dir = lane_snapshot_dir(&lanes_root, entry);
@@ -1591,6 +1621,17 @@ impl TieredStateBackend {
         previous: &LaneConfig,
         current: &LaneConfig,
     ) -> Result<()> {
+        self.reconcile_lane_geometry_with_replacements(previous, current, &BTreeSet::new())
+    }
+
+    /// Ensure tiered snapshot directories reflect lane geometry, treating selected
+    /// same-id lanes as fresh replacements.
+    pub fn reconcile_lane_geometry_with_replacements(
+        &mut self,
+        previous: &LaneConfig,
+        current: &LaneConfig,
+        replaced_lane_ids: &BTreeSet<LaneId>,
+    ) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -1611,12 +1652,12 @@ impl TieredStateBackend {
 
         let added: Vec<&LaneConfigEntry> = current_map
             .iter()
-            .filter(|(id, _)| !previous_map.contains_key(id))
+            .filter(|(id, _)| !previous_map.contains_key(id) || replaced_lane_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
         let retired: Vec<&LaneConfigEntry> = previous_map
             .iter()
-            .filter(|(id, _)| !current_map.contains_key(id))
+            .filter(|(id, _)| !current_map.contains_key(id) || replaced_lane_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
 
@@ -1628,11 +1669,26 @@ impl TieredStateBackend {
             )
         })?;
 
-        for entry in added {
+        for entry in retired
+            .iter()
+            .copied()
+            .filter(|entry| replaced_lane_ids.contains(&entry.lane_id))
+        {
+            self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
+        }
+
+        for entry in added
+            .iter()
+            .copied()
+            .filter(|entry| !replaced_lane_ids.contains(&entry.lane_id))
+        {
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
 
         for entry in current.entries() {
+            if replaced_lane_ids.contains(&entry.lane_id) {
+                continue;
+            }
             let dir = lane_snapshot_dir(&lanes_root, entry);
             if dir.exists() {
                 continue;
@@ -1646,7 +1702,19 @@ impl TieredStateBackend {
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
 
-        for entry in retired {
+        for entry in added
+            .iter()
+            .copied()
+            .filter(|entry| replaced_lane_ids.contains(&entry.lane_id))
+        {
+            self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
+        }
+
+        for entry in retired
+            .iter()
+            .copied()
+            .filter(|entry| !replaced_lane_ids.contains(&entry.lane_id))
+        {
             self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
         }
 

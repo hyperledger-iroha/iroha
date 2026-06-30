@@ -182,12 +182,24 @@ object OfflineBearerCashTextCodec {
 
     @JvmStatic
     fun payloadKind(text: String): OfflineBearerCashPayloadKindV1? {
-        val trimmed = text.trim()
         return when {
-            trimmed.startsWith(RECEIVE_REQUEST_TEXT_PREFIX) -> OfflineBearerCashPayloadKindV1.RECEIVE_REQUEST
-            trimmed.startsWith(PAYMENT_TEXT_PREFIX) -> OfflineBearerCashPayloadKindV1.PAYMENT
-            trimmed.startsWith(ACK_TEXT_PREFIX) -> OfflineBearerCashPayloadKindV1.ACK
+            hasExactUnpaddedBase64UrlPayload(text, RECEIVE_REQUEST_TEXT_PREFIX) ->
+                OfflineBearerCashPayloadKindV1.RECEIVE_REQUEST
+            hasExactUnpaddedBase64UrlPayload(text, PAYMENT_TEXT_PREFIX) -> OfflineBearerCashPayloadKindV1.PAYMENT
+            hasExactUnpaddedBase64UrlPayload(text, ACK_TEXT_PREFIX) -> OfflineBearerCashPayloadKindV1.ACK
             else -> null
         }
     }
+
+    private fun hasExactUnpaddedBase64UrlPayload(text: String, prefix: String): Boolean {
+        if (!text.startsWith(prefix)) return false
+        val payload = text.substring(prefix.length)
+        return payload.isNotEmpty() &&
+            payload.trim() == payload &&
+            !payload.contains("=") &&
+            payload.all(::isBase64UrlCharacter)
+    }
+
+    private fun isBase64UrlCharacter(value: Char): Boolean =
+        value in 'A'..'Z' || value in 'a'..'z' || value in '0'..'9' || value == '-' || value == '_'
 }

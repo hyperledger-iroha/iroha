@@ -906,7 +906,8 @@ public struct OfflineNoteAuditBundle: Equatable, Sendable {
     }
 
     public func outputClaim(matchingNoteCommitmentHex noteCommitmentHex: String) -> OfflineNoteAuditOutputClaim? {
-        guard let noteCommitment = Data(hexString: normalizedNoteCommitmentHex(noteCommitmentHex)),
+        guard OfflineNoteTextPayloadEncoding.isCanonicalHashHex(noteCommitmentHex),
+              let noteCommitment = Data(hexString: noteCommitmentHex),
               noteCommitment.count == 32 else {
             return nil
         }
@@ -955,13 +956,6 @@ public struct OfflineNoteAuditBundle: Equatable, Sendable {
         )
     }
 
-    private func normalizedNoteCommitmentHex(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasPrefix("0x") {
-            return String(trimmed.dropFirst(2))
-        }
-        return trimmed
-    }
 }
 
 public struct IssueOfflineNoteRequest: Sendable {

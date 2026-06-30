@@ -138,6 +138,7 @@ Quantified-predicate exactness boolean-composition helper operands are checked t
 Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals.
 Exactness boolean-composition checks unwrap one-line `LET` helper aliases.
 Unary-temporal exactness helper wrappers must not hide quantified formulas.
+Unary-temporal quantified and control-flow checks split top-level boolean operands before peeling temporal wrappers.
 Unary-temporal quantified checks unwrap one-line `LET` helper aliases.
 Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases.
 Transitive exactness predicate chains must not hide literal or alias helpers;
@@ -30634,6 +30635,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   peeling negation, so `~Q /\ R` does not mark `R` as negated while
   `~(Q /\ R)` still marks both quantified operands as negated.
   Unary-temporal helper wrappers must also not hide inline quantified formulas;
+  unary-temporal quantified and control-flow checks split top-level boolean
+  operands before peeling temporal wrappers, so `[]Q /\ R` does not mark `R`
+  as temporal while `[](Q /\ R)` still marks both operands as temporal.
   name quantified model predicates before composing exactness chains. Repeated
   helper conjunct checks traverse unary-temporal wrappers and compare
   same-polarity helper names.

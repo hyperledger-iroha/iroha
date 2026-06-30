@@ -34,7 +34,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
-            return "Asset definition id must use canonical unprefixed Base58 form (received '\(value)')."
+            return "Asset definition id must use canonical unprefixed Base58 form with optional canonical #dataspace:<id> suffix (received '\(value)')."
         case let .emptyDomainId(field):
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
@@ -176,12 +176,22 @@ struct TransactionInputValidator {
         let definition = String(value[..<markerRange.lowerBound])
         let rawDataspaceId = String(value[markerRange.upperBound...])
         guard !definition.isEmpty,
-              !rawDataspaceId.isEmpty,
               !rawDataspaceId.contains("#"),
+              isCanonicalUnsignedDecimal(rawDataspaceId),
               let dataspaceId = UInt64(rawDataspaceId) else {
             return ("", "")
         }
         return (definition, "\(marker)\(dataspaceId)")
+    }
+
+    private static func isCanonicalUnsignedDecimal(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value == "0" || !value.hasPrefix("0") else {
+            return false
+        }
+        return value.unicodeScalars.allSatisfy { scalar in
+            scalar.value >= 48 && scalar.value <= 57
+        }
     }
 
     static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {
@@ -611,15 +621,10 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.emptyAssetDefinitionId
         }
         let destination = ids.accountIds["destination"] ?? transfer.destination
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let feeSponsor: String?
-        if let rawFeeSponsor = transfer.feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !rawFeeSponsor.isEmpty
-        {
-            feeSponsor = rawFeeSponsor
-        } else {
-            feeSponsor = nil
+        let feeSponsor = try transfer.feeSponsor.map {
+            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
         }
+        let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeTransfer(chainId: ids.chainId,
                                                          authority: ids.authorityId,

@@ -197,6 +197,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals",
     "Exactness boolean-composition checks unwrap one-line `LET` helper aliases",
     "Unary-temporal exactness helper wrappers must not hide quantified formulas",
+    "Unary-temporal quantified and control-flow checks split top-level boolean operands before peeling temporal wrappers",
     "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
     "Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases",
     "Transitive exactness predicate chains must not hide literal or alias helpers",
@@ -6754,6 +6755,12 @@ def unary_temporal_control_flow_formulas(body: str) -> list[tuple[str, str]]:
             collect(let_operand, in_temporal)
             return
 
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, in_temporal)
+            return
+
         whole_body_control = TLA_WHOLE_BODY_CONTROL_RE.match(normalized)
         if (
             in_temporal
@@ -6774,12 +6781,6 @@ def unary_temporal_control_flow_formulas(body: str) -> list[tuple[str, str]]:
         if temporal_operand is not None:
             collect(temporal_operand, True)
             return
-
-        for part in tla_top_level_boolean_parts(normalized):
-            compact_part = strip_static_outer_parentheses(" ".join(part.split()))
-            if compact_part == normalized:
-                continue
-            collect(part, in_temporal)
 
     collect(body, False)
     return control_flow
@@ -7612,6 +7613,12 @@ def unary_temporal_quantified_formulas(body: str) -> list[str]:
             collect(let_operand, in_temporal)
             return
 
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, in_temporal)
+            return
+
         negated_operand = tla_static_negation_operand(normalized)
         if negated_operand is not None:
             collect(negated_operand, in_temporal)
@@ -7621,12 +7628,6 @@ def unary_temporal_quantified_formulas(body: str) -> list[str]:
         if temporal_operand is not None:
             collect(temporal_operand, True)
             return
-
-        for part in tla_top_level_boolean_parts(normalized):
-            compact_part = strip_static_outer_parentheses(" ".join(part.split()))
-            if compact_part == normalized:
-                continue
-            collect(part, in_temporal)
 
     collect(body, False)
     return formulas

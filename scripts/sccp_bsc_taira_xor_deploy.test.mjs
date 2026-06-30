@@ -5194,6 +5194,67 @@ test("BSC route-config rejects duplicate route manifest container and scalar ali
       routeManifest({ settlement: { asset_key: "xor" } }),
       /route manifest settlement\.assetKey must not use multiple aliases in route manifest settlement: assetKey, asset_key/u,
     ],
+    [
+      "destination browser prover module URL",
+      routeManifest({
+        destinationBrowserProver: {
+          ...browserProverRef("destination"),
+          module_url: DESTINATION_BROWSER_MODULE_URL,
+        },
+      }),
+      /route manifest destinationBrowserProver\.moduleUrl must not use multiple aliases in route manifest destinationBrowserProver: moduleUrl, module_url/u,
+    ],
+    [
+      "source browser prover module specifier",
+      routeManifest({
+        sourceBrowserProver: {
+          ...browserProverRef("source"),
+          moduleSpecifier: "@sora/sccp-bsc-source-prover",
+          specifier: "@sora/sccp-bsc-source-prover",
+        },
+      }),
+      /route manifest sourceBrowserProver\.moduleSpecifier must not use multiple aliases in route manifest sourceBrowserProver: moduleSpecifier, specifier/u,
+    ],
+    [
+      "destination browser prover module hash",
+      routeManifest({
+        destinationBrowserProver: {
+          ...browserProverRef("destination"),
+          module_hash: DESTINATION_BROWSER_MODULE_HASH,
+        },
+      }),
+      /route manifest destinationBrowserProver\.moduleHash must not use multiple aliases: moduleHash, module_hash/u,
+    ],
+    [
+      "source browser prover manifest hash",
+      routeManifest({
+        sourceBrowserProver: {
+          ...browserProverRef("source"),
+          manifest_sha256: SOURCE_BROWSER_MANIFEST_HASH,
+        },
+      }),
+      /route manifest sourceBrowserProver\.manifestHash must not use multiple aliases: manifestHash, manifest_sha256/u,
+    ],
+    [
+      "destination browser prover bound route hash",
+      routeManifest({
+        destinationBrowserProver: {
+          ...browserProverRef("destination"),
+          routeHash: bindingHash(),
+        },
+      }),
+      /route manifest destinationBrowserProver\.boundRouteHash must not use multiple aliases: boundRouteHash, routeHash/u,
+    ],
+    [
+      "source browser prover bound proof hash",
+      routeManifest({
+        sourceBrowserProver: {
+          ...browserProverRef("source"),
+          proofArtifactHash: routeManifest().destinationRollout.proofArtifactHash,
+        },
+      }),
+      /route manifest sourceBrowserProver\.boundProofHash must not use multiple aliases: boundProofHash, proofArtifactHash/u,
+    ],
   ]) {
     assert.throws(
       () =>

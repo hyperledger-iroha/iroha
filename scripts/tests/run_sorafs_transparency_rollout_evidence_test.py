@@ -294,6 +294,36 @@ def test_deployment_context_write_uses_no_follow_descriptor_open(
     assert MODULE.deployment_context_write_open_flags() == opened["flags"]
 
 
+def test_deployment_context_write_retries_short_os_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    original_write = os.write
+    write_lengths: list[int] = []
+
+    def short_write(fd: int, payload) -> int:
+        chunk = bytes(payload[: max(1, min(5, len(payload)))])
+        written = original_write(fd, chunk)
+        write_lengths.append(written)
+        return written
+
+    monkeypatch.setattr(MODULE.os, "write", short_write)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == []
+    assert len(write_lengths) > 1
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["deployment_id"] == "transparency-staging-a"
+    assert payload["environment"] == "staging"
+    assert payload["deployment_context_reviewed"] is True
+
+
 def test_deployment_context_write_error_is_sanitized(
     tmp_path: Path,
     monkeypatch,

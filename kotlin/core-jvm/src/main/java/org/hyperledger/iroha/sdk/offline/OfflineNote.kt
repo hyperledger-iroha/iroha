@@ -77,6 +77,18 @@ object OfflineNote {
         "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimage"
     private const val PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimage"
+
+    fun canonicalAssetId(assetId: String): String {
+        val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
+        writeAssetId(encoder, assetId)
+        val decoder = NoritoDecoder(encoder.toByteArray(), NoritoHeader.COMPACT_LEN)
+        val canonical = readAssetId(decoder)
+        require(decoder.remaining() == 0) {
+            "Trailing bytes after Offline Note asset id canonicalization"
+        }
+        return canonical
+    }
+
     /**
      * Historical classic Offline Note instruction wire names kept only for
      * fixture-only decoding; production offline payments use Kagemusha
@@ -1747,12 +1759,28 @@ object OfflineNote {
         val dataspaceId = if (parts.size == 3) {
             val scope = parts[2]
             require(scope.startsWith("dataspace:")) { "asset scope must use dataspace:<id>" }
-            scope.substring("dataspace:".length).toLong()
+            parseDataspaceId(scope.substring("dataspace:".length))
         } else {
             null
         }
         return ParsedAssetId(parts[1], definitionBytes, dataspaceId)
     }
+
+    private fun parseDataspaceId(value: String): Long {
+        require(isCanonicalUnsignedDecimal(value)) {
+            "asset scope must use canonical dataspace:<id>"
+        }
+        return try {
+            value.toLong()
+        } catch (ex: NumberFormatException) {
+            throw IllegalArgumentException("asset scope dataspace id must fit in signed 64-bit range", ex)
+        }
+    }
+
+    private fun isCanonicalUnsignedDecimal(value: String): Boolean =
+        value.isNotEmpty() &&
+            (value == "0" || !value.startsWith("0")) &&
+            value.all { it in '0'..'9' }
 
     private fun parseNumeric(value: String): NumericValue {
         val decimal = BigDecimal(value)

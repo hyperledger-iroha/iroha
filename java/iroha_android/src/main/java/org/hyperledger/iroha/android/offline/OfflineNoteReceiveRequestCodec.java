@@ -40,13 +40,13 @@ public final class OfflineNoteReceiveRequestCodec {
   }
 
   public static OfflineNoteReceiveRequest decodeText(final String text) {
-    final String trimmed = Objects.requireNonNull(text, "text").trim();
-    if (!trimmed.startsWith(TEXT_PREFIX)) {
+    final String value = Objects.requireNonNull(text, "text");
+    if (!value.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note receive request prefix missing");
     }
     return decodeNorito(
         OfflineBase64Url.decodeUnpadded(
-            trimmed.substring(TEXT_PREFIX.length()), "Offline Note receive request payload"));
+            value.substring(TEXT_PREFIX.length()), "Offline Note receive request payload"));
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNoteReceiveRequest request) {

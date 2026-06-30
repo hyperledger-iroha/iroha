@@ -17,33 +17,92 @@ and completed history lives in [`status.md`](./status.md).
   canonical platform assertion profiles, canonical base64 public/assertion keys,
   a canonical base64 issuer signature, and exact first-release platform names
   (`ios-appattest` or `android-keymint`) instead of substring-normalized
-  platform aliases; Kotlin/JVM compact wallet
-  certificate state must also use those exact first-release platform names and
-  reject explicit retired assertion-profile
-  spellings instead of preserving them, and Kotlin/JVM offline wallet amount
-  normalization must reject malformed values instead of coercing them to zero;
+	  platform aliases; Kotlin/JVM compact wallet
+	  certificate state must also use exact version `1`, those exact first-release
+	  platform names, platform-specific assertion usage limits, canonical base64
+	  public/assertion keys with fixed 32-/65-byte lengths, and canonical 64-byte
+	  issuer signatures, reject explicit retired assertion-profile spellings and retired
+	  `app_attest_public_key_base64` assertion-key aliases instead of preserving
+	  them, and Kotlin/JVM offline wallet amount normalization must reject
+  malformed values instead of coercing them to zero;
   Kotlin/JVM and Swift payment-token input claims must validate fixed hash
   fields as exact lowercase 32-byte hex text, canonical asset IDs, amount
   strings, and optional `claim_hash` values through the canonical issued-claim
   hash path instead of remaining passive or permissive DTO fields;
-  Swift and Java Android wallet-note JSON decoders must reject retired
-  `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
-  state spellings instead of migrating them, with Kotlin docs mirroring the
-  same first-release storage contract;
+	  Swift, Kotlin Android secure-store, and Java Android wallet-note JSON
+	  decoders must reject retired `spendPending`, `SPEND_PENDING`,
+	  `changePending`, and `CHANGE_PENDING` state spellings instead of migrating
+	  them, Java Android persisted wallet-note `note_commitment_hex` must be exact
+	  lowercase 32-byte hex instead of being lowercased during decode, with Kotlin
+	  docs mirroring the same first-release storage contract;
+  Kotlin/JVM spendable-note selection must
+  reject nonpositive `maxInputs` instead of coercing them to one; Swift,
+  Kotlin/JVM, and Java Android Offline Note wallets must retain the four-input
+  payment cap and reject five-note payments before token construction or note
+  state mutation, and must reject zero or negative load, receive, and payment
+  amounts before issuer refill preparation, pending receive notes, or
+  payment-token construction can touch randomness or stored note state; Java
+  Android load and receive request paths must canonicalize exact decimal amount
+  strings and reject whitespace, exponent notation, malformed decimals, and
+  nonpositive values before issuer or wallet state is touched;
+  Swift, Kotlin/JVM, and Java Android Offline Bearer Cash policies must reject
+  nonpositive and inverted custody-hop, lineage-step, QR/stream payload,
+  Android key-pool, and transport payload-byte limits instead of accepting
+  zero-boundary drift;
+  Swift, Kotlin/JVM, and Java Android Offline Bearer Cash receive, payment,
+  and ACK text codecs plus payload-kind classification must reject
+  whitespace-normalized text envelopes and require exact unpadded base64url
+  payloads;
+  Swift, Kotlin/JVM, and Java Android Nearby pairing challenges must preserve
+  and validate exact first-release asset names instead of trimming padded
+  challenge strings;
+  Swift direct transfer text payload decoders and payload-kind classification
+  must require exact prefixes plus exact non-empty unpadded base64url bodies
+  instead of trimming whole envelopes or classifying by prefix only;
+  Swift, Kotlin/JVM, and Java Android QR stream text decoders must require
+  exact `iroha:qr:` text and reject whitespace-wrapped frame strings before
+  prefix or base64 payload validation;
+  Swift, Kotlin/JVM, and Java Android Offline Note explorer reconciliation must
+  accept only exact `Committed`/`Rejected` statuses and exact instruction kind
+  names instead of case-insensitive matching;
+  Swift, Kotlin/JVM, and Java Android Torii Offline Note outcome providers must
+  decode explorer `encoded` instruction fields only from exact non-empty
+  lowercase even-length hex text, rejecting whitespace, `0x` prefixes,
+  uppercase, odd-length, or non-hex payloads instead of normalizing them;
+  Swift native/compatibility and Kotlin/JVM payment-token output-commitment
+  lookup helpers must reject whitespace, `0x` prefixes, uppercase hex, and
+  non-32-byte commitment text instead of normalizing it before matching claims;
   mobile QR stream tests must describe the rejected `iroha:qr-old:` prefix as a
   retired versioned prefix, and mobile route/scheme comments and diagnostics
   must use retired terminology;
-  retired recursive proof JSON must carry
-  canonical base64 `proof_bytes_base64`; Swift payload text
+  Swift and Kotlin/JVM retired recursive proof JSON must carry exact
+  `verifier_key_backend`, string-only `verifier_key_id`, exact
+  `proof_backend`, exact lowercase 32-byte `public_inputs_hash_hex` values,
+  and canonical non-empty standard base64 `proof_bytes_base64`, without
+  object-shaped or `backend:name` verifier-key aliases; Swift payload text
   amounts, including nested payment-token input claims decoded from JSON, must
   reject malformed amount strings instead of preserving them, and input-claim
-  `claim_hash` values must match the canonical issued-claim hash; Swift
-  compact certificates must reject retired assertion-key aliases such as
-  `app_attest_public_key_base64` and require canonical
-  `assertion_public_key`; Swift, Kotlin/JVM, and Java Android raw Torii
-  issuer-device-binding inputs must reject retired `device_public_key` and
-  `app_attest_public_key_base64` assertion-key aliases before building refill
-  request bodies;
+  `claim_hash` values must match the canonical issued-claim hash; Swift and
+  Kotlin/JVM compact certificates must reject retired assertion-key aliases
+	  such as `app_attest_public_key_base64` and require canonical
+	  `assertion_public_key`; Kotlin/JVM wallet device-binding JSON plus Swift,
+	  Kotlin/JVM, and Java Android raw Torii issuer-device-binding inputs must
+	  reject retired `device_public_key` and `app_attest_public_key_base64`
+	  assertion-key aliases and reject whitespace-normalized `device_id`,
+	  `offline_public_key`, and `attestation_key_id` fields before preserving
+	  wallet state or building refill request bodies; Kotlin/JVM wallet
+	  attestation receipt and device-proof JSON
+	  must reject passive platform/profile, usage-limit, lowercase 32-byte hash,
+	  canonical base64, signature-length, and counter drift before preserving state;
+	  Kotlin/JVM signed wallet authorization, server-anchor, revocation, asset-limit,
+	  and transfer-receipt payloads must reject malformed amount strings,
+	  non-monotonic validity windows, non-lowercase 32-byte state hashes,
+	  non-canonical 64-byte signatures, and passive transfer direction/version drift;
+	  Kotlin/JVM wallet state collections must reject malformed local-state
+	  hashes, source nullifiers, asset usage windows, note secret and native
+	  token base64, one-use key-pool counters, pending outbox/audit records, and
+	  exact identifier comparison drift instead of trimming, lowercasing, or
+	  dropping malformed entries;
   key-refill requests must use only
   `attestation_key_id` and must strip retired `X-Iroha-*` canonical-auth
   headers before body signing, with Swift issuer tests using retired
@@ -52,23 +111,61 @@ and completed history lives in [`status.md`](./status.md).
   device-attestation registration must expose `keyCertificatePayload()` instead
   of synthesizing unsigned all-zero-signature certificates, and the SDK parity
   guard's
-  `--negative-control-swift-offline-note-payload-certificate-fail-closed`
-  plus
-  `--negative-control-swift-offline-note-v2-registration-certificate-payload`
-  plus `--negative-control-swift-key-refill-attestation-alias` plus
-  `--negative-control-mobile-retired-offline-note-issuers` plus
-  `--negative-control-mobile-retired-qr-prefix-wording` plus
-  `--negative-control-mobile-wallet-note-retired-state-migration` plus
-  `--negative-control-kotlin-offline-wallet-compact-certificate-profile` plus
-  `--negative-control-kotlin-offline-wallet-amount-normalization` plus
+	  `--negative-control-swift-offline-note-payload-certificate-fail-closed`
+	  plus
+	  `--negative-control-swift-offline-note-v2-registration-certificate-payload`
+	  plus `--negative-control-swift-key-refill-attestation-alias` plus
+	  `--negative-control-mobile-retired-offline-note-issuers` plus
+	  `--negative-control-mobile-retired-qr-prefix-wording` plus
+	  `--negative-control-mobile-wallet-note-retired-state-migration` plus
+	  `--negative-control-mobile-wallet-note-commitment-hex-exactness` plus
+	  `--negative-control-mobile-offline-note-wallet-input-cap` plus
+  `--negative-control-mobile-offline-note-wallet-positive-amounts` plus
+	  `--negative-control-mobile-offline-bearer-cash-text-exactness` plus
+	  `--negative-control-mobile-nearby-pairing-challenge-exactness` plus
+	  `--negative-control-mobile-offline-outcome-exactness` plus
+	  `--negative-control-mobile-offline-outcome-encoded-instruction-exactness` plus
+	  `--negative-control-swift-transfer-text-payload-exactness` plus
+	  `--negative-control-mobile-qr-stream-text-exactness` plus
+	  `--negative-control-kotlin-offline-bearer-cash-text-exactness` plus
+	  `--negative-control-kotlin-offline-outcome-exactness` plus
+	  `--negative-control-kotlin-offline-payment-token-commitment-exactness` plus
+	  `--negative-control-swift-offline-payment-token-commitment-exactness` plus
+	  `--negative-control-kotlin-offline-cash-request-strictness` plus
+	  `--negative-control-kotlin-offline-wallet-compact-certificate-profile` plus
+	  `--negative-control-kotlin-offline-wallet-recursive-proof-strictness` plus
+	  `--negative-control-kotlin-offline-wallet-device-binding-alias-strictness` plus
+	  `--negative-control-kotlin-offline-wallet-attestation-payload-strictness` plus
+	  `--negative-control-kotlin-offline-wallet-signed-payload-strictness` plus
+	  `--negative-control-kotlin-offline-wallet-state-collection-strictness` plus
+	  `--negative-control-kotlin-offline-wallet-amount-normalization` plus
+  `--negative-control-kotlin-offline-wallet-max-inputs-strictness` plus
+  `--negative-control-mobile-bearer-cash-policy-validation` plus
   `--negative-control-kotlin-offline-wallet-input-claim-strictness` modes
   prove that
-  zero-signature synthesis, non-canonical base64 aliases, retired
-  assertion-profile spellings, malformed wallet amount zero-coercion, passive
-  Kotlin/JVM input-claim amount/hash drift, retired wallet-note state
+  zero-signature synthesis, non-canonical base64 aliases, malformed Kotlin/JVM
+  compact wallet certificate key/signature fields, retired
+	  assertion-profile spellings, malformed wallet amount zero-coercion, passive
+	  Kotlin/JVM recursive proof verifier metadata aliases, passive Kotlin/JVM
+	  attestation receipt or device-proof platform/hash/base64/signature drift,
+	  passive Kotlin/JVM signed wallet payload hash/amount/signature drift,
+	  passive Kotlin/JVM wallet state collection normalization drift,
+	  passive Kotlin/JVM input-claim asset-id/amount/hash drift, retired wallet-note state
   migrations, retired QR prefix wording drift, substring platform matching,
-  fake registration certificates, old Swift canonical-auth test naming, and
-  `app_attest_key_id` or retired issuer-device-binding assertion-key aliases
+  fake registration certificates, old Swift canonical-auth test naming,
+  nonpositive spend-selection input coercion, mobile Offline Note wallet
+  input-cap relaxation, nonpositive Offline Note load/receive/payment amount
+  acceptance, and `app_attest_key_id` or retired
+  issuer-device-binding assertion-key aliases, padded raw issuer device-binding
+  fields, or Kotlin/JVM wallet device-binding alias preservation, plus mobile
+  Bearer Cash policy
+  zero-boundary and inverted-limit drift or Kotlin/JVM Bearer Cash text
+  whitespace normalization, Nearby pairing challenge whitespace normalization,
+  Swift transfer text envelope normalization or prefix-only classification,
+  QR stream text whitespace normalization, mobile Offline Note explorer
+  outcome case-folding, or Swift/Kotlin payment-token commitment hex
+  normalization, or Kotlin/JVM cash-route request identifier/amount
+  normalization, or Java Android Offline Note amount canonicalization drift,
   cannot return.
 
 - Keep Torii Offline V2 Kagemusha OpenAPI endpoint descriptions in
@@ -317,7 +414,27 @@ and completed history lives in [`status.md`](./status.md).
   Note keychain tests now describe unrevisioned collections directly, and the
   issuer 404 test names retired issuer-route retries; the SDK parity guard's
   `--negative-control-swift-offline-note-retired-route-wording` mode pins those
-  Swift test names and diagnostics.
+  Swift test names and diagnostics. Kotlin/JVM and Android Java
+  `OfflineListParams` now also preserve `verdict_id_hex` exactly and reject
+  whitespace, `0x` prefixes, uppercase, empty, odd-length, and non-hex query
+  values instead of lowercasing or omitting them; the SDK parity guard's
+  `--negative-control-jvm-offline-list-verdict-id-hex-exactness` mode pins the
+  source and focused regression coverage. Swift, Kotlin/JVM, and Android Java
+  Offline Note `OpenVerifyEnvelope` helpers now also require exact lowercase
+  32-byte public-input hash hex before parsing envelopes, so padded, uppercase,
+  `0x`-prefixed, odd-length, empty, and non-hex strings return `false` instead
+  of being trimmed or lowercased into verifier selectors; the SDK parity guard's
+  `--negative-control-mobile-open-verify-public-input-hash-exactness` mode pins
+  the source and regression coverage. Swift Torii Offline Cash API issue
+  settlement request and settlement-proof `note_commitment` fields, issue
+  response `issued_note_commitment`, plus redemption proof
+  `source_note_commitment` and `input_nullifiers` entries, must also stay exact
+  lowercase 32-byte hex, rejecting padded, uppercase, `0x`-prefixed,
+  odd-length, empty, or non-hex values instead of trimming, lowercasing, or
+  passively preserving them; the SDK parity guard's
+  `--negative-control-swift-offline-cash-api-note-commitment-exactness` and
+  `--negative-control-swift-offline-cash-api-redemption-hash-exactness` modes
+  pin that source and regression coverage.
   Preferred Kagemusha spend-mode selectors must also stay first-release strict:
   choose ABI-7 recursive compact when available, otherwise ABI-6 recursive spend
   when available, and otherwise return no preferred production mode. Do not
@@ -2897,11 +3014,19 @@ and completed history lives in [`status.md`](./status.md).
   Kagemusha transaction helpers. JavaScript confidential v2 note, nullifier,
   and owner-tag derivation helpers must reject padded `assetDefinitionId`,
   `chainId`, and fixed-32 hex values before native dispatch in both source and
-  package-dist coverage. JavaScript confidential proof builders must also keep
+  package-dist coverage, and owner-tag derivation must require canonical
+  `diversifierHex` instead of defaulting omitted diversifiers or accepting raw
+  `diversifier` aliases. JavaScript confidential proof builders must also keep
   exact metadata and fixed-32 hex prechecks for chain ids, asset definitions,
   pool ids, anchor/root hints, note `rho` values, diversifiers, owner tags, and
-  tree commitments before native dispatch, and must reject padded whole-number
-  fee/input/output/public amount literals before native dispatch. JavaScript
+  tree commitments before native dispatch, must require canonical
+  `diversifierHex` proof-input fields in source and package-dist wrappers while
+  the N-API host rejects omitted `diversifier_hex` values instead of
+  substituting a default, must reject `diversifier`/`diversifier_hex` wrapper
+  aliases, and must reject padded whole-number fee/input/output/public amount
+  literals before native dispatch. Python native confidential proof-input
+  parsing must mirror that first-release policy with canonical `diversifier`
+  fields and no `diversifier_hex`/`diversifierHex` aliases. JavaScript
   private Kaigi transaction builders must reject padded `chainId` and `callId`
   identifiers before native dispatch across source and package-dist coverage. JavaScript
   typed recursive-spend request tests must keep malformed spendable-note
@@ -5392,9 +5517,12 @@ and completed history lives in [`status.md`](./status.md).
   plus `--dry-run`; runner
   `main` functions must convert argparse `SystemExit` failures into numeric
   exit codes for tests and operator wrappers, runner examples must include a
-  `--dry-run` review command, runner dry-run plan rendering must reject
-  non-object plan shapes before writing stdout and sanitize caught JSON render
-  exceptions before returning plan diagnostics, every runner must preflight its
+  `--dry-run` review command, runner collection-plan validation must reject
+  non-object renderings, command-plan drift, and strict JSON rendering failures
+  through shared preflight before dry-run output or execution, runner dry-run
+  plan rendering must reject non-object plan shapes before writing stdout and
+  sanitize caught JSON render exceptions before returning plan diagnostics,
+  every runner must preflight its
   verifier as a non-symlink file under symlink-free parent chains and preflight
   summary/output targets plus runner input files/directories through shared
   helpers before emitting dry-run plans, including precise missing file versus
@@ -5417,7 +5545,8 @@ and completed history lives in [`status.md`](./status.md).
   gate diagnostics, and transparency runner generated-artifact annotation
   read/write failures must sanitize path and exception labels before returning
   collected diagnostics while rewriting reviewed deployment context through
-  descriptor no-follow opens after a fresh parent-chain check;
+  descriptor no-follow opens and complete byte-write loops after a fresh
+  parent-chain check;
   every runner must execute
   plans through the shared command-plan runner so malformed scalar or mapping
   command plans, malformed step labels, non-Path step artifacts, empty command
@@ -5470,9 +5599,9 @@ and completed history lives in [`status.md`](./status.md).
   files,
   while
   malformed scalar or mapping evidence/reserved-output path collections or
-  symlinked, symlink-parented, malformed, or duplicate reserved-output entries
-  failing before evidence inspection, symlink-parented evidence
-  files/directories, diagnostic containers, labels, sanitized evidence directory
+  symlinked, malformed, or duplicate reserved-output entries
+  failing before evidence inspection, non-directory evidence
+  parent chains, diagnostic containers, labels, sanitized evidence directory
   and conflict path/error labels, evidence directory inspection failures, direct
   JSON scans over uninspected or non-directory paths, and JSON scan failures
   surface as structured errors instead of tracebacks, and every
@@ -5518,7 +5647,7 @@ and completed history lives in [`status.md`](./status.md).
   failures become path-qualified evidence errors instead of tracebacks while
 	  malformed bounded-JSON diagnostic containers or existing diagnostic text are
 	  rejected before helper-local error recording can raise, direct bounded reads
-	  inspect evidence files for symlink leaves, symlinked parent chains, and
+	  inspect evidence files for symlink leaves, non-directory parent chains, and
 	  non-files before opening them, and use a no-follow descriptor open for the
 	  final path component where the platform exposes it, bounded byte-reader
 	  oversize failures use a typed `ValueError` subclass so checkers do not parse
@@ -5984,7 +6113,8 @@ and completed history lives in [`status.md`](./status.md).
   empty, padded, or control-character diagnostics before printing any
   `ERROR:` line or block heading, while shared checker summary rendering now
   rejects malformed top-level or nested summary keys before stdout or
-  `--summary-out` writes,
+  `--summary-out` writes, and shared `--summary-out` emission now writes
+  through complete descriptor byte loops,
   explicit unrecognized evidence path diagnostics now use a shared helper
   across standard rollout/release gates so explicit-path detection and
   path-qualified validation error recording cannot drift,
@@ -6076,7 +6206,8 @@ and completed history lives in [`status.md`](./status.md).
   mode, and mtime, rejects symlinked archive-output parents, stage roots,
   parent chains, and staged entries before archiving, writes archive bytes and
   reads staged files through no-follow descriptors, and writes the release
-  manifest JSON through a no-follow descriptor,
+  manifest JSON through a no-follow descriptor with strict bytes and a complete
+  write loop,
   and the local SoraFS release gate runs the header-contract
   guard before Clippy/tests. The JavaScript SDK now exposes the Rust-backed
   orderbook and PDP reference validators from both the package root and
@@ -6162,7 +6293,10 @@ and completed history lives in [`status.md`](./status.md).
   replay outcomes for SDK and release smoke testing. The docs portal SoraFS
   packager now reads its generated package-summary rows through no-follow
   descriptors before emitting the final package summary, so developer-portal
-  CAR/SBOM release metadata is not assembled from a symlinked summary input. The
+  CAR/SBOM release metadata is not assembled from a symlinked summary input.
+  The docs portal pin-release descriptor append path now also reads existing
+  descriptor JSON and writes updated strict descriptor bytes through no-follow
+  descriptors with complete byte-write loops. The
   `scripts/release_sorafs_cli.sh` signing wrapper, direct-mode smoke policy
   probe, and gateway telemetry probe now likewise read generated JSON summaries
   and policy/report inputs through no-follow descriptors before deriving hashes,
@@ -6617,8 +6751,9 @@ and completed history lives in [`status.md`](./status.md).
 	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
 	  a dry-run-visible verifier command, selected-kind `evidence_contract`, and
 	  operator example args. The gateway denylist CI guard now copies sample and
-	  evidence JSON, discovers bundles, and reads generated diff/evidence reports
-	  through symlink-checked no-follow descriptors before those artifacts can feed
+	  evidence JSON, writes generated old-snapshot JSON, discovers bundles, and
+	  reads generated diff/evidence reports through symlink-checked no-follow
+	  descriptors plus complete byte-write loops before those artifacts can feed
 	  promotion checks. Remaining
 	  SFM-4 gateway compliance production work is the always-on compliance
   controller daemon, persisted production catalog state, moderation
@@ -7392,8 +7527,12 @@ and completed history lives in [`status.md`](./status.md).
   `environment` and emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed summary paths,
-  supports `@ARGFILE`, and prints a dry-run collection plan for release
-  operators. Required-row artifact entries must carry canonical unique paths,
+  requires exactly one summary input per required gate, requires an explicit
+  canonical `--deployment-id`/`--environment` pair, supports `@ARGFILE`, and
+  validates the schema-closed collection plan envelope against the built command
+  plan before dry-run output or execution while rejecting non-object or
+  non-strict-JSON collection-plan renderings.
+  Required-row artifact entries must carry canonical unique paths,
   lowercase SHA-256 digests, and canonical artifact schema/status labels when
   present, reject extra artifact-row fields outside the schema-closed
   payload-free artifact contract, and the required top-level
@@ -7404,10 +7543,15 @@ and completed history lives in [`status.md`](./status.md).
   schema-closed before release review, with canonical path, lowercase SHA-256,
   count, timestamp, list, and error shapes checked after the row digest is
   attached, and the final aggregate summary envelope is schema-closed before the
-  production-readiness report is written. Final aggregate required rows also
-  have exact present and missing row output contracts, so failed or absent lane
-  rows cannot grow extra payload-bearing fields while still being reported, and
-  absent lanes must keep deterministic missing-row diagnostics. The aggregate
+  production-readiness report is written. Aggregate status must match canonical
+  aggregate diagnostics before release review, and ready aggregate summaries
+  must carry complete deployment context with only present, valid required rows.
+  Final aggregate required rows also have exact present and missing row output
+  contracts, so failed or absent lane rows cannot grow extra payload-bearing
+  fields while still being reported, and absent lanes must keep deterministic
+  missing-row diagnostics. Invalid aggregate required rows must keep canonical
+  thresholds, deployment labels, and timestamp ordering before blocked rows are
+  emitted for release review. The aggregate
   recognized-summary count must also match the final present required-row set,
   and duplicate lane summaries must keep deterministic duplicate-summary
   diagnostics while every duplicate input remains counted as a top-level
@@ -11994,16 +12138,20 @@ and completed history lives in [`status.md`](./status.md).
 	  `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
 	  with `--no-deps`. The SoraFS orchestrator fixture regeneration script now
 	  rejects symlinked input/output paths and parent chains, reads and writes
-	  fixture JSON through no-follow descriptors, and derives payload sizes through
-	  descriptor `fstat`. The Android codegen SoraFS fixture replay helper now
-	  applies the same no-follow JSON read/write policy to generated replay
-	  artifacts and validates payload/plan inputs before launching the manifest
-	  stub. The orchestrator adoption CI gate now validates fixture/report/log
+	  fixture JSON through no-follow descriptors with complete byte-write loops,
+	  reproduces the canonical `reputation_score_bps` telemetry field, and derives
+	  payload sizes through descriptor `fstat`. The Android codegen SoraFS fixture
+	  replay helper now applies the same no-follow JSON read/write policy to
+	  generated replay artifacts with complete byte-write loops and validates
+	  payload/plan inputs before launching the manifest stub. The orchestrator
+	  adoption CI gate now validates fixture/report/log
 	  inputs through no-follow descriptor opens and writes generated config plus
-	  burn-in notes through no-follow descriptors before promotion evidence is
-	  trusted. The orchestrator SDK parity smoke harness now uses no-follow
-	  descriptor reads/writes/appends for fixture snapshots, results TSV, summary,
-	  and matrix artifacts instead of direct shell redirection, `cp`, or
+	  burn-in notes through no-follow descriptors with complete byte-write loops
+	  before promotion evidence is trusted. The orchestrator SDK parity smoke
+	  harness now uses no-follow
+	  descriptor reads/writes/appends plus complete byte-write loops for fixture
+	  snapshots, results TSV, summary, and matrix artifacts instead of direct
+	  shell redirection, `cp`, or
 	  `Path.write_text`. The full `soranet-relay` strict clippy gate now reaches and
 	  passes relay diagnostics without `--no-deps`.
 - Keep crypto primitives fail-closed at the crypto boundary. The
@@ -17962,12 +18110,18 @@ operator-provided rollout bundles.
   sits between surviving records, and Kura DA index hydration now replays the
   same visibility rules after restart. Per-lane reset watermarks are now
   persisted with the DA shard cursor journal, so historical records at or below
-  a retire/recreate reset height remain available as committed block bundles but
-  cannot rehydrate active pin intents, query-visible commitments, shard cursors,
-  or committed identity reservations for the fresh lane incarnation after rewind
-  or restart. Remaining work is focused on end-to-end
+  a retire/recreate or same-shard lane/dataspace rebind reset height remain
+  available as committed block bundles but cannot rehydrate active pin intents,
+  query-visible commitments, shard cursors, or committed identity reservations
+  for the fresh lane incarnation after rewind or restart. Same-plan
+  retire+add replacements now also apply destructive physical geometry
+  semantics: Kura and tiered-state storage archive the old segment before
+  provisioning the replacement and reject occupied replacement targets, so a
+  fresh lane id cannot inherit stale block, merge-ledger, or cold snapshot
+  files through the relabel path. Remaining work is focused on end-to-end
   independent-lane consensus fixtures and live rollout evidence rather than
-  stale cached-relay, stale DA-cursor, or stale public-lane economic admission.
+  stale cached-relay, stale DA-cursor, stale storage, or stale public-lane
+  economic admission.
 - NPoS lane-scope inference now ignores inactive public-lane validator records
   when deriving live recovery candidates and active topologies, so stale
   `Jailed`, `Exiting`, `Exited`, `PendingActivation`, or `Slashed` records from
@@ -18239,15 +18393,22 @@ operator-provided rollout bundles.
   `out_utilization_p95_permille`; scale-in evidence must carry
   `in_latency_ratio_permille` and `in_utilization_p95_permille`. Transition
   markers for a different elastic lane, missing or wrong-direction producer
-  fields, prefixed field name, or suffixed lane-looking token such as a decimal,
+  fields, duplicated height/capacity/ratio fields, prefixed field name, multiple
+  or conflicting standalone `lane` fields, stale contextual lane text beside a
+  structured event, or suffixed lane-looking token such as a decimal,
   hyphenated, or leading-zero lane value cannot satisfy public-profile
   expansion or contraction checks. Public-profile expansion evidence now also
   pins relay-height progress to the target elastic lane, rejecting wrong-lane
   relay progress and stale same-height relay records. Storage fallback evidence
-  now requires each peer to expose the exact expanded contiguous lane-id
-  profile, so duplicate elastic-lane directories cannot hide missing base-lane
+  now requires each peer to expose the exact expanded contiguous lane-id profile
+  plus the exact autoscale elastic `lane_NNN_elastic_lane_N` storage segment, so
+  prefix-spoofed or wrong-slug storage directories cannot supply elastic-lane
+  progress, duplicate elastic-lane directories cannot hide missing base-lane
   storage, and extra malformed or duplicate lane directories cannot satisfy an
-  otherwise complete profile.
+  otherwise complete profile. Expansion/contraction status evidence also now
+  requires a unique `teu_lane_commit` lane-status row per lane, so duplicate
+  active rows cannot fake elastic-lane expansion or keep base lanes eligible for
+  contraction.
 - Keep the rotating Byzantine 30 TPS NPoS soak in the stabilization corridor:
   the snapshot-enabled strict 7,200 second 4-peer transfer run now passes under
   the broadened `conflicting-ready`, `duplicate-inits`, and
@@ -24300,10 +24461,12 @@ validation path.
   unary-temporal wrappers. Quantified-helper formula checks must also traverse
   boolean operands, negated quantified helper checks must split top-level
   boolean operands before peeling negation and unwrap one-line `LET` helper
-  aliases, unary-temporal quantified and parameterized-call checks must unwrap
-  one-line `LET` helper aliases, and quantified body checks must unwrap one-line
-  `LET` helper aliases before classifying vacuity or control-flow predicate
-  selection. Non-transparent `LET` bodies in quantified
+  aliases, unary-temporal quantified and control-flow checks must split
+  top-level boolean operands before peeling temporal wrappers, unary-temporal
+  quantified and parameterized-call checks must unwrap one-line `LET` helper
+  aliases, and quantified body checks must unwrap one-line `LET` helper aliases
+  before classifying vacuity or control-flow predicate selection. Non-transparent
+  `LET` bodies in quantified
   helpers must be rejected as control-flow predicate selection. Helper
   reference traversal must unwrap
   one-line `LET`

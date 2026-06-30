@@ -566,6 +566,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal exactness helper wrappers must not hide quantified formulas",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Unary-temporal quantified and control-flow checks split top-level boolean operands before peeling temporal wrappers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases",
@@ -3768,6 +3770,15 @@ def test_quantified_formulas_descend_into_unary_temporal_exactness_wrappers() ->
         "[] (Ready /\\ (\\A c \\in Cases: Predicate(c)))"
     ) == ["\\A c \\in Cases: Predicate(c)"]
     assert module.unary_temporal_quantified_formulas(
+        "[](\\A c \\in Cases: Left(c)) /\\ (\\A d \\in Other: Right(d))"
+    ) == ["\\A c \\in Cases: Left(c)"]
+    assert module.unary_temporal_quantified_formulas(
+        "[]((\\A c \\in Cases: Left(c)) /\\ (\\A d \\in Other: Right(d)))"
+    ) == [
+        "\\A c \\in Cases: Left(c)",
+        "\\A d \\in Other: Right(d)",
+    ]
+    assert module.unary_temporal_quantified_formulas(
         "[] (LET selected == \\A c \\in Cases: Predicate(c) IN selected)"
     ) == ["\\A c \\in Cases: Predicate(c)"]
     assert module.unary_temporal_quantified_formulas(
@@ -4298,6 +4309,17 @@ def test_control_flow_formulas_descend_into_unary_temporal_wrappers() -> None:
         "ConcretePredicate /\\ "
         "(LET selected == IF TRUE THEN Left ELSE Right IN [] selected)"
     ) == [("IF", "IF TRUE THEN Left ELSE Right")]
+    assert module.unary_temporal_control_flow_formulas(
+        "[](CASE TRUE -> Left [] OTHER -> Right) /\\ "
+        "CASE TRUE -> Outside [] OTHER -> Fallback"
+    ) == [("CASE", "CASE TRUE -> Left [] OTHER -> Right")]
+    assert module.unary_temporal_control_flow_formulas(
+        "[]((CASE TRUE -> Left [] OTHER -> Right) /\\ "
+        "(CASE TRUE -> Outside [] OTHER -> Fallback))"
+    ) == [
+        ("CASE", "CASE TRUE -> Left [] OTHER -> Right"),
+        ("CASE", "CASE TRUE -> Outside [] OTHER -> Fallback"),
+    ]
     assert module.unary_temporal_control_flow_formulas(
         "[] (IF TRUE THEN TRUE ELSE FALSE)"
     ) == []

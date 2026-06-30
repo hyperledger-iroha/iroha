@@ -480,18 +480,35 @@ fn parse_and_authorize(
             format!("Invalid Offline Notes V2 account_id: {}", err.reason()),
         )
     })?;
-    app_auth::verify_canonical_body_request(
+    let body_auth_result = app_auth::verify_canonical_body_request(
         &app.state,
         body_auth,
         method,
         uri,
         &unsigned_body,
         Some(&account_id),
-    )
-    .map_err(|err| Error::AppForbidden {
-        code: "OFFLINE_V2_SIGNATURE_INVALID",
-        message: app_auth_error_message(err),
-    })?;
+    );
+    match body_auth_result {
+        Ok(_) => {}
+        Err(primary_err) => {
+            let retry_result = match unsigned_body_without_server_attestation_receipt(&value)? {
+                Some(unsigned_body) => app_auth::verify_canonical_body_request(
+                    &app.state,
+                    body_auth,
+                    method,
+                    uri,
+                    &unsigned_body,
+                    Some(&account_id),
+                )
+                .map(|_| ()),
+                None => Err(primary_err),
+            };
+            retry_result.map_err(|err| Error::AppForbidden {
+                code: "OFFLINE_V2_SIGNATURE_INVALID",
+                message: app_auth_error_message(err),
+            })?;
+        }
+    }
 
     let device_id = required_exact_protocol_string(
         &value,
@@ -670,6 +687,33 @@ fn extract_body_auth(
         },
         unsigned_body,
     ))
+}
+
+fn unsigned_body_without_server_attestation_receipt(
+    value: &Value,
+) -> Result<Option<Vec<u8>>, Error> {
+    let mut unsigned = value.clone();
+    let Value::Object(map) = &mut unsigned else {
+        return Err(validation(
+            "OFFLINE_V2_INVALID_JSON",
+            "Offline Notes V2 request body must be a JSON object.",
+        ));
+    };
+    map.remove("signature_base64");
+    map.remove("witness_base64");
+
+    let Some(Value::Object(device_binding)) = map.get_mut("device_binding") else {
+        return Ok(None);
+    };
+    if device_binding.remove("attestation_receipt").is_none() {
+        return Ok(None);
+    }
+
+    let unsigned_body = json::to_vec(&unsigned).map_err(|source| Error::SerializationFailure {
+        context: "offline_v2_body_auth_unsigned_json_without_server_attestation_receipt",
+        source,
+    })?;
+    Ok(Some(unsigned_body))
 }
 
 fn optional_body_auth_proof_string<'a>(
@@ -5791,6 +5835,72 @@ mod tests {
         assert_eq!(
             nested.get("witness_base64").and_then(Value::as_str),
             Some("nested-witness")
+        );
+    }
+
+    #[test]
+    fn body_auth_retry_removes_only_server_attestation_receipt() {
+        let value = json_object(vec![
+            ("account_id", string_value("account-1")),
+            ("timestamp_ms", number_value(NOW_MS)),
+            ("nonce", string_value("nonce-1")),
+            ("signature_base64", string_value("top-level-signature")),
+            (
+                "device_binding",
+                json_object(vec![
+                    (
+                        "attestation_receipt",
+                        json_object(vec![(
+                            "signature_base64",
+                            string_value("receipt-signature"),
+                        )]),
+                    ),
+                    ("signature_base64", string_value("nested-signature")),
+                    ("witness_base64", string_value("nested-witness")),
+                ]),
+            ),
+        ]);
+
+        let unsigned_body = unsigned_body_without_server_attestation_receipt(&value)
+            .expect("retry unsigned body")
+            .expect("receipt was present");
+
+        let unsigned: Value = json::from_slice(&unsigned_body).expect("unsigned json");
+        assert!(unsigned.get("signature_base64").is_none());
+        assert!(unsigned.get("witness_base64").is_none());
+        let nested = unsigned
+            .get("device_binding")
+            .expect("device binding")
+            .as_object()
+            .expect("device binding object");
+        assert!(nested.get("attestation_receipt").is_none());
+        assert_eq!(
+            nested.get("signature_base64").and_then(Value::as_str),
+            Some("nested-signature")
+        );
+        assert_eq!(
+            nested.get("witness_base64").and_then(Value::as_str),
+            Some("nested-witness")
+        );
+    }
+
+    #[test]
+    fn body_auth_retry_is_absent_without_server_attestation_receipt() {
+        let value = json_object(vec![
+            ("account_id", string_value("account-1")),
+            ("timestamp_ms", number_value(NOW_MS)),
+            ("nonce", string_value("nonce-1")),
+            ("signature_base64", string_value("top-level-signature")),
+            (
+                "device_binding",
+                json_object(vec![("platform", string_value("ios-appattest"))]),
+            ),
+        ]);
+
+        assert!(
+            unsigned_body_without_server_attestation_receipt(&value)
+                .expect("retry check")
+                .is_none()
         );
     }
 

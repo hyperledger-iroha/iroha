@@ -45,6 +45,7 @@ public final class OfflineNoteV2Test {
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
     proofVerifierAndHashValidationRejectsMalformedValues();
+    openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding();
     openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields();
     certificateValidationRejectsMalformedValues();
     offlineDeviceAttestationRegistrationMatchesRustVectors();
@@ -54,6 +55,7 @@ public final class OfflineNoteV2Test {
     auditBundleRejectsInvalidShapesAndUncommittedOutputs();
     issueRedeemPublicInputsAndInstancesRejectMalformedValues();
     offlineNoteV2DomainsRejectSubstitutionAndPadding();
+    offlineNoteV2AssetScopeDataspaceIdsRejectNonCanonicalForms();
     instanceValuesMatchRustVectors();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
@@ -551,6 +553,15 @@ public final class OfflineNoteV2Test {
         "Trailing bytes after OpenVerifyEnvelope field decode");
   }
 
+  private static void openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding() {
+    final String canonicalHash = repeat("ab", 32);
+    for (final String rejectedHash : nonExactPublicInputHashes(canonicalHash)) {
+      assertTrue(
+          !OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(new byte[0], rejectedHash),
+          "Java Offline V2 Halo2 helper rejects non-exact public input hash before decoding");
+    }
+  }
+
   private static void certificateValidationRejectsMalformedValues() throws Exception {
     final Map<String, Object> cert = obj(obj(loadFixture(), "payment_token"), "sender_key_certificate");
     final byte[] publicKey = base64Bytes(string(cert, "public_key"));
@@ -772,6 +783,18 @@ public final class OfflineNoteV2Test {
         string(vector, "key_certificate_payload_hash"),
         hex(registration.keyCertificatePayloadHash()),
         "device attestation key certificate payload hash");
+    final OfflineNoteV2.KeyCertificatePayloadV2 keyCertificatePayload =
+        registration.keyCertificatePayload();
+    assertEquals(
+        string(vector, "key_certificate_payload_hash"),
+        hex(keyCertificatePayload.payloadHash()),
+        "registration key certificate payload helper hash");
+    assertEquals(
+        base64(keyCertificatePayload.noritoEncoded()),
+        base64(
+            OfflineNoteV2.decodeCertificatePayload(keyCertificatePayload.noritoEncoded())
+                .noritoEncoded()),
+        "registration key certificate payload helper round-trip");
     assertEquals(
         string(vector, "norito_base64"),
         base64(registration.noritoEncoded()),
@@ -1309,6 +1332,41 @@ public final class OfflineNoteV2Test {
         "padded audit-public-inputs domain must be rejected");
   }
 
+  private static void offlineNoteV2AssetScopeDataspaceIdsRejectNonCanonicalForms()
+      throws Exception {
+    final OfflineNoteV2.IssueV2 issue = issue(loadFixture());
+
+    new OfflineNoteV2.IssueV2(
+        issue.noteCommitment(),
+        issue.keyCertificate(),
+        issue.assetId() + "#dataspace:0",
+        issue.amount());
+    new OfflineNoteV2.IssueV2(
+        issue.noteCommitment(),
+        issue.keyCertificate(),
+        issue.assetId() + "#dataspace:1",
+        issue.amount());
+
+    for (final String rejected :
+        Arrays.asList(
+            "dataspace:",
+            "dataspace:+1",
+            "dataspace:01",
+            "dataspace:-1",
+            "dataspace:1.0",
+            "DATASPACE:1",
+            "dataspace:9223372036854775808")) {
+      assertThrows(
+          () ->
+              new OfflineNoteV2.IssueV2(
+                  issue.noteCommitment(),
+                  issue.keyCertificate(),
+                  issue.assetId() + "#" + rejected,
+                  issue.amount()),
+          "non-canonical V2 dataspace scope should reject: " + rejected);
+    }
+  }
+
   private static void instanceValuesMatchRustVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -1367,6 +1425,16 @@ public final class OfflineNoteV2Test {
     assertTrue(
         proof.proof().bytes().length <= OfflineNoteV2Halo2Prover.MAX_ENVELOPE_BYTES,
         "Java Offline V2 Halo2 envelope fits QR budget");
+    final String publicInputsHashHex = hex(proof.publicInputsHash());
+    assertTrue(
+        OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+            proof.proof().bytes(), publicInputsHashHex),
+        "Java Offline V2 Halo2 SDK envelope helper verifies public input hash");
+    for (final String rejectedHash : nonExactPublicInputHashes(publicInputsHashHex)) {
+      assertTrue(
+          !OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(proof.proof().bytes(), rejectedHash),
+          "Java Offline V2 Halo2 SDK envelope helper rejects non-exact public input hash");
+    }
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
@@ -2063,6 +2131,17 @@ public final class OfflineNoteV2Test {
       builder.append(String.format("%02x", b & 0xFF));
     }
     return builder.toString();
+  }
+
+  private static List<String> nonExactPublicInputHashes(final String canonicalHash) {
+    return Arrays.asList(
+        " " + canonicalHash,
+        canonicalHash + "\n",
+        canonicalHash.toUpperCase(Locale.ROOT),
+        "0x" + canonicalHash,
+        canonicalHash.substring(0, canonicalHash.length() - 1),
+        canonicalHash.substring(0, canonicalHash.length() - 2) + "zz",
+        "");
   }
 
   private static byte[] sha256(final byte[] bytes) {

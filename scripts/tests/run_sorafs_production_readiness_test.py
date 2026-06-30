@@ -59,6 +59,135 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
     assert "check_sorafs_production_readiness.py" in payload["steps"][0]["command"][1]
 
 
+def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    assert MODULE.validate_plan_json(rendered, plan, args) == []
+
+    assert MODULE.validate_plan_json(["step"], plan, args) == [
+        "production readiness runner plan must be an object"
+    ]
+
+    rendered["thresholds"]["now_unix"] = float("inf")
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    assert "production readiness runner plan must be strict JSON renderable" in errors
+    assert "inf" not in "\n".join(errors)
+    rendered = MODULE.plan_json(plan, args)
+
+    rendered["private_key"] = "runtime-only-key-material"
+    rendered["external_summaries"] = {
+        "gateway_load": [
+            "artifacts/sorafs/gateway-load/summary.json",
+            "artifacts/sorafs/gateway-load/summary-copy.json",
+        ]
+    }
+    rendered["summary_contract"] = {}
+    rendered["steps"] = []
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+    assert (
+        "production readiness runner plan fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert (
+        "production readiness runner plan external_summaries must contain exactly one summary per required gate"
+        in diagnostics
+    )
+    assert (
+        "production readiness runner plan summary_contract must match required gates"
+        in diagnostics
+    )
+    assert "production readiness runner plan steps must match command plan" in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "summary-copy" not in diagnostics
+
+
+def test_execution_rejects_plan_validation_drift_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    ran_plan = False
+
+    def fake_validate_plan_json(rendered, plan, args):
+        return ["production readiness runner plan steps must match command plan"]
+
+    def fake_run_command_plan(plan, out_dir):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "validate_plan_json", fake_validate_plan_json)
+    monkeypatch.setattr(MODULE, "run_command_plan", fake_run_command_plan)
+
+    exit_code = MODULE.main(complete_args(tmp_path))
+
+    assert exit_code == 2
+    assert not ran_plan
+    assert (
+        "production readiness runner plan steps must match command plan"
+        in capsys.readouterr().err
+    )
+
+
+def test_execution_rejects_non_object_plan_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    ran_plan = False
+
+    def fake_plan_json(plan, args):
+        return ["step"]
+
+    def fake_run_command_plan(plan, out_dir):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "plan_json", fake_plan_json)
+    monkeypatch.setattr(MODULE, "run_command_plan", fake_run_command_plan)
+
+    exit_code = MODULE.main(complete_args(tmp_path))
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert not ran_plan
+    assert captured.out == ""
+    assert "production readiness runner plan must be an object" in captured.err
+
+
+def test_execution_rejects_unrenderable_plan_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    original_plan_json = MODULE.plan_json
+    ran_plan = False
+
+    def fake_plan_json(plan, args):
+        rendered = original_plan_json(plan, args)
+        rendered["thresholds"]["max_summary_artifact_age_secs"] = float("inf")
+        return rendered
+
+    def fake_run_command_plan(plan, out_dir):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "plan_json", fake_plan_json)
+    monkeypatch.setattr(MODULE, "run_command_plan", fake_run_command_plan)
+
+    exit_code = MODULE.main(complete_args(tmp_path))
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert not ran_plan
+    assert captured.out == ""
+    assert (
+        "production readiness runner plan must be strict JSON renderable"
+        in captured.err
+    )
+    assert "inf" not in captured.err
+
+
 def test_missing_required_summary_fails(tmp_path: Path, capsys) -> None:
     exit_code = MODULE.main(
         [
@@ -104,6 +233,39 @@ def test_unrequired_summary_flag_fails(tmp_path: Path, capsys) -> None:
     assert "reputation" not in captured.err
 
 
+def test_duplicate_required_summary_flag_fails(tmp_path: Path, capsys) -> None:
+    first_summary = write_json(tmp_path / "gateway-load.json")
+    second_summary = write_json(tmp_path / "gateway-load-copy.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(first_summary),
+            "--gateway-load-summary",
+            str(second_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert (
+        "production readiness runner requires exactly one summary input per required gate"
+        in captured.err
+    )
+    assert "gateway-load-copy" not in captured.err
+
+
 def test_response_file_arguments_pass(tmp_path: Path, capsys) -> None:
     args_file = tmp_path / "production-readiness.args"
     args_file.write_text("\n".join(complete_args(tmp_path) + ["--dry-run"]) + "\n", encoding="utf-8")
@@ -126,6 +288,10 @@ def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
             str(gateway_summary),
             "--require-gate",
             "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
             "--dry-run",
         ]
     )
@@ -136,3 +302,49 @@ def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
     assert payload["external_summaries"] == {
         "gateway_load": [str(gateway_summary)]
     }
+    assert payload["deployment_context"] == {
+        "deployment_id": "sorafs-mainnet-2026-06",
+        "environment": "production",
+    }
+
+
+def test_partial_deployment_context_fails(tmp_path: Path, capsys) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert (
+        "production readiness runner requires --deployment-id and --environment"
+        in captured.err
+    )
+
+
+def test_malformed_deployment_context_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = " sorafs-mainnet-2026-06"
+    args.environment = "prod\nsecret"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment context must use canonical labels"
+        in errors
+    )
+    rendered = "\n".join(errors)
+    assert "sorafs-mainnet-2026-06" not in rendered
+    assert "prod\nsecret" not in rendered

@@ -5071,6 +5071,7 @@ def check_docs_reserved_lineage_policy():
         "classic payment construction",
         "classic parser",
         "classic note issue",
+        "also trim Offline recursive verifier/proof backend metadata",
     ):
         if forbidden in offline_doc:
             fail(f"docs/source/offline_kagemusha.md contains stale retired-mode wording: {forbidden}")

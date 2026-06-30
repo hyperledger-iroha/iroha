@@ -841,7 +841,6 @@ fn peer_elastic_lane_storage_stats(
     if !blocks_root.exists() {
         return Ok(None);
     }
-    let elastic_lane_prefix = format!("lane_{lane_id:03}");
     for entry in fs::read_dir(&blocks_root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -850,7 +849,7 @@ fn peer_elastic_lane_storage_stats(
         let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
             continue;
         };
-        if name.starts_with(&elastic_lane_prefix) {
+        if is_autoscale_elastic_storage_segment(&name, lane_id) {
             return collect_directory_tree_stats(&entry.path()).map(Some);
         }
     }
@@ -961,21 +960,30 @@ fn strip_ansi_escape_codes(input: &str) -> Cow<'_, str> {
     Cow::Owned(output)
 }
 
-fn line_has_unsigned_field(line: &str, field: &str, expected: Option<u64>) -> bool {
+fn line_has_single_unsigned_field(line: &str, field: &str) -> bool {
+    line_unsigned_field_values(line, field).len() == 1
+}
+
+fn line_has_unique_unsigned_field(line: &str, field: &str, expected: u64) -> bool {
+    let mut values = line_unsigned_field_values(line, field);
+    values.len() == 1 && values.pop() == Some(expected)
+}
+
+fn line_unsigned_field_values(line: &str, field: &str) -> Vec<u64> {
     let prefixes = [
         format!("{field}="),
         format!("{field}:"),
         format!("\"{field}\":"),
     ];
-    let expected_text = expected.map(|value| value.to_string());
-    prefixes.into_iter().any(|prefix| {
-        line.match_indices(prefix.as_str()).any(|(offset, _)| {
+    let mut values = Vec::new();
+    for prefix in prefixes {
+        for (offset, _) in line.match_indices(prefix.as_str()) {
             if offset > 0
                 && line[..offset].chars().next_back().is_some_and(|previous| {
                     !previous.is_ascii_whitespace() && !matches!(previous, '{' | '[' | '(' | ',')
                 })
             {
-                return false;
+                continue;
             }
             let value = line[offset + prefix.len()..].trim_start();
             let digit_len = value
@@ -984,46 +992,46 @@ fn line_has_unsigned_field(line: &str, field: &str, expected: Option<u64>) -> bo
                 .map(char::len_utf8)
                 .sum::<usize>();
             if digit_len == 0 {
-                return false;
+                continue;
             }
             let digits = &value[..digit_len];
-            if expected_text
-                .as_ref()
-                .is_some_and(|expected| digits != expected)
-            {
-                return false;
+            if digits.len() > 1 && digits.starts_with('0') {
+                continue;
             }
-            if digits.parse::<u64>().is_err() {
-                return false;
-            }
-            value[digit_len..].chars().next().is_none_or(|next| {
+            let Ok(parsed) = digits.parse::<u64>() else {
+                continue;
+            };
+            if value[digit_len..].chars().next().is_none_or(|next| {
                 next.is_ascii_whitespace() || matches!(next, ',' | ';' | '}' | ']' | ')')
-            })
-        })
-    })
+            }) {
+                values.push(parsed);
+            }
+        }
+    }
+    values
 }
 
 fn line_has_lane_field(line: &str, lane_id: u32) -> bool {
-    line_has_unsigned_field(line, "lane", Some(u64::from(lane_id)))
+    line_has_unique_unsigned_field(line, "lane", u64::from(lane_id))
 }
 
 fn line_has_autoscale_transition_base_fields(line: &str, lane_id: u32) -> bool {
     line_has_lane_field(line, lane_id)
-        && line_has_unsigned_field(line, "height", None)
-        && line_has_unsigned_field(line, "active_lanes", None)
-        && line_has_unsigned_field(line, "autoscale_capacity_lanes", None)
+        && line_has_single_unsigned_field(line, "height")
+        && line_has_single_unsigned_field(line, "active_lanes")
+        && line_has_single_unsigned_field(line, "autoscale_capacity_lanes")
 }
 
 fn line_has_autoscale_scale_out_transition_fields(line: &str, lane_id: u32) -> bool {
     line_has_autoscale_transition_base_fields(line, lane_id)
-        && line_has_unsigned_field(line, "out_latency_ratio_permille", None)
-        && line_has_unsigned_field(line, "out_utilization_p95_permille", None)
+        && line_has_single_unsigned_field(line, "out_latency_ratio_permille")
+        && line_has_single_unsigned_field(line, "out_utilization_p95_permille")
 }
 
 fn line_has_autoscale_scale_in_transition_fields(line: &str, lane_id: u32) -> bool {
     line_has_autoscale_transition_base_fields(line, lane_id)
-        && line_has_unsigned_field(line, "in_latency_ratio_permille", None)
-        && line_has_unsigned_field(line, "in_utilization_p95_permille", None)
+        && line_has_single_unsigned_field(line, "in_latency_ratio_permille")
+        && line_has_single_unsigned_field(line, "in_utilization_p95_permille")
 }
 
 fn parse_autoscale_transition_stats_for_lane(
@@ -1383,11 +1391,27 @@ fn storage_lane_id(segment: &str) -> Option<u32> {
     if !digits.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
     }
-    let suffix = rest.get(3..)?;
-    if !(suffix.is_empty() || suffix.starts_with('_')) {
+    let slug = rest.get(3..)?.strip_prefix('_')?;
+    if slug.is_empty()
+        || slug.starts_with('_')
+        || slug.ends_with('_')
+        || slug.contains("__")
+        || !slug
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
         return None;
     }
     digits.parse().ok()
+}
+
+fn autoscale_elastic_storage_segment(lane_id: u32) -> String {
+    format!("lane_{lane_id:03}_elastic_lane_{lane_id}")
+}
+
+fn is_autoscale_elastic_storage_segment(segment: &str, lane_id: u32) -> bool {
+    segment == autoscale_elastic_storage_segment(lane_id)
+        && storage_lane_id(segment) == Some(lane_id)
 }
 
 fn all_peers_have_storage_lane_profile(
@@ -1409,18 +1433,19 @@ fn all_peers_have_storage_lane_profile(
         else {
             return false;
         };
+        let has_required_elastic_segment = lanes
+            .iter()
+            .any(|lane| is_autoscale_elastic_storage_segment(lane, required_lane_id));
         lane_ids.sort_unstable();
         lane_ids.dedup();
         lane_ids.len() == expected_count
-            && lane_ids.contains(&required_lane_id)
+            && has_required_elastic_segment
             && lane_ids.into_iter().eq(0..expected_count_u32)
     })
 }
 
 fn peer_has_active_lane_capacity(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
-    peer.lanes
-        .iter()
-        .any(|lane| lane.lane_id == lane_id && (lane.capacity > 0 || lane.committed > 0))
+    peer_lane_status(peer, lane_id).is_some_and(|lane| lane.capacity > 0 || lane.committed > 0)
 }
 
 fn peer_has_lane_commitment_activity(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
@@ -1430,7 +1455,12 @@ fn peer_has_lane_commitment_activity(peer: &PeerStatusSnapshot, lane_id: u32) ->
 }
 
 fn peer_lane_status(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<&LaneStatusSnapshot> {
-    peer.lanes.iter().find(|lane| lane.lane_id == lane_id)
+    let mut matches = peer.lanes.iter().filter(|lane| lane.lane_id == lane_id);
+    let lane = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(lane)
 }
 
 fn peer_lane_commitment_snapshot(
@@ -1474,9 +1504,7 @@ fn lane_validator_has_live_activity(lane: &LaneValidatorSnapshot) -> bool {
 }
 
 fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
-    peer.lanes
-        .iter()
-        .any(|lane| lane.lane_id == lane_id && (lane.capacity > 0 || lane.committed > 0))
+    peer_has_active_lane_capacity(peer, lane_id)
         || peer
             .lane_commitments
             .iter()
@@ -3651,12 +3679,13 @@ mod tests {
         expansion_observed_with_prior_scale_out_quorum_on_storage_for_count,
         expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
-        expansion_top_up_tx_count, parse_autoscale_transition_stats,
-        parse_autoscale_transition_stats_for_lane, peers_with_expanded_lane_signal,
-        peers_with_scale_in_transition, peers_with_scale_out_transition,
-        scale_in_transition_counts, scale_out_transition_observed_on_quorum_peers,
-        should_require_scale_in_transition, should_require_scale_in_transition_for_lane,
-        should_run_cooldown_clearance, single_cycle_load_tx_count, soak_cycle_load_tx_count,
+        expansion_top_up_tx_count, is_autoscale_elastic_storage_segment,
+        parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
+        peers_with_expanded_lane_signal, peers_with_scale_in_transition,
+        peers_with_scale_out_transition, scale_in_transition_counts,
+        scale_out_transition_observed_on_quorum_peers, should_require_scale_in_transition,
+        should_require_scale_in_transition_for_lane, should_run_cooldown_clearance,
+        single_cycle_load_tx_count, soak_cycle_load_tx_count, storage_lane_id,
         tx_confirmation_status_counts_as_load_activity,
         tx_confirmation_status_counts_as_post_cycle_progress, validate_load_submission_outcome,
     };
@@ -3926,6 +3955,35 @@ mod tests {
     }
 
     #[test]
+    fn storage_lane_id_rejects_prefix_spoofed_segments() {
+        assert_eq!(storage_lane_id("lane_003_elastic_lane_3"), Some(3));
+        assert_eq!(storage_lane_id("lane_003_elastic3"), Some(3));
+        assert!(is_autoscale_elastic_storage_segment(
+            "lane_003_elastic_lane_3",
+            3
+        ));
+        assert!(!is_autoscale_elastic_storage_segment(
+            "lane_003_elastic3",
+            3
+        ));
+        assert!(!is_autoscale_elastic_storage_segment(
+            "lane_003_duplicate",
+            3
+        ));
+
+        assert_eq!(storage_lane_id("lane_003"), None);
+        assert_eq!(storage_lane_id("lane_003_"), None);
+        assert_eq!(storage_lane_id("lane_003shadow"), None);
+        assert_eq!(storage_lane_id("lane_003-elastic"), None);
+        assert_eq!(storage_lane_id("lane_003.0"), None);
+        assert_eq!(storage_lane_id("lane_003__elastic"), None);
+        assert_eq!(storage_lane_id("lane_003_elastic_"), None);
+        assert_eq!(storage_lane_id("lane_03_elastic_lane_3"), None);
+        assert_eq!(storage_lane_id("lane_0003_elastic_lane_3"), None);
+        assert_eq!(storage_lane_id("prefix_lane_003_elastic_lane_3"), None);
+    }
+
+    #[test]
     fn autoscale_transition_stats_parse_log_markers() {
         let log = format!(
             "x\n{}\ny\n{}\n{}\nz",
@@ -3977,6 +4035,59 @@ mod tests {
             "lane=30 must not be counted as lane=1"
         );
         assert_eq!(lane_one.scale_in_transitions, 0);
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_ambiguous_lane_fields() {
+        let log = format!(
+            "INFO height=2 lane=3 lane=4 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=4, lane=3 active_lanes=4 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 {input}\n\
+             INFO {{\"height\":2,\"lane\":4,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700}} stale lane=3 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 1,
+            "only the final unambiguous lane=3 scale-out line should count"
+        );
+        assert_eq!(
+            lane_three.scale_in_transitions, 0,
+            "conflicting lane fields must not fake a lane=3 scale-in transition"
+        );
+
+        let lane_four = parse_autoscale_transition_stats_for_lane(&log, 4);
+        assert_eq!(
+            lane_four.scale_out_transitions, 0,
+            "conflicting lane fields must not count for the structured lane=4 line"
+        );
+        assert_eq!(lane_four.scale_in_transitions, 0);
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_duplicate_producer_fields() {
+        let log = format!(
+            "INFO height=2 height=3 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 active_lanes=5 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 autoscale_capacity_lanes=2 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 in_utilization_p95_permille=20 {input}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 1,
+            "only the unambiguous scale-out line should count"
+        );
+        assert_eq!(
+            lane_three.scale_in_transitions, 0,
+            "duplicate producer fields must not fake a scale-in transition"
+        );
     }
 
     #[test]
@@ -4383,6 +4494,40 @@ mod tests {
             });
         assert!(expansion_observed_on_quorum_peers_for_lane(
             &partial_lane_three_snapshot,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+    }
+
+    #[test]
+    fn public_profile_expansion_rejects_duplicate_elastic_status_rows() {
+        let pre_cycle_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut duplicate_elastic_status = pre_cycle_snapshot.clone();
+        for peer in duplicate_elastic_status.iter_mut().take(3) {
+            peer.lanes.push(LaneStatusSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                capacity: 0,
+                committed: 0,
+            });
+            peer.lanes.push(LaneStatusSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                capacity: 1_000,
+                committed: 1,
+            });
+        }
+
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &duplicate_elastic_status,
+                Some(&pre_cycle_snapshot),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID
+            ),
+            0,
+            "duplicate elastic-lane status rows are malformed evidence, even when one row is active"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &duplicate_elastic_status,
             Some(&pre_cycle_snapshot),
             PUBLIC_PROFILE_ELASTIC_LANE_ID,
             3
@@ -4798,6 +4943,25 @@ mod tests {
     }
 
     #[test]
+    fn public_profile_contraction_rejects_duplicate_base_lane_status_rows() {
+        let mut duplicate_base_lane = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        for peer in duplicate_base_lane.iter_mut().take(3) {
+            peer.lanes.push(LaneStatusSnapshot {
+                lane_id: 2,
+                capacity: 9_000,
+                committed: 10,
+            });
+        }
+
+        assert!(!contraction_observed_on_quorum_peers_for_profile(
+            &duplicate_base_lane,
+            PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+    }
+
+    #[test]
     fn public_profile_contraction_rejects_stale_base_declarations_without_active_capacity() {
         let mut stale_base_lane = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         for peer in stale_base_lane.iter_mut().take(3) {
@@ -5022,6 +5186,57 @@ mod tests {
         assert!(
             !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
                 &wrong_elastic_storage,
+                &prior_transitions,
+                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3
+            )
+        );
+    }
+
+    #[test]
+    fn public_profile_storage_fallback_rejects_wrong_elastic_lane_slug() {
+        let wrong_elastic_slug_storage = vec![
+            (
+                0,
+                vec![
+                    "lane_000_core".to_owned(),
+                    "lane_001_governance".to_owned(),
+                    "lane_002_zk".to_owned(),
+                    "lane_003_duplicate".to_owned(),
+                ],
+            );
+            4
+        ];
+        let prior_transitions = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 0,
+            },
+            AutoscaleTransitionStats::default(),
+        ];
+
+        assert!(expansion_observed_on_storage_for_count(
+            &wrong_elastic_slug_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
+        assert_eq!(storage_lane_id("lane_003_duplicate"), Some(3));
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &wrong_elastic_slug_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+        assert!(
+            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
+                &wrong_elastic_slug_storage,
                 &prior_transitions,
                 PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
                 PUBLIC_PROFILE_ELASTIC_LANE_ID,

@@ -15,6 +15,7 @@ public final class OfflineJsonParserTest {
     rejectsOfflineV2ReadinessRemovedAbi7Aliases();
     rejectsOfflineV2ReadinessMalformedCanonicalValues();
     parsesOfflineTransfers();
+    rejectsOfflineTransferMalformedIntegerFields();
     canonicalizesJson();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
   }
@@ -56,6 +57,9 @@ public final class OfflineJsonParserTest {
 
   private static void rejectsOfflineReadinessMalformedCanonicalValues() {
     for (final MalformedReadinessCase item : malformedCanonicalReadinessCases()) {
+      expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
+    }
+    for (final MalformedReadinessCase item : malformedOptionalReadinessCases()) {
       expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
     }
   }
@@ -146,6 +150,12 @@ public final class OfflineJsonParserTest {
     assert "pkr#paynet".equals(item.toJsonMap().get("asset_id"));
   }
 
+  private static void rejectsOfflineTransferMalformedIntegerFields() {
+    for (final MalformedTransferIntegerCase item : malformedTransferIntegerCases()) {
+      expectIllegalState(() -> parseOfflineTransfers(item.body), item.message);
+    }
+  }
+
   private static void canonicalizesJson() {
     final String encoded =
         OfflineJsonParser.canonicalJson("{\"b\":2,\"a\":1}".getBytes(StandardCharsets.UTF_8));
@@ -158,6 +168,10 @@ public final class OfflineJsonParserTest {
 
   private static OfflineV2Readiness parseOfflineV2Readiness(final String json) {
     return OfflineJsonParser.parseOfflineV2Readiness(json.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static OfflineTransferList parseOfflineTransfers(final String json) {
+    return OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
   }
 
   private record RemovedAbi7ReadinessCase(String field, String message) {}
@@ -181,6 +195,8 @@ public final class OfflineJsonParserTest {
   };
 
   private record MalformedReadinessCase(String body, String message) {}
+
+  private record MalformedTransferIntegerCase(String body, String message) {}
 
   private static MalformedReadinessCase[] malformedCanonicalReadinessCases() {
     return new MalformedReadinessCase[] {
@@ -217,6 +233,68 @@ public final class OfflineJsonParserTest {
               "\"kagemusha-recursive-compact-v1\"", "\"true\""),
           "offline_kagemusha_recursive_compact_artifacts_available must be a boolean")
     };
+  }
+
+  private static MalformedReadinessCase[] malformedOptionalReadinessCases() {
+    return new MalformedReadinessCase[] {
+      new MalformedReadinessCase(
+          canonicalReadinessBody("\"offline_note\": \"true\","),
+          "offline_note must be a boolean"),
+      new MalformedReadinessCase(
+          canonicalReadinessBody("\"offline_sync_optional\": 1,"),
+          "offline_sync_optional must be a boolean")
+    };
+  }
+
+  private static MalformedTransferIntegerCase[] malformedTransferIntegerCases() {
+    return new MalformedTransferIntegerCase[] {
+      new MalformedTransferIntegerCase(
+          transferListBody("\"1\"", "1", "1", "1"),
+          "total must be a JSON integer number"),
+      new MalformedTransferIntegerCase(
+          transferListBody("\"\"", "1", "1", "1"),
+          "total must be a JSON integer number"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1.5", "1", "1", "1"),
+          "total must be an integer"),
+      new MalformedTransferIntegerCase(
+          transferListBody("9223372036854775808", "1", "1", "1"),
+          "total must fit in signed 64-bit range"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1", "\"1\"", "1", "1"),
+          "items[0].receipt_count must be a JSON integer number"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1", "1", "1.5", "1"),
+          "items[0].recorded_at_ms must be an integer"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1", "1", "1", "\"\""),
+          "items[0].recorded_at_height must be a JSON integer number")
+    };
+  }
+
+  private static String transferListBody(
+      final String total,
+      final String receiptCount,
+      final String recordedAtMs,
+      final String recordedAtHeight) {
+    return String.format(
+        Locale.ROOT,
+        """
+        {
+          "items": [
+            {
+              "receipt_count": %s,
+              "recorded_at_ms": %s,
+              "recorded_at_height": %s
+            }
+          ],
+          "total": %s
+        }
+        """,
+        receiptCount,
+        recordedAtMs,
+        recordedAtHeight,
+        total);
   }
 
   private static String canonicalReadinessBody(final String extra) {

@@ -121,8 +121,13 @@ summary: Current SF-6 release automation and QA surfaces.
   artifact metadata instead of ignoring it, validate schema-closed aggregate lane
   rows with canonical path, lowercase SHA-256, count, timestamp, list, and error
   shapes before release review, validate the schema-closed aggregate summary
-  envelope before writing the final production-readiness report, validate final
+  envelope before writing the final production-readiness report, require
+  aggregate status to match canonical aggregate diagnostics, require ready
+  aggregate summaries to carry complete deployment context and only present,
+  valid required rows, validate final
   aggregate required rows for exact present and missing row output contracts,
+  validate invalid aggregate required-row metadata before blocked rows are
+  emitted for release review,
   require aggregate recognized-summary counts to match present required rows,
   pin deterministic missing-row diagnostics for absent lane summaries, pin
   deterministic duplicate-summary diagnostics for duplicate lane summaries,
@@ -135,10 +140,15 @@ summary: Current SF-6 release automation and QA surfaces.
   before emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
-  summary paths, supports `@ARGFILE`, rejects explicit summaries for lanes
-  outside a narrowed `--require-gate` selection, and emits a dry-run collection
-  plan so release operators can inspect the full production-readiness command
-  before invoking the aggregate gate.
+  summary paths, requires exactly one summary input per required gate, requires
+  an explicit canonical `--deployment-id`/`--environment` pair, supports
+  `@ARGFILE`, rejects explicit summaries for lanes outside a narrowed
+  `--require-gate` selection, validates the schema-closed collection plan
+  envelope against the built command plan before dry-run output or execution,
+  rejects non-object or non-strict-JSON collection-plan renderings before
+  stdout or verifier launch,
+  and emits that dry-run collection plan so release operators can inspect the
+  full production-readiness command before invoking the aggregate gate.
 
 ## Versioning Policy
 

@@ -50,13 +50,13 @@ public final class OfflineNotePaymentTokenCodec {
   }
 
   public static OfflineNotePaymentToken decodeText(final String text) {
-    final String trimmed = Objects.requireNonNull(text, "text").trim();
-    if (!trimmed.startsWith(TEXT_PREFIX)) {
+    final String value = Objects.requireNonNull(text, "text");
+    if (!value.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note payment token prefix missing");
     }
     return decodeNorito(
         OfflineBase64Url.decodeUnpadded(
-            trimmed.substring(TEXT_PREFIX.length()), "Offline Note payment token payload"));
+            value.substring(TEXT_PREFIX.length()), "Offline Note payment token payload"));
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNotePaymentToken token) {

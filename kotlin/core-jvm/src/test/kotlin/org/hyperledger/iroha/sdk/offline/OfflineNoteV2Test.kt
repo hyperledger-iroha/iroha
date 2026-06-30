@@ -206,6 +206,15 @@ class OfflineNoteV2Test {
         assertEquals(string(vector, "attestation_report_hash"), hex(registration.attestationReportHash()))
         assertEquals(string(vector, "evidence_hash"), hex(registration.evidenceHash()))
         assertEquals(string(vector, "key_certificate_payload_hash"), hex(registration.keyCertificatePayloadHash()))
+        val keyCertificatePayload = registration.keyCertificatePayload()
+        assertEquals(
+            string(vector, "key_certificate_payload_hash"),
+            hex(keyCertificatePayload.payloadHash()),
+        )
+        assertEquals(
+            base64(keyCertificatePayload.noritoEncoded()),
+            base64(OfflineNoteV2.decodeCertificatePayload(keyCertificatePayload.noritoEncoded()).noritoEncoded()),
+        )
         assertEquals(string(vector, "norito_base64"), base64(registration.noritoEncoded()))
 
         val changedReport = "other-report".toByteArray(Charsets.UTF_8)
@@ -499,6 +508,45 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun offlineNoteV2AssetScopeDataspaceIdsRejectNonCanonicalForms() {
+        val issue = issue(loadFixture())
+
+        OfflineNoteV2.IssueV2(
+            noteCommitment = issue.noteCommitment(),
+            keyCertificate = issue.keyCertificate,
+            assetId = "${issue.assetId}#dataspace:0",
+            amount = issue.amount,
+        )
+        OfflineNoteV2.IssueV2(
+            noteCommitment = issue.noteCommitment(),
+            keyCertificate = issue.keyCertificate,
+            assetId = "${issue.assetId}#dataspace:1",
+            amount = issue.amount,
+        )
+
+        for (rejected in listOf(
+            "dataspace:",
+            "dataspace:+1",
+            "dataspace:01",
+            "dataspace:-1",
+            "dataspace:1.0",
+            "DATASPACE:1",
+            "dataspace:9223372036854775808",
+        )) {
+            assertFailsWith<IllegalArgumentException>(
+                "non-canonical V2 dataspace scope should reject: $rejected",
+            ) {
+                OfflineNoteV2.IssueV2(
+                    noteCommitment = issue.noteCommitment(),
+                    keyCertificate = issue.keyCertificate,
+                    assetId = "${issue.assetId}#$rejected",
+                    amount = issue.amount,
+                )
+            }
+        }
+    }
+
+    @Test
     fun publicInputHashesMatchRustVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -582,6 +630,17 @@ class OfflineNoteV2Test {
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = "bad:vk")
+        }
+    }
+
+    @Test
+    fun openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding() {
+        val canonicalHash = "ab".repeat(32)
+        for (rejectedHash in nonExactPublicInputHashes(canonicalHash)) {
+            assertFalse(
+                OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(ByteArray(0), rejectedHash),
+                "OpenVerifyEnvelope must reject non-exact public input hash before decoding",
+            )
         }
     }
 
@@ -1212,6 +1271,11 @@ class OfflineNoteV2Test {
         val proof = OfflineNoteV2Halo2Prover.proveAudit(audit)
         audit.replacingRecursiveProof(proof).validateProofBinding()
         assertTrue(proof.proof.bytes().size <= OfflineNoteV2Halo2Prover.MAX_ENVELOPE_BYTES)
+        val publicInputsHashHex = hex(proof.publicInputsHash())
+        assertTrue(OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), publicInputsHashHex))
+        for (rejectedHash in nonExactPublicInputHashes(publicInputsHashHex)) {
+            assertFalse(OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), rejectedHash))
+        }
     }
 
     @Test
@@ -1569,6 +1633,17 @@ class OfflineNoteV2Test {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun nonExactPublicInputHashes(canonicalHash: String): List<String> =
+        listOf(
+            " $canonicalHash",
+            "$canonicalHash\n",
+            canonicalHash.uppercase(Locale.ROOT),
+            "0x$canonicalHash",
+            canonicalHash.dropLast(1),
+            canonicalHash.dropLast(2) + "zz",
+            "",
+        )
 
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)

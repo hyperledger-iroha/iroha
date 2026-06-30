@@ -814,9 +814,8 @@ public enum OfflineNorito {
                 maxSplits: 1,
                 omittingEmptySubsequences: false
             ).dropFirst().first,
-            scope.lowercased().hasPrefix("dataspace:"),
-            !rawDataspace.isEmpty,
-            let parsedDataspaceId = UInt64(rawDataspace) else {
+            scope.hasPrefix("dataspace:"),
+            let parsedDataspaceId = parseCanonicalAssetDataspaceId(rawDataspace) else {
                 throw OfflineNoritoError.invalidAssetId(raw)
             }
             dataspaceId = parsedDataspaceId
@@ -826,6 +825,18 @@ public enum OfflineNorito {
             accountId: accountId,
             dataspaceId: dataspaceId
         )
+    }
+
+    private static func parseCanonicalAssetDataspaceId(_ raw: Substring) -> UInt64? {
+        let text = String(raw)
+        guard !text.isEmpty,
+              (text == "0" || !text.hasPrefix("0")),
+              text.unicodeScalars.allSatisfy({ scalar in
+                  scalar.value >= 48 && scalar.value <= 57
+              }) else {
+            return nil
+        }
+        return UInt64(text)
     }
 
     private static func encodeAssetDefinitionAddress(_ literal: String) throws -> Data {

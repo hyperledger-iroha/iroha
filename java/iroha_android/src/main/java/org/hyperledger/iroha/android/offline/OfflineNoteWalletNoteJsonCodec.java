@@ -1,11 +1,11 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
@@ -196,29 +196,45 @@ public final class OfflineNoteWalletNoteJsonCodec {
   }
 
   private static long asLong(final Object value, final String field) {
-    if (value instanceof Number) {
+    if (value instanceof BigInteger) {
+      try {
+        return ((BigInteger) value).longValueExact();
+      } catch (final ArithmeticException ex) {
+        throw new IllegalArgumentException(field + " must fit in signed 64-bit range", ex);
+      }
+    }
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
       return ((Number) value).longValue();
     }
-    if (value instanceof String) {
-      return Long.parseLong((String) value);
+    if (value instanceof Float || value instanceof Double) {
+      throw new IllegalArgumentException(field + " must be an integer");
     }
-    throw new IllegalArgumentException(field + " must be an integer");
+    throw new IllegalArgumentException(field + " must be a JSON integer number");
   }
 
   private static byte[] hexBytes(final String value, final String field) {
-    final String normalized = value.toLowerCase(Locale.ROOT);
-    if ((normalized.length() & 1) != 0) {
-      throw new IllegalArgumentException(field + " must have an even hex length");
+    if (value.length() != 64) {
+      throw new IllegalArgumentException(field + " must be 32-byte lowercase hex");
     }
-    final byte[] out = new byte[normalized.length() / 2];
+    final byte[] out = new byte[32];
     for (int i = 0; i < out.length; i++) {
-      final int hi = Character.digit(normalized.charAt(i * 2), 16);
-      final int lo = Character.digit(normalized.charAt(i * 2 + 1), 16);
-      if (hi < 0 || lo < 0) {
-        throw new IllegalArgumentException(field + " must be hex");
-      }
+      final int hi = lowercaseHexDigit(value.charAt(i * 2), field);
+      final int lo = lowercaseHexDigit(value.charAt(i * 2 + 1), field);
       out[i] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private static int lowercaseHexDigit(final char ch, final String field) {
+    if (ch >= '0' && ch <= '9') {
+      return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+      return ch - 'a' + 10;
+    }
+    throw new IllegalArgumentException(field + " must be 32-byte lowercase hex");
   }
 }
