@@ -20519,7 +20519,7 @@ async fn submit_contract_call_request(
         transaction_ttl_ms,
         tx_hash_hex: None,
         pipeline_status: None,
-        entrypoint_hash_hex: Some(entrypoint_hash_hex),
+        entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
