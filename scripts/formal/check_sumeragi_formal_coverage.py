@@ -191,6 +191,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Unary-temporal self-equality exactness helper wrappers count as self-equality helpers",
     "Unary-temporal self-inequality exactness helper wrappers count as self-inequality helpers",
     "Constant-relation exactness helpers count as literal helpers",
+    "Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers",
     "Static and unary-temporal boolean-only exactness helper wrappers count as",
     "Static IF literal exactness helpers count as literal helpers",
     "Negated unary-temporal boolean-only helper wrappers count as literal helpers",
@@ -4641,7 +4642,7 @@ def tla_top_level_relation_operator(expression: str) -> str | None:
                 return "<"
         if char == ">":
             previous_char = text[index - 1] if index > 0 else ""
-            if previous_char != ">":
+            if previous_char not in "<>":
                 return ">"
         index += 1
     return None
@@ -4650,13 +4651,49 @@ def tla_top_level_relation_operator(expression: str) -> str | None:
 def tla_static_constant_relation(expression: str) -> str | None:
     """Return a whole-body constant relation with no model identifiers."""
 
-    compact = " ".join(strip_static_outer_parentheses(expression).split())
-    if tla_top_level_relation_operator(compact) is None:
-        return None
-    identifier_scan = tla_without_string_literals(compact).replace("\\in", " ")
-    if tla_static_identifiers(identifier_scan):
-        return None
-    return compact
+    memo: dict[str, str | None] = {}
+    visiting: set[str] = set()
+
+    def collect(body: str) -> str | None:
+        normalized = strip_static_outer_parentheses(" ".join(body.split()))
+        if normalized in memo:
+            return memo[normalized]
+        if normalized in visiting:
+            return None
+        visiting.add(normalized)
+
+        let_operand = tla_static_let_alias_operand(normalized)
+        if let_operand is not None:
+            result = normalized if collect(let_operand) is not None else None
+            visiting.remove(normalized)
+            memo[normalized] = result
+            return result
+
+        temporal_operand = tla_unary_temporal_operand(normalized)
+        if temporal_operand is not None:
+            result = normalized if collect(temporal_operand) is not None else None
+            visiting.remove(normalized)
+            memo[normalized] = result
+            return result
+
+        negated_operand = tla_static_negation_operand(normalized)
+        if negated_operand is not None:
+            result = normalized if collect(negated_operand) is not None else None
+            visiting.remove(normalized)
+            memo[normalized] = result
+            return result
+
+        result = None
+        if tla_top_level_relation_operator(normalized) is not None:
+            identifier_scan = tla_without_string_literals(normalized).replace("\\in", " ")
+            if not tla_static_identifiers(identifier_scan):
+                result = normalized
+
+        visiting.remove(normalized)
+        memo[normalized] = result
+        return result
+
+    return collect(expression)
 
 
 def tla_direct_operator_call_name(expression: str) -> str | None:

@@ -137,6 +137,7 @@ Static and unary-temporal boolean-only exactness helper wrappers count as
 literal helpers; use concrete model predicates instead of wrapping `TRUE`/`FALSE`.
 Static IF literal exactness helpers count as literal helpers too.
 Constant-relation exactness helpers count as literal helpers too.
+Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers.
 Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
 Compound boolean-only temporal helper wrappers count as literal helpers too.
 Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
@@ -30598,7 +30599,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Static IF literal exactness helpers such as
   `IF TRUE THEN TRUE ELSE FALSE` count as literal helpers too.
   Constant-relation exactness helpers such as `TRUE = TRUE` and `1 \in {1}`
-  count as literal helpers too.
+  count as literal helpers too. Constant-relation helper checks unwrap one-line
+  `LET`, unary-temporal, and negated wrappers, so `[] (TRUE = TRUE)`,
+  `<> (1 \in {1})`, and `~(TRUE = TRUE)` remain vacuous helpers.
   Quantified helper body control-flow checks reject non-transparent `LET` bodies.
   Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
   Compound boolean-only temporal helper wrappers count as literal helpers too.

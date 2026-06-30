@@ -271,7 +271,13 @@ async fn sumeragi_status_endpoint_shape() {
     let txq = v.get("tx_queue").and_then(|x| x.as_object()).unwrap();
     assert!(txq.get("depth").is_some());
     assert!(txq.get("capacity").is_some());
+    assert!(txq.get("retained_bytes").is_some());
+    assert!(txq.get("max_retained_bytes").is_some());
     assert!(txq.get("saturated").is_some());
+    assert!(txq.get("saturated_by_count").is_some());
+    assert!(txq.get("saturated_by_bytes").is_some());
+    assert!(txq.get("saturated_by_age").is_some());
+    assert!(txq.get("oldest_queued_age_ms").is_some());
     let worker_loop = v.get("worker_loop").and_then(|x| x.as_object()).unwrap();
     assert!(worker_loop.get("queue_depths").is_some());
     assert!(worker_loop.get("queue_diagnostics").is_some());

@@ -554,6 +554,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Constant-relation exactness helpers count as literal helpers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Static and unary-temporal boolean-only exactness helper wrappers count as",
         f"Sumeragi formal README {readme} is missing required text: "
         "Static IF literal exactness helpers count as literal helpers",
@@ -3138,8 +3140,21 @@ def test_tla_static_constant_relation_detects_identifier_free_relations() -> Non
     assert module.tla_static_constant_relation("1 \\in {1}") == "1 \\in {1}"
     assert module.tla_static_constant_relation('"a" = "a"') == '"a" = "a"'
     assert module.tla_static_constant_relation("{} = {}") == "{} = {}"
+    assert (
+        module.tla_static_constant_relation("[] (TRUE = TRUE)")
+        == "[] (TRUE = TRUE)"
+    )
+    assert (
+        module.tla_static_constant_relation("<> (1 \\in {1})")
+        == "<> (1 \\in {1})"
+    )
+    assert (
+        module.tla_static_constant_relation("~([] (FALSE # TRUE))")
+        == "~([] (FALSE # TRUE))"
+    )
     assert module.tla_static_constant_relation("checked = ready") is None
     assert module.tla_static_constant_relation('"case" \\in tried') is None
+    assert module.tla_static_constant_relation("[] (checked = ready)") is None
     assert module.tla_static_constant_relation("TRUE") is None
     assert module.tla_static_constant_relation("TRUE => FALSE") is None
     assert module.tla_static_constant_relation("TRUE <=> FALSE") is None
@@ -6693,6 +6708,54 @@ def test_cfg_correctness_envelope_shape_errors_rejects_constant_relation_exactne
     ]
 
 
+def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_constant_relation_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiUnaryTemporalConstantRelationConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiUnaryTemporalConstantRelationConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUnaryTemporalConstantRelationConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConstantRelation == [] (TRUE = TRUE)",
+                "ConstantRelationExactness ==",
+                "  /\\ ConstantRelation",
+                "ConstantRelationCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ConstantRelationExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ConstantRelationCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "unary-temporal-constant-relation-conjunct-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"unary-temporal-constant-relation-conjunct-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "ConstantRelationCorrectnessEnvelope, but exactness conjunct "
+        f"ConstantRelationExactness at {tla}:7 contains constant-relation "
+        f"exactness conjunct ConstantRelation at {tla}:5 is constant "
+        "relation [] (TRUE = TRUE); compose concrete model predicates directly"
+    ]
+
+
 def test_cfg_correctness_envelope_shape_errors_rejects_temporal_boolean_exactness_conjunct(
     tmp_path: Path,
 ) -> None:
@@ -9875,6 +9938,60 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_constant_relat
         "ConstantRelationWrapper reaches ConstantRelationLeaf through "
         f"ConstantRelationWrapper -> ConstantRelationLeaf at {tla}:6 is "
         "constant relation 1 \\in {1}; keep literal, self-equality, "
+        "self-inequality, and alias helpers out of named exactness predicate "
+        "chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_transitive_unary_temporal_constant_relation_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiTransitiveUnaryTemporalConstantRelationEnvelope.tla"
+    cfg = tmp_path / "SumeragiTransitiveUnaryTemporalConstantRelationEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveUnaryTemporalConstantRelationEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == checked = ready",
+                "ConstantRelationLeaf == [] (1 \\in {1})",
+                "ConstantRelationWrapper == ModelPredicate /\\ ConstantRelationLeaf",
+                "TransitiveConstantRelationExactness ==",
+                "  /\\ ConstantRelationWrapper",
+                "TransitiveConstantRelationCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ TransitiveConstantRelationExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT TransitiveConstantRelationCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "transitive-unary-temporal-constant-relation-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"transitive-unary-temporal-constant-relation-envelope-fast: Apalache "
+        f"cfg {cfg}:4 references correctness envelope "
+        "TransitiveConstantRelationCorrectnessEnvelope, but exactness conjunct "
+        f"TransitiveConstantRelationExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with vacuous conjunct "
+        "ConstantRelationWrapper reaches ConstantRelationLeaf through "
+        f"ConstantRelationWrapper -> ConstantRelationLeaf at {tla}:6 is "
+        "constant relation [] (1 \\in {1}); keep literal, self-equality, "
         "self-inequality, and alias helpers out of named exactness predicate "
         "chains"
     ]
@@ -13446,6 +13563,57 @@ def test_cfg_correctness_envelope_shape_errors_rejects_constant_relation_tempora
     ]
 
 
+def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_constant_relation_temporal_extra(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == [] (1 \\in {1})",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 is "
+        "constant relation [] (1 \\in {1}); temporal correctness-envelope "
+        "exceptions must stay nontrivial"
+    ]
+
+
 def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_literal_extra(
     tmp_path: Path,
 ) -> None:
@@ -15413,6 +15581,64 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_constant_relat
         "vacuous helper TemporalWrapper reaches TemporalConstantRelationLeaf "
         "through TemporalWrapper -> TemporalConstantRelationLeaf at "
         f"{tla}:6 is constant relation TRUE = TRUE; keep literal, "
+        "self-equality, self-inequality, and alias helpers out of "
+        "allowlisted temporal side-conjunct chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_transitive_unary_temporal_constant_relation_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "TemporalConstantRelationLeaf == [] (TRUE = TRUE)",
+                "TemporalWrapper == [] TemporalConstantRelationLeaf",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        f"SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:10 contains transitive temporal side-conjunct chain with "
+        "vacuous helper TemporalWrapper reaches TemporalConstantRelationLeaf "
+        "through TemporalWrapper -> TemporalConstantRelationLeaf at "
+        f"{tla}:6 is constant relation [] (TRUE = TRUE); keep literal, "
         "self-equality, self-inequality, and alias helpers out of "
         "allowlisted temporal side-conjunct chains"
     ]

@@ -85,6 +85,60 @@ summary: Current SF-6 release automation and QA surfaces.
 - `scripts/sorafs_gateway_self_cert.sh` can be invoked post-deploy with
   `--manifest`/`--manifest-bundle` to ensure staging gateways continue to serve
   the signed manifest expected by clients.
+- `scripts/check_sorafs_production_readiness.py` is the final aggregate
+  SoraFS promotion gate over the per-lane rollout/release evidence summaries.
+  It requires each selected lane summary to be `ready`, have empty summary and
+  artifact/load-error lists, carry fresh reviewed deployment-context
+  fingerprints, cover that lane checker's full default required-kind set with
+  no extra `required` rows, keep top-level evidence/artifact counts consistent
+  with the validated rows, require evidence file counts to match the distinct
+  recognized artifact paths, publish threshold metadata as a non-empty
+  canonical non-negative integer map that the aggregate row preserves for
+  release review, reject extra top-level lane-summary fields outside the
+  schema-closed payload-free lane summary contract, validate allowed top-level
+  lane metadata as payload-free canonical strings, non-negative integers,
+  booleans, objects, and lists with expected container shapes, bind those
+  metadata fields to the lane-specific contract that emits them, validate exact
+  lowercase-hex binding-list metadata shapes before aggregate promotion,
+  validate exact lowercase-hex and positive-integer scalar list metadata shapes
+  before aggregate promotion, validate governance public-head identifiers as
+  lowercase hex list metadata before aggregate promotion, validate exact
+  object-list metadata shapes before aggregate promotion, reject exact duplicate
+  object-list metadata entries while preserving artifact order, validate exact
+  object metadata shapes before aggregate
+  promotion, require set-derived lane metadata lists to be duplicate-free and
+  sorted in canonical order, sanitize malformed sensitive-field path diagnostics
+  before writing aggregate errors,
+  require canonical required-row schema labels when present, reject extra
+  required-row fields outside the schema-closed payload-free required-row
+  contract, require canonical unique artifact paths and lowercase SHA-256
+  digests plus canonical artifact schema/status labels when present, reject
+  extra artifact-row fields
+  outside the schema-closed payload-free
+  artifact contract, require top-level
+  recognized-artifact inventory and validate it against the per-kind required-row
+  artifact counts and `(kind, path, sha256)` identities plus matching required
+  artifact metadata instead of ignoring it, validate schema-closed aggregate lane
+  rows with canonical path, lowercase SHA-256, count, timestamp, list, and error
+  shapes before release review, validate the schema-closed aggregate summary
+  envelope before writing the final production-readiness report, validate final
+  aggregate required rows for exact present and missing row output contracts,
+  require aggregate recognized-summary counts to match present required rows,
+  pin deterministic missing-row diagnostics for absent lane summaries, pin
+  deterministic duplicate-summary diagnostics for duplicate lane summaries,
+  count every duplicate lane-summary input while keeping one duplicate row
+  diagnostic per gate, pin aggregate blockers for unknown schemas and explicit
+  unrequired summaries, avoid payload or secret-bearing
+  fields, reject unknown summary schemas discovered in summary directories, and
+  share the same
+  `deployment_id`/`environment`
+  before emitting
+  `sorafs.production_readiness.aggregate_gate.v1`. The companion
+  `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
+  summary paths, supports `@ARGFILE`, rejects explicit summaries for lanes
+  outside a narrowed `--require-gate` selection, and emits a dry-run collection
+  plan so release operators can inspect the full production-readiness command
+  before invoking the aggregate gate.
 
 ## Versioning Policy
 

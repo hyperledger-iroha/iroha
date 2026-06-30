@@ -1299,6 +1299,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-lineage-data-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-recursive-compact-verifier-bool
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-recursive-compact-verifier-availability
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-recursive-compact-native-archive-cap
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-native-output-cap
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-input-headers

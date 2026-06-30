@@ -170,7 +170,8 @@ def test_missing_source_kind_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "missing --source-entry coverage" in captured.err
+    assert "missing required source-entry coverage" in captured.err
+    assert "feed_source" not in captured.err
     assert captured.out == ""
 
 
@@ -187,6 +188,19 @@ def test_malformed_source_entry_sanitizes_exception_text(
 
     assert "<non-canonical-error>" in errors
     assert bad_message not in "\n".join(errors)
+
+
+def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
+    args = complete_args(tmp_path)
+    bad_spec = "source-entry-private-key-placeholder"
+    source_index = args.index("--source-entry") + 1
+    args[source_index] = bad_spec
+
+    errors = MODULE.validate_inputs(MODULE.parse_args(args))
+
+    diagnostics = "\n".join(errors)
+    assert "--source-entry must use KIND=PATH form" in diagnostics
+    assert bad_spec not in diagnostics
 
 
 def test_generated_artifact_read_error_is_sanitized(
@@ -207,11 +221,31 @@ def test_generated_artifact_read_error_is_sanitized(
         environment="staging",
     )
 
-    assert errors == [
-        f"failed to read generated evidence artifact `{artifact}`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == ["generated evidence artifact cannot be read"]
+    assert str(artifact) not in "\n".join(errors)
     assert bad_message not in "\n".join(errors)
+
+
+def test_generated_artifact_context_conflict_does_not_echo_existing_value(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    existing_value = "deployment-private-key-placeholder"
+    artifact.write_text(
+        json.dumps({"deployment_id": existing_value}),
+        encoding="utf-8",
+    )
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    diagnostics = "\n".join(errors)
+    assert "has conflicting deployment context" in diagnostics
+    assert existing_value not in diagnostics
+    assert str(artifact) not in diagnostics
 
 
 def test_generated_artifact_annotation_marks_reviewed_context(tmp_path: Path) -> None:
@@ -282,10 +316,8 @@ def test_deployment_context_write_error_is_sanitized(
         environment="staging",
     )
 
-    assert errors == [
-        f"failed to write deployment context into `{artifact}`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
     assert bad_message not in "\n".join(errors)
 
 
@@ -320,10 +352,8 @@ def test_deployment_context_write_rejects_symlink_swap_before_open(
         environment="staging",
     )
 
-    assert errors == [
-        f"failed to write deployment context into `{artifact}`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
     assert target.read_text(encoding="utf-8") == "old"
     assert bad_message not in "\n".join(errors)
 
@@ -360,9 +390,8 @@ def test_deployment_context_write_rejects_parent_symlink_swap_before_open(
         environment="staging",
     )
 
-    assert errors == [
-        f"deployment-context artifact parent `{parent}` must not be a symlink"
-    ]
+    assert errors == ["deployment-context artifact parent is invalid"]
+    assert str(parent) not in "\n".join(errors)
     assert (target_parent / "artifact.json").read_text(encoding="utf-8") == "{}"
 
 
@@ -375,9 +404,9 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "--proof-token-issuance" in captured.err
-    assert "must exist and be a file" in captured.err
-    assert str(missing) in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "--proof-token-issuance" not in captured.err
+    assert str(missing) not in captured.err
 
 
 def test_unreviewed_deployment_context_fails_before_plan(

@@ -2728,6 +2728,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-recursive-compact-verifier-availability",
     ),
     (
+        "Swift recursive compact native archive cap negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-recursive-compact-native-archive-cap",
+    ),
+    (
         "Swift Kagemusha native output cap negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-native-output-cap",
     ),
@@ -5338,6 +5342,7 @@ def check_recursive_compact_surface(texts, errors):
             "oversizedPallasOpenEnvelopesArchive",
             "Kagemusha verified fold record bundle archive must not exceed",
             "Kagemusha Pallas open-envelope archive must not exceed",
+            "nativeArchiveMaxBytes = 64 * 1024 * 1024",
             "try requireValidInputArchive(",
             "try requireValidRecursiveCompactTokenArchive(token)",
             "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
@@ -5403,6 +5408,7 @@ def check_recursive_compact_surface(texts, errors):
             "testVerifyRejectsMalformedCompactTokenArchiveBeforeBridgeCall",
             "testVerifyRejectsOversizedCompactTokenArchiveBeforeBridgeCall",
             "testVerifyRejectsEmptyPayloadCompactTokenArchiveBeforeBridgeCall",
+            "testNativeArchiveLimitMatchesSharedKagemushaCap",
             "testRejectsMalformedInputArchivesBeforeBridgeCall",
             "testRejectsOversizedInputArchivesBeforeBridgeCall",
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
@@ -5415,6 +5421,9 @@ def check_recursive_compact_surface(texts, errors):
             "kagemushaNoritoFrameWithHeaderPadding",
             "Data([0x7f])",
             "Data(repeating: 0, count: 65)",
+            "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+            "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
+            "64 * 1024 * 1024",
             ".oversizedRecordBundleArchive",
             ".oversizedPallasOpenEnvelopesArchive",
             ".oversizedCompactTokenArchive",
@@ -38737,6 +38746,49 @@ if mode == "--negative-control-swift-recursive-compact-verifier-availability":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift recursive compact verifier availability drift was not detected")
+
+if mode == "--negative-control-swift-recursive-compact-native-archive-cap":
+    mutated_texts = dict(texts)
+    wrapper = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
+    test_path = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
+    mutated_wrapper = texts[wrapper].replace(
+        "nativeArchiveMaxBytes = 64 * 1024 * 1024",
+        "nativeArchiveMaxBytes = 1024 * 1024 * 1024",
+        1,
+    )
+    mutated_test = texts[test_path].replace(
+        "testNativeArchiveLimitMatchesSharedKagemushaCap",
+        "testNativeArchiveLimitAllowsIndependentKagemushaCap",
+        1,
+    ).replace(
+        "64 * 1024 * 1024",
+        "1024 * 1024 * 1024",
+        1,
+    )
+    if mutated_wrapper == texts[wrapper] or mutated_test == texts[test_path]:
+        raise SystemExit("negative control failed: unable to mutate Swift recursive compact native archive cap coverage")
+    mutated_texts[wrapper] = mutated_wrapper
+    mutated_texts[test_path] = mutated_test
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift recursive compact wrapper missing nativeArchiveMaxBytes = 64 * 1024 * 1024",
+            "Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap",
+            "Swift recursive compact verifier tests missing 64 * 1024 * 1024",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift recursive compact native archive cap drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Swift recursive compact native archive cap drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift recursive compact native archive cap drift was not detected")
 
 if mode == "--negative-control-swift-kagemusha-native-output-cap":
     mutated_texts = dict(texts)

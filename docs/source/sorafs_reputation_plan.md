@@ -338,6 +338,10 @@ Completed local foundations:
 - Governance DAG payload validation and local filesystem publisher artifacts.
 - Torii latest, provider, snapshot, weights, events, SSE, and WebSocket surfaces.
 - CLI `reputation verify`, `publish`, `snapshot`, `fetch`, and `watch`.
+- The rollout evidence gate now emits aggregate-compatible required-kind
+  metadata, evidence counts, required-row `present`/`artifact_count` fields,
+  threshold metadata, and reviewed deployment-context fingerprints so the final
+  production readiness aggregate can consume real reputation summaries directly.
 - JavaScript/TypeScript and Python convenience clients for reads, event polling,
   and SSE consumption.
 - Scheduler consumption through `reputation_score_bps`.

@@ -193,7 +193,8 @@ def test_missing_transparency_source_kind_fails_before_plan(tmp_path: Path, caps
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "missing --source-entry coverage" in captured.err
+    assert "missing required source-entry coverage" in captured.err
+    assert "dataset_manifest" not in captured.err
     assert captured.out == ""
 
 
@@ -212,6 +213,19 @@ def test_malformed_source_entry_sanitizes_exception_text(
     assert bad_message not in "\n".join(errors)
 
 
+def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
+    args = complete_args(tmp_path)
+    bad_spec = "source-entry-private-key-placeholder"
+    source_index = args.index("--source-entry") + 1
+    args[source_index] = bad_spec
+
+    errors = MODULE.validate_inputs(MODULE.parse_args(args))
+
+    diagnostics = "\n".join(errors)
+    assert "--source-entry must use KIND=PATH form" in diagnostics
+    assert bad_spec not in diagnostics
+
+
 def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     missing = tmp_path / "missing-execution-summary.json"
@@ -221,8 +235,9 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "--executor-execution-summary" in captured.err
-    assert str(missing) in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "--executor-execution-summary" not in captured.err
+    assert str(missing) not in captured.err
 
 
 def test_committee_results_must_satisfy_quorum(tmp_path: Path, capsys) -> None:

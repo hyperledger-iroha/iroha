@@ -12058,10 +12058,10 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_r
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
+    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
-    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     let (mut c0, mut c1) =
         full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
     for (coefficient_entry, &sample_coefficient) in key
@@ -12101,6 +12101,9 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_ke
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
         validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
         validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
@@ -12110,9 +12113,6 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_ke
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
-    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
-    let decomposition_chain =
-        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     let (mut c0, mut c1) =
         full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
     for (coefficient_entry, &sample_coefficient) in key
@@ -24363,6 +24363,56 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
 fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
     payload: &BfvFullBootstrapReleaseAuditSignoffPayloadV1,
 ) -> Result<(), BfvError> {
+    let signed_commitments = [
+        (
+            "release evidence digest",
+            &payload.release_audit_evidence_digest,
+        ),
+        (
+            "centered scale-round source-chain digest",
+            &payload.centered_scale_round_source_chain_digest,
+        ),
+        ("artifact bundle digest", &payload.artifact_bundle_digest),
+        (
+            "evaluator artifact set digest",
+            &payload.evaluator_artifact_set_digest,
+        ),
+        (
+            "proof-key pair commitment",
+            &payload.proof_key_pair_commitment,
+        ),
+        ("prover-key digest", &payload.prover_key_digest),
+        ("verifier-key digest", &payload.verifier_key_digest),
+        (
+            "prover native payload digest",
+            &payload.prover_native_payload_digest,
+        ),
+        (
+            "verifier native payload digest",
+            &payload.verifier_native_payload_digest,
+        ),
+        (
+            "native circuit fingerprint",
+            &payload.native_circuit_fingerprint,
+        ),
+        (
+            "generated circuit body digest",
+            &payload.generated_circuit_body_digest,
+        ),
+        ("audit report digest", &payload.audit_report_digest),
+        (
+            "evidence archive digest",
+            &payload.audit_evidence_archive_digest,
+        ),
+    ];
+    validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
+        "signoff",
+        &signed_commitments,
+    )?;
+    validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
+        "signoff",
+        &signed_commitments,
+    )?;
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit signoff evidence digest",
         &payload.release_audit_evidence_digest,
@@ -24426,56 +24476,7 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
                 .to_owned(),
         ));
     }
-    let signed_commitments = [
-        (
-            "release evidence digest",
-            &payload.release_audit_evidence_digest,
-        ),
-        (
-            "centered scale-round source-chain digest",
-            &payload.centered_scale_round_source_chain_digest,
-        ),
-        ("artifact bundle digest", &payload.artifact_bundle_digest),
-        (
-            "evaluator artifact set digest",
-            &payload.evaluator_artifact_set_digest,
-        ),
-        (
-            "proof-key pair commitment",
-            &payload.proof_key_pair_commitment,
-        ),
-        ("prover-key digest", &payload.prover_key_digest),
-        ("verifier-key digest", &payload.verifier_key_digest),
-        (
-            "prover native payload digest",
-            &payload.prover_native_payload_digest,
-        ),
-        (
-            "verifier native payload digest",
-            &payload.verifier_native_payload_digest,
-        ),
-        (
-            "native circuit fingerprint",
-            &payload.native_circuit_fingerprint,
-        ),
-        (
-            "generated circuit body digest",
-            &payload.generated_circuit_body_digest,
-        ),
-        ("audit report digest", &payload.audit_report_digest),
-        (
-            "evidence archive digest",
-            &payload.audit_evidence_archive_digest,
-        ),
-    ];
-    validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
-        "signoff",
-        &signed_commitments,
-    )?;
-    validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
-        "signoff",
-        &signed_commitments,
-    )
+    Ok(())
 }
 
 fn validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
@@ -32370,6 +32371,7 @@ pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exa
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvFullBootstrapExecutionPrefixTraceV1, BfvError> {
+    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     let material = validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1(
         params,
         bootstrap_key,
@@ -32465,6 +32467,9 @@ pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_regi
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvFullBootstrapExecutionPrefixTraceV1, BfvError> {
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let _decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
         validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
         return Err(err);
@@ -32860,6 +32865,7 @@ pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
+    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     Err(full_bootstrap_artifacts_required_error())
 }
@@ -32945,6 +32951,7 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
     bootstrap_key: &BfvBootstrapKey,
     input_bound: u128,
 ) -> Result<u128, BfvError> {
+    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     validate_exact_residual_bound_within_centered_capacity(
         params,
@@ -33040,6 +33047,9 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let _decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
         validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
         return Err(err);
@@ -33132,6 +33142,9 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     bootstrap_key: &BfvBootstrapKey,
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let _decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
         validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
         return Err(err);
@@ -44292,6 +44305,47 @@ mod tests {
         };
         validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(&payload)
             .expect("standalone release audit signoff payload validates");
+
+        let mut aliased_verifier_native_payload_digest = payload.clone();
+        aliased_verifier_native_payload_digest.verifier_native_payload_digest =
+            aliased_verifier_native_payload_digest.prover_native_payload_digest;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &aliased_verifier_native_payload_digest,
+            ),
+            "verifier native payload digest must be distinct from prover native payload digest",
+            "standalone release audit signoff payloads must reject verifier native payload digests copied from prover payload digests before canonical mismatch",
+        );
+        let aliased_verifier_native_payload_digest_signature = SignatureOf::try_new(
+            reviewer_key_pair.private_key(),
+            &aliased_verifier_native_payload_digest,
+        )
+        .expect("fixture reviewer signs aliased native payload digest signoff payload");
+        let aliased_verifier_native_payload_digest_signoff =
+            BfvFullBootstrapReleaseAuditSignoffV1 {
+                version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1,
+                field_count: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_FIELD_COUNT_V1,
+                payload: aliased_verifier_native_payload_digest,
+                signature: aliased_verifier_native_payload_digest_signature,
+            };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_v1(
+                &aliased_verifier_native_payload_digest_signoff,
+            ),
+            "verifier native payload digest must be distinct from prover native payload digest",
+            "standalone release audit signoffs must reject well-signed verifier native payload digests copied from prover payload digests before canonical mismatch",
+        );
+
+        let mut aliased_generated_body_digest = payload.clone();
+        aliased_generated_body_digest.generated_circuit_body_digest =
+            aliased_generated_body_digest.native_circuit_fingerprint;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &aliased_generated_body_digest,
+            ),
+            "generated circuit body digest must be distinct from native circuit fingerprint",
+            "standalone release audit signoff payloads must reject generated body digests copied from native circuit fingerprints before canonical mismatch",
+        );
 
         let mut stale_source_chain_payload = payload.clone();
         stale_source_chain_payload.centered_scale_round_source_chain_digest =
@@ -102871,6 +102925,31 @@ mod tests {
             weights: vec![vec![1]],
             bias: vec![0],
         };
+        let dummy_full_bootstrap_artifacts = BfvFullBootstrapCircuitArtifactBundleV1 {
+            coefficient_to_slot_key: Vec::new(),
+            slot_to_coefficient_key: Vec::new(),
+            blind_rotation_key: Vec::new(),
+            sample_extraction_key: Vec::new(),
+            accumulator: Vec::new(),
+            proof_public_input_schema: Vec::new(),
+            arithmetic_air_constraint_system: Vec::new(),
+            prover_key: Vec::new(),
+            verifier_key: Vec::new(),
+        };
+        let dummy_sample_extraction_switch_key = BfvFullBootstrapSampleExtractionSwitchKeyV1 {
+            sample_extraction: BfvFullBootstrapSampleExtractionV1 {
+                source_slot_count: 0,
+                source_ciphertext_component_count: 0,
+                extracted_coefficient_index: 0,
+                output_ciphertext_component_count: 0,
+            },
+            coefficient_entries: Vec::new(),
+        };
+        let dummy_raw_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: 0,
+            constant_term: 0,
+            secret_coefficients: Vec::new(),
+        };
         let capacity_too_narrow_unregistered = BfvParameters {
             polynomial_degree: 2,
             ciphertext_modulus: 15,
@@ -102948,6 +103027,26 @@ mod tests {
         )
         .expect_err(
             "registered bounded basis-extension bootstrap must reject unregistered narrow parameters first",
+        );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+            &capacity_too_narrow_unregistered,
+            &dummy_bootstrap_key,
+            &dummy_ciphertext,
+        )
+        .expect_err(
+            "registered bounded full bootstrap must reject unregistered narrow parameters first",
+        );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = bfv_full_bootstrap_bounded_noise_output_bound_v1(
+            &capacity_too_narrow_unregistered,
+            &dummy_bootstrap_key,
+            0,
+        )
+        .expect_err(
+            "registered bounded full-bootstrap bound must reject unregistered narrow parameters first",
         );
         assert!(err.to_string().contains("not registered"));
 
@@ -103221,6 +103320,106 @@ mod tests {
         )
         .expect_err(
             "registered bounded basis-extension bootstrap must reject unregistered parameters",
+        );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+            &params,
+            &dummy_sample_extraction_switch_key,
+            &dummy_raw_sample,
+        )
+        .expect_err("registered full-bootstrap sample switch must reject unregistered parameters");
+        assert!(err.to_string().contains("not registered"));
+
+        let err =
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+                &params,
+                &dummy_sample_extraction_switch_key,
+                &dummy_raw_sample,
+            )
+            .expect_err(
+                "registered bounded full-bootstrap sample switch must reject unregistered parameters",
+            );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+            &params,
+            &dummy_bootstrap_key,
+            &dummy_full_bootstrap_artifacts,
+            std::slice::from_ref(&dummy_galois_key),
+            &dummy_ciphertext,
+        )
+        .expect_err("registered full-bootstrap prefix must reject unregistered parameters");
+        assert!(err.to_string().contains("not registered"));
+
+        let err =
+            apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &dummy_bootstrap_key,
+                &dummy_full_bootstrap_artifacts,
+                std::slice::from_ref(&dummy_galois_key),
+                &dummy_ciphertext,
+            )
+            .expect_err(
+                "registered bounded full-bootstrap prefix must reject unregistered parameters",
+            );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+            &params,
+            &dummy_bootstrap_key,
+            &dummy_full_bootstrap_artifacts,
+            std::slice::from_ref(&dummy_galois_key),
+            &dummy_ciphertext,
+        )
+        .expect_err(
+            "registered full-bootstrap artifact execution must reject unregistered parameters",
+        );
+        assert!(err.to_string().contains("not registered"));
+
+        let err =
+            full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &dummy_bootstrap_key,
+                &dummy_full_bootstrap_artifacts,
+                std::slice::from_ref(&dummy_galois_key),
+                &dummy_ciphertext,
+            )
+            .expect_err(
+                "registered bounded full-bootstrap artifact execution must reject unregistered parameters",
+            );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = full_bootstrap_ciphertext_registered_rns_exact_v1(
+            &params,
+            &dummy_bootstrap_key,
+            &dummy_ciphertext,
+        )
+        .expect_err("registered direct full bootstrap must reject unregistered parameters");
+        assert!(err.to_string().contains("not registered"));
+
+        let err = full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+            &params,
+            &dummy_bootstrap_key,
+            &dummy_ciphertext,
+        )
+        .expect_err("registered bounded direct full bootstrap must reject unregistered parameters");
+        assert!(err.to_string().contains("not registered"));
+
+        let err =
+            bfv_full_bootstrap_output_residual_multiple_bound_v1(&params, &dummy_bootstrap_key, 0)
+                .expect_err(
+                    "registered direct full-bootstrap bound must reject unregistered parameters",
+                );
+        assert!(err.to_string().contains("not registered"));
+
+        let err = bfv_full_bootstrap_bounded_noise_output_bound_v1(
+            &params,
+            &dummy_bootstrap_key,
+            0,
+        )
+        .expect_err(
+            "registered bounded direct full-bootstrap bound must reject unregistered parameters",
         );
         assert!(err.to_string().contains("not registered"));
     }

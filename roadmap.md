@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-29
+Last updated: 2026-06-30
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -74,8 +74,11 @@ and completed history lives in [`status.md`](./status.md).
 - Keep Torii Offline V2 Kagemusha OpenAPI endpoint descriptions in
   first-release terminology: Torii source plus both checked-in portal OpenAPI
   snapshots must describe rejected `X-Iroha-*` app-auth headers as retired, and
+  retired note-issue/audit endpoints must describe themselves as retired routes
+  that fail closed without compatibility-route wording. The Torii OpenAPI unit
+  test and
   the policy guard's `--negative-control-torii-offline-v2-kagemusha-openapi`
-  mode proves stale legacy wording cannot return.
+  mode prove stale legacy or compatibility-route wording cannot return.
 
 - Keep Torii Offline V2 middleware attestation and structured redemption
   parsing first-release strict: receipt and key-certificate profile validation
@@ -179,12 +182,16 @@ and completed history lives in [`status.md`](./status.md).
   transactions / `134,170,800` retained bytes. Queue-full operator
   observability now carries retained bytes, oldest queued age, and separate
   count/byte/age saturation causes through Sumeragi status, telemetry status,
-  Prometheus gauges, Izanami chaos digests, and localnet smoke artifacts. Torii
-  single-transaction ingress now also performs authenticated capacity shedding
-  before spending rate-limit budget, matching batch ingress and preserving the
-  operator-visible `PRTRY:QUEUE_FULL` rejection under simultaneous full-queue
-  and rate-limit pressure. Tune the retained-byte default, Torii admission
-  shedding, or the per-peer P2P outbound frame queue caps only if
+  Prometheus gauges, Izanami chaos digests, and localnet smoke artifacts. The
+  public telemetry mirrors, evidence API docs, localnet throughput docs, and
+  Torii status endpoint smoke now pin the same expanded `tx_queue` schema so
+  stale `depth`/`capacity`/`saturated`-only descriptions cannot drift back in.
+  Torii single-transaction ingress now also performs authenticated capacity
+  shedding before spending rate-limit budget, matching batch ingress and
+  preserving the operator-visible `PRTRY:QUEUE_FULL` rejection under
+  simultaneous full-queue and rate-limit pressure. Tune the retained-byte
+  default, Torii admission shedding, or the per-peer P2P outbound frame queue
+  caps only if
   future release-gate reports show real operator backpressure needs different
   limits. Deferred P2P outbound frames held while a peer session is
   missing are now capped by per-peer encoded-byte budget in addition to the
@@ -386,6 +393,18 @@ and completed history lives in [`status.md`](./status.md).
   before consuming or exposing account-facing economic state. Remaining Nexus
   scale-out work should keep new validator lifecycle, economic, and autoscale
   paths on the same key/record invariant.
+- Nexus lane relay QC admission now binds finality evidence to the
+  authoritative committee at the envelope height: validator-set hash version,
+  validator-set hash, and ordered validator-set metadata must match the
+  committee before aggregate signatures are accepted. Future autoscale,
+  emergency-override, verified-record hydration, and merge-candidate work must
+  preserve that exact committee binding so stale, reordered, or forged relay
+  committee metadata cannot influence cross-lane finality evidence.
+- Autoscale scale-in cleanup now has same-block adversarial coverage proving
+  emergency validator overrides, public-lane economic rows, public validator
+  terminalization, and AXT replay ledger rows staged earlier in the block for
+  the managed elastic lane being retired are cleaned from both the block overlay
+  and committed world state, while surviving default-lane rows remain intact.
 - Privacy production readiness now requires a 4-peer localnet
   shield-to-redeem lifecycle evidence set: shield tx, hop proof, recursive
   init/verify, recursive append/verify, unshield proof, redeem tx, replay
@@ -1561,7 +1580,10 @@ and completed history lives in [`status.md`](./status.md).
   source, the Torii Offline/Offline V2 readiness smoke files, and their
   workflow paths with removed-field absence labels; the mobile
   offline-readiness negative control injects removed gate and smoke-assertion
-  drift to prove the guard rejects both. Torii
+  drift to prove the guard rejects both. The `iroha_config` regression for the
+  rejected `settlement.offline.kagemusha_force_legacy` field must keep removed
+  force-flag wording, with the Kagemusha policy guard rejecting stale
+  removed-knob phrasing in that active test. Torii
   readiness must also keep mobile artifact archive availability false: Torii
   reports native runtime readiness, while Core API serves and gates mobile
   artifacts. JavaScript, Python, Swift, Kotlin/JVM, and Android Java canonical
@@ -3360,6 +3382,13 @@ and completed history lives in [`status.md`](./status.md).
   `swift test --filter OfflineNoteRedeemPlannerTests` so draft placeholder
   proofs, proof-binding finalization, padded scope identifiers, and
   partial/exact redeem planning are runtime-checked instead of only parsed.
+  Swift recursive compact native archive validation must keep
+  `KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes` equal to
+  the shared `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` 64 MiB cap,
+  with the focused Swift test, SDK parity inventory, and
+  `--negative-control-swift-recursive-compact-native-archive-cap` mode proving
+  the cap cannot drift upward before native bridge calls allocate or copy
+  buffers.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
   the Kagemusha, privacy catalog, crypto algorithm, Nexus app, Offline Cash,
   Connect codec, and address-format pytest files because those files cover the Python
@@ -5150,7 +5179,7 @@ and completed history lives in [`status.md`](./status.md).
 					  nonzero generated-circuit bodies. The Core verifier,
 					  governed circuit-material and proof-key/schema/native-envelope
 					  corridors with constructor/profile digest-alias preflights,
-					  release-audit evidence preflights and package builders,
+					  release-audit evidence/signoff preflights and package builders,
 					  reviewed-byte tamper preflights,
 					  external-review marker gates, native generated-body and
 					  circuit-fingerprint binding, public-opening/native AIR replay
@@ -5278,7 +5307,19 @@ and completed history lives in [`status.md`](./status.md).
   narrowed `--require-kind` subset. `scripts/run_sorafs_reputation_rollout_evidence.py`
   now drives the bounded deployed collection path, including publish/readback,
   provider fetch, proof replay, event watch, provider-proof coverage checks,
-  shell-style `@ARGFILE` support, and the final gate invocation.
+  shell-style `@ARGFILE` support, and the final gate invocation. Reputation
+  rollout summaries now also publish the common aggregate-readiness contract:
+  full `required_kinds`, top-level evidence/artifact counts, required-row
+  `present`/`artifact_count` fields, and reviewed deployment-context
+  fingerprints on every required artifact so the final SoraFS production
+  aggregate gate can consume real SFM-3 summaries directly. The static rollout
+  contract now imports every SoraFS rollout/release checker and the aggregate
+  gate together, requiring the aggregate schema list, default required gates,
+  checker `DEFAULT_REQUIRED_KINDS`, and collection-runner summary flags to stay
+  in lockstep before production readiness can be claimed. Narrowed aggregate
+  runs now also reject explicit summaries for unrequired lanes at both the
+  checker and collection-runner layers, so failed or stale lane evidence cannot
+  be hidden behind a smaller `--require-gate` selection.
   The repository-wide rollout-gate static contract now also requires every
   SoraFS rollout/release checker and collection runner to keep checked-in
   operator argfile examples; every tool must use the shared bounded response
@@ -6246,6 +6287,19 @@ and completed history lives in [`status.md`](./status.md).
   and emit `returned_count` plus `truncated` metadata for bounded
   inventory/readback scripts. The stale scheduler-telemetry/token-integration
   remaining-work note is closed.
+- SoraFS SF-5a gateway load promotion now has a fail-closed rollout evidence
+  gate: `scripts/check_sorafs_gateway_load_rollout_evidence.py` validates
+  payload-free signed local conformance, live staging load, telemetry/SLO,
+  transport-scope, and governance approval artifacts. The gate binds live
+  staging evidence back to the signed local conformance digest, requires
+  telemetry and governance artifacts to reference the staged load report,
+  rejects raw reports/response bodies/fixture payloads/runtime secrets, and
+  keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
+  gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
+  emits the matching collection dry-run plan and evidence contract, while the
+  static rollout contract keeps live gateway-load, staging-load, HTTP/3 soak,
+  and promotion route/subcommand surfaces unshipped until deployed evidence
+  passes this gate.
 - SoraFS Pin Registry validation policy wiring now covers the governance config
   surface exposed today: `manifest_pin_policy_constraints_from_config` maps
   replica floors/ceilings, retention ceilings, storage-class allowlists, and
@@ -7305,6 +7359,64 @@ and completed history lives in [`status.md`](./status.md).
   claim/heartbeat/complete/fail endpoints, local status and event-stream
   routes, `iroha sorafs repair`, `iroha sorafs gc`, `sorafs-validate repair`,
   local repair telemetry, and the fail-closed SF-8b rollout evidence gate.
+- SoraFS production promotion now has an aggregate readiness gate over the
+  existing per-lane rollout/release evidence summaries:
+  `scripts/check_sorafs_production_readiness.py` requires every selected
+  SoraFS lane summary to be `ready`, payload-free, fresh at the artifact
+  fingerprint layer, reviewed for deployment context, run with that lane
+  checker’s full default required-kind set, free of extra `required` rows, and
+  carrying empty summary, artifact, and load-error diagnostics plus top-level
+	  evidence/artifact counts consistent with the validated rows, with evidence
+	  file counts matching the distinct recognized artifact paths, threshold
+	  metadata kept as a non-empty canonical non-negative integer map and preserved
+	  in each aggregate lane row for release review, extra top-level lane-summary
+	  fields outside the schema-closed payload-free lane summary contract rejected,
+	  allowed top-level lane metadata validated as payload-free canonical strings,
+	  non-negative integers, booleans, objects, and lists with expected container
+	  shapes, bound to the lane-specific contract that emits them, exact
+	  lowercase-hex binding-list metadata shapes validated before aggregate
+	  promotion, exact lowercase-hex and positive-integer scalar list metadata
+	  shapes validated before aggregate promotion, governance public-head
+	  identifiers validated as lowercase hex list metadata before aggregate
+	  promotion, exact object-list metadata shapes validated before aggregate
+	  promotion, exact duplicate object-list metadata entries rejected while
+	  preserving artifact order, exact object metadata shapes validated before
+	  aggregate promotion, set-derived lane metadata lists
+	  required to be duplicate-free and sorted in canonical order, malformed
+	  sensitive-field path diagnostics sanitized before aggregate errors are
+	  written, and required-row schema labels kept canonical when present while
+	  extra required-row fields outside the schema-closed payload-free required-row
+	  contract are rejected, before binding
+	  to the same `deployment_id`/
+  `environment` and emitting
+  `sorafs.production_readiness.aggregate_gate.v1`. The companion
+  `scripts/run_sorafs_production_readiness.py` accepts reviewed summary paths,
+  supports `@ARGFILE`, and prints a dry-run collection plan for release
+  operators. Required-row artifact entries must carry canonical unique paths,
+  lowercase SHA-256 digests, and canonical artifact schema/status labels when
+  present, reject extra artifact-row fields outside the schema-closed
+  payload-free artifact contract, and the required top-level
+  `recognized_artifacts` inventory must be fully valid, kind-bound to that
+  lane's full required-kind contract, matched per kind to the required-row
+  artifact counts and `(kind, path, sha256)` identities plus required artifact
+  metadata, fresh, and deployment-context reviewed. Aggregate lane rows are also
+  schema-closed before release review, with canonical path, lowercase SHA-256,
+  count, timestamp, list, and error shapes checked after the row digest is
+  attached, and the final aggregate summary envelope is schema-closed before the
+  production-readiness report is written. Final aggregate required rows also
+  have exact present and missing row output contracts, so failed or absent lane
+  rows cannot grow extra payload-bearing fields while still being reported, and
+  absent lanes must keep deterministic missing-row diagnostics. The aggregate
+  recognized-summary count must also match the final present required-row set,
+  and duplicate lane summaries must keep deterministic duplicate-summary
+  diagnostics while every duplicate input remains counted as a top-level
+  blocker. Unknown summary schemas and explicit unrequired summaries must each
+  leave matching aggregate blockers.
+  Unknown summary schemas
+  discovered in summary directories now fail closed instead of being ignored.
+  This does not close the live deployment gaps above; it prevents
+  production promotion from being claimed until those lane gates all pass
+  together for the same deployment.
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
@@ -17672,10 +17784,30 @@ operator-provided rollout bundles.
   noncanonical prefixed state cannot drive relay-cache admission attempts.
   Reset pruning now also covers public-lane stake shares and reward records by
   storage-key or embedded lane ownership, while reward-claim cursors remain
-  key-owned. Remaining work is focused on
-  end-to-end independent-lane consensus fixtures and live rollout evidence
-  rather than stale cached-relay, stale DA-cursor, or stale public-lane
-  economic admission.
+  key-owned. Durable DA pin-intent query indexes are pruned for reset lanes by
+  embedded ticket lane, lane/epoch key ownership, and stale ticket cross-index
+  references, including direct lifecycle/config swaps and autoscale scale-in
+  overlays; same-block pin-intent bundles are sanitized after the autoscale
+  catalog update so retired-lane intents cannot publish through commit-order
+  races, and surviving pins keep their original canonical bundle positions even
+  when a hidden retired-lane pin sits between surviving records; Kura DA index
+  replay now covers that pin-intent visibility and location boundary after
+  restart while preserving committed owner fields without revalidating them
+  against the current post-removal account set. DA commitment bundles now apply
+  the same post-lifecycle visibility rule: the canonical block bundle and
+  committed identities are retained, while
+  retired-lane records are withheld from query, cursor, and confidential-compute
+  indexes after autoscale scale-in; confidential-compute receipts keep their
+  original committed bundle locations even when a hidden retired-lane record
+  sits between surviving records, and Kura DA index hydration now replays the
+  same visibility rules after restart. Per-lane reset watermarks are now
+  persisted with the DA shard cursor journal, so historical records at or below
+  a retire/recreate reset height remain available as committed block bundles but
+  cannot rehydrate active pin intents, query-visible commitments, shard cursors,
+  or committed identity reservations for the fresh lane incarnation after rewind
+  or restart. Remaining work is focused on end-to-end
+  independent-lane consensus fixtures and live rollout evidence rather than
+  stale cached-relay, stale DA-cursor, or stale public-lane economic admission.
 - NPoS lane-scope inference now ignores inactive public-lane validator records
   when deriving live recovery candidates and active topologies, so stale
   `Jailed`, `Exiting`, `Exited`, `PendingActivation`, or `Slashed` records from
@@ -17715,6 +17847,16 @@ operator-provided rollout bundles.
 - Lane relay admission now reports missing dataspace catalog entries as
   `unknown_dataspace` instead of folding them into validator-roster failures,
   keeping operator diagnostics and telemetry aligned with routing/catalog drift.
+- Autoscale-managed elastic lane relay admission now uses the live commit
+  topology as the authority source only when no explicit lane manifest binding
+  exists. Explicit manifest bindings keep precedence, stale explicit manifests
+  fail closed without falling back to topology signers, manifest-bound peers
+  must have live envelope-height consensus keys, and missing, pending,
+  future-active, disabled, or expired topology members are filtered before
+  committee construction. Live explicit manifests can authorize autoscale
+  relays, but under-quorum explicit manifests are not topped up from the commit
+  topology. Record-level relay admission coverage proves rejected autoscale
+  relays do not populate the merge-relay cache.
 - Autoscale scale-out eligibility now also requires an actually free elastic
   lane id in `autoscale.min_lanes..autoscale.max_lanes`, so public-profile
   catalogs whose default-route capacity is below `max_lanes` but whose elastic
@@ -17922,6 +18064,30 @@ operator-provided rollout bundles.
   resolves the live Nexus full plan before enforcing lane policies, preventing
   direct validation entrypoints from collapsing autoscaled default-route traffic
   back to the catalog-only base lane.
+- Autoscale localnet expansion/contraction evidence now treats public-lane
+  validator lifecycle state by status: `Active`, `PendingActivation`, `Jailed`,
+  and `Exiting` rows count as live elastic-lane evidence, while terminal
+  `Exited`/`Slashed` audit rows exposed by Torii do not fake expansion progress
+  or block contraction. Adversarial harness coverage pins terminal audit rows,
+  revivable validator rows, and terminal-count/activation-watermark noise beside
+  an already-live validator baseline. The same localnet harness now parses
+  structured `lane` fields from autoscale transition logs before using
+  deterministic scale-out/scale-in quorum evidence, and requires the producer's
+  structured `height`, `active_lanes`, and `autoscale_capacity_lanes` fields on
+  the same transition line after ANSI normalization. Scale-out evidence must
+  also carry `out_latency_ratio_permille` and
+  `out_utilization_p95_permille`; scale-in evidence must carry
+  `in_latency_ratio_permille` and `in_utilization_p95_permille`. Transition
+  markers for a different elastic lane, missing or wrong-direction producer
+  fields, prefixed field name, or suffixed lane-looking token such as a decimal,
+  hyphenated, or leading-zero lane value cannot satisfy public-profile
+  expansion or contraction checks. Public-profile expansion evidence now also
+  pins relay-height progress to the target elastic lane, rejecting wrong-lane
+  relay progress and stale same-height relay records. Storage fallback evidence
+  now requires each peer to expose the exact expanded contiguous lane-id
+  profile, so duplicate elastic-lane directories cannot hide missing base-lane
+  storage, and extra malformed or duplicate lane directories cannot satisfy an
+  otherwise complete profile.
 - Keep the rotating Byzantine 30 TPS NPoS soak in the stabilization corridor:
   the snapshot-enabled strict 7,200 second 4-peer transfer run now passes under
   the broadened `conflicting-ready`, `duplicate-inits`, and
@@ -23174,6 +23340,10 @@ or ABI behavior.
   `RotateLeft` fallback helpers now also have registered production wrappers,
   so exact-reconstruction and target-limb basis-extension paths both derive
   canonical evaluator chains before inspecting caller-controlled key material.
+  Registered full-bootstrap sample-switch, prefix execution, direct execution,
+  and direct bound surfaces now derive the production profile first as well, so
+  malformed governed artifact/key material cannot mask an unregistered BFV
+  profile.
   Bounded-noise RNS
   packed-selector products now also route through a bounded
   plaintext-polynomial RNS helper with a registered production wrapper, so
@@ -24013,6 +24183,9 @@ validation path.
   literal exactness helpers such as `IF TRUE THEN TRUE ELSE FALSE` count as
   literal helpers too. Constant-relation exactness helpers such as
   `TRUE = TRUE` and `1 \in {1}` count as literal helpers too.
+  Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and
+  negated wrappers, so `[] (TRUE = TRUE)`, `<> (1 \in {1})`, and
+  `~(TRUE = TRUE)` remain vacuous helpers.
   Negated unary-temporal boolean-only helper wrappers
   count as literal helpers too.
   Compound boolean-only temporal helper wrappers count as literal helpers too.

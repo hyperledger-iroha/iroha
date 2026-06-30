@@ -39,23 +39,19 @@ def test_normalized_sensitive_key_variants_fail() -> None:
     )
 
     joined = "\n".join(errors)
-    assert "transport.accessToken must not be present in rollout evidence" in joined
-    assert "transport.api-key must not be present in rollout evidence" in joined
     assert (
-        "transport.httpAuthorizationHeader must not be present in rollout evidence"
-        in joined
+        joined.count("transport.<sensitive-key> must not be present in rollout evidence")
+        == 7
     )
-    assert "transport.payloadIncluded must be false" in joined
-    assert "transport.privateKey must not be present in rollout evidence" in joined
-    assert (
-        "transport.sealedSigningKeyMaterial must not be present in rollout evidence"
-        in joined
-    )
-    assert (
-        "transport.rawRequestBodyPreview must not be present in rollout evidence"
-        in joined
-    )
-    assert "transport.response-body must not be present in rollout evidence" in joined
+    assert "transport.<sensitive-inclusion-marker> must be false" in joined
+    assert "accessToken" not in joined
+    assert "api-key" not in joined
+    assert "httpAuthorizationHeader" not in joined
+    assert "payloadIncluded" not in joined
+    assert "privateKey" not in joined
+    assert "sealedSigningKeyMaterial" not in joined
+    assert "rawRequestBodyPreview" not in joined
+    assert "response-body" not in joined
 
 
 def test_sensitive_key_fragments_do_not_reject_legitimate_proof_token_fields() -> None:
@@ -118,10 +114,41 @@ def test_inclusion_markers_reject_non_false_values() -> None:
 
     assert errors == [
         "included must be false",
-        "payloadIncluded must be false",
-        "nested.response_bodies_included must be false",
-        "nested.request_body_included must be false",
+        "<sensitive-inclusion-marker> must be false",
+        "nested.<sensitive-inclusion-marker> must be false",
+        "nested.<sensitive-inclusion-marker> must be false",
     ]
+    joined = "\n".join(errors)
+    assert "payloadIncluded" not in joined
+    assert "response_bodies_included" not in joined
+    assert "request_body_included" not in joined
+
+
+def test_sensitive_inclusion_marker_key_names_are_redacted() -> None:
+    errors: list[str] = []
+    payload = {
+        "transport": {
+            "privateKeyIncluded": True,
+            "accessTokenIncluded": True,
+            "responseBodyIncluded": True,
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"access_token", "private_key", "response_body"},
+    )
+
+    joined = "\n".join(errors)
+    assert (
+        joined.count("transport.<sensitive-inclusion-marker> must be false")
+        == 3
+    )
+    assert "privateKeyIncluded" not in joined
+    assert "accessTokenIncluded" not in joined
+    assert "responseBodyIncluded" not in joined
 
 
 def test_non_string_payload_keys_fail_closed_and_still_scan_children() -> None:
@@ -140,9 +167,59 @@ def test_non_string_payload_keys_fail_closed_and_still_scan_children() -> None:
     )
 
     assert errors == [
-        "7 key must be a string",
-        "7.privateKey must not be present in rollout evidence",
+        "<non-string-key> key must be a string",
+        "<non-string-key>.<sensitive-key> must not be present in rollout evidence",
     ]
+
+
+def test_noncanonical_sensitive_key_paths_are_sanitized() -> None:
+    errors: list[str] = []
+    payload = {
+        "private\nkey": "runtime-only-private-key",
+        "nested": {
+            "response\nbody": "{}",
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"private_key", "response_body"},
+    )
+
+    joined = "\n".join(errors)
+    assert "<sensitive-key> must not be present in rollout evidence" in joined
+    assert "nested.<sensitive-key> must not be present in rollout evidence" in joined
+    assert "private\nkey" not in joined
+    assert "response\nbody" not in joined
+
+
+def test_sensitive_parent_path_is_redacted_for_nested_diagnostics() -> None:
+    errors: list[str] = []
+    payload = {
+        "operatorPrivateKey": {
+            "responseBody": "{}",
+            "included": True,
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"private_key", "response_body"},
+    )
+
+    joined = "\n".join(errors)
+    assert "<sensitive-key> must not be present in rollout evidence" in joined
+    assert (
+        "<sensitive-key>.<sensitive-key> must not be present in rollout evidence"
+        in joined
+    )
+    assert "<sensitive-key>.included must be false" in joined
+    assert "operatorPrivateKey" not in joined
+    assert "responseBody" not in joined
 
 
 def test_malformed_sensitive_key_configuration_fails_closed() -> None:

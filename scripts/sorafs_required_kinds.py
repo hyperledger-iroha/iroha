@@ -48,9 +48,9 @@ def _validate_default_required(
                 "default required evidence kind names must be non-empty canonical strings"
             )
         if candidate not in allowed_kinds:
-            raise ValueError(f"unknown default required evidence kind `{candidate}`")
+            raise ValueError("unknown default required evidence kind")
         if candidate in defaults:
-            raise ValueError(f"duplicate default required evidence kind `{candidate}`")
+            raise ValueError("duplicate default required evidence kind")
         defaults.append(candidate)
     return tuple(defaults)
 
@@ -85,9 +85,9 @@ def parse_required_kinds(
                     "--require-kind entries must be non-empty canonical strings"
                 )
             if candidate not in allowed:
-                raise ValueError(f"unknown required evidence kind `{candidate}`")
+                raise ValueError("unknown required evidence kind")
             if candidate in required:
-                raise ValueError(f"duplicate required evidence kind `{candidate}`")
+                raise ValueError("duplicate required evidence kind")
             required.append(candidate)
     if not required:
         raise ValueError("at least one required evidence kind must be specified")

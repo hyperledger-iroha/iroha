@@ -218,6 +218,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.transparency.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
+    assert payload["thresholds"] == {"max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES}
     assert payload["recognized_artifact_count"] == 5
     assert payload["required"]["publication"]["valid"] is True
     assert payload["valid_source_batch_digests"] == [DIGEST]

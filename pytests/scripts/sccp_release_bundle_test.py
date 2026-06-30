@@ -1794,6 +1794,12 @@ def fixed_hex32(seed: int) -> str:
     return "0x" + f"{seed % 256:02x}" * 32
 
 
+def fixed_tron_address(seed: int) -> str:
+    """Return a non-zero canonical TRON 0x41-prefixed address fixture."""
+
+    return "0x41" + f"{seed % 256:02x}" * 20
+
+
 def evm_route_canary_lane(verifier: Any, domain: int, seed_base: int) -> dict[str, Any]:
     """Return a minimal all-lanes EVM route-canary lane fixture."""
 
@@ -8100,6 +8106,10 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
                         "route_canary_message_proof_used": "true",
                         "route_canary_raw_data_owner_matches_transaction": "true",
                         "route_canary_signature_recovers_to_owner": "true",
+                        "route_canary_transaction_id": "0X" + "44" * 32,
+                        "route_canary_transaction_owner_address": "0x41" + "00" * 20,
+                        "route_canary_signature_sha256": "0x" + "00" * 32,
+                        "route_canary_signature_recovered_address": "0x42" + "11" * 20,
                         "route_canary_log_index": "0",
                         "route_canary_target_domain": "1",
                         "route_canary_proof_version": "1",
@@ -8198,6 +8208,14 @@ def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render(
         f"{label} route_canary_signature_recovers_to_owner must be true, false, or null"
         in captured.err
     )
+    assert (
+        f"{label} route_canary_transaction_owner_address must be a non-zero "
+        "canonical 0x41-prefixed 21-byte hex string"
+    ) in captured.err
+    assert (
+        f"{label} route_canary_signature_recovered_address must be a non-zero "
+        "canonical 0x41-prefixed 21-byte hex string"
+    ) in captured.err
     for field in (
         "route_canary_log_index",
         "route_canary_target_domain",
@@ -8440,6 +8458,18 @@ def test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before
                 "route_canary_finality_block_hash": fixed_hex32(0x7A + domain),
             }
         )
+        if domain == 5:
+            tron_owner = fixed_tron_address(0x44)
+            row.update(
+                {
+                    "route_canary_transaction_id": fixed_hex32(0x4A),
+                    "route_canary_transaction_owner_address": tron_owner,
+                    "route_canary_signature_sha256": fixed_hex32(0x4B),
+                    "route_canary_signature_recovered_address": tron_owner,
+                    "route_canary_block_number": 1,
+                    "route_canary_block_timestamp": 2,
+                }
+            )
         if domain in (1, 2):
             row.update(
                 {
@@ -8650,6 +8680,10 @@ def test_release_bundle_rejects_copied_crypto_non_evm_route_canary_evm_metadata_
                     "route_canary_message_proof_used": True,
                     "route_canary_raw_data_owner_matches_transaction": True,
                     "route_canary_signature_recovers_to_owner": True,
+                    "route_canary_transaction_id": fixed_hex32(0xF1),
+                    "route_canary_transaction_owner_address": fixed_tron_address(0xF2),
+                    "route_canary_signature_sha256": fixed_hex32(0xF3),
+                    "route_canary_signature_recovered_address": fixed_tron_address(0xF2),
                     "route_canary_log_index": 0,
                     "route_canary_target_domain": domain,
                     "route_canary_proof_version": 1,
@@ -8984,6 +9018,18 @@ def test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render(
                 ),
             }
         )
+        if domain == 5:
+            tron_owner = fixed_tron_address(0xE5)
+            row.update(
+                {
+                    "route_canary_transaction_id": fixed_hex32(0xE6),
+                    "route_canary_transaction_owner_address": tron_owner,
+                    "route_canary_signature_sha256": fixed_hex32(0xE7),
+                    "route_canary_signature_recovered_address": tron_owner,
+                    "route_canary_block_number": 1,
+                    "route_canary_block_timestamp": 2,
+                }
+            )
 
         errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
 
@@ -9126,6 +9172,7 @@ def test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_
         ("route_canary_raw_data_owner_matches_transaction", False),
         ("route_canary_signature_recovers_to_owner", None),
     ):
+        tron_owner = fixed_tron_address(0x54)
         row = {row_field: None for row_field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
         row.update(
             {
@@ -9138,17 +9185,23 @@ def test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_
                 "route_canary_message_proof_used": True,
                 "route_canary_raw_data_owner_matches_transaction": True,
                 "route_canary_signature_recovers_to_owner": True,
-            "route_canary_log_index": 0,
-            "route_canary_target_domain": 5,
-            "route_canary_proof_version": 1,
-            "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
-            "route_canary_call_data_sha256": fixed_hex32(0xB7),
-            "route_canary_payload_hash": fixed_hex32(0xB8),
-            "route_canary_statement_hash": fixed_hex32(0xB9),
-            "route_canary_commitment_root": fixed_hex32(0xBA),
-            "route_canary_finality_height": fixed_hex32(0xBB),
-            "route_canary_finality_block_hash": fixed_hex32(0xBC),
-            field: value,
+                "route_canary_transaction_id": fixed_hex32(0xB5),
+                "route_canary_transaction_owner_address": tron_owner,
+                "route_canary_signature_sha256": fixed_hex32(0xB6),
+                "route_canary_signature_recovered_address": tron_owner,
+                "route_canary_log_index": 0,
+                "route_canary_target_domain": 5,
+                "route_canary_proof_version": 1,
+                "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+                "route_canary_call_data_sha256": fixed_hex32(0xB7),
+                "route_canary_payload_hash": fixed_hex32(0xB8),
+                "route_canary_statement_hash": fixed_hex32(0xB9),
+                "route_canary_commitment_root": fixed_hex32(0xBA),
+                "route_canary_finality_height": fixed_hex32(0xBB),
+                "route_canary_finality_block_hash": fixed_hex32(0xBC),
+                "route_canary_block_number": 1,
+                "route_canary_block_timestamp": 2,
+                field: value,
             }
         )
 
@@ -9174,6 +9227,92 @@ def test_release_bundle_rejects_copied_tron_crypto_owner_signature_drift_before_
         f"{label} route_canary_raw_data_owner_matches_transaction must be null "
         "for non-TRON route canary evidence"
     ) in errors
+
+
+def test_release_bundle_rejects_copied_tron_crypto_transcript_drift_before_render() -> None:
+    """Copied TRON canary crypto rows must publish bound tx/signature transcript."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    tron_owner = fixed_tron_address(0x70)
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": 5,
+            "chain": "tron",
+            "route_canary_evidence_hash": fixed_hex32(0x70),
+            "route_canary_evidence_source": bundle._route_canary_source_by_domain()[5],
+            "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_raw_data_owner_matches_transaction": True,
+            "route_canary_signature_recovers_to_owner": True,
+            "route_canary_transaction_id": "",
+            "route_canary_transaction_owner_address": "0x41" + "00" * 20,
+            "route_canary_signature_sha256": "0x" + "00" * 32,
+            "route_canary_signature_recovered_address": tron_owner,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": 5,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": bundle._sccp_domain_sora(),
+            "route_canary_call_data_sha256": fixed_hex32(0x71),
+            "route_canary_payload_hash": fixed_hex32(0x72),
+            "route_canary_statement_hash": fixed_hex32(0x73),
+            "route_canary_commitment_root": fixed_hex32(0x74),
+            "route_canary_finality_height": fixed_hex32(0x75),
+            "route_canary_finality_block_hash": fixed_hex32(0x76),
+            "route_canary_block_number": 1,
+            "route_canary_block_timestamp": 2,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": fixed_hex32(0x77),
+            "source_adapter_gate_audit_hashes": {
+                "tron_dpos_source_gate_hash": fixed_hex32(0x77),
+            },
+        }
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    for field in ("route_canary_transaction_id", "route_canary_signature_sha256"):
+        assert (
+            f"{label} {field} must be a non-zero canonical bytes32 hex string "
+            "for TRON route canary evidence"
+        ) in errors, field
+    assert (
+        f"{label} route_canary_transaction_owner_address must be a non-zero "
+        "canonical 0x41-prefixed 21-byte hex string for TRON route canary evidence"
+    ) in errors
+
+    row["route_canary_transaction_id"] = fixed_hex32(0x78)
+    row["route_canary_transaction_owner_address"] = tron_owner
+    row["route_canary_signature_sha256"] = fixed_hex32(0x79)
+    row["route_canary_signature_recovered_address"] = fixed_tron_address(0x7A)
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    assert (
+        f"{label} route_canary_signature_recovered_address must match "
+        "route_canary_transaction_owner_address"
+    ) in errors
+
+    non_tron = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    non_tron.update(
+        {
+            "domain": 1,
+            "chain": "eth",
+            "route_canary_transaction_id": fixed_hex32(0x81),
+            "route_canary_transaction_owner_address": fixed_tron_address(0x82),
+            "route_canary_signature_sha256": fixed_hex32(0x83),
+            "route_canary_signature_recovered_address": fixed_tron_address(0x82),
+        }
+    )
+    errors = bundle._cryptographic_evidence_row_bundle_errors(non_tron, label)
+
+    for field in (
+        "route_canary_transaction_id",
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_sha256",
+        "route_canary_signature_recovered_address",
+    ):
+        assert f"{label} {field} must be empty for non-TRON lanes" in errors, field
 
 
 def test_release_bundle_rejects_copied_crypto_non_tron_route_canary_block_metadata_before_render() -> None:
@@ -10201,12 +10340,15 @@ def test_release_bundle_rejects_public_route_canary_transcript_template_hash_rep
         all_lanes.SCCP_DOMAIN_TON,
         all_lanes.SCCP_DOMAIN_TRON,
     )
-    transcript_field = "route_canary_message_id"
-
     # Source-inventory marker: public crypto route-canary transcript template replays cover every launch domain
     for domain in domains:
         profile = all_lanes.LANE_PROFILES[domain]
         template_hashes = all_lanes._source_material_template_hashes(profile)
+        transcript_field = (
+            "route_canary_signature_sha256"
+            if domain == all_lanes.SCCP_DOMAIN_TRON
+            else "route_canary_message_id"
+        )
         for template_field, template_hash in template_hashes.items():
             row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
             row.update(
@@ -42968,6 +43110,10 @@ def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary
         f"{boolean_cell(row['route_canary_message_proof_used'])} | "
         f"{boolean_cell(row['route_canary_raw_data_owner_matches_transaction'])} | "
         f"{boolean_cell(row['route_canary_signature_recovers_to_owner'])} | "
+        f"{hash_cell(row['route_canary_transaction_id'])} | "
+        f"{hash_cell(row['route_canary_transaction_owner_address'])} | "
+        f"{hash_cell(row['route_canary_signature_sha256'])} | "
+        f"{hash_cell(row['route_canary_signature_recovered_address'])} | "
         f"{integer_cell(row['route_canary_log_index'])} | "
         f"{integer_cell(row['route_canary_target_domain'])} | "
         f"{integer_cell(row['route_canary_proof_version'])} | "
@@ -44722,6 +44868,17 @@ def test_release_bundle_verifier_expected_crypto_evidence_omits_non_evm_message_
     )
 
     assert tron_row["route_canary_message_id"] == ""
+    route_canary = tron_lane["route_allowlist"]["route_canary"]
+    assert tron_row["route_canary_transaction_id"] == route_canary["transaction_id"]
+    assert (
+        tron_row["route_canary_transaction_owner_address"]
+        == route_canary["transaction_owner_address"]
+    )
+    assert tron_row["route_canary_signature_sha256"] == route_canary["signature_sha256"]
+    assert (
+        tron_row["route_canary_signature_recovered_address"]
+        == route_canary["signature_recovered_address"]
+    )
 
 
 def test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes(
@@ -44840,6 +44997,14 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
     row["route_canary_receipt_block_finalized"] = False
     tron_row["route_canary_raw_data_owner_matches_transaction"] = False
     tron_row["route_canary_signature_recovers_to_owner"] = False
+    tron_row["route_canary_transaction_id"] = replacement_hash(
+        tron_row["route_canary_transaction_id"]
+    )
+    tron_row["route_canary_transaction_owner_address"] = fixed_tron_address(0x31)
+    tron_row["route_canary_signature_sha256"] = replacement_hash(
+        tron_row["route_canary_signature_sha256"]
+    )
+    tron_row["route_canary_signature_recovered_address"] = fixed_tron_address(0x32)
     tron_row["route_canary_block_number"] += 1
     tron_row["route_canary_block_timestamp"] += 1
     source_gate_row["source_adapter_gate_required"] = False
@@ -44973,6 +45138,16 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift(
         (
             "route_canary_signature_recovers_to_owner",
             "route_allowlist.route_canary.signature_recovers_to_owner",
+        ),
+        ("route_canary_transaction_id", "route_allowlist.route_canary.transaction_id"),
+        (
+            "route_canary_transaction_owner_address",
+            "route_allowlist.route_canary.transaction_owner_address",
+        ),
+        ("route_canary_signature_sha256", "route_allowlist.route_canary.signature_sha256"),
+        (
+            "route_canary_signature_recovered_address",
+            "route_allowlist.route_canary.signature_recovered_address",
         ),
         ("route_canary_block_number", "route_allowlist.route_canary.block_number"),
         (
@@ -45258,6 +45433,38 @@ def test_release_bundle_verifier_rejects_crypto_route_canary_transcript_replay(
         in verified.stdout
     )
 
+    tron_tmp_path = tmp_path / "tron"
+    tron_tmp_path.mkdir()
+    output_dir = build_ready_bundle(tron_tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 5)
+    row["route_canary_evidence_hash"] = row["route_canary_signature_sha256"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row route_canary hash role "
+        "route_canary_evidence_hash must not reuse route_canary_signature_sha256"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
 
 def test_release_bundle_verifier_numbers_repeated_crypto_evidence_row_errors(
     tmp_path: Path,
@@ -45348,6 +45555,10 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     row["route_canary_message_proof_used"] = "true"
     row["route_canary_raw_data_owner_matches_transaction"] = "true"
     row["route_canary_signature_recovers_to_owner"] = "true"
+    row["route_canary_transaction_id"] = "0X" + "13" * 32
+    row["route_canary_transaction_owner_address"] = "0x41" + "00" * 20
+    row["route_canary_signature_sha256"] = "0x" + "00" * 32
+    row["route_canary_signature_recovered_address"] = "0x42" + "14" * 20
     row["route_canary_log_index"] = "0"
     row["route_canary_target_domain"] = "1"
     row["route_canary_proof_version"] = "1"
@@ -45485,10 +45696,23 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
         "route_canary_transaction_hash",
         "route_canary_receipt_block_hash",
         "route_canary_message_id",
+        "route_canary_transaction_id",
     ):
         assert (
             "readiness report cryptographic evidence row "
             f"{field} must be a canonical bytes32 hex string"
+        ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_signature_sha256 must be a non-zero canonical bytes32 hex string"
+    ) in verified.stdout
+    for field in (
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_recovered_address",
+    ):
+        assert (
+            "readiness report cryptographic evidence row "
+            f"{field} must be a non-zero canonical 0x41-prefixed 21-byte hex string"
         ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
@@ -45726,6 +45950,10 @@ def test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile() -> None:
         "route_canary_message_proof_used": True,
         "route_canary_raw_data_owner_matches_transaction": None,
         "route_canary_signature_recovers_to_owner": None,
+        "route_canary_transaction_id": "",
+        "route_canary_transaction_owner_address": "",
+        "route_canary_signature_sha256": "",
+        "route_canary_signature_recovered_address": "",
         "route_canary_log_index": 0,
         "route_canary_target_domain": verifier.SCCP_DOMAIN_BSC,
         "route_canary_proof_version": 1,
@@ -45896,6 +46124,7 @@ def test_release_bundle_verifier_rejects_tron_crypto_profile_block_metadata_drif
 
     verifier = load_verify_helpers()
     row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+    tron_owner = fixed_tron_address(0x41)
     row.update(
         {
             "domain": verifier.SCCP_DOMAIN_TRON,
@@ -45910,6 +46139,10 @@ def test_release_bundle_verifier_rejects_tron_crypto_profile_block_metadata_drif
             "route_canary_message_proof_used": True,
             "route_canary_raw_data_owner_matches_transaction": True,
             "route_canary_signature_recovers_to_owner": True,
+            "route_canary_transaction_id": fixed_hex32(0x48),
+            "route_canary_transaction_owner_address": tron_owner,
+            "route_canary_signature_sha256": fixed_hex32(0x49),
+            "route_canary_signature_recovered_address": tron_owner,
             "route_canary_log_index": 0,
             "route_canary_target_domain": verifier.SCCP_DOMAIN_TRON,
             "route_canary_proof_version": 1,
@@ -46021,6 +46254,10 @@ def test_release_bundle_verifier_rejects_crypto_route_canary_metadata_drift_for_
             "evm_destination_block_tag": "",
             "route_canary_raw_data_owner_matches_transaction": True,
             "route_canary_signature_recovers_to_owner": True,
+            "route_canary_transaction_id": hex32("99"),
+            "route_canary_transaction_owner_address": "0x41" + "99" * 20,
+            "route_canary_signature_sha256": hex32("9a"),
+            "route_canary_signature_recovered_address": "0x41" + "99" * 20,
             "route_canary_block_number": 1,
             "route_canary_block_timestamp": 0,
         },
@@ -46424,6 +46661,58 @@ def test_release_bundle_verifier_rejects_absent_crypto_route_canary_owner_signat
                 ) in errors, (domain, field, flag_value)
 
 
+def test_release_bundle_verifier_rejects_absent_crypto_route_canary_tron_transcript() -> None:
+    """Strict verifier must reject TRON tx/signature transcript without evidence."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    transcript_fields = (
+        "route_canary_transaction_id",
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_sha256",
+        "route_canary_signature_recovered_address",
+    )
+
+    # Source-inventory marker: strict verifier public crypto absent TRON route-canary transcript exactness covers every launch domain
+    for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_hash": "",
+                "route_canary_evidence_source": "",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "route_canary_transaction_id": fixed_hex32(0x90 + domain),
+                "route_canary_transaction_owner_address": fixed_tron_address(0x91 + domain),
+                "route_canary_signature_sha256": fixed_hex32(0x92 + domain),
+                "route_canary_signature_recovered_address": fixed_tron_address(
+                    0x91 + domain
+                ),
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+
+        errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+        for field in transcript_fields:
+            assert (
+                "readiness report cryptographic evidence row "
+                f"{field} must be empty when route canary evidence is absent"
+            ) in errors, (domain, field)
+
+
 def test_release_bundle_verifier_rejects_absent_crypto_route_canary_proof_context() -> None:
     """Strict verifier must reject proof context without canary evidence."""
 
@@ -46554,6 +46843,7 @@ def test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift() -> 
 
     verifier = load_verify_helpers()
     row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+    tron_owner = fixed_tron_address(0x51)
     row.update(
         {
             "domain": verifier.SCCP_DOMAIN_TRON,
@@ -46564,9 +46854,14 @@ def test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift() -> 
             "evm_destination_block_tag": "",
             "route_canary_evidence_hash": fixed_hex32(0x51),
             "route_canary_evidence_source": "tron_message_proof_accepted_transaction",
+            "route_canary_evidence_bound": True,
             "route_canary_message_proof_used": True,
             "route_canary_raw_data_owner_matches_transaction": False,
             "route_canary_signature_recovers_to_owner": None,
+            "route_canary_transaction_id": fixed_hex32(0x67),
+            "route_canary_transaction_owner_address": tron_owner,
+            "route_canary_signature_sha256": fixed_hex32(0x68),
+            "route_canary_signature_recovered_address": tron_owner,
             "route_canary_log_index": 0,
             "route_canary_target_domain": verifier.SCCP_DOMAIN_TRON,
             "route_canary_proof_version": 1,
@@ -46614,6 +46909,96 @@ def test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift() -> 
         "route_canary_raw_data_owner_matches_transaction must be null for "
         "non-TRON route canary evidence"
     ) in errors
+
+
+def test_release_bundle_verifier_rejects_tron_crypto_transcript_drift() -> None:
+    """TRON crypto rows must expose canonical tx and recovered signature transcript."""
+
+    verifier = load_verify_helpers()
+    tron_owner = fixed_tron_address(0x71)
+    row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+    row.update(
+        {
+            "domain": verifier.SCCP_DOMAIN_TRON,
+            "chain": "tron",
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_evidence_hash": fixed_hex32(0x71),
+            "route_canary_evidence_source": "tron_message_proof_accepted_transaction",
+            "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_raw_data_owner_matches_transaction": True,
+            "route_canary_signature_recovers_to_owner": True,
+            "route_canary_transaction_id": "",
+            "route_canary_transaction_owner_address": "0x41" + "00" * 20,
+            "route_canary_signature_sha256": "0x" + "00" * 32,
+            "route_canary_signature_recovered_address": tron_owner,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": verifier.SCCP_DOMAIN_TRON,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+            "route_canary_call_data_sha256": fixed_hex32(0x72),
+            "route_canary_payload_hash": fixed_hex32(0x73),
+            "route_canary_statement_hash": fixed_hex32(0x74),
+            "route_canary_commitment_root": fixed_hex32(0x75),
+            "route_canary_finality_height": fixed_hex32(0x76),
+            "route_canary_finality_block_hash": fixed_hex32(0x77),
+            "route_canary_block_number": 1,
+            "route_canary_block_timestamp": 0,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": "0x" + "11" * 32,
+            "source_adapter_gate_audit_hashes": {
+                "tron_dpos_source_gate_hash": "0x" + "11" * 32,
+            },
+        }
+    )
+
+    errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+    for field in ("route_canary_transaction_id", "route_canary_signature_sha256"):
+        assert (
+            "readiness report cryptographic evidence row "
+            f"{field} must be a non-zero canonical bytes32 hex string for "
+            "TRON route canary evidence"
+        ) in errors, field
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_transaction_owner_address must be a non-zero canonical "
+        "0x41-prefixed 21-byte hex string for TRON route canary evidence"
+    ) in errors
+
+    row["route_canary_transaction_id"] = fixed_hex32(0x78)
+    row["route_canary_transaction_owner_address"] = tron_owner
+    row["route_canary_signature_sha256"] = fixed_hex32(0x79)
+    row["route_canary_signature_recovered_address"] = fixed_tron_address(0x7A)
+    errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+    assert (
+        "readiness report cryptographic evidence row "
+        "route_canary_signature_recovered_address must match "
+        "route_canary_transaction_owner_address"
+    ) in errors
+
+    non_tron = {
+        **row,
+        "domain": verifier.SCCP_DOMAIN_ETH,
+        "chain": "eth",
+        "route_canary_evidence_hash": None,
+    }
+    errors = verifier._cryptographic_evidence_row_schema_errors(non_tron)
+
+    for field in (
+        "route_canary_transaction_id",
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_sha256",
+        "route_canary_signature_recovered_address",
+    ):
+        assert (
+            "readiness report cryptographic evidence row "
+            f"{field} must be empty for non-TRON lanes"
+        ) in errors, field
 
 
 def test_release_bundle_verifier_rejects_crypto_source_adapter_gate_policy_drift() -> None:

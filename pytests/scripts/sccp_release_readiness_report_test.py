@@ -21432,14 +21432,19 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
         )
         route_message_id = fixed_hex32(0xF0 + domain)
         target_row["route_canary_evidence_hash"] = route_message_id
-        target_row["route_canary_message_id"] = route_message_id
+        transcript_field = (
+            "route_canary_signature_sha256"
+            if domain == report.SCCP_DOMAIN_TRON
+            else "route_canary_message_id"
+        )
+        target_row[transcript_field] = route_message_id
 
         errors = report._public_cryptographic_evidence_errors(rows)
 
         assert (
             f"readiness report cryptographic_evidence[{target_index}] "
             "route_canary hash role route_canary_evidence_hash must not reuse "
-            "route_canary_message_id"
+            f"{transcript_field}"
         ) in errors, domain
 
 

@@ -3,6 +3,17 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
+    func testNativeArchiveLimitMatchesSharedKagemushaCap() {
+        XCTAssertEqual(
+            KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes,
+            KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
+        )
+        XCTAssertEqual(
+            KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes,
+            64 * 1024 * 1024
+        )
+    }
+
     func testRejectsEmptyRecordBundleArchiveBeforeBridgeCall() {
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver

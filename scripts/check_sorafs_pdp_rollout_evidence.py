@@ -31,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
     evidence_artifact_is_valid,
@@ -548,6 +549,7 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_proof_summary_digests": sorted(valid_proof_summary_digests),
         "required": required,
         "errors": errors,

@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_reputation_rollout_evidence.py"
+PRODUCTION_READINESS_PATH = (
+    Path(__file__).resolve().parents[1] / "check_sorafs_production_readiness.py"
+)
 SPEC = importlib.util.spec_from_file_location(
     "check_sorafs_reputation_rollout_evidence",
     MODULE_PATH,
@@ -24,6 +27,8 @@ MERKLE_ROOT = "22" * 32
 MERKLE_ROOT_2 = "44" * 32
 NOW_UNIX = 1_800_100_000
 GENERATED_AT = NOW_UNIX - 120
+DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
+ENVIRONMENT = "production"
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -31,8 +36,30 @@ def write_json(path: Path, payload: dict) -> Path:
     return path
 
 
+def load_production_readiness_module():
+    spec = importlib.util.spec_from_file_location(
+        "check_sorafs_production_readiness_for_reputation_test",
+        PRODUCTION_READINESS_PATH,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader  # pragma: no cover
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def deployment_context() -> dict:
+    return {
+        "generated_at_unix": GENERATED_AT,
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
+        "deployment_context_reviewed": True,
+    }
+
+
 def snapshot_summary(*, snapshot_id: str = SNAPSHOT_ID, generated_at: int = GENERATED_AT) -> dict:
     return {
+        **deployment_context(),
         "status": "accepted",
         "snapshot_id_hex": snapshot_id,
         "generated_at_unix": generated_at,
@@ -43,6 +70,7 @@ def snapshot_summary(*, snapshot_id: str = SNAPSHOT_ID, generated_at: int = GENE
 
 def provider_evidence(*, provider_id: str = "provider-a", snapshot_id: str = SNAPSHOT_ID) -> dict:
     return {
+        **deployment_context(),
         "snapshot_id_hex": snapshot_id,
         "merkle_root_hex": MERKLE_ROOT,
         "provider": {
@@ -59,6 +87,7 @@ def provider_evidence(*, provider_id: str = "provider-a", snapshot_id: str = SNA
 
 def events_evidence() -> dict:
     return {
+        **deployment_context(),
         "since": 0,
         "limit": 10,
         "count": 1,
@@ -78,6 +107,7 @@ def events_evidence() -> dict:
 
 def verify_evidence(provider_id: str = "provider-a") -> dict:
     return {
+        **deployment_context(),
         "snapshot_id_hex": SNAPSHOT_ID,
         "merkle_root_hex": MERKLE_ROOT,
         "provider_count": 2,
@@ -90,6 +120,7 @@ def verify_evidence(provider_id: str = "provider-a") -> dict:
 
 def metrics_evidence(*, snapshot_age: int = 120, ingest_lag: int = 60) -> dict:
     return {
+        **deployment_context(),
         "schema": "sorafs.reputation.metrics_canary.v1",
         "status": "passed",
         "snapshot_id_hex": SNAPSHOT_ID,
@@ -104,6 +135,7 @@ def metrics_evidence(*, snapshot_age: int = 120, ingest_lag: int = 60) -> dict:
 
 def transport_evidence() -> dict:
     return {
+        **deployment_context(),
         "schema": "sorafs.reputation.transport_canary.v1",
         "status": "passed",
         "snapshot_id_hex": SNAPSHOT_ID,
@@ -118,6 +150,7 @@ def transport_evidence() -> dict:
 
 def consumption_evidence() -> dict:
     return {
+        **deployment_context(),
         "schema": "sorafs.reputation.routing_incentive_consumption.v1",
         "status": "passed",
         "snapshot_id_hex": SNAPSHOT_ID,
@@ -157,7 +190,23 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.reputation.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
+    assert payload["required_kinds"] == list(MODULE.DEFAULT_REQUIRED_KINDS)
+    assert payload["thresholds"] == {
+        "max_snapshot_age_secs": MODULE.DEFAULT_MAX_SNAPSHOT_AGE_SECS,
+        "max_ingest_lag_secs": MODULE.DEFAULT_MAX_INGEST_LAG_SECS,
+        "max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES,
+    }
+    assert payload["evidence_file_count"] == len(MODULE.DEFAULT_REQUIRED_KINDS)
+    assert payload["recognized_artifact_count"] == len(MODULE.DEFAULT_REQUIRED_KINDS)
+    assert payload["errors"] == []
     assert payload["required"]["transport"]["valid"] is True
+    for row in payload["required"].values():
+        assert row["present"] is True
+        assert row["artifact_count"] == len(row["artifacts"])
+        for artifact in row["artifacts"]:
+            assert artifact["fingerprint"]["deployment_id"] == DEPLOYMENT_ID
+            assert artifact["fingerprint"]["environment"] == ENVIRONMENT
+            assert artifact["fingerprint"]["deployment_context_reviewed"] is True
     assert payload["provider_ids"] == ["provider-a"]
     assert payload["valid_snapshot_bindings"] == [
         {
@@ -165,6 +214,20 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "merkle_root_hex": MERKLE_ROOT,
         }
     ]
+    production_readiness = load_production_readiness_module()
+    _aggregate_row, aggregate_errors = production_readiness.validate_gate_summary(
+        production_readiness.GATE_BY_NAME["reputation"],
+        payload,
+        production_readiness.ValidationOptions(
+            now_unix=NOW_UNIX,
+            max_summary_artifact_age_secs=(
+                production_readiness.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS
+            ),
+            deployment_id=DEPLOYMENT_ID,
+            environment=ENVIRONMENT,
+        ),
+    )
+    assert aggregate_errors == []
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -176,6 +239,22 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     )
 
     assert MODULE.main([f"@{args}"]) == 0
+
+
+def test_deployment_context_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = json.loads((tmp_path / "transport.json").read_text(encoding="utf-8"))
+    payload.pop("deployment_context_reviewed")
+    write_json(tmp_path / "transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    report = json.loads(summary.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert "deployment_context_reviewed must be true" in report["required"][
+        "transport"
+    ]["errors"]
 
 
 def test_missing_evidence_sources_fail_shared_preflight(capsys) -> None:
@@ -250,8 +329,24 @@ def test_snapshot_id_mismatch_fails(tmp_path: Path) -> None:
 
 def test_required_provider_must_have_proof(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
+    provider_id = "provider-b-private-key-placeholder"
+    summary = tmp_path / "summary.json"
 
-    assert run_gate(tmp_path, "--require-provider", "provider-b") == 1
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-provider",
+            provider_id,
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert "missing provider/proof evidence for required provider" in diagnostics
+    assert provider_id not in diagnostics
 
 
 def test_high_ingest_lag_fails(tmp_path: Path) -> None:
@@ -344,9 +439,11 @@ def test_transport_merkle_root_must_match_snapshot_anchor(tmp_path: Path) -> Non
     assert required["valid"] is False
     assert artifact["valid"] is False
     assert artifact["errors"] == [
-        "transport.merkle_root_hex "
-        f"`{MERKLE_ROOT_2}` does not match `{MERKLE_ROOT}`",
+        "transport.merkle_root_hex does not match previous value",
     ]
+    joined = "\n".join(artifact["errors"])
+    assert MERKLE_ROOT_2 not in joined
+    assert MERKLE_ROOT not in joined
 
 
 def test_transport_schema_must_match(tmp_path: Path) -> None:
@@ -440,9 +537,29 @@ def test_invalid_optional_artifact_fails_subset_gate(tmp_path: Path) -> None:
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
-    path = write_json(tmp_path / "unknown.json", {"schema": "sorafs.reputation.unknown.v1"})
+    unknown_schema = "sorafs.reputation.unknown.private-key-placeholder.v1"
+    path = write_json(tmp_path / "unknown.json", {"schema": unknown_schema})
+    summary = tmp_path / "summary.json"
 
-    assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    load_errors = "\n".join(payload["load_errors"])
+    assert "unknown reputation evidence schema" in load_errors
+    assert unknown_schema not in load_errors
+    assert str(path) not in load_errors
 
 
 def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
@@ -466,9 +583,12 @@ def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["status"] == "failed"
     assert any(
-        "belongs to `transport`, not explicit kind `metrics`" in error
+        error == "evidence schema does not match explicit kind"
         for error in payload["load_errors"]
     )
+    assert "transport" not in "\n".join(payload["load_errors"])
+    assert "metrics" not in "\n".join(payload["load_errors"])
+    assert str(path) not in "\n".join(payload["load_errors"])
 
 
 def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
@@ -494,9 +614,12 @@ def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["status"] == "failed"
     assert any(
-        "explicit kind `metrics` conflicts with explicit kind `transport`" in error
+        error == "explicit evidence kind conflicts with previous kind"
         for error in payload["load_errors"]
     )
+    assert "transport" not in "\n".join(payload["load_errors"])
+    assert "metrics" not in "\n".join(payload["load_errors"])
+    assert str(path) not in "\n".join(payload["load_errors"])
 
 
 def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
@@ -513,6 +636,45 @@ def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
     assert loaded == []
     assert "<non-canonical-error>" in errors
     assert bad_message not in "\n".join(errors)
+
+
+def test_unknown_explicit_evidence_kind_does_not_echo_kind() -> None:
+    unknown_kind = "private-key-placeholder"
+
+    loaded, errors = MODULE.load_evidence([], [f"{unknown_kind}=/tmp/evidence.json"])
+
+    diagnostics = "\n".join(errors)
+    assert loaded == []
+    assert "unknown evidence kind" in diagnostics
+    assert unknown_kind not in diagnostics
+
+
+def test_unsupported_loaded_evidence_kind_is_sanitized(tmp_path: Path) -> None:
+    unsupported_kind = "unsupported-private-key-placeholder"
+    summary = MODULE.validate_evidence_set(
+        [
+            MODULE.LoadedEvidence(
+                unsupported_kind,
+                tmp_path / "unsupported.json",
+                {
+                    **deployment_context(),
+                    "schema": "sorafs.reputation.unsupported.v1",
+                    "status": "ready",
+                },
+                "ab" * 32,
+            )
+        ],
+        required_kinds=("latest",),
+        required_providers=(),
+        now_unix=NOW_UNIX,
+        max_snapshot_age_secs=MODULE.DEFAULT_MAX_SNAPSHOT_AGE_SECS,
+        max_ingest_lag_secs=MODULE.DEFAULT_MAX_INGEST_LAG_SECS,
+    )
+
+    diagnostics = json.dumps(summary, sort_keys=True)
+    assert summary["recognized_artifacts"][0]["kind"] == "<unknown>"
+    assert "unsupported evidence kind" in diagnostics
+    assert unsupported_kind not in diagnostics
 
 
 def test_prefixed_explicit_evidence_matching_summary_out_fails_before_write(
@@ -552,9 +714,10 @@ def test_explicit_malformed_json_reports_shared_load_error(
     captured = capsys.readouterr()
     summary = json.loads(captured.out)
     assert any(
-        error.startswith(f"{path}: failed to load evidence JSON:")
+        error.startswith("failed to load evidence JSON:")
         for error in summary["load_errors"]
     )
+    assert str(path) not in "\n".join(summary["load_errors"])
 
 
 def test_explicit_missing_file_reports_discovery_error(
@@ -566,6 +729,5 @@ def test_explicit_missing_file_reports_discovery_error(
 
     captured = capsys.readouterr()
     summary = json.loads(captured.out)
-    assert summary["load_errors"] == [
-        f"evidence file `{path}` must exist and be a file"
-    ]
+    assert summary["load_errors"] == ["evidence file must exist and be a file"]
+    assert str(path) not in "\n".join(summary["load_errors"])

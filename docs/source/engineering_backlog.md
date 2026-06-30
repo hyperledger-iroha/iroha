@@ -3753,7 +3753,11 @@ redistributable schemas, and official trust/revocation bundles.
   bounded-noise Multiply, Galois key-switch, and packed `RotateLeft` fallback
   helpers now also have registered production wrappers, so both
   exact-reconstruction and target-limb basis-extension paths derive canonical
-  evaluator chains before inspecting caller-controlled key material. Bounded
+  evaluator chains before inspecting caller-controlled key material. Registered
+  full-bootstrap sample-switch, prefix execution, direct execution, and direct
+  bound surfaces now derive the production profile first as well, so malformed
+  governed artifact/key material cannot mask an unregistered BFV profile.
+  Bounded
   Bootstrap refresh now also has direct and registered target-limb
   basis-extension wrappers, and Soracloud bounded Bootstrap execution uses the
   registered wrapper instead of the older direct registered refresh add.
