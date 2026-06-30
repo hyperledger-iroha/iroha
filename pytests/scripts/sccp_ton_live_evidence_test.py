@@ -356,6 +356,65 @@ def test_live_ton_account_states_redacts_transport_and_error_response_details():
         raise AssertionError("secret-bearing TON accountStates error was accepted")
 
 
+def test_live_ton_account_states_rejects_unsuccessful_ok_flag():
+    module = load_live_module()
+
+    for ok_value in (False, None, 0, 1, "true", "false", [], {}):
+
+        def unsuccessful_ok_opener(_request, timeout, *, ok_value=ok_value):
+            assert timeout == 3.0
+            return FakeResponse({"ok": ok_value, "accounts": []})
+
+        try:
+            module.collect_live_evidence(
+                "https://toncenter.example",
+                verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                opener=unsuccessful_ok_opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert message == "TON accountStates returned unsuccessful response"
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"TON accountStates ok flag {ok_value!r} was accepted"
+            )
+
+
+def test_live_ton_account_states_rejects_ambiguous_account_container():
+    module = load_live_module()
+
+    cases = (
+        (
+            {"accounts": [], "result": {"accounts": []}},
+            "TON accountStates returned ambiguous accounts",
+        ),
+        ({"result": []}, "TON accountStates result must be an object"),
+    )
+    for payload, expected_error in cases:
+
+        def ambiguous_accounts_opener(_request, timeout, *, payload=payload):
+            assert timeout == 3.0
+            return FakeResponse(payload)
+
+        try:
+            module.collect_live_evidence(
+                "https://toncenter.example",
+                verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                opener=ambiguous_accounts_opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert message == expected_error
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"TON accountStates payload {payload!r} was accepted"
+            )
+
+
 def test_ton_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
@@ -466,6 +525,34 @@ def test_live_ton_last_transaction_lt_requires_canonical_ascii_decimal():
             assert "last_transaction_lt" in str(exc)
         else:
             raise AssertionError(f"noncanonical live TON LT {value!r} was accepted")
+
+
+def test_live_ton_last_transaction_lt_rejects_boolean_json_value():
+    module = load_live_module()
+
+    try:
+        module._positive_decimal(True, label="last transaction LT")
+    except RuntimeError as exc:
+        assert str(exc) == "last transaction LT must be a decimal string"
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("boolean TON last transaction LT was accepted")
+
+    fake = fake_ton_opener(module, last_transaction_lt_text=True)
+    try:
+        module.collect_live_evidence(
+            "https://toncenter.example",
+            verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+            opener=fake.opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "last_transaction_lt must be a decimal string"
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("boolean live TON last_transaction_lt was accepted")
 
 
 def live_args(module, *, code_hash, account_state_hash):
@@ -901,7 +988,13 @@ def test_live_ton_evidence_redacts_code_boc_parser_failures(monkeypatch):
 def test_live_ton_hash_decoder_redacts_base64_parser_causes(monkeypatch):
     module = load_live_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_b64decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token hash base64")
@@ -1423,3 +1516,43 @@ def test_live_ton_evidence_uses_runtime_only_api_key(tmp_path):
         assert "api_key" in str(exc)
     else:
         raise AssertionError("non-exact direct TON API key was accepted")
+
+
+def test_ton_live_api_key_file_rejects_unreadable_file_shapes(tmp_path):
+    module = load_live_module()
+
+    outside_token_file = tmp_path / "secret-token-ton-api-key-outside"
+    outside_token_file.write_text("secret-token\n", encoding="ascii")
+    symlink_token_file = tmp_path / "secret-token-ton-api-key-link"
+    symlink_token_file.symlink_to(outside_token_file)
+    directory_token_file = tmp_path / "secret-token-ton-api-key-dir"
+    directory_token_file.mkdir()
+    real_parent = tmp_path / "secret-token-ton-api-key-real-parent"
+    real_parent.mkdir()
+    (real_parent / "token").write_text("secret-token\n", encoding="ascii")
+    symlink_parent = tmp_path / "secret-token-ton-api-key-parent-link"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+    missing_token_file = tmp_path / "secret-token-ton-api-key-missing"
+
+    for unreadable_file in (
+        symlink_token_file,
+        directory_token_file,
+        symlink_parent / "token",
+        missing_token_file,
+    ):
+        try:
+            module._read_api_key(
+                SimpleNamespace(api_key=None, api_key_file=str(unreadable_file))
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "--api-key-file cannot be read"
+            assert "secret-token" not in rendered
+            assert "IsADirectoryError" not in rendered
+            assert "FileNotFoundError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"unreadable TON API key file {unreadable_file} was accepted"
+            )

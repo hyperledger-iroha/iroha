@@ -373,6 +373,14 @@ def fail(message):
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(1)
 
+def write_all(fd, chunk):
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS release manifest")
+        view = view[written:]
+
 def validate_manifest_output_path(path):
     try:
         if path.is_symlink():
@@ -387,17 +395,16 @@ def validate_manifest_output_path(path):
 
 def write_manifest_no_follow(path, payload):
     validate_manifest_output_path(path)
+    rendered = (
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    ).encode("utf-8")
     fd = -1
     try:
         fd = os.open(path, write_open_flags(), 0o666)
         descriptor_stat = os.fstat(fd)
         if not stat.S_ISREG(descriptor_stat.st_mode):
             fail(f"release manifest output `{path}` must be a regular file")
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1
-        with handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        write_all(fd, rendered)
     finally:
         if fd >= 0:
             os.close(fd)

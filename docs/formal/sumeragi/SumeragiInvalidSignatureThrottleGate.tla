@@ -422,9 +422,12 @@ InvalidSignatureThrottleSafetyAnchors ==
   /\ RbcThrottleKeyBoundaryAndOutcomeAnchors
   /\ PenaltyThresholdCooldownAndPruneAnchors
 
-InvalidSignatureThrottleExactness ==
-  /\ \A c \in Candidates:
+InvalidSignatureThrottleActionsMatchSpec ==
+  \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+InvalidSignatureThrottleExactness ==
+  /\ InvalidSignatureThrottleActionsMatchSpec
   /\ InvalidSignatureThrottleSafetyAnchors
 
 InvalidSignatureThrottleCorrectnessEnvelope ==

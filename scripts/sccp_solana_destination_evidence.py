@@ -15,6 +15,7 @@ import base64
 import binascii
 import hashlib
 import json
+import stat
 from html import unescape as html_unescape
 from pathlib import Path
 from typing import Iterable
@@ -65,6 +66,9 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("Solana destination fixed hex nonzero must be a boolean")
+
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -72,7 +76,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -91,7 +95,7 @@ def parse_program_bytes_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -110,7 +114,7 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     try:
         raw = base64.b64decode(text, validate=True)
-    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise argparse.ArgumentTypeError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != text:
         raise argparse.ArgumentTypeError(f"{label} must be canonical base64")
@@ -123,14 +127,37 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
     return raw
 
 
+def _reject_program_bytes_file_symlink_path(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(mode):
+            raise argparse.ArgumentTypeError("program bytes file must not be a symlink")
+
+
+def _read_program_bytes_file(path: Path, *, label: str) -> bytes:
+    try:
+        _reject_program_bytes_file_symlink_path(path)
+    except (OSError, argparse.ArgumentTypeError):
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    try:
+        return path.read_bytes()
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+
+
 def parse_program_bytes_file(value: str, *, label: str) -> bytes:
     """Parse non-empty Solana program bytes from a raw binary file."""
 
     path = Path(value).expanduser()
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    raw = _read_program_bytes_file(path, label=label)
     if not raw:
         raise argparse.ArgumentTypeError(f"{label} file must not be empty")
     if not any(raw):
@@ -197,6 +224,9 @@ def _require_fixed_bytes(
     byte_length: int,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("Solana destination fixed bytes nonzero must be a boolean")
+
     if not isinstance(value, (bytes, bytearray)):
         raise ValueError(f"{label} must be {byte_length} bytes")
     raw = bytes(value)
@@ -577,6 +607,8 @@ def solana_route_canary_evidence_hash(
         label="programdata_owner",
         expected=SOLANA_UPGRADEABLE_LOADER_ID,
     )
+    if type(program_immutable) is not bool:
+        raise ValueError("Solana route canary program_immutable must be a boolean")
     if program_immutable is not True:
         raise ValueError("program_immutable must be true")
 
@@ -1178,6 +1210,8 @@ def _json_summary(
     destination_binding_hash: bytes,
     expected_matches: bool,
 ) -> dict[str, object]:
+    if type(expected_matches) is not bool:
+        raise ValueError("Solana destination JSON expected_matches must be a boolean")
     apply_verifier_program_code_hash(args)
     _require_destination_evidence(args)
     expected_hash = solana_destination_binding_hash()
@@ -1255,6 +1289,10 @@ def _json_summary(
         if _has_programdata_metadata_input(args):
             _require_toml_programdata_metadata(args, output="json")
         programdata_metadata_ready = _toml_programdata_metadata_ready(args)
+        if type(programdata_metadata_ready) is not bool:
+            raise ValueError(
+                "Solana destination ProgramData metadata readiness must be a boolean"
+            )
         route_canary = _route_canary_summary(
             args,
             route_allowlist_hash=route_allowlist_hash,
@@ -1487,13 +1525,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

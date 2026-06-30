@@ -523,7 +523,7 @@ StalledPendingFrontierTimeoutExactness ==
   /\ StalledPendingFrontierBacklogExact
   /\ StalledPendingFrontierDeferredExact
   /\ StalledPendingFrontierTimeoutCapExact
-  /\ StalledPendingFrontierArithmeticExact
+  /\ SaturatingArithmeticAnchors
   /\ StalledPendingFrontierProjectionExact
 
 StalledPendingFrontierTimeoutCorrectnessEnvelope ==

@@ -13314,7 +13314,7 @@
     },
     "/v1/offline/v2/audit": {
       "post": {
-        "description": "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "Classic Offline V2 audit is retired and this retired route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -13378,7 +13378,7 @@
     },
     "/v1/offline/v2/notes/issue": {
       "post": {
-        "description": "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "Classic Offline V2 note issuance is retired and this retired route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         "requestBody": {
           "content": {
             "application/json": {

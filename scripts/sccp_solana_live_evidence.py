@@ -181,6 +181,11 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
+    if decoded.get("jsonrpc") != "2.0":
+        raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
+    response_id = decoded.get("id")
+    if type(response_id) is not int or response_id != 1:
+        raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
         raise RuntimeError(f"JSON-RPC {method} returned error response")
@@ -242,7 +247,7 @@ def _account_data(account: dict[str, Any], *, label: str) -> bytes:
         raise RuntimeError(f"{label} account data must use base64 encoding")
     try:
         raw = base64.b64decode(data[0], validate=True)
-    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise RuntimeError(f"{label} account data is invalid base64") from None
     if base64.b64encode(raw).decode("ascii") != data[0]:
         raise RuntimeError(f"{label} account data must be canonical base64")
@@ -255,6 +260,8 @@ def _require_upgradeable_loader_account(
     label: str,
     executable: bool,
 ) -> bytes:
+    if type(executable) is not bool:
+        raise ValueError("Solana live account executable must be a boolean")
     owner = account.get("owner")
     if owner != UPGRADEABLE_LOADER_ID:
         raise RuntimeError(f"{label} account owner must be the BPF upgradeable loader")
@@ -400,9 +407,9 @@ def _live_positive_u64(live: dict[str, Any], field: str, *, label: str) -> int:
     ):
         parsed = int(value, 10)
     else:
-        raise ValueError(f"{label} must be a positive decimal")
+        raise ValueError(f"{label} must be a positive decimal") from None
     if parsed <= 0 or parsed > 0xFFFF_FFFF_FFFF_FFFF:
-        raise ValueError(f"{label} must be a positive decimal")
+        raise ValueError(f"{label} must be a positive decimal") from None
     return parsed
 
 
@@ -412,7 +419,7 @@ def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes
         raise ValueError(f"{label} must be present")
     try:
         raw = base64.b64decode(value, validate=True)
-    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
@@ -661,6 +668,12 @@ def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
             f"expected {expected_programdata}, got {live['programdata_address']}"
         )
     expected_programdata_slot = getattr(args, "expected_programdata_slot", None)
+    if expected_programdata_slot is not None:
+        expected_programdata_slot = _live_positive_u64(
+            {"expected_programdata_slot": expected_programdata_slot},
+            "expected_programdata_slot",
+            label="expected ProgramData slot",
+        )
     if (
         expected_programdata_slot is not None
         and str(expected_programdata_slot) != live["programdata_slot"]
@@ -973,13 +986,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

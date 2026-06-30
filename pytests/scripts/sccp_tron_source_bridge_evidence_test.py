@@ -1021,7 +1021,13 @@ def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes(
 ):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token TRON source hex TypeError detail"
             if exception_type is TypeError
@@ -1063,12 +1069,83 @@ def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes(
                     assert rendered == f"{label} must be hex"
                     assert "secret-token" not in rendered
                     assert exception_type.__name__ not in rendered
+                    if exception_type is module.argparse.ArgumentTypeError:
+                        assert (
+                            "ArgumentTypeError" not in rendered
+                        ), "TRON source hex ArgumentTypeError detail leaked"
                     assert exc.__cause__ is None
                     assert exc.__suppress_context__ is True
                 else:
                     raise AssertionError(
                         f"{label} parser {exception_type.__name__} was accepted"
                     )
+
+
+def test_tron_source_bridge_helper_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for control in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="network id",
+                byte_length=32,
+                nonzero=control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "TRON source bridge fixed hex nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed TRON source bridge fixed-hex nonzero control accepted"
+            )
+
+        try:
+            module._parse_runtime_bytecode_text(
+                "0x6001600055",
+                label="source bridge runtime bytecode",
+                allow_whitespace=control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "TRON source bridge runtime bytecode allow_whitespace must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed TRON source bridge runtime-bytecode whitespace control accepted"
+            )
+
+        try:
+            module._require_exact_u64(
+                0,
+                "route_canary_block_number",
+                positive=control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "TRON source bridge exact u64 positive must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed TRON source bridge exact-u64 positive control accepted"
+            )
+
+        try:
+            module._require_fixed_bytes(
+                bytes(32),
+                label="network_id",
+                byte_length=32,
+                nonzero=control,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "TRON source bridge fixed bytes nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed TRON source bridge fixed-bytes nonzero control accepted"
+            )
 
 
 def test_parse_runtime_bytecode_hex_rejects_padded_inline_text(tmp_path):
@@ -1149,6 +1226,35 @@ def test_parse_runtime_bytecode_hex_rejects_padded_inline_text(tmp_path):
         assert "lowercase" in str(exc)
     else:
         raise AssertionError("non-canonical runtime bytecode file was accepted")
+
+
+def test_tron_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
+    module = load_evidence_module()
+    outside = tmp_path / "secret-token-tron-runtime-outside.hex"
+    outside.write_text("0x6001600055\n", encoding="utf-8")
+    symlink_input = tmp_path / "secret-token-tron-runtime-link.hex"
+    symlink_input.symlink_to(outside)
+    directory_input = tmp_path / "secret-token-tron-runtime-dir.hex"
+    directory_input.mkdir()
+    missing_input = tmp_path / "secret-token-tron-runtime-missing.hex"
+
+    for path in (symlink_input, directory_input, missing_input):
+        try:
+            module.parse_runtime_bytecode_file(
+                str(path),
+                label="source bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            suppress_context = exc.__suppress_context__
+        else:
+            raise AssertionError("TRON runtime bytecode file shape was accepted")
+
+        assert rendered == "source bridge runtime bytecode file cannot be read"
+        assert "secret-token" not in rendered
+        assert "IsADirectoryError" not in rendered
+        assert "FileNotFoundError" not in rendered
+        assert suppress_context is True
 
 
 def test_tron_source_bridge_hashes_reject_boolean_domain_values():
@@ -1614,6 +1720,33 @@ def test_direct_record_hashes_reject_template_source_component_hashes():
         else:
             raise AssertionError(
                 f"direct deployment hash accepted template {label}"
+            )
+
+
+def test_direct_record_hashes_reject_cross_role_template_source_component_hashes():
+    module = load_evidence_module()
+    config_hash = bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR)
+    template_hash = module._template_component_hashes()["consensus_verifier_hash"]
+
+    for record_hash, field in (
+        (module.tron_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.tron_source_adapter_engine_deployment_record_hash,
+            "source_bridge_emitter_code_hash",
+        ),
+    ):
+        args = sample_full_toml_args()
+        setattr(args, field, template_hash)
+        label = field.replace("_", " ")
+
+        try:
+            record_hash(args, config_hash)
+        except ValueError as exc:
+            assert f"live {label}" in str(exc)
+            assert "template-derived consensus verifier hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"TRON record hash accepted cross-role template hash for {field}"
             )
 
 

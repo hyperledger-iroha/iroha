@@ -181,9 +181,12 @@ VoteSupportAnchors ==
   /\ SpecCount("padding_ignored") = 4
   /\ SpecCount("sparse_high_ignored") = 1
 
-Safety ==
+AllVotingSignerCountsMatchSpec ==
   \A c \in Cases:
     ActualCount(c) = SpecCount(c)
+
+Safety ==
+  AllVotingSignerCountsMatchSpec
 
 EmptyAndZeroRosterSupportExact ==
   /\ ActualCount("empty_set_zero") = 0
@@ -209,8 +212,7 @@ DuplicateSupportCollapsed ==
   /\ ActualCount("duplicates_collapsed") < OccurrenceCount("duplicates_collapsed")
 
 VotingSignerSupportCountExactness ==
-  /\ \A c \in Cases:
-    ActualCount(c) = SpecCount(c)
+  /\ AllVotingSignerCountsMatchSpec
   /\ SpecCountBounds
   /\ VoteSupportAnchors
   /\ EmptyAndZeroRosterSupportExact

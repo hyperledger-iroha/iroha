@@ -2597,16 +2597,22 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert "def read_open_flags" in packager
     assert "def write_open_flags" in packager
     assert "def write_manifest_no_follow" in packager
+    assert "def write_all(fd, chunk)" in packager
     assert "O_NOFOLLOW" in packager
     assert "path.lstat()" in packager
     assert "os.open(path, read_open_flags())" in packager
     assert "os.open(path, write_open_flags(), 0o666)" in packager
     assert "os.fstat(fd)" in packager
+    assert "json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)" in packager
+    assert "written = os.write(fd, view)" in packager
+    assert "write_all(fd, rendered)" in packager
     assert "write_manifest_no_follow(manifest_path, manifest)" in packager
     assert "validate_archive_path(archive_path, \"release package archive\")" in packager
     assert "os.open(archive_path, write_open_flags(), 0o666)" in packager
     assert "path.open(\"rb\")" not in packager
     assert "archive_path.open(\"wb\")" not in packager
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in packager
+    assert "json.dump(payload" not in packager
     assert "with open(sys.argv[1]" not in packager
     assert "root.rglob(\"*\")" in packager
     assert "for path in scan_stage_entries(stage_dir)" in packager
@@ -2694,11 +2700,19 @@ def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
     assert "def validate_adoption_path" in adoption
     assert "def ensure_adoption_directory" in adoption
     assert "def require_adoption_file" in adoption
+    assert adoption.count("def write_all(fd: int, chunk: bytes) -> None") >= 2
+    assert "view = memoryview(chunk)" in adoption
+    assert "written = os.write(fd, view)" in adoption
+    assert 'write_all(fd, body.encode("utf-8"))' in adoption
+    assert "json.dumps(payload, indent=2, allow_nan=False)" in adoption
+    assert "write_all(fd, rendered)" in adoption
     assert "write_adoption_text(config_path" in adoption
     assert "write_adoption_json(note_path" in adoption
     assert 'require_nonempty_file "${CONFIG_PATH}" "fixture config"' in adoption
     assert 'path.open("r"' not in adoption
     assert 'config_path.open("w"' not in adoption
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in adoption
+    assert "json.dump(payload" not in adoption
     assert "note_path.write_text" not in adoption
 
 
@@ -2713,6 +2727,7 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
     assert "def require_sdk_file" in sdk_gate
     assert "def read_text_artifact" in sdk_gate
     assert "def write_text_artifact" in sdk_gate
+    assert sdk_gate.count("def write_all(fd: int, chunk: bytes) -> None") >= 3
     assert 'getattr(os, "O_NOFOLLOW", 0)' in sdk_gate
     assert "stat.S_ISREG(path_stat.st_mode)" in sdk_gate
     assert "os.open(source, read_open_flags())" in sdk_gate
@@ -2720,10 +2735,15 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
     assert "os.open(path, read_open_flags())" in sdk_gate
     assert "os.open(path, write_open_flags(), 0o666)" in sdk_gate
     assert "os.open(path, append_open_flags(), 0o666)" in sdk_gate
-    assert "os.write(fd" in sdk_gate
+    assert "view = memoryview(chunk)" in sdk_gate
+    assert "written = os.write(fd, view)" in sdk_gate
+    assert "write_all(write_fd, chunk)" in sdk_gate
+    assert 'write_all(fd, body.encode("utf-8"))' in sdk_gate
+    assert 'write_all(fd, ("\\t".join(fields) + "\\n").encode("utf-8"))' in sdk_gate
     assert "write_text_artifact(\n    summary_path" in sdk_gate
     assert "write_text_artifact(\n    matrix_path" in sdk_gate
     assert "with open(" not in sdk_gate
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in sdk_gate
     assert ".write_text(" not in sdk_gate
     assert ".read_text(" not in sdk_gate
     assert 'cp "${source_file}" "${target_file}"' not in sdk_gate
@@ -2852,6 +2872,31 @@ def test_sorafs_docs_portal_package_summary_uses_no_follow_read() -> None:
     assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in packager
     assert "for raw in read_summary_lines_no_follow(summary_path)" in packager
     assert "with open(summary_path" not in packager
+
+
+def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
+    pin_release = read(REPO_ROOT / "docs" / "portal" / "scripts" / "sorafs-pin-release.sh")
+
+    assert "def read_open_flags() -> int" in pin_release
+    assert "def write_open_flags() -> int" in pin_release
+    assert "def validate_descriptor_path" in pin_release
+    assert "def read_descriptor" in pin_release
+    assert "def write_descriptor" in pin_release
+    assert "def write_all(fd: int, chunk: bytes) -> None" in pin_release
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in pin_release
+    assert "path.lstat()" in pin_release
+    assert "stat.S_ISREG(path_stat.st_mode)" in pin_release
+    assert "os.open(path, read_open_flags())" in pin_release
+    assert "os.open(path, write_open_flags(), 0o666)" in pin_release
+    assert "os.fstat(fd)" in pin_release
+    assert "json.load(handle)" in pin_release
+    assert "json.dumps(payload, indent=2, allow_nan=False)" in pin_release
+    assert "written = os.write(fd, view)" in pin_release
+    assert "write_all(fd, rendered)" in pin_release
+    assert "target.read_text" not in pin_release
+    assert "target.write_text" not in pin_release
+    assert ".read_text(" not in pin_release
+    assert ".write_text(" not in pin_release
 
 
 def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
@@ -3468,8 +3513,12 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "failed to render checker summary JSON: {error_diagnostic_label(error)}" in helper
     assert "def write_checker_summary" in helper
     assert "def checker_summary_write_open_flags" in helper
+    assert "def write_all_checker_summary_bytes" in helper
+    assert "view = memoryview(payload)" in helper
+    assert "written = os.write(fd, view)" in helper
     assert "os.open(summary_out, checker_summary_write_open_flags(), 0o666)" in helper
-    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" in helper
+    assert 'write_all_checker_summary_bytes(fd, summary_text.encode("utf-8"))' in helper
+    assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in helper
     assert "summary_out.write_text" not in helper
     assert "checker summary text must be a string" in helper
     assert "failed to create --summary-out parent" in helper
@@ -3543,6 +3592,10 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     )
     assert "test_write_checker_summary_rejects_non_string_text" in helper_test
     assert "test_write_checker_summary_uses_no_follow_descriptor_open" in helper_test
+    assert (
+        "test_write_checker_summary_completes_partial_descriptor_writes"
+        in helper_test
+    )
     assert "test_write_checker_summary_rejects_summary_symlink" in helper_test
     assert (
         "test_write_checker_summary_rejects_parent_chain_symlink_before_create"

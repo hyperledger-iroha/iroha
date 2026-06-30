@@ -2157,6 +2157,33 @@ def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys():
             (
                 (
                     "[[zk.sccp_destination_rollouts]]\n"
+                    'credential_duplicate_key = "first"\n'
+                    'credential_duplicate_key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("credential_duplicate_key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'auth_header_duplicate_key = "first"\n'
+                    'auth_header_duplicate_key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("auth_header_duplicate_key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'signing_key_duplicate_key = "first"\n'
+                    'signing_key_duplicate_key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("signing_key_duplicate_key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
                     'route|operator-duplicate-key = "first"\n'
                     'route|operator-duplicate-key = "second"\n'
                 ),
@@ -2173,6 +2200,9 @@ def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys():
                 for token in redacted_tokens:
                     assert token not in rendered
                 assert exc.__cause__ is None
+                assert (
+                    exc.__suppress_context__ is True
+                ), "minimal TOML duplicate key context leaked"
             else:
                 raise AssertionError(
                     "minimal TOML loader accepted unsafe duplicate key"
@@ -2252,6 +2282,16 @@ def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
                 "seed_phrase_section",
             ),
             (
+                "[[zk.auth-header-section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with sensitive name",
+                "auth-header-section",
+            ),
+            (
+                "[[zk.signing_key_section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with sensitive name",
+                "signing_key_section",
+            ),
+            (
                 "[[zk.route|operator-section]]\nversion = 1\n",
                 "operator evidence:1: unsupported zk section with malformed name",
                 "route|operator-section",
@@ -2265,6 +2305,9 @@ def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
                 assert rendered == expected
                 assert redacted_token not in rendered
                 assert exc.__cause__ is None
+                assert (
+                    exc.__suppress_context__ is True
+                ), "minimal TOML unsupported section context leaked"
             else:
                 raise AssertionError(
                     "minimal TOML loader accepted unsafe unsupported section"
@@ -2437,6 +2480,51 @@ def test_all_lanes_cli_preserves_safe_top_level_exception_detail(
     assert safe_message in captured.err
     assert "SCCP all-lanes evidence validation failed" not in captured.err
     assert "RuntimeError" not in captured.err
+
+
+def test_all_lanes_load_evidence_rejects_unreadable_file_shapes(tmp_path):
+    module = load_evidence_module()
+    outside = tmp_path / "secret-token-outside.toml"
+    outside.write_text(
+        "\n".join(
+            [
+                "[[zk.sccp_source_verifier_materials]]",
+                "version = 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    symlink_input = tmp_path / "secret-token-evidence.toml"
+    symlink_input.symlink_to(outside)
+    directory_input = tmp_path / "secret-token-evidence-dir.toml"
+    directory_input.mkdir()
+    real_parent = tmp_path / "secret-token-evidence-real-parent"
+    real_parent.mkdir()
+    (real_parent / "complete.toml").write_text(
+        outside.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    symlink_parent = tmp_path / "secret-token-evidence-parent-link"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+    missing_input = tmp_path / "secret-token-missing.toml"
+
+    for path in (
+        symlink_input,
+        directory_input,
+        symlink_parent / "complete.toml",
+        missing_input,
+    ):
+        try:
+            module.load_evidence_bundle([path])
+        except OSError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("all-lanes loader accepted unreadable evidence input")
+
+        assert message == "evidence input cannot be read"
+        assert "secret-token" not in message
+        assert "IsADirectoryError" not in message
+        assert "FileNotFoundError" not in message
 
 
 def test_all_lanes_loader_rejects_duplicate_metadata_comments(tmp_path):
@@ -2783,6 +2871,25 @@ def test_all_lanes_evidence_rejects_boolean_domain_fields():
     )
     assert "sccp_destination_rollouts: record 0 missing integer domain" in blockers
     assert "sccp_route_allowlists: record 0 missing integer domain" in blockers
+
+
+def test_all_lanes_evidence_rejects_boolean_integer_aliases():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+
+    records["sccp_source_verifier_materials"][0]["placeholder_material"] = 0
+    records["sccp_destination_rollouts"][0]["immutable_verifier_ready"] = 1
+    records["sccp_destination_rollouts"][0]["anchors_ready"] = 1
+    records["sccp_route_allowlists"][0]["routes_allowlisted"] = 1
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert "domain 1 (eth): placeholder_material must be False" in blockers
+    assert "domain 1 (eth): immutable_verifier_ready must be True" in blockers
+    assert "domain 1 (eth): anchors_ready must be True" in blockers
+    assert "domain 1 (eth): routes_allowlisted must be True" in blockers
 
 
 def test_all_lanes_evidence_rejects_unknown_record_fields():
@@ -3167,6 +3274,38 @@ def test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lane
         ) in summary["blockers"]
 
 
+def test_all_lanes_evidence_rejects_source_material_cross_role_template_hashes():
+    module = load_evidence_module()
+
+    for domain in module.SCCP_CORE_REMOTE_DOMAINS:
+        records = complete_bundle(module)
+        material_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        profile = module.LANE_PROFILES[domain]
+        template_hashes = tuple(module._source_material_template_hashes(profile).items())
+        assert len(template_hashes) >= 2
+        for target_offset, (field, _own_template_hash) in enumerate(template_hashes):
+            replay_field, replay_hash = template_hashes[
+                (target_offset + 1) % len(template_hashes)
+            ]
+            records["sccp_source_verifier_materials"][material_index][field] = (
+                "0x" + replay_hash.hex()
+            )
+
+            summary = module.validate_evidence_bundle(records)
+
+            assert summary["production_ready"] is False, (
+                domain,
+                field,
+                replay_field,
+            )
+            assert (
+                f"domain {domain} ({profile.chain}): {field} must be deployed "
+                "evidence, not built-in template material"
+            ) in summary["blockers"]
+
+            records = complete_bundle(module)
+
+
 def test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_for_all_lanes():
     module = load_evidence_module()
     eth_module = module._load_sibling_module("sccp_eth_source_bridge_evidence.py")
@@ -3429,7 +3568,8 @@ def test_all_lanes_evidence_rejects_non_string_section_keys():
     summary = module.validate_evidence_bundle(records)
 
     assert summary["production_ready"] is False
-    assert "evidence section name must be a string: 1" in summary["blockers"]
+    assert "evidence section name must be a string" in summary["blockers"]
+    assert "evidence section name must be a string: 1" not in summary["blockers"]
 
 
 def test_route_allowlist_hash_matches_rust_vector():
@@ -3827,7 +3967,13 @@ def test_all_lanes_redacts_evm_runtime_bytecode_parser_failures(
     destination = records["sccp_destination_rollouts"][0]
     original_loader = module._load_sibling_module
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_runtime(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} runtime parser")
@@ -4486,7 +4632,13 @@ def test_all_lanes_redacts_tron_route_canary_address_parser_failures(
         deployment,
     )
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_address(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} route canary parser")
@@ -4501,6 +4653,7 @@ def test_all_lanes_redacts_tron_route_canary_address_parser_failures(
 
         canary: dict[str, object] = {}
         errors = module._check_tron_route_canary_transaction_evidence(
+            profile,
             route,
             destination_record=destination,
             source_record_hashes=source_hashes,
@@ -5461,7 +5614,13 @@ def test_all_lanes_redacts_tron_live_metadata_parser_failures(
         "sccp_tron_source_bridge_evidence.py"
     )
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_address(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} address parser")
@@ -5978,7 +6137,13 @@ def test_all_lanes_redacts_solana_live_base64_comment_failures():
 def test_all_lanes_base64_helper_redacts_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token all-lanes base64")
@@ -5996,6 +6161,10 @@ def test_all_lanes_base64_helper_redacts_parser_causes(monkeypatch):
                 assert "secret-token" not in rendered
                 assert "all-lanes base64" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "all-lanes base64 ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -6005,7 +6174,13 @@ def test_all_lanes_base64_helper_redacts_parser_causes(monkeypatch):
 def test_all_lanes_hex_helpers_redact_parser_exit_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         class SecretBytes:
             @staticmethod
@@ -6143,7 +6318,13 @@ def test_all_lanes_solana_base64_callers_redact_helper_exit_causes(
         deployment,
     )
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_base64(_value, *, label, exception_type=exception_type):
             raise exception_type(
@@ -6179,6 +6360,10 @@ def test_all_lanes_solana_base64_callers_redact_helper_exit_causes(
             assert "Solana route canary ProgramData metadata is invalid" in route_errors
             assert "secret-token" not in rendered
             assert exception_type.__name__ not in rendered
+            if exception_type is module.argparse.ArgumentTypeError:
+                assert (
+                    "ArgumentTypeError" not in rendered
+                ), "Solana base64 caller ArgumentTypeError detail leaked"
 
 
 def test_all_lanes_redacts_solana_programdata_parser_failures(
@@ -6203,7 +6388,13 @@ def test_all_lanes_redacts_solana_programdata_parser_failures(
         "sccp_solana_destination_evidence.py"
     )
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_program_id(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} program id")
@@ -6250,7 +6441,13 @@ def test_all_lanes_redacts_solana_programdata_parser_failures(
         assert "secret-token" not in rendered
         assert exception_type.__name__ not in rendered
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_canary_hash(**_kwargs):
             raise exception_type("secret-token route canary live program detail")
@@ -6777,7 +6974,13 @@ def test_all_lanes_redacts_ton_live_account_parser_failures(
     )
     real_ton_module = module._load_sibling_module("sccp_ton_destination_evidence.py")
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_code_boc_hex(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} code BoC parser")
@@ -6815,6 +7018,7 @@ def test_all_lanes_redacts_ton_live_account_parser_failures(
         )
         canary: dict[str, object] = {}
         route_errors = module._check_ton_route_canary_live_account_evidence(
+            profile,
             route,
             destination_record=destination,
             source_record_hashes=source_hashes,
@@ -7403,7 +7607,13 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
         ),
     )
 
-    for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
 
         def fail_recompute(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token source gate material")
@@ -7441,6 +7651,10 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
             assert f"{expected}:" not in rendered
             assert "secret-token" not in rendered
             assert exception_type.__name__ not in rendered
+            if exception_type is module.argparse.ArgumentTypeError:
+                assert (
+                    "ArgumentTypeError" not in rendered
+                ), "source gate recompute ArgumentTypeError detail leaked"
 
 
 def test_all_lanes_public_source_gate_summaries_redact_signature_drift(
@@ -7621,7 +7835,13 @@ def test_all_lanes_evidence_redacts_destination_binding_recompute_failures(
     module = load_evidence_module()
     records = complete_bundle(module)
 
-    for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
 
         def fail_destination_binding(
             _profile,
@@ -7645,6 +7865,10 @@ def test_all_lanes_evidence_redacts_destination_binding_recompute_failures(
         assert "destination binding cannot be recomputed:" not in blockers
         assert "secret-token" not in blockers
         assert exception_type.__name__ not in blockers
+        if exception_type is module.argparse.ArgumentTypeError:
+            assert (
+                "ArgumentTypeError" not in blockers
+            ), "destination binding recompute ArgumentTypeError detail leaked"
 
 
 def test_all_lanes_evidence_rejects_destination_comment_drift():
@@ -7808,6 +8032,102 @@ def test_all_lanes_evidence_rejects_route_canary_evidence_hash_template_replays(
             f"domain {domain} ({profile.chain}): route canary evidence hash "
             "must be live evidence, not built-in template material"
         ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_evidence_rejects_route_canary_transcript_hash_template_replays():
+    module = load_evidence_module()
+    cases = (
+        (
+            module.SCCP_DOMAIN_ETH,
+            "evm_route_canary_message_id",
+            "_comment_evm_route_canary_message_id",
+            "EVM route canary transcript hash evm_route_canary_message_id",
+        ),
+        (
+            module.SCCP_DOMAIN_BSC,
+            "evm_route_canary_message_id",
+            "_comment_evm_route_canary_message_id",
+            "EVM route canary transcript hash evm_route_canary_message_id",
+        ),
+        (
+            module.SCCP_DOMAIN_TON,
+            "ton_route_canary_account_state_hash",
+            "_comment_ton_route_canary_account_state_hash",
+            "TON route canary transcript hash ton_route_canary_account_state_hash",
+        ),
+        (
+            module.SCCP_DOMAIN_TRON,
+            "tron_route_canary_message_id",
+            "_comment_tron_route_canary_message_id",
+            "TRON route canary transcript hash tron_route_canary_message_id",
+        ),
+    )
+
+    for domain, field, comment_field, expected_detail in cases:
+        records = complete_bundle(module)
+        profile = module.LANE_PROFILES[domain]
+        route = next(
+            record
+            for record in records["sccp_route_allowlists"]
+            if record["domain"] == domain
+        )
+        template_hash = next(iter(module._source_material_template_hashes(profile).values()))
+        template_value = "0x" + template_hash.hex()
+        route[field] = template_value
+        route[comment_field] = template_value
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        assert (
+            f"domain {domain} ({profile.chain}): {expected_detail} "
+            "must be live evidence, not built-in template material"
+        ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_route_canary_transcript_template_loader_failures_are_bounded(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    tron_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TRON)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_TRON]
+    material = records["sccp_source_verifier_materials"][tron_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][tron_index]
+    destination = records["sccp_destination_rollouts"][tron_index]
+    route = records["sccp_route_allowlists"][tron_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+
+    def fail_template_hashes(_profile):
+        raise module.argparse.ArgumentTypeError(
+            "secret-token route canary transcript template loader"
+        )
+
+    monkeypatch.setattr(
+        module,
+        "_source_material_template_hashes",
+        fail_template_hashes,
+    )
+
+    errors = module._check_tron_route_canary_transaction_evidence(
+        profile,
+        route,
+        destination_record=destination,
+        source_record_hashes=source_hashes,
+        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+        canary={},
+    )
+    rendered = "\n".join(errors)
+
+    assert "TRON route canary transcript hash template material validation failed" in errors
+    assert "secret-token" not in rendered
+    assert "ArgumentTypeError" not in rendered
 
 
 def test_all_lanes_release_checklist_reports_ready_bundle():
@@ -8307,6 +8627,32 @@ def test_all_lanes_public_blocker_sanitizers_cover_marker_families():
         nested_label,
     ) == [f"{nested_label} contains sensitive value"]
 
+    explicit_encoded_sensitive_cases = (
+        "secret%20key",
+        "private%20key",
+        "private&amp;#95;key",
+        "private&amp;#32;key",
+        "access%20key",
+        "api%20key",
+        "client&amp;#32;secret",
+        "credential",
+        "auth%20header",
+        "auth&amp;#32;header",
+        "mnemonic",
+        "seed%20phrase",
+        "signing%20key",
+        "signing&amp;#32;key",
+    )
+    for encoded_marker in explicit_encoded_sensitive_cases:
+        assert (
+            module._blocker_text_issue(f"operator-{encoded_marker}-blocker")
+            == "contains sensitive name"
+        )
+        assert module._public_nested_lane_value_errors(
+            f"operator-{encoded_marker}-lane-value",
+            nested_label,
+        ) == [f"{nested_label} contains sensitive value"]
+
     decoded_unsafe_blockers = (
         ("safe%0Apublic-blocker", "contains control character"),
         ("safe%E2%80%AEpublic-blocker", "contains non-ASCII character"),
@@ -8344,6 +8690,17 @@ def test_all_lanes_cli_error_detail_rejects_decoded_unsafe_messages():
         module._cli_error_detail(RuntimeError("safe collector detail"), fallback=fallback)
         == "safe collector detail"
     )
+
+
+def test_all_lanes_cli_error_detail_treats_system_exit_as_opaque():
+    module = load_evidence_module()
+    fallback = "SCCP all-lanes evidence validation failed"
+    safe_message = "safe collector SystemExit detail"
+
+    detail = module._cli_error_detail(SystemExit(safe_message), fallback=fallback)
+
+    assert detail == fallback
+    assert safe_message not in detail
 
 
 def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys):
@@ -8418,6 +8775,36 @@ def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys)
     ):
         assert copied_blocker not in captured.out
     assert "Traceback" not in captured.err
+
+
+def test_all_lanes_numbers_repeated_duplicate_blocker_diagnostics():
+    """Repeated duplicate-blocker groups must stay distinct without leaking text."""
+
+    module = load_evidence_module()
+    blockers = [
+        "safe duplicated root blocker a",
+        "safe%20duplicated%20root%20blocker%20a",
+        "safe duplicated root blocker b",
+        "safe%20duplicated%20root%20blocker%20b",
+    ]
+    copied_errors = module._blocker_list_errors(
+        {"blockers": list(blockers)},
+        "all-lanes summary",
+    )
+    canonical_blockers, canonical_errors = module._canonical_blocker_list(
+        list(blockers),
+        "all-lanes summary",
+    )
+
+    duplicate_error = "all-lanes summary blockers must not contain duplicate strings"
+    for errors in (copied_errors, canonical_errors):
+        rendered = "\n".join(errors)
+        assert f"{duplicate_error} #1" in rendered
+        assert f"{duplicate_error} #2" in rendered
+        assert rendered.count(f"{duplicate_error} #") == 2
+        for blocker in blockers:
+            assert blocker not in rendered
+    assert canonical_blockers == []
 
 
 def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
@@ -8802,6 +9189,98 @@ def test_all_lanes_cli_rejects_malformed_lanes_without_leaking(capsys):
     assert "secret-token" not in captured.out
     assert "secret-token" not in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_all_lanes_public_summary_boolean_domain_does_not_alias_eth():
+    module = load_evidence_module()
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lane = next(
+        item for item in summary["lanes"] if item["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    lane["domain"] = True
+    lane["chain"] = "bsc"
+    lane["evm_live_metadata"]["source_block_tag"] = "safe-nonfinalized"
+    lane["route_allowlist"]["route_canary"]["evidence_source"] = "safe-source"
+    lane["route_allowlist"]["route_canary"]["message_id"] = lane[
+        "source_record_hashes"
+    ]["source_verifier_material_hash"]
+
+    payload = module._public_summary_payload(summary)
+
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "all-lanes summary lanes[0] domain must be an integer" in blockers
+    assert "all-lanes summary lanes missing domain 1" in blockers
+    assert "all-lanes summary lanes[0] chain must match the lane domain" not in blockers
+    assert (
+        "all-lanes summary lanes[0].evm_live_metadata.source_block_tag must be "
+        "finalized"
+    ) not in blockers
+    assert (
+        "all-lanes summary lanes[0].route_allowlist.route_canary.evidence_source "
+        "must be"
+    ) not in blockers
+    assert "route_canary hash role message_id must not reuse" not in blockers
+
+
+def test_all_lanes_release_checklist_boolean_domain_does_not_alias_eth_policy():
+    module = load_evidence_module()
+    lane = {
+        "domain": True,
+        "chain": "eth",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_record_hashes": {
+            "source_verifier_material_hash": hex32(0x21),
+            "source_adapter_engine_deployment_hash": hex32(0x22),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": hex32(0x23),
+            "audit_hashes": {},
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+            "destination_binding_hash": hex32(0x24),
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_allowlist_hash": hex32(0x25),
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x26),
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(
+        blocker for item in checklist["items"] for blocker in item["blockers"]
+    )
+
+    assert checklist["ready"] is False
+    assert (
+        "lane eth: lane domain must be an integer"
+        in items["all_required_lane_records"]["blockers"]
+    )
+    assert (
+        "lane eth: live route canary evidence source cannot be validated for "
+        "malformed lane domain"
+    ) in items["live_route_canary_evidence"]["blockers"]
+    assert "evm_source_gate_hash" not in blockers
+    assert "message proof must be used" not in blockers
+    assert "receipt block must be finalized" not in blockers
 
 
 def test_all_lanes_cli_rejects_copied_source_adapter_gate_drift_without_leaking(
@@ -9378,31 +9857,34 @@ def test_all_lanes_cli_rejects_template_loader_failure_without_leaking(capsys):
     original_load = module.load_evidence_bundle
     original_validate = module.validate_evidence_bundle
     original_template_hashes = module._source_material_template_hashes
-    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    exception_types = (RuntimeError, module.argparse.ArgumentTypeError)
 
-    def broken_template_hashes(_profile):
-        raise RuntimeError("secret-token-template-loader")
+    for exception_type in exception_types:
+        summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
 
-    module._source_material_template_hashes = broken_template_hashes
-    module.load_evidence_bundle = lambda paths: {}
-    module.validate_evidence_bundle = lambda records: summary
-    try:
-        exit_code = module.main(["evidence.toml"])
-    finally:
-        module.load_evidence_bundle = original_load
-        module.validate_evidence_bundle = original_validate
-        module._source_material_template_hashes = original_template_hashes
+        def broken_template_hashes(_profile, exception_type=exception_type):
+            raise exception_type("secret-token-template-loader")
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    blockers = "\n".join(payload["blockers"])
-    assert payload["production_ready"] is False
-    assert "lanes" not in payload
-    assert "template material validation failed" in blockers
-    assert "secret-token-template-loader" not in captured.out
-    assert "secret-token-template-loader" not in captured.err
-    assert "Traceback" not in captured.err
+        module._source_material_template_hashes = broken_template_hashes
+        module.load_evidence_bundle = lambda paths: {}
+        module.validate_evidence_bundle = lambda records: summary
+        try:
+            exit_code = module.main(["evidence.toml"])
+        finally:
+            module.load_evidence_bundle = original_load
+            module.validate_evidence_bundle = original_validate
+            module._source_material_template_hashes = original_template_hashes
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        blockers = "\n".join(payload["blockers"])
+        assert payload["production_ready"] is False
+        assert "lanes" not in payload
+        assert "template material validation failed" in blockers
+        assert "secret-token-template-loader" not in captured.out
+        assert "secret-token-template-loader" not in captured.err
+        assert "Traceback" not in captured.err
 
 
 def test_all_lanes_cli_rejects_source_gate_requirement_failure_without_leaking(
@@ -9412,31 +9894,34 @@ def test_all_lanes_cli_rejects_source_gate_requirement_failure_without_leaking(
     original_load = module.load_evidence_bundle
     original_validate = module.validate_evidence_bundle
     original_requirements = module._source_adapter_gate_requirements
-    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    exception_types = (RuntimeError, module.argparse.ArgumentTypeError)
 
-    def broken_requirements(_domain):
-        raise RuntimeError("secret-token-source-gate-requirements")
+    for exception_type in exception_types:
+        summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
 
-    module._source_adapter_gate_requirements = broken_requirements
-    module.load_evidence_bundle = lambda paths: {}
-    module.validate_evidence_bundle = lambda records: summary
-    try:
-        exit_code = module.main(["evidence.toml"])
-    finally:
-        module.load_evidence_bundle = original_load
-        module.validate_evidence_bundle = original_validate
-        module._source_adapter_gate_requirements = original_requirements
+        def broken_requirements(_domain, exception_type=exception_type):
+            raise exception_type("secret-token-source-gate-requirements")
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    blockers = "\n".join(payload["blockers"])
-    assert payload["production_ready"] is False
-    assert "lanes" not in payload
-    assert "source adapter gate requirement validation failed" in blockers
-    assert "secret-token-source-gate-requirements" not in captured.out
-    assert "secret-token-source-gate-requirements" not in captured.err
-    assert "Traceback" not in captured.err
+        module._source_adapter_gate_requirements = broken_requirements
+        module.load_evidence_bundle = lambda paths: {}
+        module.validate_evidence_bundle = lambda records: summary
+        try:
+            exit_code = module.main(["evidence.toml"])
+        finally:
+            module.load_evidence_bundle = original_load
+            module.validate_evidence_bundle = original_validate
+            module._source_adapter_gate_requirements = original_requirements
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        blockers = "\n".join(payload["blockers"])
+        assert payload["production_ready"] is False
+        assert "lanes" not in payload
+        assert "source adapter gate requirement validation failed" in blockers
+        assert "secret-token-source-gate-requirements" not in captured.out
+        assert "secret-token-source-gate-requirements" not in captured.err
+        assert "Traceback" not in captured.err
 
 
 def test_all_lanes_cli_rejects_copied_not_ready_source_record_template_replay(capsys):
@@ -10927,7 +11412,13 @@ def test_all_lanes_cli_rejects_copied_route_allowlist_recompute_helper_failures(
         "adapter deployment, and destination binding hashes"
     )
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_recompute(
             _profile,
@@ -12327,6 +12818,119 @@ def test_all_lanes_cli_rejects_malformed_release_checklist_without_leaking(capsy
     assert "Traceback" not in captured.err
 
 
+def test_all_lanes_public_helper_strictness_flags_reject_non_booleans():
+    module = load_evidence_module()
+    malformed_values = (1, "true", None)
+
+    for require_ready in malformed_values:
+        try:
+            module._public_release_checklist_errors(
+                {"ready": True, "items": []},
+                require_ready=require_ready,
+            )
+        except ValueError as exc:
+            assert str(exc) == "release_checklist require_ready must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes release-checklist strictness flag was accepted"
+            )
+
+        try:
+            module._public_lanes_errors([], require_ready=require_ready)
+        except ValueError as exc:
+            assert str(exc) == "lanes require_ready must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes lane strictness flag was accepted"
+            )
+
+    for require_ready_state in malformed_values:
+        try:
+            module._source_adapter_gate_release_metadata_blockers(
+                "domain 3 (sol)",
+                {"domain": module.SCCP_DOMAIN_SOL},
+                {},
+                require_ready_state=require_ready_state,
+            )
+        except ValueError as exc:
+            assert str(exc) == "require_ready_state must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes source-gate ready-state flag was accepted"
+            )
+
+    for allow_empty in malformed_values:
+        try:
+            module._public_lane_optional_canonical_string_errors(
+                {"source_rpc_chain_id": ""},
+                "all-lanes summary lane",
+                ("source_rpc_chain_id",),
+                allow_empty=allow_empty,
+            )
+        except ValueError as exc:
+            assert str(exc) == "canonical string allow_empty must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes canonical-string allow-empty flag was accepted"
+            )
+
+    for positive in malformed_values:
+        try:
+            module._is_canonical_decimal_text("1", positive=positive)
+        except ValueError as exc:
+            assert str(exc) == "canonical decimal positive must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes canonical-decimal positive flag was accepted"
+            )
+
+        try:
+            module._canonical_decimal_int("1", positive=positive)
+        except ValueError as exc:
+            assert str(exc) == "canonical decimal int positive must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes canonical-decimal-int positive flag was accepted"
+            )
+
+        try:
+            module._check_route_canary_decimal_comment_matches_record(
+                [],
+                {
+                    "block_number": "1",
+                    "_comment_block_number": "1",
+                },
+                "block_number",
+                "_comment_block_number",
+                label="route canary block number",
+                positive=positive,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "route canary decimal comment positive must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes route-canary decimal positive flag was accepted"
+            )
+
+    for prefixed in malformed_values:
+        try:
+            module._parse_public_destination_binding_key_hex(
+                "11" * 32,
+                byte_length=32,
+                prefixed=prefixed,
+                label="destination binding",
+            )
+        except ValueError as exc:
+            assert str(exc) == "destination binding key prefixed must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean all-lanes destination-binding prefixed flag was accepted"
+            )
+
+
 def test_all_lanes_release_checklist_pinpoints_canary_gaps():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -13704,7 +14308,13 @@ def test_all_lanes_evidence_redacts_route_allowlist_recompute_failures(
     module = load_evidence_module()
     records = complete_bundle(module)
 
-    for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
 
         def fail_recompute(
             _profile,
@@ -13724,6 +14334,10 @@ def test_all_lanes_evidence_redacts_route_allowlist_recompute_failures(
         assert "route_allowlist_hash cannot be recomputed:" not in blockers
         assert "secret-token" not in blockers
         assert exception_type.__name__ not in blockers
+        if exception_type is module.argparse.ArgumentTypeError:
+            assert (
+                "ArgumentTypeError" not in blockers
+            ), "route allowlist recompute ArgumentTypeError detail leaked"
 
 
 def test_all_lanes_evidence_rejects_canonical_source_validator_drift():
@@ -13819,7 +14433,13 @@ def test_all_lanes_evidence_redacts_destination_identity_failures(
     profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
     destination = records["sccp_destination_rollouts"][0]
 
-    for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
 
         def fail_parse(_identity, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} parser detail")
@@ -13839,6 +14459,10 @@ def test_all_lanes_evidence_redacts_destination_identity_failures(
         assert "verifier_identity is not canonical for eth:" not in rendered
         assert "secret-token" not in rendered
         assert exception_type.__name__ not in rendered
+        if exception_type is module.argparse.ArgumentTypeError:
+            assert (
+                "ArgumentTypeError" not in rendered
+            ), "destination identity ArgumentTypeError detail leaked"
 
 
 def test_all_lanes_cli_merges_toml_snippets(tmp_path, capsys):

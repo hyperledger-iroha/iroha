@@ -69,14 +69,27 @@ Defaults used by the integration test:
 - `txs_approved`
 - `commit_time_ms`
 - `sumeragi.tx_queue_depth`
+- `sumeragi.tx_queue_capacity`
+- `sumeragi.tx_queue_retained_bytes`
+- `sumeragi.tx_queue_max_retained_bytes`
 - `sumeragi.tx_queue_saturated`
+- `sumeragi.tx_queue_saturated_by_count`
+- `sumeragi.tx_queue_saturated_by_bytes`
+- `sumeragi.tx_queue_saturated_by_age`
+- `sumeragi.tx_queue_oldest_queued_age_ms`
 
 ### `/v1/sumeragi/status`
 - `view_change_install_total`
 - `pacemaker_backpressure_deferrals_total`
 - `tx_queue_depth`
 - `tx_queue_capacity`
+- `tx_queue_retained_bytes`
+- `tx_queue_max_retained_bytes`
 - `tx_queue_saturated`
+- `tx_queue_saturated_by_count`
+- `tx_queue_saturated_by_bytes`
+- `tx_queue_saturated_by_age`
+- `tx_queue_oldest_queued_age_ms`
 - `commit_qc.height`
 
 ### `/metrics` (Prometheus)

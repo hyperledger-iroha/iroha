@@ -21,6 +21,7 @@ import hashlib
 from html import unescape as html_unescape
 from urllib.parse import unquote
 import json
+import stat
 import sys
 import urllib.error
 import urllib.request
@@ -183,10 +184,16 @@ def _parse_hex32(value: str, *, label: str) -> bytes:
 
 
 def _parse_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("TRON live hex nonzero must be a boolean")
+
     return _parse_exact_hex_blob(value, label=label, nonzero=nonzero)
 
 
 def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("TRON live exact hex nonzero must be a boolean")
+
     if not isinstance(value, str):
         raise RuntimeError(f"{label} must be hex")
     if value != value.strip():
@@ -216,6 +223,9 @@ def _parse_exact_hex32_blob(
     label: str,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("TRON live exact hex32 nonzero must be a boolean")
+
     parsed = _parse_exact_hex_blob(value, label=label, nonzero=False)
     if len(parsed) != 32:
         raise RuntimeError(f"{label} must be 32 bytes")
@@ -225,6 +235,9 @@ def _parse_exact_hex32_blob(
 
 
 def _parse_hex32_blob(value: Any, *, label: str, nonzero: bool = True) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("TRON live hex32 nonzero must be a boolean")
+
     parsed = _parse_hex_blob(value, label=label, nonzero=nonzero)
     if len(parsed) != 32:
         raise RuntimeError(f"{label} must be 32 bytes")
@@ -314,6 +327,9 @@ def _optional_hex_blob_arg(
     *,
     nonzero: bool = True,
 ) -> bytes | None:
+    if type(nonzero) is not bool:
+        raise ValueError("TRON live optional hex nonzero must be a boolean")
+
     value = getattr(args, name, None)
     if value is None:
         return None
@@ -1563,7 +1579,7 @@ def _source_event_result_bytes_are_success(result_bytes: bytes) -> bool:
                 cursor,
                 label="source-event transaction result bytes",
             )
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             return False
         previous_field_number = field_number
         if field_number == 2 and value != 0:
@@ -1694,6 +1710,8 @@ def _tron_block_header_raw_data_bytes(
     *,
     tx_trie_root_nonzero: bool = True,
 ) -> bytes:
+    if type(tx_trie_root_nonzero) is not bool:
+        raise ValueError("TRON block header txTrieRoot nonzero must be a boolean")
     timestamp = _parse_protobuf_nonnegative_int(
         raw_data.get("timestamp"),
         label="source-event block timestamp",
@@ -1764,6 +1782,8 @@ def _parse_solid_block_header(
     expected_block_number: int,
     tx_trie_root_nonzero: bool,
 ) -> dict[str, Any]:
+    if type(tx_trie_root_nonzero) is not bool:
+        raise ValueError("TRON block header txTrieRoot nonzero must be a boolean")
     block_id = _parse_exact_hex32_blob(response.get("blockID"), label=f"{label} blockID")
     header = response.get("block_header")
     if not isinstance(header, dict):
@@ -1914,7 +1934,7 @@ def _source_event_solid_block_header_proof_summary(
             proof_input
         )
         proof_hash = sccp_client.tron_solid_block_header_proof_hash(proof_input)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "solid_block_header_proof_ready": False,
             "solid_block_header_proof_blocker": "solid block header proof is invalid",
@@ -1986,6 +2006,9 @@ def _source_event_witness_schedule_summary(
     expected_schedule_hash: bytes | None,
     allow_expected_mismatch: bool = False,
 ) -> dict[str, Any]:
+    if type(allow_expected_mismatch) is not bool:
+        raise ValueError("allow_expected_mismatch must be a boolean")
+
     if payload is None:
         return {
             "witness_schedule_proof_ready": False,
@@ -1999,7 +2022,7 @@ def _source_event_witness_schedule_summary(
             label="witness schedule hash",
         )
         witnesses = _decode_tron_witness_schedule_payload(payload)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_schedule_proof_ready": False,
             "witness_schedule_proof_blocker": "witness schedule payload is invalid",
@@ -2127,7 +2150,7 @@ def _source_event_witness_schedule_transition_chain_summary(
             ),
             label="active witness schedule hash",
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_schedule_transition_chain_ready": False,
             "witness_schedule_transition_chain_required": True,
@@ -2162,7 +2185,7 @@ def _source_event_witness_schedule_transition_chain_summary(
                     parent_payload_value,
                     label=f"witness schedule transition {index} parent payload",
                 )
-            except (SystemExit, RuntimeError, TypeError, ValueError):
+            except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
                 return {
                     "witness_schedule_transition_chain_ready": False,
                     "witness_schedule_transition_chain_required": True,
@@ -2176,7 +2199,7 @@ def _source_event_witness_schedule_transition_chain_summary(
                 sccp_client.tron_witness_schedule_hash_from_payload(parent_payload),
                 label=f"witness schedule transition {index} parent schedule hash",
             )
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2207,7 +2230,7 @@ def _source_event_witness_schedule_transition_chain_summary(
                 sccp_client.tron_witness_schedule_payload_hash(next_payload),
                 label=f"witness schedule transition {index} next payload hash",
             )
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2299,7 +2322,7 @@ def _source_event_witness_schedule_transition_chain_summary(
                     message_input
                 )
             )
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2323,7 +2346,7 @@ def _source_event_witness_schedule_transition_chain_summary(
 
         try:
             parent_witnesses = _decode_tron_witness_schedule_payload(parent_payload)
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2397,7 +2420,7 @@ def _source_event_witness_schedule_transition_chain_summary(
             seal_hash = sccp_client.tron_witness_schedule_transition_seal_hash(
                 seal_input
             )
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             return {
                 "witness_schedule_transition_chain_ready": False,
                 "witness_schedule_transition_chain_required": True,
@@ -2548,7 +2571,7 @@ def _source_event_witness_seal_summary(
 
     try:
         witnesses = _decode_tron_witness_schedule_payload(payload)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness schedule payload is invalid",
@@ -2557,7 +2580,7 @@ def _source_event_witness_seal_summary(
     witness_weights = [weight for _address, weight in witnesses]
     try:
         signer_indices = _signer_indices_from_bitmap(signers_bitmap, len(witnesses))
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness seal signer bitmap is invalid",
@@ -2568,7 +2591,7 @@ def _source_event_witness_seal_summary(
         witness_schedule_hash = sccp_client.tron_witness_schedule_hash_from_payload(
             payload
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness schedule payload is invalid",
@@ -2595,7 +2618,7 @@ def _source_event_witness_seal_summary(
             solid_block_message_hash,
             label="solid block message hash",
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness seal solid-block message is invalid",
@@ -2625,7 +2648,7 @@ def _source_event_witness_seal_summary(
         seal_bytes = sccp_client.canonical_tron_witness_seal_bytes(seal_input)
         seal_hash = sccp_client.tron_witness_seal_hash(seal_input)
         seal_hash_bytes = _parse_hex32_blob(seal_hash, label="witness seal hash")
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return {
             "witness_seal_proof_ready": False,
             "witness_seal_proof_blocker": "witness seal proof is invalid",
@@ -2915,7 +2938,7 @@ def _source_event_transaction_source_proof_summary(
             proof_hash,
             label="transaction source proof hash",
         )
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return (
             {
                 "transaction_source_proof_ready": False,
@@ -3012,7 +3035,7 @@ def _source_event_solid_block_summary(
                     active_witness_schedule_payload
                 )
             }
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             witness_weights = None
     tx_trie_root = child_header["tx_trie_root"]
     transactions = response.get("transactions")
@@ -3569,8 +3592,14 @@ def _tron_route_canary_transaction_evidence_hash(
         network_id,
         label="route-canary network id",
     )
+    if type(used_message_proof) is not bool:
+        raise ValueError("route-canary used_message_proof must be a boolean")
     if used_message_proof is not True:
         raise RuntimeError("route-canary usedMessageProofs witness must be true")
+    if type(raw_data_owner_matches_transaction) is not bool:
+        raise ValueError(
+            "route-canary raw_data_owner_matches_transaction must be a boolean"
+        )
     if raw_data_owner_matches_transaction is not True:
         raise RuntimeError("route-canary raw_data owner must match transaction owner")
     signature_sha256 = _require_nonzero_word(
@@ -3584,6 +3613,10 @@ def _tron_route_canary_transaction_evidence_hash(
     if signature_recovered_address != transaction_owner_address:
         raise RuntimeError(
             "route-canary signature recovered address must match transaction owner"
+        )
+    if type(signature_recovers_to_owner) is not bool:
+        raise ValueError(
+            "route-canary signature_recovers_to_owner must be a boolean"
         )
     if signature_recovers_to_owner is not True:
         raise RuntimeError("route-canary signature recovery witness must be true")
@@ -4539,6 +4572,8 @@ def collect_source_bridge_evidence(
 ) -> dict[str, Any]:
     """Collect and verify read-only source bridge evidence."""
 
+    if type(include_contract_metadata) is not bool:
+        raise ValueError("include_contract_metadata must be a boolean")
     bridge_payload = parse_tron_address_payload(
         source_bridge_address,
         label="source bridge address",
@@ -4683,6 +4718,8 @@ def collect_destination_verifier_evidence(
 ) -> dict[str, Any]:
     """Collect and verify read-only TRON destination verifier evidence."""
 
+    if type(include_contract_metadata) is not bool:
+        raise ValueError("include_contract_metadata must be a boolean")
     verifier_payload = parse_tron_address_payload(
         destination_verifier_address,
         label="destination verifier address",
@@ -5143,6 +5180,10 @@ def _validate_route_allowlist_hash(
     destination_verifier: Any,
     destination_binding_pinned: bool,
 ) -> dict[str, Any]:
+    if type(destination_binding_pinned) is not bool:
+        raise ValueError(
+            "TRON route allowlist destination_binding_pinned must be a boolean"
+        )
     if not isinstance(destination_verifier, dict):
         raise ValueError("--route-allowlist-hash requires --destination-verifier-address")
     if not isinstance(source_records, dict):
@@ -6330,6 +6371,32 @@ def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] |
     }
 
 
+def _reject_runtime_file_symlink_path(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(mode):
+            raise ValueError("runtime file must not be a symlink")
+
+
+def _read_runtime_text_file(path: Path, *, error_message: str) -> str:
+    try:
+        _reject_runtime_file_symlink_path(path)
+    except (OSError, ValueError):
+        raise ValueError(error_message) from None
+    if not path.is_file():
+        raise ValueError(error_message) from None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        raise ValueError(error_message) from None
+
+
 def _runtime_tron_pro_api_key(args: argparse.Namespace) -> str | None:
     inline_key = getattr(args, "tron_pro_api_key", None)
     key_file = getattr(args, "tron_pro_api_key_file", None)
@@ -6337,10 +6404,10 @@ def _runtime_tron_pro_api_key(args: argparse.Namespace) -> str | None:
         raise ValueError("--tron-pro-api-key and --tron-pro-api-key-file cannot both be supplied")
     from_file = key_file is not None
     if key_file is not None:
-        try:
-            inline_key = Path(key_file).expanduser().read_text(encoding="utf-8")
-        except OSError:
-            raise ValueError("--tron-pro-api-key-file cannot be read") from None
+        inline_key = _read_runtime_text_file(
+            Path(key_file).expanduser(),
+            error_message="--tron-pro-api-key-file cannot be read",
+        )
     if inline_key is None:
         return None
     return _tron_pro_api_key_token(
@@ -6359,12 +6426,10 @@ def _runtime_witness_schedule_payload(args: argparse.Namespace) -> bytes | None:
         )
     from_file = payload_file is not None
     if from_file:
-        try:
-            inline_payload = Path(payload_file).expanduser().read_text(
-                encoding="utf-8"
-            )
-        except OSError:
-            raise ValueError("--witness-schedule-payload-file cannot be read") from None
+        inline_payload = _read_runtime_text_file(
+            Path(payload_file).expanduser(),
+            error_message="--witness-schedule-payload-file cannot be read",
+        )
     if inline_payload is None:
         return None
     if not from_file:
@@ -6402,12 +6467,12 @@ def _runtime_witness_schedule_transitions(
             )
         text = value
         if text.startswith("@"):
-            try:
-                text = Path(text[1:]).expanduser().read_text(encoding="utf-8")
-            except OSError:
-                raise ValueError(
+            text = _read_runtime_text_file(
+                Path(text[1:]).expanduser(),
+                error_message=(
                     f"--witness-schedule-transition-json {index} file cannot be read"
-                ) from None
+                ),
+            )
         try:
             parsed = json.loads(
                 text,
@@ -6456,26 +6521,40 @@ def _bounded_header_depth(args: argparse.Namespace, name: str) -> int:
     return value
 
 
+def _runtime_bool_arg(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    default: bool = False,
+) -> bool:
+    if type(default) is not bool:
+        raise ValueError("TRON runtime boolean default must be a boolean")
+    value = getattr(args, name, default)
+    if type(value) is not bool:
+        raise ValueError(f"--{name.replace('_', '-')} must be true or false")
+    return value
+
+
 def _constant_endpoint(args: argparse.Namespace) -> str:
-    if getattr(args, "solid", False):
+    if _runtime_bool_arg(args, "solid"):
         return "walletsolidity/triggerconstantcontract"
     return "wallet/triggerconstantcontract"
 
 
 def _transaction_info_endpoint(args: argparse.Namespace) -> str:
-    if getattr(args, "solid", False):
+    if _runtime_bool_arg(args, "solid"):
         return "walletsolidity/gettransactioninfobyid"
     return "wallet/gettransactioninfobyid"
 
 
 def _transaction_endpoint(args: argparse.Namespace) -> str:
-    if getattr(args, "solid", False):
+    if _runtime_bool_arg(args, "solid"):
         return "walletsolidity/gettransactionbyid"
     return "wallet/gettransactionbyid"
 
 
 def _block_endpoint(args: argparse.Namespace) -> str:
-    if getattr(args, "solid", False):
+    if _runtime_bool_arg(args, "solid"):
         return "walletsolidity/getblockbynum"
     return "wallet/getblockbynum"
 
@@ -6487,6 +6566,9 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect all requested evidence and return a JSON-serializable summary."""
 
+    no_getcontract = _runtime_bool_arg(args, "no_getcontract")
+    full_toml = _runtime_bool_arg(args, "full_toml")
+    _runtime_bool_arg(args, "solid")
     caller_address = None
     if args.caller_address is not None:
         caller_payload = parse_tron_address_payload(args.caller_address, label="caller address")
@@ -6504,7 +6586,7 @@ def collect_live_evidence(
         raise ValueError(
             "source record/config hash preflight requires --source-bridge-address"
         )
-    if source_event_digest is not None and getattr(args, "full_toml", False):
+    if source_event_digest is not None and full_toml:
         raise ValueError("--source-event-digest is only supported for JSON evidence output")
     if (
         _optional_hex32_arg(args, "expected_destination_binding_hash") is not None
@@ -6559,7 +6641,7 @@ def collect_live_evidence(
             caller_address=caller_address,
             tron_pro_api_key=tron_pro_api_key,
             constant_endpoint=str(summary["constant_endpoint"]),
-            include_contract_metadata=not args.no_getcontract,
+            include_contract_metadata=not no_getcontract,
             opener=opener,
             timeout=args.timeout,
         )
@@ -6820,7 +6902,7 @@ def collect_live_evidence(
             caller_address=caller_address,
             tron_pro_api_key=tron_pro_api_key,
             constant_endpoint=str(summary["constant_endpoint"]),
-            include_contract_metadata=not args.no_getcontract,
+            include_contract_metadata=not no_getcontract,
             opener=opener,
             timeout=args.timeout,
         )
@@ -7412,13 +7494,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

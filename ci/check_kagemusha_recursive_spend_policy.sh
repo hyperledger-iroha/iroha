@@ -223,11 +223,11 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendVerifyResultV1"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
-        '"sha256_hex": "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"',
-        '"sha256_hex": "ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d"',
+        '"sha256_hex": "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"',
+        '"sha256_hex": "d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43"',
         '"sha256_hex": "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"',
-        '"sha256_hex": "f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250"',
-        '"sha256_hex": "d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838"',
+        '"sha256_hex": "f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d"',
+        '"sha256_hex": "69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6"',
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
@@ -2510,6 +2510,8 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "offline_v2_notes_redeem_rejects_kagemusha_public_binding_tamper",
     ),
     "crates/iroha_torii/src/openapi.rs": (
+        "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+        "Classic Offline V2 audit is retired and this retired route fails closed.",
         "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
         "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
@@ -2520,6 +2522,8 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         'assert!(redeem_description.contains("ignored auxiliary fields"));',
     ),
     "docs/portal/static/openapi/torii.json": (
+        "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+        "Classic Offline V2 audit is retired and this retired route fails closed.",
         "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
         "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
@@ -2527,6 +2531,8 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
     ),
     "docs/portal/static/openapi/versions/current/torii.json": (
+        "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+        "Classic Offline V2 audit is retired and this retired route fails closed.",
         "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
         "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
@@ -3876,6 +3882,18 @@ def check_core_offline_first_release_test_wording():
     ):
         if needle not in rust:
             fail(f"core Offline/Kagemusha tests missing first-release wording marker: {needle}")
+    config = read("crates/iroha_config/src/parameters/user.rs")
+    for forbidden in (
+        "removed Kagemusha leg" "acy readiness knob",
+    ):
+        if forbidden in config:
+            fail(f"iroha_config Kagemusha force flag tests contain stale first-release wording: {forbidden}")
+    for needle in (
+        "removed Kagemusha force flag must not parse",
+        "removed Kagemusha force flag should produce a parse error",
+    ):
+        if needle not in config:
+            fail(f"iroha_config Kagemusha force flag tests missing first-release wording marker: {needle}")
 
 
 def check_rust_reserved_lineage_policy():
@@ -5149,10 +5167,6 @@ def extract_rust_const_str_array_body(source, name, label):
 
 
 def check_torii_offline_v2_kagemusha_redeem_coverage():
-    require_needles(
-        TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE,
-        "is missing Torii offline-v2 Kagemusha redeem ingress coverage",
-    )
     for relative in (
         "crates/iroha_torii/src/openapi.rs",
         "docs/portal/static/openapi/torii.json",
@@ -5163,6 +5177,15 @@ def check_torii_offline_v2_kagemusha_redeem_coverage():
                 f"{relative} contains stale Offline V2 X-Iroha header wording: "
                 "Legacy X-Iroha-* app-auth headers"
             )
+        if "compatibility route fails closed" in read(relative):
+            fail(
+                f"{relative} contains stale Offline V2 retired route wording: "
+                "compatibility route fails closed"
+            )
+    require_needles(
+        TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE,
+        "is missing Torii offline-v2 Kagemusha redeem ingress coverage",
+    )
 
 
 def check_torii_offline_v2_retired_redeem_alias_coverage():
@@ -5797,13 +5820,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "append",
             "KagemushaRecursiveSpendBundleV1",
             13622,
-            "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5",
+            "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0",
         ),
         "verify_request": (
             "verify",
             "KagemushaRecursiveSpendVerifyRequestV1",
             13628,
-            "ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d",
+            "d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43",
         ),
         "verify_result": (
             "verify",
@@ -5815,13 +5838,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "redeem",
             "KagemushaRecursiveSpendRedeemRequestV1",
             26275,
-            "f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250",
+            "f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d",
         ),
         "redeem_instruction": (
             "redeem",
             "RedeemKagemushaRecursive",
             26262,
-            "d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838",
+            "69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6",
         ),
     }
     by_name = {
@@ -6711,8 +6734,8 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     target = SHARED_ABI7_ARCHIVE_FIXTURE_PATH
     source = read(target)
     mutated = source.replace(
-        '"sha256_hex": "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"',
-        '"sha256_hex": "007b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"',
+        '"sha256_hex": "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"',
+        '"sha256_hex": "003ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"',
         1,
     )
     if mutated == source:
@@ -6724,7 +6747,7 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
         message = str(error)
         expected = (
             f'{target} is missing shared recursive spend ABI-7 fixture coverage: '
-            '"sha256_hex": "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"'
+            '"sha256_hex": "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"'
         )
         if expected not in message:
             raise SystemExit(
@@ -8021,9 +8044,9 @@ if mode == "--negative-control-core-folded-path-wording":
     raise SystemExit("negative control failed: Kagemusha folded-path wording drift was not detected")
 
 if mode == "--negative-control-core-offline-first-release-test-wording":
-    target = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
     cases = (
         (
+            "crates/iroha_core/src/smartcontracts/isi/offline.rs",
             "partial recursive redeem change output must not record the retired v1 tree root",
             "partial recursive redeem change output must not record the leg"
             "acy tree root",
@@ -8031,6 +8054,7 @@ if mode == "--negative-control-core-offline-first-release-test-wording":
             "acy tree root",
         ),
         (
+            "crates/iroha_core/src/smartcontracts/isi/offline.rs",
             'proof.proof.bytes = b"non-zk1 transcript payload".to_vec();',
             'proof.proof.bytes = b"leg'
             'acy transcript payload".to_vec();',
@@ -8038,13 +8062,28 @@ if mode == "--negative-control-core-offline-first-release-test-wording":
             "acy transcript payload",
         ),
         (
+            "crates/iroha_core/src/smartcontracts/isi/offline.rs",
             "issuer signature should authorize without attestation marker",
             "middleware issuer signature should remain a valid fallback",
             "core Offline/Kagemusha tests contain stale first-release wording: valid fallback",
         ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "removed Kagemusha force flag must not parse",
+            "removed Kagemusha leg" "acy readiness knob must not parse",
+            "iroha_config Kagemusha force flag tests contain stale first-release wording: removed Kagemusha leg"
+            "acy readiness knob",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "removed Kagemusha force flag should produce a parse error",
+            "removed Kagemusha leg" "acy readiness knob should produce a parse error",
+            "iroha_config Kagemusha force flag tests contain stale first-release wording: removed Kagemusha leg"
+            "acy readiness knob",
+        ),
     )
     first_message = None
-    for before, after, expected in cases:
+    for target, before, after, expected in cases:
         source = read(target)
         mutated = source.replace(before, after, 1)
         if mutated == source:
@@ -8930,6 +8969,18 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
     cases = (
         (
             "crates/iroha_torii/src/openapi.rs",
+            "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
+            "compatibility route fails closed",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
+            "Classic Offline V2 audit is retired and this retired route fails closed.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed.",
+            "compatibility route fails closed",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
             "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
             "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
             "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
@@ -8960,6 +9011,18 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
         ),
         (
             "docs/portal/static/openapi/torii.json",
+            "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
+            "compatibility route fails closed",
+        ),
+        (
+            "docs/portal/static/openapi/torii.json",
+            "Classic Offline V2 audit is retired and this retired route fails closed.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed.",
+            "compatibility route fails closed",
+        ),
+        (
+            "docs/portal/static/openapi/torii.json",
             "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
             "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
             "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
@@ -8975,6 +9038,18 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
             "Optional amount and source_note_commitment echo fields",
             "Optional amount echo fields",
             "Optional amount and source_note_commitment echo fields",
+        ),
+        (
+            "docs/portal/static/openapi/versions/current/torii.json",
+            "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
+            "compatibility route fails closed",
+        ),
+        (
+            "docs/portal/static/openapi/versions/current/torii.json",
+            "Classic Offline V2 audit is retired and this retired route fails closed.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed.",
+            "compatibility route fails closed",
         ),
         (
             "docs/portal/static/openapi/versions/current/torii.json",
@@ -9015,6 +9090,11 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
                 expected = (
                     f"{target} contains stale Offline V2 X-Iroha header wording: "
                     "Legacy X-Iroha-* app-auth headers"
+                )
+            elif expected_marker == "compatibility route fails closed":
+                expected = (
+                    f"{target} contains stale Offline V2 retired route wording: "
+                    "compatibility route fails closed"
                 )
             else:
                 expected = (

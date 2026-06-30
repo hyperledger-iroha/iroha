@@ -89,6 +89,17 @@ def checker_summary_write_open_flags() -> int:
     return flags
 
 
+def write_all_checker_summary_bytes(fd: int, payload: bytes) -> None:
+    """Write every checker summary byte, including after short writes."""
+
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write checker summary")
+        view = view[written:]
+
+
 def _checker_artifact_error_message(message: Any, *, label: str) -> str:
     """Return a canonical artifact error message or reject unsafe text."""
 
@@ -496,10 +507,7 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
     fd = -1
     try:
         fd = os.open(summary_out, checker_summary_write_open_flags(), 0o666)
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1
-        with handle:
-            handle.write(summary_text)
+        write_all_checker_summary_bytes(fd, summary_text.encode("utf-8"))
     except (OSError, RuntimeError) as error:
         summary_label = path_diagnostic_label(summary_out)
         return [

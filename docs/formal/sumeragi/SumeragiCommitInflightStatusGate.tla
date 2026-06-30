@@ -494,8 +494,7 @@ SafetyAnchors ==
   /\ ProjectionAnchors
 
 CommitInflightStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllCommitInflightStatusCandidatesMatchSpec
   /\ SafetyAnchors
 
 CommitInflightStatusCorrectnessEnvelope ==

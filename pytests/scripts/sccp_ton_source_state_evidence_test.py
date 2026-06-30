@@ -189,7 +189,13 @@ def test_ton_source_hex_parser_redacts_parser_causes():
 def test_ton_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token TON source hex TypeError detail"
             if exception_type is TypeError
@@ -215,6 +221,10 @@ def test_ton_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
                 assert rendered == "source state verifier hash must be hex"
                 assert "secret-token" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "TON source hex ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -222,6 +232,25 @@ def test_ton_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
                     "TON source-state parser "
                     f"{exception_type.__name__} was accepted"
                 )
+
+
+def test_ton_source_hex_nonzero_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="source state verifier hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "TON source-state fixed hex nonzero must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed TON source-state fixed-hex nonzero control accepted"
+            )
 
 
 def test_ton_source_domain_parser_requires_canonical_ascii_decimal():
@@ -315,6 +344,26 @@ def test_ton_source_state_evidence_rejects_boolean_target_domain():
         assert "target_domain must be an exact u32" in str(exc)
     else:
         raise AssertionError("boolean TON target domain reached vk hash derivation")
+
+
+def test_ton_source_state_evidence_rejects_boolean_source_domain():
+    module = load_evidence_module()
+    args = ton_args(module)
+    args.source_domain = True
+
+    try:
+        module._json_summary(args)
+    except SystemExit as exc:
+        assert "source_domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean TON source domain was accepted")
+
+    try:
+        module.ton_source_adapter_verifier_vk_hash(source_domain=True)
+    except ValueError as exc:
+        assert "source_domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean TON source domain reached vk hash derivation")
 
 
 def test_ton_toml_rendering_requires_full_light_client_evidence():
@@ -530,6 +579,32 @@ def test_ton_direct_record_hashes_reject_template_component_hashes():
         else:
             raise AssertionError(
                 f"TON deployment hash accepted template {label}"
+            )
+
+
+def test_ton_direct_record_hashes_reject_cross_role_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = module._template_component_hashes()["consensus_verifier_hash"]
+
+    for record_hash, field in (
+        (module.ton_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.ton_source_adapter_engine_deployment_record_hash,
+            "source_state_verifier_hash",
+        ),
+    ):
+        args = ton_args(module)
+        setattr(args, field, template_hash)
+        label = field.replace("_", " ")
+
+        try:
+            record_hash(args)
+        except SystemExit as exc:
+            assert f"live {label}" in str(exc)
+            assert "template-derived consensus verifier hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"TON record hash accepted cross-role template hash for {field}"
             )
 
 

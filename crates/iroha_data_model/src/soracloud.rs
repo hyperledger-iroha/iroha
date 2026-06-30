@@ -5307,13 +5307,17 @@ fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes
     if envelope_bytes.iter().all(is_text_byte) {
         return soracloud_fhe_stark_native_envelope_text_span_is_placeholder(envelope_bytes);
     }
-    envelope_bytes
+    if envelope_bytes
         .split(|byte| !is_text_byte(byte))
         .any(|decorated_text| {
             !decorated_text.is_empty()
                 && !decorated_text.iter().all(u8::is_ascii_whitespace)
                 && soracloud_fhe_stark_native_envelope_text_span_is_placeholder(decorated_text)
         })
+    {
+        return true;
+    }
+    soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(envelope_bytes)
 }
 
 fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(text: &[u8]) -> bool {
@@ -5323,6 +5327,22 @@ fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(text: &[u8]) -> 
         &lower,
         SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
     )
+}
+
+fn soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(bytes: &[u8]) -> bool {
+    let mut collapsed_text = Vec::with_capacity(bytes.len());
+    collapsed_text.extend(
+        bytes
+            .iter()
+            .filter(|byte| byte.is_ascii_alphanumeric())
+            .map(u8::to_ascii_lowercase),
+    );
+    !collapsed_text.is_empty()
+        && soracloud_collapsed_placeholder_markers(
+            SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
+        )
+        .iter()
+        .any(|marker| ascii_windows_contains(&collapsed_text, marker))
 }
 
 fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8], markers: &[&[u8]]) -> bool {
@@ -19970,6 +19990,20 @@ mod tests {
         );
         assert_native_envelope_error(&err, "placeholder or non-production text");
 
+        let mut marker_split_material = sample_fhe_full_bootstrap_material_proof();
+        let envelope = open_verify_envelope_with_native_envelope_bytes(
+            &marker_split_material.proof.proof.bytes,
+            b"native verifier metadata operator your\xffproof payload".to_vec(),
+        );
+        replace_fhe_full_bootstrap_material_open_verify_envelope(
+            &mut marker_split_material,
+            &envelope,
+        );
+        let err = marker_split_material.validate().expect_err(
+            "full-bootstrap material proof must reject binary-split placeholder native envelope text",
+        );
+        assert_native_envelope_error(&err, "placeholder or non-production text");
+
         let mut execution = sample_fhe_full_bootstrap_execution_proof();
         let envelope = open_verify_envelope_with_native_envelope_bytes(
             &execution.proof.proof.bytes,
@@ -20003,6 +20037,17 @@ mod tests {
         );
         let err = binary_fragmented.validate().expect_err(
             "full-bootstrap execution proof must reject binary-fragmented placeholder native envelope text",
+        );
+        assert_native_envelope_error(&err, "placeholder or non-production text");
+
+        let mut marker_split = sample_fhe_full_bootstrap_execution_proof();
+        let envelope = open_verify_envelope_with_native_envelope_bytes(
+            &marker_split.proof.proof.bytes,
+            b"native verifier metadata operator your\xffproof payload".to_vec(),
+        );
+        replace_fhe_full_bootstrap_execution_open_verify_envelope(&mut marker_split, &envelope);
+        let err = marker_split.validate().expect_err(
+            "full-bootstrap execution proof must reject binary-split placeholder native envelope text",
         );
         assert_native_envelope_error(&err, "placeholder or non-production text");
 

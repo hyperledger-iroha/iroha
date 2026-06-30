@@ -194,8 +194,7 @@ LocalPeerRemovedStatusSafetyAnchors ==
   /\ GetterSideEffectFreeAnchors
 
 LocalPeerRemovedStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllLocalPeerRemovedActionsMatchSpec
   /\ LocalPeerRemovedStatusSafetyAnchors
 
 LocalPeerRemovedStatusCorrectnessEnvelope ==

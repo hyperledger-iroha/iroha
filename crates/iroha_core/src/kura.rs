@@ -1993,6 +1993,11 @@ impl Kura {
     /// Reconcile lane storage topology, provisioning directories for new lanes and
     /// archiving storage for retired lanes.
     ///
+    /// When the same lane id appears in both `added` and `retired`, the operation
+    /// is a fresh replacement rather than an alias relabel. The old segment is
+    /// archived before the new segment is provisioned so the new lane incarnation
+    /// cannot inherit stale block or merge-ledger files.
+    ///
     /// # Errors
     /// Returns an [`Error`] if preparing or retiring storage directories fails for any entry.
     pub fn reconcile_lane_segments(
@@ -2003,13 +2008,31 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
+        let replacement_ids: BTreeSet<_> = added
+            .iter()
+            .map(|entry| entry.lane_id)
+            .filter(|lane_id| retired.iter().any(|entry| entry.lane_id == *lane_id))
+            .collect();
         let mut changed = false;
+
+        for entry in retired
+            .iter()
+            .copied()
+            .filter(|entry| replacement_ids.contains(&entry.lane_id))
+        {
+            self.retire_lane_storage(entry)?;
+            changed = true;
+        }
         for entry in added {
             self.prepare_lane_storage(entry)?;
             changed = true;
         }
 
-        for entry in retired {
+        for entry in retired
+            .iter()
+            .copied()
+            .filter(|entry| !replacement_ids.contains(&entry.lane_id))
+        {
             self.retire_lane_storage(entry)?;
             changed = true;
         }
@@ -2044,10 +2067,29 @@ impl Kura {
             return Ok(());
         }
 
+        let added_by_lane: BTreeMap<_, _> =
+            added.iter().map(|entry| (entry.lane_id, *entry)).collect();
+        let retired_by_lane: BTreeMap<_, _> = retired
+            .iter()
+            .map(|entry| (entry.lane_id, *entry))
+            .collect();
+
+        for (lane_id, previous) in &retired_by_lane {
+            if let Some(current) = added_by_lane.get(lane_id) {
+                self.preflight_replace_lane_storage(previous, current)?;
+            }
+        }
+
         for entry in added {
+            if retired_by_lane.contains_key(&entry.lane_id) {
+                continue;
+            }
             self.preflight_prepare_lane_storage(entry)?;
         }
         for entry in retired {
+            if added_by_lane.contains_key(&entry.lane_id) {
+                continue;
+            }
             self.preflight_retire_lane_storage(entry)?;
         }
         for (previous, current) in relabelled {
@@ -2055,6 +2097,40 @@ impl Kura {
         }
 
         Ok(())
+    }
+
+    fn preflight_replace_lane_storage(
+        &self,
+        previous: &LaneConfigEntry,
+        current: &LaneConfigEntry,
+    ) -> Result<()> {
+        self.preflight_retire_lane_storage(previous)?;
+
+        let old_dir = previous.blocks_dir(&self.store_root);
+        let new_dir = current.blocks_dir(&self.store_root);
+        if old_dir != new_dir && new_dir.exists() {
+            return Err(Error::MkDir(
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "lane storage replacement target already exists",
+                ),
+                new_dir,
+            ));
+        }
+
+        let old_merge = previous.merge_log_path(&self.store_root);
+        let new_merge = current.merge_log_path(&self.store_root);
+        if old_merge != new_merge && new_merge.exists() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "lane merge-ledger replacement target already exists",
+                ),
+                new_merge,
+            ));
+        }
+
+        self.preflight_prepare_lane_storage(current)
     }
 
     /// Rename lane storage directories when lane aliases change.

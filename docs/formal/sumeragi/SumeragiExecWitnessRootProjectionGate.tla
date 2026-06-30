@@ -375,9 +375,12 @@ ExecWitnessRootSafetyAnchors ==
 
 SafetyFast == Safety
 
-ExecWitnessRootProjectionExactness ==
-  /\ \A c \in Cases:
+ExecWitnessRootProjectionActionsMatchSpec ==
+  \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
+
+ExecWitnessRootProjectionExactness ==
+  /\ ExecWitnessRootProjectionActionsMatchSpec
   /\ ExecWitnessRootSafetyAnchors
 
 ExecWitnessRootProjectionCorrectnessEnvelope ==

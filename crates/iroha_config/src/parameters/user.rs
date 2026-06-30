@@ -25430,10 +25430,10 @@ initial_delay_seconds = 17
         offline.insert("kagemusha_force_legacy".into(), Value::Boolean(true));
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("removed Kagemusha legacy readiness knob must not parse");
+            .expect_err("removed Kagemusha force flag must not parse");
         assert!(
             !error.to_string().is_empty(),
-            "removed Kagemusha legacy readiness knob should produce a parse error"
+            "removed Kagemusha force flag should produce a parse error"
         );
     }
 

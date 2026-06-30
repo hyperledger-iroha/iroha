@@ -130,8 +130,8 @@ CommitWorkerConfigPositiveExact ==
 CommitWorkerConfigExactness ==
   /\ CommitWorkerConfigOutputExact
   /\ CommitWorkerConfigFloorExact
-  /\ CommitWorkerConfigExplicitExact
-  /\ CommitWorkerConfigPositiveExact
+  /\ ExplicitCapPreservation
+  /\ QueueCapsPositive
 
 CommitWorkerConfigCorrectnessEnvelope ==
   /\ TypeInvariant

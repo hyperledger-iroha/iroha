@@ -239,10 +239,45 @@ def test_eth_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
         raise AssertionError("missing secret ETH source bridge runtime file was accepted")
 
 
+def test_eth_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
+    module = load_evidence_module()
+    outside = tmp_path / "secret-token-eth-runtime-outside.hex"
+    outside.write_text("0x6080604052\n", encoding="utf-8")
+    symlink_input = tmp_path / "secret-token-eth-runtime-link.hex"
+    symlink_input.symlink_to(outside)
+    directory_input = tmp_path / "secret-token-eth-runtime-dir.hex"
+    directory_input.mkdir()
+    missing_input = tmp_path / "secret-token-eth-runtime-missing.hex"
+
+    for path in (symlink_input, directory_input, missing_input):
+        try:
+            module.parse_runtime_bytecode_file(
+                str(path),
+                label="source bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            suppress_context = exc.__suppress_context__
+        else:
+            raise AssertionError("ETH runtime bytecode file shape was accepted")
+
+        assert rendered == "source bridge runtime bytecode file cannot be read"
+        assert "secret-token" not in rendered
+        assert "IsADirectoryError" not in rendered
+        assert "FileNotFoundError" not in rendered
+        assert suppress_context is True
+
+
 def test_eth_source_bridge_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token ETH source hex TypeError detail"
             if exception_type is TypeError
@@ -278,12 +313,37 @@ def test_eth_source_bridge_direct_parsers_redact_helper_exit_parser_causes(monke
                     assert rendered == f"{label} must be hex"
                     assert "secret-token" not in rendered
                     assert exception_type.__name__ not in rendered
+                    if exception_type is module.argparse.ArgumentTypeError:
+                        assert (
+                            "ArgumentTypeError" not in rendered
+                        ), "ETH source hex ArgumentTypeError detail leaked"
                     assert exc.__cause__ is None
                     assert exc.__suppress_context__ is True
                 else:
                     raise AssertionError(
                         f"{label} parser {exception_type.__name__} was accepted"
                     )
+
+
+def test_eth_source_bridge_fixed_hex_nonzero_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="source trust anchor hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "ETH source bridge fixed hex nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed ETH source bridge fixed-hex nonzero control accepted"
+            )
 
 
 def test_eth_hash_parser_rejects_zero_and_wrong_width():
@@ -689,6 +749,34 @@ def test_eth_source_evidence_requires_receipt_block_receipts_root_for_toml():
     assert module._toml_receipt_metadata_ready(args) is False
 
 
+def test_eth_source_json_summary_rejects_non_boolean_readiness_helpers(monkeypatch):
+    module = load_evidence_module()
+    cases = (
+        (
+            "_toml_receipt_metadata_ready",
+            "ETH source bridge receipt metadata readiness must be a boolean",
+        ),
+        (
+            "_toml_runtime_bytecode_metadata_ready",
+            "ETH source bridge runtime bytecode readiness must be a boolean",
+        ),
+    )
+
+    for helper_name, expected_error in cases:
+        args = eth_args(module)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, helper_name, lambda _args: "ready")
+            try:
+                module._json_summary(args)
+            except ValueError as exc:
+                assert expected_error in str(exc)
+            else:
+                raise AssertionError(
+                    f"ETH source summary accepted non-boolean {helper_name}"
+                )
+
+
 def test_eth_source_evidence_rejects_boolean_target_domain():
     module = load_evidence_module()
     args = eth_args(module)
@@ -707,6 +795,26 @@ def test_eth_source_evidence_rejects_boolean_target_domain():
         assert "target_domain must be an exact u32" in str(exc)
     else:
         raise AssertionError("boolean ETH target domain reached vk hash derivation")
+
+
+def test_eth_source_evidence_rejects_boolean_source_domain():
+    module = load_evidence_module()
+    args = eth_args(module)
+    args.source_domain = True
+
+    try:
+        module._json_summary(args)
+    except ValueError as exc:
+        assert "source_domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean ETH source domain was accepted")
+
+    try:
+        module.eth_source_adapter_verifier_vk_hash(source_domain=True)
+    except ValueError as exc:
+        assert "source_domain must be an exact u32" in str(exc)
+    else:
+        raise AssertionError("boolean ETH source domain reached vk hash derivation")
 
 
 def test_eth_toml_rendering_rejects_reused_role_hashes():
@@ -914,6 +1022,32 @@ def test_eth_direct_record_hashes_reject_template_component_hashes():
         else:
             raise AssertionError(
                 f"ETH deployment hash accepted template {label}"
+            )
+
+
+def test_eth_direct_record_hashes_reject_cross_role_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = module._template_component_hashes()["consensus_verifier_hash"]
+
+    for record_hash, field in (
+        (module.eth_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.eth_source_adapter_engine_deployment_record_hash,
+            "source_bridge_emitter_code_hash",
+        ),
+    ):
+        args = eth_args(module)
+        setattr(args, field, template_hash)
+        label = field.replace("_", " ")
+
+        try:
+            record_hash(args)
+        except ValueError as exc:
+            assert f"live {label}" in str(exc)
+            assert "template-derived consensus verifier hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"ETH record hash accepted cross-role template hash for {field}"
             )
 
 

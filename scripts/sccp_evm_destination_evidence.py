@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import stat
 import sys
 from html import unescape as html_unescape
 from pathlib import Path
@@ -102,6 +103,9 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("EVM destination fixed hex nonzero must be a boolean")
+
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -109,7 +113,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -134,21 +138,44 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     return raw
 
 
+def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            break
+        if stat.S_ISLNK(mode):
+            raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
+
+
+def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
+    try:
+        _reject_runtime_bytecode_file_symlink_path(path)
+    except (OSError, argparse.ArgumentTypeError):
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+
+
 def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     """Parse runtime bytecode from a file containing hex text."""
 
     path = Path(value).expanduser()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    text = _read_runtime_bytecode_file_text(path, label=label)
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
 
 
@@ -353,6 +380,9 @@ def _require_fixed_bytes(
     byte_length: int,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("EVM destination fixed bytes nonzero must be a boolean")
+
     if not isinstance(value, (bytes, bytearray)):
         raise ValueError(f"{label} must be {byte_length} bytes")
     raw = bytes(value)
@@ -760,6 +790,8 @@ def evm_route_canary_transaction_evidence_hash(
         raise ValueError(
             "proof_source_domain must match source_domain for EVM route canaries"
         )
+    if type(used_message_proof) is not bool:
+        raise ValueError("used_message_proof must be a boolean for EVM route canaries")
     if used_message_proof is not True:
         raise ValueError("used_message_proof must be true for EVM route canaries")
     if type(receipt_block_finalized) is not bool:
@@ -1685,6 +1717,9 @@ def _json_summary(
     destination_binding_hash: bytes,
     expected_matches: bool,
 ) -> dict[str, object]:
+    if type(expected_matches) is not bool:
+        raise ValueError("EVM destination JSON expected_matches must be a boolean")
+
     apply_runtime_bytecode_hash(args)
     apply_bridge_runtime_bytecode_hash(args)
     profile = _profile(args)
@@ -1759,6 +1794,11 @@ def _json_summary(
             args,
             destination_binding_hash,
         )
+        runtime_bytecode_ready = _runtime_bytecode_evidence_ready(args)
+        if type(runtime_bytecode_ready) is not bool:
+            raise ValueError(
+                "EVM destination runtime bytecode readiness must be a boolean"
+            )
         summary.update(
             {
                 "source_verifier_material_hash": _hex(
@@ -1770,8 +1810,7 @@ def _json_summary(
                 "route_allowlist_hash": _hex(route_allowlist_hash),
                 "expected_route_allowlist_hash": _hex(expected_route_allowlist_hash),
                 "expected_route_allowlist_hash_matches": True,
-                "toml_ready": expected_matches
-                and _runtime_bytecode_evidence_ready(args),
+                "toml_ready": expected_matches and runtime_bytecode_ready,
             }
         )
         route_canary = _route_canary_summary(
@@ -1781,7 +1820,6 @@ def _json_summary(
         )
         if route_canary is not None:
             summary["route_canary"] = route_canary
-            summary["toml_ready"] = bool(summary["toml_ready"])
         else:
             summary["toml_ready"] = False
     return summary
@@ -2189,13 +2227,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded
