@@ -60,9 +60,13 @@ def test_write_json_uses_no_follow_descriptor_open(
 
     monkeypatch.setattr(MODULE.os, "open", open_path)
 
-    MODULE.write_json(output, {"ready": True})
+    payload = {"ready": True}
+    MODULE.write_json(output, payload)
 
-    assert json.loads(output.read_text(encoding="utf-8")) == {"ready": True}
+    assert output.read_text(encoding="utf-8") == (
+        json.dumps(payload, indent=2, allow_nan=False) + "\n"
+    )
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
     assert opened["flags"] & os.O_WRONLY
     assert opened["flags"] & os.O_CREAT
     assert opened["flags"] & os.O_TRUNC
@@ -70,6 +74,31 @@ def test_write_json_uses_no_follow_descriptor_open(
         assert opened["flags"] & os.O_NOFOLLOW
     assert opened["mode"] == 0o666
     assert opened["flags"] == MODULE.write_open_flags()
+
+
+def test_write_json_completes_partial_descriptor_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "fixture.json"
+    payload = {"chunks": [1, 2, 3], "ready": True}
+    original_write = os.write
+    writes: list[int] = []
+
+    def partial_write(fd: int, data) -> int:
+        chunk = bytes(data)
+        limit = max(1, min(3, len(chunk)))
+        writes.append(limit)
+        return original_write(fd, chunk[:limit])
+
+    monkeypatch.setattr(MODULE.os, "write", partial_write)
+
+    MODULE.write_json(output, payload)
+
+    assert output.read_text(encoding="utf-8") == (
+        json.dumps(payload, indent=2, allow_nan=False) + "\n"
+    )
+    assert len(writes) > 1
 
 
 def test_ensure_fixture_directory_rejects_symlink_before_create(
@@ -109,3 +138,21 @@ def test_fixture_file_size_uses_no_follow_descriptor_fstat(
     assert opened["flags"] == MODULE.read_open_flags()
     if hasattr(os, "O_NOFOLLOW"):
         assert opened["flags"] & os.O_NOFOLLOW
+
+
+def test_build_telemetry_includes_reputation_score() -> None:
+    telemetry = MODULE.build_telemetry([{"provider_id": "fixture-provider-0"}])
+
+    assert telemetry == [
+        {
+            "provider_id": "fixture-provider-0",
+            "qos_score": 95.0,
+            "latency_p95_ms": 120.0,
+            "failure_rate_ewma": 0.0,
+            "token_health": 0.9,
+            "staking_weight": 1.0,
+            "reputation_score_bps": 10_000,
+            "penalty": False,
+            "last_updated_unix": MODULE.FIXTURE_NOW_UNIX_SECS - 120,
+        }
+    ]

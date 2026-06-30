@@ -5226,9 +5226,12 @@ and completed history lives in [`status.md`](./status.md).
   plus `--dry-run`; runner
   `main` functions must convert argparse `SystemExit` failures into numeric
   exit codes for tests and operator wrappers, runner examples must include a
-  `--dry-run` review command, runner dry-run plan rendering must reject
-  non-object plan shapes before writing stdout and sanitize caught JSON render
-  exceptions before returning plan diagnostics, every runner must preflight its
+  `--dry-run` review command, runner collection-plan validation must reject
+  non-object renderings, command-plan drift, and strict JSON rendering failures
+  through shared preflight before dry-run output or execution, runner dry-run
+  plan rendering must reject non-object plan shapes before writing stdout and
+  sanitize caught JSON render exceptions before returning plan diagnostics,
+  every runner must preflight its
   verifier as a non-symlink file under symlink-free parent chains and preflight
   summary/output targets plus runner input files/directories through shared
   helpers before emitting dry-run plans, including precise missing file versus
@@ -5251,7 +5254,8 @@ and completed history lives in [`status.md`](./status.md).
   gate diagnostics, and transparency runner generated-artifact annotation
   read/write failures must sanitize path and exception labels before returning
   collected diagnostics while rewriting reviewed deployment context through
-  descriptor no-follow opens after a fresh parent-chain check;
+  descriptor no-follow opens and complete byte-write loops after a fresh
+  parent-chain check;
   every runner must execute
   plans through the shared command-plan runner so malformed scalar or mapping
   command plans, malformed step labels, non-Path step artifacts, empty command
@@ -5304,9 +5308,9 @@ and completed history lives in [`status.md`](./status.md).
   files,
   while
   malformed scalar or mapping evidence/reserved-output path collections or
-  symlinked, symlink-parented, malformed, or duplicate reserved-output entries
-  failing before evidence inspection, symlink-parented evidence
-  files/directories, diagnostic containers, labels, sanitized evidence directory
+  symlinked, malformed, or duplicate reserved-output entries
+  failing before evidence inspection, non-directory evidence
+  parent chains, diagnostic containers, labels, sanitized evidence directory
   and conflict path/error labels, evidence directory inspection failures, direct
   JSON scans over uninspected or non-directory paths, and JSON scan failures
   surface as structured errors instead of tracebacks, and every
@@ -5352,7 +5356,7 @@ and completed history lives in [`status.md`](./status.md).
   failures become path-qualified evidence errors instead of tracebacks while
 	  malformed bounded-JSON diagnostic containers or existing diagnostic text are
 	  rejected before helper-local error recording can raise, direct bounded reads
-	  inspect evidence files for symlink leaves, symlinked parent chains, and
+	  inspect evidence files for symlink leaves, non-directory parent chains, and
 	  non-files before opening them, and use a no-follow descriptor open for the
 	  final path component where the platform exposes it, bounded byte-reader
 	  oversize failures use a typed `ValueError` subclass so checkers do not parse
@@ -6451,8 +6455,9 @@ and completed history lives in [`status.md`](./status.md).
 	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
 	  a dry-run-visible verifier command, selected-kind `evidence_contract`, and
 	  operator example args. The gateway denylist CI guard now copies sample and
-	  evidence JSON, discovers bundles, and reads generated diff/evidence reports
-	  through symlink-checked no-follow descriptors before those artifacts can feed
+	  evidence JSON, writes generated old-snapshot JSON, discovers bundles, and
+	  reads generated diff/evidence reports through symlink-checked no-follow
+	  descriptors plus complete byte-write loops before those artifacts can feed
 	  promotion checks. Remaining
 	  SFM-4 gateway compliance production work is the always-on compliance
   controller daemon, persisted production catalog state, moderation
@@ -7226,8 +7231,12 @@ and completed history lives in [`status.md`](./status.md).
   `environment` and emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed summary paths,
-  supports `@ARGFILE`, and prints a dry-run collection plan for release
-  operators. Required-row artifact entries must carry canonical unique paths,
+  requires exactly one summary input per required gate, requires an explicit
+  canonical `--deployment-id`/`--environment` pair, supports `@ARGFILE`, and
+  validates the schema-closed collection plan envelope against the built command
+  plan before dry-run output or execution while rejecting non-object or
+  non-strict-JSON collection-plan renderings.
+  Required-row artifact entries must carry canonical unique paths,
   lowercase SHA-256 digests, and canonical artifact schema/status labels when
   present, reject extra artifact-row fields outside the schema-closed
   payload-free artifact contract, and the required top-level
@@ -7238,10 +7247,15 @@ and completed history lives in [`status.md`](./status.md).
   schema-closed before release review, with canonical path, lowercase SHA-256,
   count, timestamp, list, and error shapes checked after the row digest is
   attached, and the final aggregate summary envelope is schema-closed before the
-  production-readiness report is written. Final aggregate required rows also
-  have exact present and missing row output contracts, so failed or absent lane
-  rows cannot grow extra payload-bearing fields while still being reported, and
-  absent lanes must keep deterministic missing-row diagnostics. The aggregate
+  production-readiness report is written. Aggregate status must match canonical
+  aggregate diagnostics before release review, and ready aggregate summaries
+  must carry complete deployment context with only present, valid required rows.
+  Final aggregate required rows also have exact present and missing row output
+  contracts, so failed or absent lane rows cannot grow extra payload-bearing
+  fields while still being reported, and absent lanes must keep deterministic
+  missing-row diagnostics. Invalid aggregate required rows must keep canonical
+  thresholds, deployment labels, and timestamp ordering before blocked rows are
+  emitted for release review. The aggregate
   recognized-summary count must also match the final present required-row set,
   and duplicate lane summaries must keep deterministic duplicate-summary
   diagnostics while every duplicate input remains counted as a top-level
@@ -11297,11 +11311,13 @@ and completed history lives in [`status.md`](./status.md).
 	  `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
 	  with `--no-deps`. The SoraFS orchestrator fixture regeneration script now
 	  rejects symlinked input/output paths and parent chains, reads and writes
-	  fixture JSON through no-follow descriptors, and derives payload sizes through
-	  descriptor `fstat`. The Android codegen SoraFS fixture replay helper now
-	  applies the same no-follow JSON read/write policy to generated replay
-	  artifacts and validates payload/plan inputs before launching the manifest
-	  stub. The orchestrator adoption CI gate now validates fixture/report/log
+	  fixture JSON through no-follow descriptors with complete byte-write loops,
+	  reproduces the canonical `reputation_score_bps` telemetry field, and derives
+	  payload sizes through descriptor `fstat`. The Android codegen SoraFS fixture
+	  replay helper now applies the same no-follow JSON read/write policy to
+	  generated replay artifacts with complete byte-write loops and validates
+	  payload/plan inputs before launching the manifest stub. The orchestrator
+	  adoption CI gate now validates fixture/report/log
 	  inputs through no-follow descriptor opens and writes generated config plus
 	  burn-in notes through no-follow descriptors before promotion evidence is
 	  trusted. The orchestrator SDK parity smoke harness now uses no-follow
@@ -17255,10 +17271,11 @@ operator-provided rollout bundles.
   sits between surviving records, and Kura DA index hydration now replays the
   same visibility rules after restart. Per-lane reset watermarks are now
   persisted with the DA shard cursor journal, so historical records at or below
-  a retire/recreate reset height remain available as committed block bundles but
-  cannot rehydrate active pin intents, query-visible commitments, shard cursors,
-  or committed identity reservations for the fresh lane incarnation after rewind
-  or restart. Remaining work is focused on end-to-end
+  a retire/recreate or same-shard lane/dataspace rebind reset height remain
+  available as committed block bundles but cannot rehydrate active pin intents,
+  query-visible commitments, shard cursors, or committed identity reservations
+  for the fresh lane incarnation after rewind or restart. Remaining work is
+  focused on end-to-end
   independent-lane consensus fixtures and live rollout evidence rather than
   stale cached-relay, stale DA-cursor, or stale public-lane economic admission.
 - NPoS lane-scope inference now ignores inactive public-lane validator records
@@ -17532,15 +17549,22 @@ operator-provided rollout bundles.
   `out_utilization_p95_permille`; scale-in evidence must carry
   `in_latency_ratio_permille` and `in_utilization_p95_permille`. Transition
   markers for a different elastic lane, missing or wrong-direction producer
-  fields, prefixed field name, or suffixed lane-looking token such as a decimal,
+  fields, duplicated height/capacity/ratio fields, prefixed field name, multiple
+  or conflicting standalone `lane` fields, stale contextual lane text beside a
+  structured event, or suffixed lane-looking token such as a decimal,
   hyphenated, or leading-zero lane value cannot satisfy public-profile
   expansion or contraction checks. Public-profile expansion evidence now also
   pins relay-height progress to the target elastic lane, rejecting wrong-lane
   relay progress and stale same-height relay records. Storage fallback evidence
-  now requires each peer to expose the exact expanded contiguous lane-id
-  profile, so duplicate elastic-lane directories cannot hide missing base-lane
+  now requires each peer to expose the exact expanded contiguous lane-id profile
+  plus the exact autoscale elastic `lane_NNN_elastic_lane_N` storage segment, so
+  prefix-spoofed or wrong-slug storage directories cannot supply elastic-lane
+  progress, duplicate elastic-lane directories cannot hide missing base-lane
   storage, and extra malformed or duplicate lane directories cannot satisfy an
-  otherwise complete profile.
+  otherwise complete profile. Expansion/contraction status evidence also now
+  requires a unique `teu_lane_commit` lane-status row per lane, so duplicate
+  active rows cannot fake elastic-lane expansion or keep base lanes eligible for
+  contraction.
 - Keep the rotating Byzantine 30 TPS NPoS soak in the stabilization corridor:
   the snapshot-enabled strict 7,200 second 4-peer transfer run now passes under
   the broadened `conflicting-ready`, `duplicate-inits`, and

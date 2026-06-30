@@ -1115,15 +1115,10 @@ pub(crate) fn dataspace_fee_sponsor_matches(
     dataspace: DataSpaceId,
     account_id: &AccountId,
 ) -> bool {
-    dataspace_fee_sponsor_from_config(
-        world,
-        dataspace_catalog,
-        dataspace_fee_sponsors,
-        dataspace,
-    )
-    .ok()
-    .flatten()
-    .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
+    dataspace_fee_sponsor_from_config(world, dataspace_catalog, dataspace_fee_sponsors, dataspace)
+        .ok()
+        .flatten()
+        .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
 }
 
 pub(crate) fn dataspace_fee_sponsor_policy_from_config(
@@ -25696,7 +25691,11 @@ impl State {
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
         let previous_lane_config = self.nexus.read().lane_config.clone();
         let lanes_to_reset = lanes_requiring_state_reset(&previous_lane_config, &nexus.lane_config);
-        self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
+        self.apply_lane_geometry_updates(
+            &previous_lane_config,
+            &nexus.lane_config,
+            &BTreeSet::new(),
+        )?;
         let active_reset_lanes = Self::active_reset_lanes(&lanes_to_reset, &nexus.lane_config);
         let reset_height = self.block_hashes.view().len() as u64;
         *self.nexus.write() = nexus;
@@ -25989,6 +25988,7 @@ impl State {
             self.apply_lane_geometry_updates(
                 &lifecycle_update.previous_lane_config,
                 &lifecycle_update.updated_lane_config,
+                &lifecycle_update.replaced_lane_ids,
             )?;
             let lanes_to_reset = lifecycle_update.lanes_to_reset.clone();
             {
@@ -26095,18 +26095,24 @@ impl State {
         &self,
         previous: &iroha_config::parameters::actual::LaneConfig,
         current: &iroha_config::parameters::actual::LaneConfig,
+        replaced_lane_ids: &BTreeSet<LaneId>,
     ) -> Result<(), LaneLifecycleError> {
-        let diff = lane_topology_diff(previous, current);
+        let diff = lane_topology_diff(previous, current, replaced_lane_ids);
         self.kura
             .preflight_lane_segments(&diff.added, &diff.retired, &diff.relabelled)
             .map_err(|err| LaneLifecycleError::Storage(format!("kura preflight: {err}")))?;
         {
             let mut backend = self.tiered_backend.lock();
             backend
-                .preflight_lane_geometry(previous, current, &diff.relabelled)
+                .preflight_lane_geometry_with_replacements(
+                    previous,
+                    current,
+                    &diff.relabelled,
+                    replaced_lane_ids,
+                )
                 .map_err(|err| LaneLifecycleError::Storage(format!("tiered preflight: {err:?}")))?;
             backend
-                .reconcile_lane_geometry(previous, current)
+                .reconcile_lane_geometry_with_replacements(previous, current, replaced_lane_ids)
                 .map_err(|err| LaneLifecycleError::Storage(format!("tiered: {err:?}")))?;
             if !diff.relabelled.is_empty() {
                 backend
@@ -26182,7 +26188,11 @@ impl State {
         pending: &PendingAutoscaleLaneLifecycle,
     ) -> Result<(), LaneLifecycleError> {
         let update = &pending.catalog_update;
-        self.apply_lane_geometry_updates(&update.previous_lane_config, &update.updated_lane_config)
+        self.apply_lane_geometry_updates(
+            &update.previous_lane_config,
+            &update.updated_lane_config,
+            &update.replaced_lane_ids,
+        )
     }
 
     fn active_da_commitments_for_current_nexus(
@@ -26753,6 +26763,7 @@ struct LaneLifecycleCatalogUpdate {
     previous_lane_config: iroha_config::parameters::actual::LaneConfig,
     updated_lane_config: iroha_config::parameters::actual::LaneConfig,
     lanes_to_reset: BTreeSet<LaneId>,
+    replaced_lane_ids: BTreeSet<LaneId>,
 }
 
 struct PendingDaCommitmentBundle {
@@ -26865,6 +26876,7 @@ fn prepare_lane_lifecycle_update(
         previous_lane_config,
         updated_lane_config,
         lanes_to_reset,
+        replaced_lane_ids,
     })
 }
 
@@ -27195,6 +27207,7 @@ fn lanes_requiring_state_reset(
 fn lane_topology_diff<'a>(
     previous: &'a iroha_config::parameters::actual::LaneConfig,
     current: &'a iroha_config::parameters::actual::LaneConfig,
+    replaced_lane_ids: &BTreeSet<LaneId>,
 ) -> LaneTopologyDiff<'a> {
     let mut previous_map = BTreeMap::new();
     for entry in previous.entries() {
@@ -27208,18 +27221,21 @@ fn lane_topology_diff<'a>(
 
     let added = current_map
         .iter()
-        .filter(|(id, _)| !previous_map.contains_key(id))
+        .filter(|(id, _)| !previous_map.contains_key(id) || replaced_lane_ids.contains(id))
         .map(|(_, entry)| *entry)
         .collect();
     let retired = previous_map
         .iter()
-        .filter(|(id, _)| !current_map.contains_key(id))
+        .filter(|(id, _)| !current_map.contains_key(id) || replaced_lane_ids.contains(id))
         .map(|(_, entry)| *entry)
         .collect();
 
     let relabelled = current_map
         .iter()
         .filter_map(|(id, current_entry)| {
+            if replaced_lane_ids.contains(id) {
+                return None;
+            }
             previous_map.get(id).and_then(|previous_entry| {
                 (previous_entry.kura_segment != current_entry.kura_segment)
                     .then_some((*previous_entry, *current_entry))

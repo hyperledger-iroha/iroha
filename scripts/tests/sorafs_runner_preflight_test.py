@@ -36,6 +36,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     runner_path_size_open_flags,
     validate_command_plan_artifacts,
     validate_command_plan_step_shapes,
+    validate_runner_plan_steps,
     validate_runner_output_dir,
     validate_runner_output_parent,
     validate_runner_preflight,
@@ -1674,6 +1675,68 @@ def test_write_runner_plan_writes_rendered_plan(capsys) -> None:
     captured = capsys.readouterr()
     assert errors == []
     assert captured.out == '{\n  "schema": "example",\n  "steps": []\n}\n'
+
+
+def test_validate_runner_plan_steps_matches_command_plan(tmp_path: Path) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "artifact.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example",
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    assert validate_runner_plan_steps(rendered, plan) == []
+
+
+def test_validate_runner_plan_steps_rejects_non_object_and_drift(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "artifact.json"
+    plan = [Step("gate", artifact, command)]
+
+    assert validate_runner_plan_steps(["step"], plan) == [
+        "runner plan must be an object"
+    ]
+    assert validate_runner_plan_steps({"steps": []}, plan) == [
+        "runner plan steps must match command plan"
+    ]
+    assert validate_runner_plan_steps({"steps": []}, {"label": "gate"}) == [
+        "command plan must be a sequence of steps"
+    ]
+
+
+def test_validate_runner_plan_steps_rejects_unrenderable_plan(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "artifact.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example",
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+        "latency_ms": float("inf"),
+        "path": tmp_path,
+    }
+
+    errors = validate_runner_plan_steps(rendered, plan)
+
+    assert len(errors) == 1
+    assert "failed to render runner plan JSON" in errors[0]
+    assert "artifact.json" not in errors[0]
 
 
 def test_write_runner_plan_reports_non_finite_plan_without_stdout(capsys) -> None:
