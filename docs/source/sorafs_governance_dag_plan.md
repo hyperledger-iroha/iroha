@@ -75,7 +75,10 @@ Implemented foundations include:
   fail-closed SF-12 rollout evidence gate for deployed Governance DAG
   promotion packets, and
   `scripts/run_sorafs_governance_dag_rollout_evidence.py` provides the matching
-  reviewed evidence collection planner/runner. Mirror datastore, checkpoint
+  reviewed evidence collection planner/runner. The checker exports its required
+  top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
+  dry-run emits the checker-backed `evidence_contract` map for selected SF-12
+  evidence kinds. Mirror datastore, checkpoint
   recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance
   approval artifacts must carry the same `public_head_cid_hex` as a valid
   publisher-service artifact in the same bundle, so rollout evidence cannot mix
@@ -519,7 +522,7 @@ node payloads, response bodies, private keys, bearer tokens, signed
 transactions, and ledgers are absent, route latency, IPFS pin lag, and public
 head age stay under configured thresholds, enough public blocks and payload
 kinds are covered, and governance is bound to `iroha_config`. The collection
-planner's dry-run JSON also includes an `evidence_contract` map so operators
+planner's dry-run JSON also includes the checker-backed `evidence_contract` map so operators
 can inspect the exact required fields for each requested evidence kind before
 collecting or submitting live publication artifacts.
 

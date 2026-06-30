@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1b3a52b360818291e0a6e4876a6a9372cbe80ec8856504fc4bb7c5823943a1de
+source_hash: 168c1fa6961839f51931ab4c5b0457044df1d45c21d0146b42385f1692b68889
 source_last_modified: "2026-06-25T17:05:30+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -294,8 +294,10 @@ moderation ledger publication service described by the original plan.
   privacy aggregate, proof-token issuance, and explorer evidence must match a
   source-bound publication `cycle_digest_hex`; publication cycles that fail
   source-entry binding do not anchor downstream rollout evidence. The checker
-  supports shell-style `@ARGFILE` inputs for direct replay of reviewed artifact
-  directories.
+  exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`,
+  so dry-run collection plans and downstream automation can inspect the exact
+  evidence contract before live collection. It supports shell-style `@ARGFILE`
+  inputs for direct replay of reviewed artifact directories.
 - `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL
   --out-dir DIR ...` is the operator harness for collecting the required
   source-entry, privacy aggregate, proof-token issuance, publication, and
@@ -305,8 +307,11 @@ moderation ledger publication service described by the original plan.
   publication cycle-detail ids are missing, accepts repeated `--iroha-arg ARG`
   values for runtime-only client config/signing options that must be passed
   before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
-  operator inputs, and `--dry-run` emits the command plan without contacting
-  live services. `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
+  operator inputs, requires a reviewed `--deployment-id` plus `--environment`,
+  stamps that context onto generated canary artifacts before verification, and
+  `--dry-run` emits the command plan plus the checker-backed
+  `evidence_contract` field map without contacting live services.
+  `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
   documents the required source-entry kinds, aggregate probes, proof-token
   issuance probe, cycle id, Torii URL, and runtime-only client-config path
   without storing signing material.
@@ -318,8 +323,9 @@ entry roots, block hashes, inclusion proofs, publication bundles, and
 privacy-safe aggregate payloads that can be converted into ledger entries. The
 local SoraFS node can materialize those bundles into the Governance DAG
 filesystem/CAR pipeline and optional signed runtime DAG blocks, and Torii can
-verify and serve the locally published bundles. The production transparency
-service still needs a live runtime ledger layer that ingests and publishes:
+verify and serve the locally published bundles. The local ledger layer now covers
+bundle materialization and readback; remaining deployed-service work is to wire
+live producer, anchoring, explorer, proof-token, and hardening evidence for:
 
 - moderation action summaries;
 - appeal outcomes and deposit disposition summaries;

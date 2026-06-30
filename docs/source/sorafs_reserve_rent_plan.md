@@ -17,7 +17,10 @@ commands; `cargo xtask sorafs-reserve-matrix` emits quote matrices; and
 dashboards and Alertmanager rules. `scripts/check_sorafs_reserve_rent_rollout_evidence.py`
 now provides the fail-closed rollout evidence gate for staged SFM-6 promotion
 packets, and `scripts/run_sorafs_reserve_rent_rollout_evidence.py` provides the
-matching reviewed evidence collection planner/runner. `sorafs_node` now also
+matching reviewed evidence collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
+collection planner dry-run JSON includes the checker-backed `evidence_contract`
+map for selected required kinds. `sorafs_node` now also
 ships a local reserve lifecycle and movement runtime that stores provider
 summaries, derives ledger and lifecycle projections from the shared quote math,
 keeps sequenced lifecycle events for replay, and records idempotent local
@@ -494,7 +497,7 @@ governance artifacts all carry the same payload-free
 governance packet must also be bound to `iroha_config`. Tuple binding failures
 are recorded on the offending artifact before required-kind validity is
 computed, so the JSON summary matches the fail-closed rollout decision. The
-collection planner's dry-run JSON also includes an `evidence_contract` map so
+collection planner's dry-run JSON also includes the checker-backed `evidence_contract` map so
 operators can inspect the exact required fields for each requested evidence
 kind before collecting or submitting live artifacts.
 

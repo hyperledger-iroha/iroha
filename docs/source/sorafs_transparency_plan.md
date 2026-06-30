@@ -328,8 +328,9 @@ entry roots, block hashes, inclusion proofs, publication bundles, and
 privacy-safe aggregate payloads that can be converted into ledger entries. The
 local SoraFS node can materialize those bundles into the Governance DAG
 filesystem/CAR pipeline and optional signed runtime DAG blocks, and Torii can
-verify and serve the locally published bundles. The production transparency
-service still needs a live runtime ledger layer that ingests and publishes:
+verify and serve the locally published bundles. The local ledger layer now covers
+bundle materialization and readback; remaining deployed-service work is to wire
+live producer, anchoring, explorer, proof-token, and hardening evidence for:
 
 - moderation action summaries;
 - appeal outcomes and deposit disposition summaries;

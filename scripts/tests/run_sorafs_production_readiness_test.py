@@ -348,3 +348,186 @@ def test_malformed_deployment_context_fails(tmp_path: Path) -> None:
     rendered = "\n".join(errors)
     assert "sorafs-mainnet-2026-06" not in rendered
     assert "prod\nsecret" not in rendered
+
+
+def test_nonproduction_environment_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.environment = "staging"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert "production readiness runner environment must be production" in errors
+    assert "staging" not in "\n".join(errors)
+
+
+def test_unreviewed_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-notproductionready-a"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-reviewed deployment markers ['notproductionready']"
+        in errors
+    )
+    assert "gateway-notproductionready-a" not in "\n".join(errors)
+
+
+def test_summary_input_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    unsafe_summary = write_json(tmp_path / "gateway_private_key_summary.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(unsafe_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert (
+        "production readiness runner summary input paths must not contain "
+        "secret-looking, control-character, parent, current, or platform-specific components"
+        in captured.err
+    )
+    assert captured.out == ""
+    assert "gateway_private_key_summary" not in captured.err
+    assert "private_key" not in captured.err
+
+
+def test_plan_rendered_output_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "private_key_output"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in captured.err
+    assert captured.out == ""
+    assert "private_key_output" not in captured.err
+    assert "private_key" not in captured.err
+
+
+def test_plan_rendered_summary_output_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--summary-out",
+            str(tmp_path / "bearer_token_summary.json"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in captured.err
+    assert captured.out == ""
+    assert "bearer_token_summary" not in captured.err
+    assert "bearer_token" not in captured.err
+
+
+def test_plan_rendered_verifier_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    gateway_summary = write_json(tmp_path / "gateway-load.json")
+    unsafe_verifier = tmp_path / "private_key_verifier.py"
+    unsafe_verifier.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(unsafe_verifier),
+            "--gateway-load-summary",
+            str(gateway_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in captured.err
+    assert captured.out == ""
+    assert "private_key_verifier" not in captured.err
+    assert "private_key" not in captured.err
+
+
+def test_plan_rendered_path_safety_rejects_drive_prefix() -> None:
+    assert not MODULE.plan_rendered_path_is_safe(Path("C:/sorafs/summary.json"))
+
+
+def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None:
+    safe_summary = tmp_path / "gateway_load_digest.json"
+    write_json(safe_summary)
+    args = MODULE.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(safe_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+        ]
+    )
+
+    assert MODULE.validate_inputs(args) == []

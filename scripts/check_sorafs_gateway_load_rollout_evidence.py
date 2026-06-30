@@ -30,6 +30,7 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     build_required_evidence_summary,
     count_evidence_artifacts,
@@ -254,6 +255,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "suite_report_digest_hex",
     "staging_report_digest_hex",
 )
@@ -422,7 +424,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,

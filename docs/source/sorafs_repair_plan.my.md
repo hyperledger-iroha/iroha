@@ -38,7 +38,10 @@ roster and SF-9 coordinator publish their runbooks.
 `scripts/check_sorafs_repair_rollout_evidence.py` now provides the fail-closed
 SF-8b rollout evidence gate for deployed repair promotion packets, and
 `scripts/run_sorafs_repair_rollout_evidence.py` provides the matching reviewed
-evidence collection planner/runner. Signed auditor API, worker lifecycle,
+evidence collection planner/runner. The checker exports its required top-level
+payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
+checker-backed `evidence_contract` map in dry-run output for the selected
+required kinds. Signed auditor API, worker lifecycle,
 event stream, governance handoff, and approval artifacts must bind to a valid
 auditor roster digest; worker, event stream, and handoff artifacts must also
 bind to a valid failure-capture evidence bundle digest. Roster or failure
@@ -388,7 +391,9 @@ auditor roster meets the configured minimum, governance is bound to
 handoff / governance approval artifacts carry a `roster_digest_hex` that
 matches a valid auditor-roster artifact, and worker lifecycle / event stream /
 governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches
-a valid PoR/PoTR failure-capture artifact in the same rollout bundle.
+a valid PoR/PoTR failure-capture artifact in the same rollout bundle. Its
+collection planner exposes those exact required payload fields through
+`--dry-run` without touching live repair services.
 
 ## Rollout Status
 Implemented engineering coverage:

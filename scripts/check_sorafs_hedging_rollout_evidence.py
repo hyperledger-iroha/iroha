@@ -30,12 +30,12 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
-    evidence_artifact_detail,
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
@@ -297,6 +297,19 @@ class ValidationOptions:
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+    "cycle_id",
+    "cycle_index",
+    "generated_at_unix",
+    "decision_id_hex",
+    "statement_count",
+    "reference_decision_id_hex",
+    "statement_bundle_digest_hex",
+    "reconciliation_digest_hex",
+)
+BILLING_CYCLE_DETAIL_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "cycle_id",
@@ -573,14 +586,13 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
             FINGERPRINT_FIELDS,
         )
         if kind_name == "billing_cycle":
-            artifact["cycle"] = evidence_artifact_fingerprint(artifact)
             if evidence_artifact_is_valid(artifact):
                 valid_billing_cycle_artifacts.append(artifact)
         elif kind_name == "reference_price" and evidence_artifact_is_valid(artifact):
@@ -596,7 +608,7 @@ def build_summary(
         required_kinds, ("billing_cycle", "reference_price")
     ):
         for artifact in valid_billing_cycle_artifacts:
-            cycle = evidence_artifact_detail(artifact, "cycle")
+            cycle = evidence_artifact_fingerprint(artifact)
             decision_id = cycle.get("reference_decision_id_hex")
             record_string_value_binding_errors(
                 artifact,
@@ -610,10 +622,14 @@ def build_summary(
             )
 
     valid_billing_cycles = [
-        cycle
+        {
+            field: cycle[field]
+            for field in BILLING_CYCLE_DETAIL_FIELDS
+            if field in cycle
+        }
         for artifact in valid_billing_cycle_artifacts
-        for cycle in [evidence_artifact_detail(artifact, "cycle")]
-        if evidence_artifact_is_valid(artifact) and cycle
+        for cycle in [evidence_artifact_fingerprint(artifact)]
+        if evidence_artifact_is_valid(artifact)
     ]
     valid_cycle_bindings = {
         (statement_bundle.lower(), reconciliation_digest.lower())

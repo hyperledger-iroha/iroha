@@ -30,6 +30,7 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -530,6 +531,18 @@ class ValidationOptions:
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
+    "case_digest_hex",
+    "roster_hash_hex",
+    "tally_digest_hex",
+    "generated_at_unix",
+    "peer_count",
+    "validator_count",
+    "case_count",
+)
+E2E_RUN_DETAIL_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "case_digest_hex",
     "roster_hash_hex",
     "tally_digest_hex",
@@ -1008,7 +1021,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
@@ -1135,8 +1148,13 @@ def build_summary(
     )
 
     valid_e2e_runs = [
-        evidence_artifact_fingerprint(artifact)
+        {
+            field: fingerprint[field]
+            for field in E2E_RUN_DETAIL_FIELDS
+            if field in fingerprint
+        }
         for artifact in e2e_candidate_artifacts
+        for fingerprint in [evidence_artifact_fingerprint(artifact)]
         if evidence_artifact_is_valid(artifact)
     ]
 

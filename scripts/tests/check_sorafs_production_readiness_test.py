@@ -24,6 +24,26 @@ SNAPSHOT_ID = "cd" * 16
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
 
+LANE_FIXTURE_TESTS = {
+    "ai_prescreen": "check_sorafs_ai_prescreen_rollout_evidence_test.py",
+    "appeal_finance": "check_sorafs_appeal_finance_rollout_evidence_test.py",
+    "gateway_compliance": "check_sorafs_gateway_compliance_rollout_evidence_test.py",
+    "gateway_load": "check_sorafs_gateway_load_rollout_evidence_test.py",
+    "governance_dag": "check_sorafs_governance_dag_rollout_evidence_test.py",
+    "hedging_billing": "check_sorafs_hedging_rollout_evidence_test.py",
+    "moderation_panel": "check_sorafs_moderation_panel_rollout_evidence_test.py",
+    "orderbook": "check_sorafs_orderbook_rollout_evidence_test.py",
+    "pdp": "check_sorafs_pdp_rollout_evidence_test.py",
+    "pop_credentials": "check_sorafs_pop_credentials_rollout_evidence_test.py",
+    "por": "check_sorafs_por_rollout_evidence_test.py",
+    "potr": "check_sorafs_potr_rollout_evidence_test.py",
+    "reference_sdk_release": "check_sorafs_reference_sdk_release_evidence_test.py",
+    "repair": "check_sorafs_repair_rollout_evidence_test.py",
+    "reputation": "check_sorafs_reputation_rollout_evidence_test.py",
+    "reserve_rent": "check_sorafs_reserve_rent_rollout_evidence_test.py",
+    "transparency": "check_sorafs_transparency_rollout_evidence_test.py",
+}
+
 
 def write_json(path: Path, payload: dict) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -107,6 +127,23 @@ def recognized_artifacts_from_required(payload: dict) -> list[dict]:
     return artifacts
 
 
+def add_fingerprint_metadata(
+    payload: dict,
+    *,
+    kind_name: str | None = None,
+    **metadata: object,
+) -> None:
+    for row_name, row in payload["required"].items():
+        if kind_name is not None and row_name != kind_name:
+            continue
+        for artifact in row["artifacts"]:
+            artifact.setdefault("fingerprint", {}).update(metadata)
+    for artifact in payload["recognized_artifacts"]:
+        if kind_name is not None and artifact.get("kind") != kind_name:
+            continue
+        artifact.setdefault("fingerprint", {}).update(metadata)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(
         [
@@ -121,6 +158,124 @@ def run_gate(root: Path, *extra: str) -> int:
             *extra,
         ]
     )
+
+
+def load_lane_fixture_module(gate_name: str):
+    fixture_name = LANE_FIXTURE_TESTS[gate_name]
+    fixture_path = Path(__file__).resolve().parent / fixture_name
+    spec = importlib.util.spec_from_file_location(
+        f"{fixture_path.stem}_aggregate_fixture",
+        fixture_path,
+    )
+    fixture_module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader  # pragma: no cover - defensive
+    sys.modules[spec.name] = fixture_module
+    spec.loader.exec_module(fixture_module)
+    return fixture_module
+
+
+def write_complete_lane_fixture_summary(
+    gate_name: str,
+    root: Path,
+) -> tuple[dict, int]:
+    fixture_module = load_lane_fixture_module(gate_name)
+    evidence_root = root / gate_name
+    evidence_root.mkdir()
+    summary = root / f"{gate_name}.json"
+
+    if gate_name == "pop_credentials":
+        evidence_dir = fixture_module.write_complete_evidence(evidence_root)
+        exit_code = fixture_module.MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(fixture_module.NOW),
+            ]
+        )
+    elif gate_name == "transparency":
+        fixture_module.write_complete_evidence(evidence_root)
+        exit_code = fixture_module.MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_root),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+    elif gate_name == "reputation":
+        fixture_module.write_complete_evidence(evidence_root)
+        exit_code = fixture_module.run_gate(
+            evidence_root,
+            "--require-provider",
+            "provider-a",
+            "--summary-out",
+            str(summary),
+        )
+    else:
+        fixture_module.write_complete_evidence(evidence_root)
+        exit_code = fixture_module.run_gate(
+            evidence_root,
+            "--summary-out",
+            str(summary),
+        )
+
+    assert exit_code == 0
+    now_unix = getattr(
+        fixture_module,
+        "NOW_UNIX",
+        getattr(fixture_module, "NOW", NOW_UNIX),
+    )
+    return json.loads(summary.read_text(encoding="utf-8")), now_unix
+
+
+def lane_summary_deployment_context(payload: dict) -> tuple[str, str]:
+    contexts = set()
+    for row in payload["required"].values():
+        for artifact in row["artifacts"]:
+            fingerprint = artifact["fingerprint"]
+            contexts.add(
+                (
+                    fingerprint.get("deployment_id"),
+                    fingerprint.get("environment"),
+                )
+            )
+
+    assert contexts
+    assert len(contexts) == 1
+    deployment_id, environment = next(iter(contexts))
+    assert isinstance(deployment_id, str) and deployment_id
+    assert isinstance(environment, str) and environment
+    return deployment_id, environment
+
+
+def normalize_deployment_context(value: object, deployment_id: str, environment: str) -> None:
+    if isinstance(value, dict):
+        if "deployment_id" in value:
+            value["deployment_id"] = deployment_id
+        if "environment" in value:
+            value["environment"] = environment
+        for child in value.values():
+            normalize_deployment_context(child, deployment_id, environment)
+    elif isinstance(value, list):
+        for item in value:
+            normalize_deployment_context(item, deployment_id, environment)
+
+
+def write_normalized_complete_lane_summaries(
+    fixture_root: Path,
+    summary_root: Path,
+) -> int:
+    now_values = []
+    for gate_name in MODULE.DEFAULT_REQUIRED_GATES:
+        payload, now_unix = write_complete_lane_fixture_summary(gate_name, fixture_root)
+        normalize_deployment_context(payload, DEPLOYMENT_ID, ENVIRONMENT)
+        write_json(summary_root / f"{gate_name}.json", payload)
+        now_values.append(now_unix)
+    assert now_values
+    return max(now_values)
 
 
 def test_payload_free_summary_metadata_fields_are_derived_from_gate_contracts() -> None:
@@ -148,9 +303,159 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
         "environment": ENVIRONMENT,
     }
     assert payload["required"]["gateway_load"]["valid"] is True
+    assert payload["required"]["gateway_load"]["path"] == "gateway_load.json"
     assert payload["required"]["gateway_load"]["thresholds"] == {
         "max_evidence_bytes": 2_097_152,
     }
+
+
+def test_complete_lane_fixture_summaries_pass_aggregate_contract(
+    tmp_path: Path,
+) -> None:
+    failures = {}
+
+    for gate_name in MODULE.DEFAULT_REQUIRED_GATES:
+        payload, now_unix = write_complete_lane_fixture_summary(gate_name, tmp_path)
+        deployment_id, environment = lane_summary_deployment_context(payload)
+        row, validation_errors = MODULE.validate_gate_summary(
+            MODULE.GATE_BY_NAME[gate_name],
+            payload,
+            MODULE.ValidationOptions(
+                now_unix=now_unix,
+                max_summary_artifact_age_secs=(
+                    MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS
+                ),
+                deployment_id=deployment_id,
+                environment=environment,
+            ),
+        )
+        if validation_errors:
+            failures[gate_name] = validation_errors
+            continue
+        assert row["present"] is True
+        assert row["valid"] is True
+        assert row["recognized_artifact_count"] == payload["recognized_artifact_count"]
+        assert row["expected_required_kinds"] == list(
+            MODULE.GATE_BY_NAME[gate_name].required_kinds
+        )
+
+    assert failures == {}
+
+
+def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
+    tmp_path: Path,
+) -> None:
+    fixture_root = tmp_path / "fixtures"
+    summary_root = tmp_path / "summaries"
+    fixture_root.mkdir()
+    summary_root.mkdir()
+    now_unix = write_normalized_complete_lane_summaries(fixture_root, summary_root)
+    summary = tmp_path / "aggregate.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(summary_root),
+                "--now-unix",
+                str(now_unix),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["schema"] == MODULE.SUMMARY_SCHEMA
+    assert payload["status"] == "ready"
+    assert payload["recognized_summary_count"] == len(MODULE.DEFAULT_REQUIRED_GATES)
+    assert payload["deployment"] == {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
+    }
+    assert set(payload["required"]) == set(MODULE.DEFAULT_REQUIRED_GATES)
+    for gate_name, row in payload["required"].items():
+        assert row["present"] is True
+        assert row["valid"] is True
+        assert row["deployment_id"] == DEPLOYMENT_ID
+        assert row["environment"] == ENVIRONMENT
+        assert row["expected_required_kinds"] == list(
+            MODULE.GATE_BY_NAME[gate_name].required_kinds
+        )
+
+
+def test_aggregate_lane_summary_paths_are_archive_relative(tmp_path: Path) -> None:
+    nested = tmp_path / "release" / "summaries"
+    nested.mkdir(parents=True)
+    write_gate(nested, "gateway_load")
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 0
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["required"]["gateway_load"]["path"] == (
+        "release/summaries/gateway_load.json"
+    )
+
+
+def test_explicit_lane_summary_path_uses_safe_basename(tmp_path: Path) -> None:
+    gateway_load = write_gate(tmp_path, "gateway_load")
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(gateway_load),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["required"]["gateway_load"]["path"] == "gateway_load.json"
+
+
+def test_aggregate_summary_path_label_falls_back_when_identity_resolution_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    gateway_load = write_gate(tmp_path, "gateway_load")
+    original_resolve = Path.resolve
+
+    def resolve(path: Path, *args, **kwargs):
+        if path == gateway_load:
+            raise RuntimeError("resolver failure")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+    assert MODULE.aggregate_summary_path_label(gateway_load, [tmp_path]) == (
+        "gateway_load.json"
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -438,6 +743,72 @@ def test_malformed_required_artifact_metadata_label_fails(tmp_path: Path) -> Non
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    absolute_path = "/tmp/private-sorafs-evidence.json"
+    parent_path = "../private-sorafs-evidence.json"
+    payload["required"][first_required]["artifacts"][0]["path"] = absolute_path
+    payload["recognized_artifacts"][0]["path"] = absolute_path
+    payload["recognized_artifacts"][1]["path"] = parent_path
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        ".path must be archive-relative without absolute, empty, current, "
+        "parent, or platform-specific segments"
+        in errors
+    )
+    assert absolute_path not in errors
+    assert parent_path not in errors
+
+
+def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    windows_path = "C:\\runtime-only\\sorafs-evidence.json"
+    empty_segment_path = "artifacts//sorafs-evidence.json"
+    payload["required"][first_required]["artifacts"][0]["path"] = windows_path
+    payload["recognized_artifacts"][0]["path"] = windows_path
+    payload["recognized_artifacts"][1]["path"] = empty_segment_path
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        ".path must be archive-relative without absolute, empty, current, "
+        "parent, or platform-specific segments"
+        in errors
+    )
+    assert windows_path not in errors
+    assert empty_segment_path not in errors
+
+
 def test_malformed_required_row_schema_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
@@ -473,6 +844,138 @@ def test_deployment_mismatch_fails(tmp_path: Path) -> None:
         )
         == 1
     )
+
+
+def test_staging_environment_cannot_promote_production_readiness(tmp_path: Path) -> None:
+    write_gate(tmp_path, "gateway_load", environment="staging")
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert "aggregate environment must be production" in errors
+    assert result["status"] == "blocked"
+    assert result["deployment"] == {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": "staging",
+    }
+
+
+def test_unreviewed_deployment_id_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    unreviewed_deployment = "gateway-notproductionready-a"
+    write_gate(tmp_path, "gateway_load", deployment_id=unreviewed_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment markers "
+        "['notproductionready']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['notproductionready']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert unreviewed_deployment not in errors
+
+
+def test_explicit_nonproduction_environment_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_gate(tmp_path, "gateway_load", environment="staging")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                "staging",
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--environment must be production for this gate" in captured.err
+    assert "staging" not in captured.err
+
+
+def test_explicit_unreviewed_deployment_id_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    unreviewed_deployment = "gateway-notproductionready-a"
+    write_gate(tmp_path, "gateway_load", deployment_id=unreviewed_deployment)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                unreviewed_deployment,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "--deployment-id must not contain non-reviewed deployment markers "
+        "['notproductionready']"
+        in captured.err
+    )
+    assert unreviewed_deployment not in captured.err
 
 
 def test_sensitive_summary_payload_fails(tmp_path: Path) -> None:
@@ -678,9 +1181,38 @@ def test_allowed_top_level_lane_metadata_rejects_nested_raw_payload(
 def test_allowed_top_level_lane_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     payload["valid_suite_report_digests"] = [SHA256]
+    add_fingerprint_metadata(payload, suite_report_digest_hex=SHA256)
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 0
+
+
+def test_hex_list_metadata_must_match_recognized_artifact_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    payload["valid_suite_report_digests"] = [SHA256]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "valid_suite_report_digests must match recognized artifact fingerprints"
+        in errors
+    )
+    assert SHA256 not in errors
 
 
 def test_digest_list_metadata_entries_are_validated(tmp_path: Path) -> None:
@@ -762,9 +1294,50 @@ def test_hex_binding_metadata_for_gate_passes(tmp_path: Path) -> None:
         }
     ]
     payload["valid_workflow_digests"] = [SHA256]
+    add_fingerprint_metadata(
+        payload,
+        manifest_id_hex="12" * 16,
+        runner_hash_hex=SHA256,
+        subject_digest_hex=SHA256,
+        workflow_digest_hex=SHA256,
+    )
     write_json(tmp_path / "ai_prescreen.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "ai_prescreen") == 0
+
+
+def test_hex_binding_metadata_must_match_recognized_artifact_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("ai_prescreen")
+    payload["valid_runner_bindings"] = [
+        {
+            "manifest_id_hex": "12" * 16,
+            "runner_hash_hex": SHA256,
+            "subject_digest_hex": SHA256,
+        }
+    ]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "ai_prescreen.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "ai_prescreen",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "valid_runner_bindings must match recognized artifact fingerprints"
+        in errors
+    )
+    assert SHA256 not in errors
 
 
 def test_hex_binding_metadata_entries_are_validated(tmp_path: Path) -> None:
@@ -969,6 +1542,8 @@ def test_object_list_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("appeal_finance")
     payload["valid_multi_peer_runs"] = [
         {
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": ENVIRONMENT,
             "generated_at_unix": GENERATED_AT,
             "peer_count": 4,
             "validator_count": 4,
@@ -977,9 +1552,46 @@ def test_object_list_metadata_for_gate_passes(tmp_path: Path) -> None:
         }
     ]
     payload["valid_config_digests"] = [SHA256]
+    add_fingerprint_metadata(payload, config_digest_hex=SHA256)
     write_json(tmp_path / "appeal_finance.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "appeal_finance") == 0
+
+
+def test_object_list_metadata_must_match_required_artifact_count(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        ("appeal_finance", "valid_multi_peer_runs", "multi_peer_reconciliation"),
+        ("hedging_billing", "valid_billing_cycles", "billing_cycle"),
+        ("moderation_panel", "valid_e2e_runs", "e2e_panel"),
+        ("reserve_rent", "valid_provider_bakes", "provider_bake"),
+    ]
+
+    for gate_name, metadata_field, required_kind in cases:
+        root = tmp_path / gate_name
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[metadata_field] = []
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert (
+            f"{metadata_field} length must match `{required_kind}` required artifact count"
+            in errors
+        )
 
 
 def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
@@ -987,6 +1599,8 @@ def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
     bad_digest = "AB" * 32
     payload["valid_multi_peer_runs"] = [
         {
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": ENVIRONMENT,
             "generated_at_unix": GENERATED_AT,
             "peer_count": 0,
             "validator_count": True,
@@ -1036,6 +1650,8 @@ def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
 def test_object_list_metadata_entries_must_not_duplicate(tmp_path: Path) -> None:
     payload = gate_summary("appeal_finance")
     run = {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
         "generated_at_unix": GENERATED_AT,
         "peer_count": 4,
         "validator_count": 4,
@@ -1075,6 +1691,8 @@ def test_provider_bake_metadata_completed_at_must_not_precede_start(
     payload["valid_provider_bakes"] = [
         {
             "bake_id": "reserve-bake-001",
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": ENVIRONMENT,
             "started_at_unix": GENERATED_AT,
             "completed_at_unix": GENERATED_AT - 1,
             "provider_count": 3,
@@ -1108,9 +1726,40 @@ def test_deployment_context_metadata_for_gate_passes(tmp_path: Path) -> None:
         "environment": ENVIRONMENT,
     }
     payload["valid_case_digests"] = [SHA256]
+    add_fingerprint_metadata(payload, case_digest_hex=SHA256)
     write_json(tmp_path / "moderation_panel.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "moderation_panel") == 0
+
+
+def test_deployment_context_metadata_mismatch_fails(tmp_path: Path) -> None:
+    payload = gate_summary("moderation_panel")
+    mismatched_deployment = "moderation-panel-staging-a"
+    payload["deployment_context"] = {
+        "deployment_id": mismatched_deployment,
+        "environment": ENVIRONMENT,
+    }
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "moderation_panel deployment context must match across artifacts and metadata"
+        in errors
+    )
+    assert mismatched_deployment not in errors
 
 
 def test_deployment_context_metadata_entries_are_validated(
@@ -1148,13 +1797,166 @@ def test_deployment_context_metadata_entries_are_validated(
     assert "runtime-only-key-material" not in errors
 
 
+def test_object_list_metadata_deployment_context_mismatch_fails(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    mismatched_environment = "staging"
+    payload["valid_billing_cycles"] = [
+        {
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": mismatched_environment,
+            "cycle_id": "cycle-a",
+            "cycle_index": 1,
+            "generated_at_unix": GENERATED_AT,
+            "statement_count": 3,
+            "reference_decision_id_hex": SHA256,
+            "statement_bundle_digest_hex": SHA256,
+            "reconciliation_digest_hex": SHA256,
+        }
+    ]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "hedging_billing deployment context must match across artifacts and metadata"
+        in errors
+    )
+    assert mismatched_environment not in errors
+
+
+def test_multi_peer_run_metadata_deployment_context_mismatch_fails(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("appeal_finance")
+    mismatched_deployment = "appeal-finance-staging-a"
+    payload["valid_multi_peer_runs"] = [
+        {
+            "deployment_id": mismatched_deployment,
+            "environment": ENVIRONMENT,
+            "generated_at_unix": GENERATED_AT,
+            "peer_count": 4,
+            "validator_count": 4,
+            "case_count": 2,
+            "config_digest_hex": SHA256,
+        }
+    ]
+    payload["valid_config_digests"] = [SHA256]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "appeal_finance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "appeal_finance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "appeal_finance deployment context must match across artifacts and metadata"
+        in errors
+    )
+    assert mismatched_deployment not in errors
+
+
+def test_provider_bake_metadata_deployment_context_mismatch_fails(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    mismatched_environment = "staging"
+    payload["valid_policy_digests"] = [SHA256]
+    payload["valid_provider_bakes"] = [
+        {
+            "bake_id": "reserve-bake-001",
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": mismatched_environment,
+            "started_at_unix": GENERATED_AT - 3_600,
+            "completed_at_unix": GENERATED_AT,
+            "provider_count": 3,
+        }
+    ]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "reserve_rent deployment context must match across artifacts and metadata"
+        in errors
+    )
+    assert mismatched_environment not in errors
+
+
 def test_reputation_top_level_hex_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("reputation")
     payload["snapshot_id_hex"] = SNAPSHOT_ID
     payload["merkle_root_hex"] = SHA256
+    add_fingerprint_metadata(
+        payload,
+        snapshot_id_hex=SNAPSHOT_ID,
+        merkle_root_hex=SHA256,
+    )
     write_json(tmp_path / "reputation.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "reputation") == 0
+
+
+def test_scalar_metadata_must_match_recognized_artifact_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    payload["snapshot_id_hex"] = SNAPSHOT_ID
+    payload["merkle_root_hex"] = SHA256
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert "snapshot_id_hex must match recognized artifact fingerprints" in errors
+    assert "merkle_root_hex must match recognized artifact fingerprints" in errors
+    assert SNAPSHOT_ID not in errors
+    assert SHA256 not in errors
 
 
 def test_reputation_top_level_hex_metadata_is_validated(tmp_path: Path) -> None:
@@ -1596,6 +2398,7 @@ def test_aggregate_gate_row_output_shape_is_validated() -> None:
     assert errors == []
 
     row["private_key"] = "runtime-only-key-material"
+    row["path"] = "/tmp/runtime-only/gateway_load.json"
     row["sha256"] = "AB" * 32
     row["expected_required_kinds"] = list(reversed(row["expected_required_kinds"]))
     row["newest_generated_at_unix"] = row["oldest_generated_at_unix"] - 1
@@ -1607,6 +2410,11 @@ def test_aggregate_gate_row_output_shape_is_validated() -> None:
         in diagnostics
     )
     assert "gateway_load aggregate row <sensitive-key> is not allowed" in diagnostics
+    assert (
+        "gateway_load aggregate row path must be archive-relative without "
+        "absolute, empty, current, parent, or platform-specific segments"
+        in diagnostics
+    )
     assert (
         "gateway_load aggregate row sha256 must be canonical lowercase SHA-256"
         in diagnostics
@@ -1622,6 +2430,7 @@ def test_aggregate_gate_row_output_shape_is_validated() -> None:
     assert "gateway_load aggregate row errors must be empty" in diagnostics
     assert "private_key" not in diagnostics
     assert "runtime-only-key-material" not in diagnostics
+    assert "/tmp/runtime-only" not in diagnostics
     assert "AB" * 32 not in diagnostics
 
 
@@ -1670,6 +2479,13 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
         "aggregate summary ready deployment must include deployment_id and environment"
         in diagnostics
     )
+
+    errors = []
+    ready_summary = copy.deepcopy(summary)
+    ready_summary["deployment"]["environment"] = "staging"
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary environment must be production" in diagnostics
 
     errors = []
     ready_summary = copy.deepcopy(summary)
@@ -1816,7 +2632,7 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
         in diagnostics
     )
     assert (
-        "gateway_load aggregate invalid row deployment_id must be canonical when present"
+        "gateway_load aggregate invalid row deployment_id must be a non-empty canonical string"
         in diagnostics
     )
     assert (

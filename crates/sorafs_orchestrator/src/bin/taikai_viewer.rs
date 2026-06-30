@@ -9,9 +9,8 @@
 
 use std::{
     collections::HashMap,
-    env,
-    fs::{self, File},
-    io,
+    env, fs, io,
+    io::Write,
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -23,6 +22,9 @@ use norito::{
     decode_from_bytes, json,
     json::{Map, Value},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 const USAGE: &str = "\
 taikai_viewer --segment envelope=PATH,car=PATH [--segment ...] [--cluster LABEL] [--lane LABEL]
@@ -150,7 +152,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let metrics_text = metrics.try_to_string()?;
     if let Some(path) = args.metrics_out.as_ref() {
-        fs::write(path, &metrics_text)?;
+        write_output_bytes(path, "metrics output", metrics_text.as_bytes())?;
     } else {
         println!("{metrics_text}");
     }
@@ -180,14 +182,172 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         root.insert("segments".into(), Value::Array(summaries));
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let file = File::create(path)?;
-        json::to_writer_pretty(file, &Value::Object(root))?;
+        let rendered = json::to_json_pretty(&Value::Object(root))?;
+        write_output_bytes(path, "summary output", rendered.as_bytes())?;
     }
 
     Ok(())
+}
+
+fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> {
+    let mut file = open_output_file(path, label)?;
+    file.write_all(bytes)
+}
+
+fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options.open(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to open {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to inspect {label} `{}` after open: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "failed to write {label} `{}`: output must be a regular file",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to create output parent `{}`: {err}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a symlink",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a directory",
+                    path.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!("failed to inspect output `{}`: {err}", path.display()),
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        )));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        )));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to inspect output parent `{}`: {err}",
+                            ancestor.display()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 fn load_envelope(path: &Path) -> Result<TaikaiSegmentEnvelopeV1, Box<dyn std::error::Error>> {
@@ -442,4 +602,71 @@ fn parse_segment(raw: &str) -> Result<SegmentInput, Box<dyn std::error::Error>> 
         )
     })?;
     Ok(SegmentInput { envelope, car })
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::{TempDir, tempdir};
+
+    use super::*;
+
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
+
+    #[test]
+    fn write_output_bytes_creates_parent_and_writes_all_bytes() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("nested").join("metrics.prom");
+
+        write_output_bytes(&output_path, "metrics output", b"metric 1\n").expect("write metrics");
+
+        assert_eq!(fs::read(&output_path).expect("read output"), b"metric 1\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("target.prom");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("metrics.prom");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_output_bytes(&output_path, "metrics output", b"replace")
+            .expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_symlink_parent() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("summary.json");
+
+        let err = write_output_bytes(&output_path, "summary output", b"replace")
+            .expect_err("reject symlink parent");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join("summary.json").exists(),
+            "symlink parent should not receive output"
+        );
+    }
 }

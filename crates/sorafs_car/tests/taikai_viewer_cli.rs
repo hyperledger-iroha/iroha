@@ -67,7 +67,8 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     let config_primary = sample_dir.join("sample_config.json");
     let config_secondary = sample_dir.join("sample_config_720p.json");
     let temp = tempdir()?;
-    let out_dir = temp.path().join("publisher");
+    let temp_path = temp.path().canonicalize()?;
+    let out_dir = temp_path.join("publisher");
     let summary_path = out_dir.join("publisher_summary.json");
 
     let output = Command::new(&python)
@@ -106,7 +107,7 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
         assert!(required.exists(), "missing {}", required.display());
     }
 
-    let cek_path = temp.path().join("cek_receipt.norito");
+    let cek_path = temp_path.join("cek_receipt.norito");
     let receipt = CekRotationReceiptV1 {
         schema_version: CEK_ROTATION_RECEIPT_VERSION_V1,
         event_id: TaikaiEventId::new(Name::from_str("global-keynote")?),
@@ -126,8 +127,8 @@ fn taikai_viewer_emits_metrics_and_summary() -> Result<(), Box<dyn Error>> {
     let receipt_buf = norito::to_bytes(&receipt).expect("encode cek receipt");
     fs::write(&cek_path, &receipt_buf)?;
 
-    let metrics_out = temp.path().join("metrics.prom");
-    let viewer_summary = temp.path().join("viewer_summary.json");
+    let metrics_out = temp_path.join("metrics.prom");
+    let viewer_summary = temp_path.join("viewer_summary.json");
 
     let viewer_output = Command::new(&taikai_viewer_path)
         .arg("--segment")

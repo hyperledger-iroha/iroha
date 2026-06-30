@@ -51,9 +51,11 @@ deposit, settlement, submitter, worker, Governance DAG, dashboard,
 reconciliation, and governance approval evidence back to a valid pricing-config
 artifact in the same bundle. Config-digest mismatches are recorded on the
 offending artifact in the JSON summary before required-kind validity is
-reported, and
+reported. The checker also exports its required top-level payload fields as
+`EVIDENCE_REQUIRED_FIELDS`, and
 `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner.
+reviewed evidence collection planner/runner with a dry-run
+`evidence_contract` map for the selected required kinds.
 The repo still does not ship a standalone pricing daemon. Deposit custody uses
 the returned native `OpenAssetLock` instruction, which the authenticated payer
 must sign and submit through the normal transaction path, then external

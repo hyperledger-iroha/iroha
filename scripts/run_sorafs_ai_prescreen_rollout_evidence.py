@@ -34,7 +34,9 @@ from sorafs_runner_preflight import (  # noqa: E402
     run_command_plan,
     require_existing_dirs,
     require_existing_files,
+    require_runner_passthrough_args,
     require_runner_positive_int,
+    require_runner_url_args,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -79,6 +81,22 @@ def split_source_entry_spec(spec: str) -> tuple[str, Path]:
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    require_runner_passthrough_args(
+        args,
+        ("sorafs_cli_bin", "iroha_bin"),
+        ("iroha_arg",),
+        errors,
+    )
+    require_runner_url_args(
+        args,
+        (
+            "runner_url",
+            "committee_url",
+            "operator_url",
+            "notification_webhook_url",
+        ),
+        errors,
+    )
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     seen_input_dirs: dict[Path, tuple[str, Path]] = {}
     source_entries: list[tuple[str, Path]] = []

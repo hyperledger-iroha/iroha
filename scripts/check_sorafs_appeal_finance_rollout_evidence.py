@@ -31,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -218,6 +219,7 @@ COMMON_CANARY_REQUIRED_FIELDS: tuple[str, ...] = (
 COMMON_GOVERNANCE_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema",
     "status",
+    "generated_at_unix",
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
@@ -404,9 +406,12 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "config_digest_hex",
 )
 RECONCILIATION_RUN_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "generated_at_unix",
     "peer_count",
     "validator_count",
@@ -756,6 +761,7 @@ def validate_multi_peer_reconciliation(
 
 
 def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> None:
+    require_positive_int(payload, "generated_at_unix", errors)
     require_config_backed_governance_approval(payload, errors)
     require_bool_true(payload, "pricing_policy_present", errors)
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
@@ -851,7 +857,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
@@ -859,7 +865,6 @@ def build_summary(
         )
         if kind_name == "multi_peer_reconciliation":
             run = artifact_fingerprint(payload, RECONCILIATION_RUN_FIELDS)
-            artifact["run"] = run
             if evidence_artifact_is_valid(artifact):
                 valid_multi_peer_runs.append(run)
         if evidence_artifact_is_valid(artifact):

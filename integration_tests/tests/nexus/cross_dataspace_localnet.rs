@@ -67,12 +67,14 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 
-const NEXUS_ALIAS: &str = "nexus";
+const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
 const NEXUS_ID_U64: u64 = 0;
 const DS1_ID_U64: u64 = 1;
 const DS2_ID_U64: u64 = 2;
+const DS1_MANIFEST_HASH: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+const DS2_MANIFEST_HASH: &str = "0200000000000000000000000000000000000000000000000000000000000000";
 const NEXUS_LANE_INDEX: u32 = 0;
 const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
@@ -104,6 +106,7 @@ const SOAK_FALLBACK_LOG_LIMIT: usize = 3;
 const SOAK_ITERATION_ATTEMPTS: usize = 3;
 const SOAK_ITERATIONS: usize = 10;
 const SOAK_ITERATIONS_ENV: &str = "IROHA_NEXUS_CROSS_SOAK_ITERATIONS";
+const CROSS_DATASPACE_LOCALNET_STACK_BYTES: usize = 32 * 1024 * 1024;
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
@@ -232,6 +235,10 @@ fn localnet_builder() -> NetworkBuilder {
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
             ds1.insert(
+                "manifest_hash".into(),
+                TomlValue::String(DS1_MANIFEST_HASH.to_owned()),
+            );
+            ds1.insert(
                 "description".into(),
                 TomlValue::String("private dataspace one".to_owned()),
             );
@@ -240,6 +247,10 @@ fn localnet_builder() -> NetworkBuilder {
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
+            ds2.insert(
+                "manifest_hash".into(),
+                TomlValue::String(DS2_MANIFEST_HASH.to_owned()),
+            );
             ds2.insert(
                 "description".into(),
                 TomlValue::String("private dataspace two".to_owned()),
@@ -1725,6 +1736,29 @@ impl Drop for PhaseGuard<'_> {
 
 #[test]
 fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
+    run_cross_dataspace_localnet_test_on_large_stack(
+        stringify!(cross_dataspace_atomic_swap_is_all_or_nothing),
+        cross_dataspace_atomic_swap_is_all_or_nothing_impl,
+    )
+}
+
+fn run_cross_dataspace_localnet_test_on_large_stack<F>(name: &'static str, test: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()> + Send + 'static,
+{
+    // The 12-peer localnet startup exceeds default libtest stack budgets on some hosts.
+    let handle = thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(CROSS_DATASPACE_LOCALNET_STACK_BYTES)
+        .spawn(test)
+        .expect("spawn cross-dataspace localnet test thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
     let context = stringify!(cross_dataspace_atomic_swap_is_all_or_nothing);
     let mut phase_timings = PhaseTimings::new(context);
     let (network, rt) = {
@@ -2913,14 +2947,14 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, AccountId, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX,
-        ExpectedLaneValidatorBinding, KeyPair, NEXUS_ID_U64, NEXUS_LANE_INDEX,
-        OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse, TOTAL_PEERS,
-        VALIDATORS_PER_LANE, bounded_observer_request_timeout, cross_dataspace_gas_account_id,
-        duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
-        expected_lane_binding_for_peer, is_inconclusive_blocking_submit_error,
-        is_inconclusive_committed_outcome_error, lane_validator_snapshot,
-        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        ALICE_ID, AccountId, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64,
+        DS2_LANE_INDEX, DS2_MANIFEST_HASH, ExpectedLaneValidatorBinding, KeyPair, NEXUS_ALIAS,
+        NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse,
+        TOTAL_PEERS, VALIDATORS_PER_LANE, bounded_observer_request_timeout,
+        cross_dataspace_gas_account_id, duration_min_avg_max_secs,
+        expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
+        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
+        lane_validator_snapshot, multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
         npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
         render_error_with_debug, render_rejection_reason, routed_header_string, should_submit_tick,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
@@ -2928,6 +2962,7 @@ mod tests {
     };
     use iroha::data_model::{
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
+        nexus::DataSpaceId,
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
     use norito::json::Value as JsonValue;
@@ -2949,6 +2984,29 @@ mod tests {
                 PeerId::new(key_pair.public_key().clone())
             })
             .collect()
+    }
+
+    fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
+        assert_eq!(raw.len(), 64);
+        let mut hash = [0_u8; 32];
+        for (idx, chunk) in raw.as_bytes().chunks_exact(2).enumerate() {
+            let pair = std::str::from_utf8(chunk).expect("hex pair");
+            hash[idx] = u8::from_str_radix(pair, 16).expect("manifest hash hex");
+        }
+        hash
+    }
+
+    #[test]
+    fn dataspace_fixture_manifest_hashes_derive_config_ids() {
+        let ds1_hash = decode_manifest_hash_fixture(DS1_MANIFEST_HASH);
+        let ds2_hash = decode_manifest_hash_fixture(DS2_MANIFEST_HASH);
+
+        assert_eq!(NEXUS_ALIAS, "universal");
+        assert_eq!(NEXUS_ID_U64, DataSpaceId::UNIVERSAL.as_u64());
+        assert_eq!(DataSpaceId::from_hash(&ds1_hash).as_u64(), DS1_ID_U64);
+        assert_eq!(DataSpaceId::from_hash(&ds2_hash).as_u64(), DS2_ID_U64);
+        assert_ne!(DataSpaceId::from_hash(&ds1_hash), DataSpaceId::UNIVERSAL);
+        assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
 
     #[test]

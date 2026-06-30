@@ -103,6 +103,12 @@ config rather than wrapper-local defaults:
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
+- `check_sorafs_rollout_mock_test.sh`: local mock regression suite for the
+  SoraFS rollout smoke, covering read-only mode, implicit bootstrap, explicit
+  signer-config preservation, faucet retry, stale-validator dispatch errors,
+  capacity-state visibility failures, `/status` and Sumeragi commit-QC health
+  failures, and bounded HTTP timeout controls without mutating public Taira
+  state.
 - `verify_soraswap_rollout.sh`: post-upgrade wrapper that first runs the local
   `iroha_core` SoraSwap deploy-route router regression and three-hop nested
   transfer authority canary, then runs the public MCP canary, the SoraFS capacity canary, the SoraSwap
@@ -541,6 +547,11 @@ Then gate the SoraFS path on the same public node:
 
 - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
 
+When `--write-config` is supplied, `check_sorafs_rollout.sh` reads that
+runtime-only signer config as-is and fails if it is missing; it does not
+bootstrap over the supplied path. Omit `--write-config` only when the intended
+flow is to bootstrap the default runtime canary config automatically.
+
 Expected result:
 
 - `POST /v1/sorafs/pin/register`, `POST /v1/sorafs/capacity/declare`, and
@@ -548,6 +559,17 @@ Expected result:
   not `HTTP 405`
 - the signed capacity canary lands and becomes visible in
   `GET /v1/sorafs/capacity/state`
+
+The SoraFS rollout script validates all numeric canary controls before it
+bootstraps a signer or submits a transaction. `ROLLOUT_CANARY_TIME_TO_LIVE_MS`,
+`ROLLOUT_CANARY_STATUS_TIMEOUT_MS`, `DECLARED_CAPACITY_GIB`, `STAKE_AMOUNT`,
+`DECLARATION_VALID_BLOCKS`, and `CAPACITY_STATE_RECHECK_ATTEMPTS` must be
+positive integers; `CAPACITY_STATE_RECHECK_DELAY_SECONDS` must be a
+non-negative integer. HTTP probes also use bounded curl timeouts:
+`SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS` and
+`SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS` default to `5` and `20` seconds and can
+be overridden with `--curl-connect-timeout-seconds` and
+`--curl-max-time-seconds`.
 
 If the canary fails with `Unknown instruction type`, the served validator build
 is stale and missing the SoraFS capacity/order entries in
