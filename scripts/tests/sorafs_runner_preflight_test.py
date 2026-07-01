@@ -2682,6 +2682,233 @@ def test_validate_runner_context_evidence_plan_includes_expected_context_errors(
     assert errors == ["deployment context policy failed"]
 
 
+def test_validate_runner_aggregate_readiness_plan_accepts_schema_closed_plan(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    summary = tmp_path / "gateway-load.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example.aggregate.plan.v1",
+        "verifier_summary_schema": "example.aggregate.summary.v1",
+        "required_gates": ["gateway_load"],
+        "thresholds": {
+            "max_summary_artifact_age_secs": 0,
+            "now_unix": 1800800000,
+        },
+        "deployment_context": {
+            "deployment_id": "sorafs-mainnet-2026-06",
+            "environment": "production",
+        },
+        "external_summaries": {"gateway_load": [str(summary)]},
+        "summary_contract": {
+            "gateway_load": {
+                "schema": "example.gateway_load.summary.v1",
+                "required_kinds": ["probe", "metrics"],
+            }
+        },
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    assert (
+        validate_runner_aggregate_readiness_plan(
+            rendered,
+            plan,
+            diagnostic_prefix="example aggregate runner plan",
+            plan_schema="example.aggregate.plan.v1",
+            plan_fields=frozenset(rendered),
+            summary_schema="example.aggregate.summary.v1",
+            required_gates=("gateway_load",),
+            known_gates={
+                "gateway_load": Gate(
+                    "example.gateway_load.summary.v1",
+                    ("probe", "metrics"),
+                )
+            },
+            thresholds=rendered["thresholds"],
+            required_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
+            positive_threshold_fields=frozenset({"now_unix"}),
+            non_negative_threshold_fields=frozenset(
+                {"max_summary_artifact_age_secs"}
+            ),
+            threshold_fields_label="max_summary_artifact_age_secs and optional now_unix",
+            deployment_context=rendered["deployment_context"],
+            deployment_context_fields=frozenset({"deployment_id", "environment"}),
+            deployment_context_value_errors=lambda _context: (),
+            external_summaries=rendered["external_summaries"],
+            summary_contract=rendered["summary_contract"],
+        )
+        == []
+    )
+
+
+def test_validate_runner_aggregate_readiness_plan_rejects_nested_drift_without_leaking(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "bad\nplan",
+        "verifier_summary_schema": "bad\nsummary",
+        "required_gates": [
+            "gateway_load",
+            "gateway_load",
+            "unknown_gate",
+            "bad\ngate",
+        ],
+        "thresholds": {
+            "max_summary_artifact_age_secs": -1,
+            "now_unix": False,
+            "bad\nfield": 1,
+            "private_key": 2,
+        },
+        "deployment_context": {
+            "deployment_id": "bad\ndeployment",
+            "environment": False,
+            "private_key": "runtime-only-key-material",
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "external_summaries": {
+            "gateway_load": [],
+            "reputation": ["reputation.json"],
+            "unknown_gate": ["unknown.json"],
+            "bad\ngate": ["summary.json"],
+            "repair": "repair.json",
+            "por": [7],
+        },
+        "summary_contract": {
+            "gateway_load": {
+                "schema": "wrong.schema.v1",
+                "required_kinds": ["probe", "probe", "bad\nkind"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "reputation": {
+                "schema": "example.reputation.summary.v1",
+                "required_kinds": ["snapshot"],
+            },
+            "unknown_gate": {"schema": "example.unknown.v1", "required_kinds": []},
+            "bad\ngate": {
+                "schema": "example.gateway_load.summary.v1",
+                "required_kinds": ["probe"],
+            },
+            "repair": "contract-shaped-entry",
+        },
+        "steps": [
+            {
+                "label": "bad\nlabel",
+                "artifact": 7,
+                "command": [sys.executable, "bad\nargument"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "step-shaped-entry",
+            {"label": "empty_command", "artifact": None, "command": []},
+        ],
+        "bad\nfield": "runtime-only-key-material",
+    }
+
+    errors = validate_runner_aggregate_readiness_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="example aggregate runner plan",
+        plan_schema="example.aggregate.plan.v1",
+        plan_fields=frozenset(
+            {
+                "schema",
+                "verifier_summary_schema",
+                "required_gates",
+                "thresholds",
+                "deployment_context",
+                "external_summaries",
+                "summary_contract",
+                "steps",
+            }
+        ),
+        summary_schema="example.aggregate.summary.v1",
+        required_gates=("gateway_load",),
+        known_gates={
+            "gateway_load": Gate(
+                "example.gateway_load.summary.v1",
+                ("probe", "metrics"),
+            ),
+            "reputation": Gate("example.reputation.summary.v1", ("snapshot",)),
+            "repair": Gate("example.repair.summary.v1", ("repair",)),
+            "por": Gate("example.por.summary.v1", ("por",)),
+        },
+        thresholds={"max_summary_artifact_age_secs": 0},
+        required_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
+        positive_threshold_fields=frozenset({"now_unix"}),
+        non_negative_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
+        threshold_fields_label="max_summary_artifact_age_secs and optional now_unix",
+        deployment_context={
+            "deployment_id": "sorafs-mainnet-2026-06",
+            "environment": "production",
+        },
+        deployment_context_fields=frozenset({"deployment_id", "environment"}),
+        deployment_context_value_errors=lambda _context: (
+            "deployment context policy failed",
+        ),
+        external_summaries={"gateway_load": [str(tmp_path / "gateway-load.json")]},
+        summary_contract={
+            "gateway_load": {
+                "schema": "example.gateway_load.summary.v1",
+                "required_kinds": ["probe", "metrics"],
+            }
+        },
+    )
+    diagnostics = "\n".join(errors)
+
+    assert "example aggregate runner plan fields must be canonical strings" in diagnostics
+    assert "example aggregate runner plan schema must be canonical" in diagnostics
+    assert (
+        "example aggregate runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan required_gates must not contain duplicate gates"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan thresholds.max_summary_artifact_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan deployment_context must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan external_summaries must contain exactly one summary per required gate"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan summary_contract required_kinds must match gate contract"
+        in diagnostics
+    )
+    assert "example aggregate runner plan steps must contain objects" in diagnostics
+    assert "example aggregate runner plan steps must match command plan" in diagnostics
+    assert "deployment context policy failed" not in diagnostics
+    assert "unknown_gate" not in diagnostics
+    assert "bad\ngate" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+    assert "bad\nargument" not in diagnostics
+
+
 def test_write_runner_plan_reports_non_finite_plan_without_stdout(capsys) -> None:
     errors = write_runner_plan({"schema": "example", "latency_ms": float("inf")})
 

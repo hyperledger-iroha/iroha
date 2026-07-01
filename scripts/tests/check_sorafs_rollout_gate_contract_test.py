@@ -9945,7 +9945,10 @@ def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
 def test_pdp_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
+        "`policy_digest_hex` and `provider_roster_digest_hex`, valid PDP policy and provider-roster digests are published as `valid_policy_digests` and `valid_provider_roster_digests`",
+        "governance approval evidence must bind its `policy_digest_hex` and `provider_roster_digest_hex` to the matching valid proof-generation digests.",
         "Proof-summary mismatches are recorded on the offending artifact in the JSON summary before required-kind validity is reported.",
+        "Policy and provider-roster mismatches are recorded on the offending governance approval artifact through the same summary path.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the collection runner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
         "with proof-summary digest binding and rejection of evidence supplied for excluded `--require-kind` values.",
@@ -11095,6 +11098,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     roadmap_source = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
     checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example")
     runner_example = read(
         EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"
@@ -11620,176 +11624,62 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "supplied for unrequired" in runner
     assert "PLAN_FIELDS" in runner
     assert "def validate_plan_json" in runner
-    assert "production readiness runner plan must be an object" in runner
-    assert "render_runner_plan(rendered)" in runner
-    assert "production readiness runner plan must be strict JSON renderable" in runner
-    assert (
-        "production readiness runner plan fields must be canonical strings"
-        in runner
-    )
-    assert "production readiness runner plan fields must match the schema-closed contract" in runner
-    assert "production readiness runner plan schema must be canonical" in runner
-    assert (
-        "production readiness runner plan verifier schema must be canonical"
-        in runner
-    )
-    assert "production readiness runner plan steps must match command plan" in runner
-    assert "production readiness runner plan thresholds must be an object" in runner
-    assert (
-        "production readiness runner plan thresholds keys must be canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan thresholds must contain only max_summary_artifact_age_secs and optional now_unix"
-        in runner
-    )
-    assert (
-        "production readiness runner plan thresholds.max_summary_artifact_age_secs must be present"
-        in runner
-    )
-    assert (
-        "production readiness runner plan thresholds.max_summary_artifact_age_secs must be a non-negative integer"
-        in runner
-    )
-    assert (
-        "production readiness runner plan thresholds.now_unix must be a positive integer"
-        in runner
-    )
-    assert (
-        "production readiness runner plan deployment_context must be an object"
-        in runner
-    )
-    assert (
-        "production readiness runner plan deployment_context fields must be deployment_id and environment"
-        in runner
-    )
-    assert (
-        "production readiness runner plan deployment_context keys must be canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan deployment_context must be canonical"
-        in runner
-    )
-    assert (
-        "production readiness runner plan deployment_context must match args"
-        in runner
-    )
-    assert "production readiness runner plan required_gates must be a list" in runner
-    assert (
-        "production readiness runner plan required_gates must contain canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan required_gates must not contain duplicate gates"
-        in runner
-    )
-    assert (
-        "production readiness runner plan required_gates must use known gate names"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries must be an object"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries keys must be canonical gate names"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries keys must use known gate names"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries must contain only required gates"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries must map each gate to a summary path list"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries must contain exactly one summary path per gate"
-        in runner
-    )
-    assert (
-        "production readiness runner plan external_summaries paths must be canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract must be an object"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract keys must be canonical gate names"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract keys must use known gate names"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract must contain only required gates"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract must map each gate to a contract object"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract gate fields must be schema and required_kinds"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract gate fields must be canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract schemas must match gate schema"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract required_kinds must be non-empty lists"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract required_kinds must contain canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract required_kinds must not contain duplicate kinds"
-        in runner
-    )
-    assert (
-        "production readiness runner plan summary_contract required_kinds must match gate contract"
-        in runner
-    )
-    assert "production readiness runner plan steps must be a non-empty list" in runner
-    assert "production readiness runner plan steps must contain objects" in runner
-    assert (
-        "production readiness runner plan step fields must be label, artifact, and command"
-        in runner
-    )
-    assert (
-        "production readiness runner plan step fields must be canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan step labels must be canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan step artifacts must be null or canonical strings"
-        in runner
-    )
-    assert (
-        "production readiness runner plan step commands must be non-empty lists"
-        in runner
-    )
-    assert (
-        "production readiness runner plan step commands must contain canonical strings"
-        in runner
-    )
+    assert "validate_runner_aggregate_readiness_plan(" in runner
+    assert 'diagnostic_prefix="production readiness runner plan"' in runner
+    assert "def validate_runner_aggregate_readiness_plan" in helper
+    assert "render_runner_plan(rendered)" in helper
+    assert "must be strict JSON renderable" in helper
+    for marker in (
+        "must be an object",
+        "fields must be canonical strings",
+        "fields must match the schema-closed contract",
+        "schema must be canonical",
+        "verifier schema must be canonical",
+        "steps must match command plan",
+        "thresholds must be an object",
+        "thresholds keys must be canonical strings",
+        "thresholds must contain only {threshold_fields_label}",
+        "thresholds.{field_name} must be present",
+        "thresholds.{field_name} must be a non-negative integer",
+        "thresholds.{field_name} must be a positive integer",
+        "deployment_context must be an object",
+        "deployment_context fields must be deployment_id and environment",
+        "deployment_context keys must be canonical strings",
+        "deployment_context must be canonical",
+        "deployment_context must match args",
+        "required_gates must be a list",
+        "required_gates must contain canonical strings",
+        "required_gates must not contain duplicate gates",
+        "required_gates must use known gate names",
+        "external_summaries must be an object",
+        "external_summaries keys must be canonical gate names",
+        "external_summaries keys must use known gate names",
+        "external_summaries must contain only required gates",
+        "external_summaries must map each gate to a summary path list",
+        "external_summaries must contain exactly one summary path per gate",
+        "external_summaries paths must be canonical strings",
+        "summary_contract must be an object",
+        "summary_contract keys must be canonical gate names",
+        "summary_contract keys must use known gate names",
+        "summary_contract must contain only required gates",
+        "summary_contract must map each gate to a contract object",
+        "summary_contract gate fields must be schema and required_kinds",
+        "summary_contract gate fields must be canonical strings",
+        "summary_contract schemas must match gate schema",
+        "summary_contract required_kinds must be non-empty lists",
+        "summary_contract required_kinds must contain canonical strings",
+        "summary_contract required_kinds must not contain duplicate kinds",
+        "summary_contract required_kinds must match gate contract",
+        "steps must be a non-empty list",
+        "steps must contain objects",
+        "step fields must be label, artifact, and command",
+        "step fields must be canonical strings",
+        "step labels must be canonical strings",
+        "step artifacts must be null or canonical strings",
+        "step commands must be non-empty lists",
+        "step commands must contain canonical strings",
+    ):
+        assert marker in helper
     assert "production readiness runner plan deployment_id" in runner
     assert "production readiness runner plan environment must be production" in runner
     assert "test_plan_json_schema_fields_are_validated" in read(

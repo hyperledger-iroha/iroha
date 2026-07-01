@@ -34,6 +34,7 @@ DIGEST = "a" * 64
 POLICY_DIGEST = "b" * 64
 VALIDATION_DIGEST = "c" * 64
 ARCHIVE_DIGEST = "d" * 64
+ROSTER_DIGEST = "e" * 64
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -59,6 +60,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--proof-summary-digest-hex", DIGEST])
     if kind in MODULE.POLICY_DIGEST_KINDS:
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
+    if kind in MODULE.PROVIDER_ROSTER_DIGEST_KINDS:
+        args.extend(["--provider-roster-digest-hex", ROSTER_DIGEST])
     if kind == "provider_transport":
         for route in MODULE.REQUIRED_ROUTES:
             args.extend(["--route", route])
@@ -116,6 +119,7 @@ def test_generated_canaries_pass_full_pdp_gate(tmp_path: Path) -> None:
     assert payload["status"] == "ready"
     assert payload["valid_proof_summary_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert payload["valid_provider_roster_digests"] == [ROSTER_DIGEST]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
@@ -169,6 +173,20 @@ def test_proof_generation_requires_policy_digest_before_write(
 
     captured = capsys.readouterr()
     assert "--policy-digest-hex is required for proof_generation" in captured.err
+    assert not canary_path(tmp_path, "proof_generation").exists()
+
+
+def test_proof_generation_requires_provider_roster_digest_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("proof_generation", tmp_path)
+    index = args.index("--provider-roster-digest-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider-roster-digest-hex is required for proof_generation" in captured.err
     assert not canary_path(tmp_path, "proof_generation").exists()
 
 

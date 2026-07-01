@@ -85,6 +85,7 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
         taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
         sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333".to_owned(),
         tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+        ton_finalize_message_value_nano: None,
         verifier_code_hash: hex32(0x45),
         verifier_key_hash: hex32(0x46),
         proof_artifact_hash: Some(proof_artifact_hash.clone()),
@@ -135,6 +136,93 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
     }
 }
 
+fn ton_raw(seed: u8) -> String {
+    format!("0:{}", hex::encode([seed; 32]))
+}
+
+fn production_ton_route_manifest() -> SccpRouteManifest {
+    let destination_binding_hash =
+        "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799".to_owned();
+    let proof_artifact_hash = hex32(0xcc);
+    let source_deployment_receipt_hash = hex32(0x51);
+    let source_material = Json::new(norito::json!({
+        "version": 1,
+        "source_domain": 4,
+        "target_domain": 0,
+        "source_chain": "ton-testnet"
+    }));
+    let source_deployment = Json::new(norito::json!({
+        "version": 1,
+        "source_domain": 4,
+        "target_domain": 0,
+        "source_chain": "ton-testnet",
+        "deployment_receipt_hash": source_deployment_receipt_hash
+    }));
+    SccpRouteManifest {
+        version: 1,
+        route_id: "taira_ton_xor".to_owned(),
+        asset_key: "xor".to_owned(),
+        tron_network: "testnet".to_owned(),
+        chain: "ton-testnet".to_owned(),
+        chain_id_hex: "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+            .to_owned(),
+        explorer_url: Some("https://testnet.tonscan.org".to_owned()),
+        explorer_host: Some("testnet.tonscan.org".to_owned()),
+        counterparty_account_codec: Some(4),
+        counterparty_account_codec_key: Some("ton_raw".to_owned()),
+        counterparty_domain: iroha_sccp::SCCP_DOMAIN_TON,
+        verifier_target: "TonContract".to_owned(),
+        production_ready: true,
+        disabled_reason: None,
+        network_id_hex: "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+            .to_owned(),
+        taira_xor_token_address: ton_raw(0x11),
+        taira_xor_bridge_address: ton_raw(0x22),
+        sccp_tron_source_bridge_address: ton_raw(0x33),
+        tron_verifier_address: ton_raw(0x44),
+        ton_finalize_message_value_nano: Some("100000000".to_owned()),
+        verifier_code_hash: hex32(0xca),
+        verifier_key_hash: hex32(0xcb),
+        proof_artifact_hash: Some(proof_artifact_hash.clone()),
+        proving_key_hash: Some(hex32(0xcd)),
+        native_evm_prover_bundle_hash: None,
+        native_evm_prover_bundle: None,
+        source_verifier_material: Some(source_material.clone()),
+        source_adapter_engine_deployment: Some(source_deployment),
+        source_adapter_engine: Some(source_material),
+        destination_browser_prover: Some(browser_prover_ref(
+            0x60,
+            &destination_binding_hash,
+            &proof_artifact_hash,
+        )),
+        source_browser_prover: Some(browser_prover_ref(
+            0x70,
+            &destination_binding_hash,
+            &proof_artifact_hash,
+        )),
+        deployment_evidence_sha256: Some(hex32(0xce)),
+        destination_binding_key: "sccp:0:4:ton:ton-contract-v1:3".to_owned(),
+        destination_binding_hash,
+        taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
+        taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
+        taira_burn_record_artifact_sha256: hex32(0xcf),
+        taira_burn_record_code_hash: hex32(0xd1),
+        taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+        taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+        taira_burn_record_gas_limit: 2_000_000,
+        settlement_contract_address: None,
+        settlement_contract_alias: Some("taira_ton_xor_burn_record".to_owned()),
+        post_deploy_full_toml_ready: Some(true),
+        post_deploy_source_bridge_config_hash: Some(hex32(0xd2)),
+        post_deploy_source_event_transaction_id: Some(hex32(0xd3)),
+        post_deploy_source_event_explorer_url: None,
+        post_deploy_route_canary_evidence_hash: Some(hex32(0xd4)),
+        post_deploy_route_canary_transaction_id: Some(hex32(0xd5)),
+        post_deploy_route_canary_explorer_url: None,
+        post_deploy_offline_full_toml_sha256: Some(hex32(0xd6)),
+    }
+}
+
 fn production_tron_route_manifest() -> SccpRouteManifest {
     let network_id_hex = "0x000000000000000000000000000000000000000000000000000000002b6653dc";
     let verifier_address = "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ";
@@ -166,6 +254,7 @@ fn production_tron_route_manifest() -> SccpRouteManifest {
         taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
         sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
         tron_verifier_address: verifier_address.to_owned(),
+        ton_finalize_message_value_nano: None,
         verifier_code_hash,
         verifier_key_hash,
         proof_artifact_hash: None,
@@ -330,6 +419,61 @@ fn production_bsc_route_manifest_isi_rejects_incomplete_or_foreign_payloads() {
     assert!(
         stx.zk.sccp_route_manifests.is_empty(),
         "rejected route manifests must not mutate state transaction"
+    );
+}
+
+#[test]
+fn production_ton_route_manifest_isi_accepts_and_rejects_foreign_payloads() {
+    let state = test_state();
+    let mut block = state.block(test_header());
+    let mut stx = block.transaction();
+    grant_route_manifest_permission(&mut stx);
+
+    let manifest = production_ton_route_manifest();
+    UpsertSccpRouteManifest::new(manifest.clone())
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect("production TON route manifest should parse and insert");
+    assert_eq!(stx.zk.sccp_route_manifests.len(), 1);
+    assert_eq!(stx.zk.sccp_route_manifests[0].route_id, "taira_ton_xor");
+    assert_eq!(
+        stx.zk.sccp_route_manifests[0].counterparty_domain,
+        iroha_sccp::SCCP_DOMAIN_TON
+    );
+    assert_eq!(
+        stx.zk.sccp_route_manifests[0].chain_id_hex,
+        "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+    );
+    assert_eq!(
+        stx.zk.sccp_route_manifests[0]
+            .ton_finalize_message_value_nano
+            .as_deref(),
+        Some("100000000")
+    );
+
+    let mut wrong_route = manifest.clone();
+    wrong_route.route_id = "taira_ton_usdt".to_owned();
+    let err = UpsertSccpRouteManifest::new(wrong_route)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("production TON route must be taira_ton_xor/xor");
+    assert!(
+        format!("{err:?}").contains("taira_ton_xor"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut wrong_target = manifest;
+    wrong_target.verifier_target = "EvmContract".to_owned();
+    let err = UpsertSccpRouteManifest::new(wrong_target)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("production TON route must use TonContract");
+    assert!(
+        format!("{err:?}").contains("TonContract"),
+        "unexpected error: {err:?}"
+    );
+
+    assert_eq!(
+        stx.zk.sccp_route_manifests.len(),
+        1,
+        "rejected TON route manifests must not mutate state transaction"
     );
 }
 

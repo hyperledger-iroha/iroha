@@ -1385,8 +1385,8 @@ mod tests {
             .parse()
             .expect("chain id");
         let validator_keypair = checked_bls_keypair();
-        let validator_public_key = validator_keypair.public_key().clone();
-        let validator_set = vec![PeerId::new(validator_public_key.clone())];
+        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
+        let validator_set = vec![PeerId::new(validator_keypair.public_key().clone())];
         let validator_set_hash = HashOf::new(&validator_set);
         let mut validator_set_hash_bytes = [0u8; 32];
         validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
@@ -1424,7 +1424,7 @@ mod tests {
                 highest_qc: None,
                 validator_set_hash: validator_set_hash_bytes,
                 validator_set_hash_version: 1,
-                validator_public_keys: vec![validator_public_key.to_string()],
+                validator_public_keys,
                 validator_set_pops: vec![vec![1; 48]],
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![2; 96],

@@ -49,6 +49,7 @@ from sorafs_response_args import (  # noqa: E402
 CANARY_KINDS = tuple(KIND_BY_NAME)
 PROOF_SUMMARY_DIGEST_KINDS = ("proof_generation",) + PROOF_SUMMARY_BOUND_KINDS
 POLICY_DIGEST_KINDS = ("proof_generation", "governance_approval")
+PROVIDER_ROSTER_DIGEST_KINDS = ("proof_generation", "governance_approval")
 HEX64_LEN = 64
 
 
@@ -207,6 +208,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "max_proof_latency_ms": args.proof_latency_ms,
                 "proof_summary_digest_hex": args.proof_summary_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
+                "provider_roster_digest_hex": args.provider_roster_digest_hex,
                 "raw_challenge_bytes_included": False,
                 "raw_proof_bytes_included": False,
             }
@@ -273,6 +275,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "config_source": "iroha_config",
                 "proof_summary_digest_hex": args.proof_summary_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
+                "provider_roster_digest_hex": args.provider_roster_digest_hex,
             }
         )
     return payload
@@ -305,6 +308,17 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         validate_hex64(
             args.proof_summary_digest_hex,
             option="--proof-summary-digest-hex",
+            errors=errors,
+        )
+    if args.kind in PROVIDER_ROSTER_DIGEST_KINDS:
+        require_kind_options(
+            args,
+            errors,
+            (("--provider-roster-digest-hex", args.provider_roster_digest_hex),),
+        )
+        validate_hex64(
+            args.provider_roster_digest_hex,
+            option="--provider-roster-digest-hex",
             errors=errors,
         )
     if args.kind == "provider_transport":
@@ -451,6 +465,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-bundle-digest-hex")
     parser.add_argument("--archive-summary-digest-hex")
     parser.add_argument("--policy-digest-hex")
+    parser.add_argument("--provider-roster-digest-hex")
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)

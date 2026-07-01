@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b968ba92edfff30a42e2edac0b39f78978214001908264e3d3897e4ca4b4ad79
-source_last_modified: "2026-06-25T17:38:19+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: 5c6f527d30d92fc6beed4049ff0425b78c3b8c93ddf4b31f8ae50059305ff687
+source_last_modified: "2026-07-01T17:51:34.143803+00:00"
+translation_last_reviewed: 2026-07-01
 title: Sora-PDP Hot Storage Proofs
 summary: SF-13 PDP implementation status, fail-closed Torii behavior, and remaining provider-protocol gates.
 ---
@@ -43,14 +43,23 @@ Implemented locally:
   governance-approval artifacts before reporting `ready`, and it requires
   replay, governance/repair, observability, and governance approval evidence to
   carry a `proof_summary_digest_hex` matching a valid proof-generation artifact
-  in the same bundle. Proof-summary mismatches are recorded on the offending
-  artifact in the JSON summary before required-kind validity is reported. The
-  checker exports its required top-level payload fields as
-  `EVIDENCE_REQUIRED_FIELDS`, and the collection runner includes the
-  checker-backed `evidence_contract` map in dry-run output for the selected
-  required kinds, and validates the schema-closed collection plan, required
-  kinds, thresholds, external evidence map, evidence contract, and command steps
-  before dry-run output or verifier execution.
+  in the same bundle. Proof-generation artifacts also carry
+  `policy_digest_hex` and `provider_roster_digest_hex`, valid PDP policy and
+  provider-roster digests are published as `valid_policy_digests` and
+  `valid_provider_roster_digests`, and governance approval evidence must bind
+  its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
+  valid proof-generation digests. Proof-summary mismatches are recorded on the
+  offending artifact in the JSON summary before required-kind validity is
+  reported. Policy and provider-roster mismatches are recorded on the offending
+  governance approval artifact through the same summary path. The checker
+  exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`,
+  and the collection runner includes the checker-backed `evidence_contract` map
+  in dry-run output for the selected required kinds, and validates the
+  schema-closed collection plan, required kinds, thresholds, external evidence
+  map, evidence contract, and command steps before dry-run output or verifier
+  execution. The shared runner plan guard also rejects non-canonical nested
+  required-kind, threshold, external-evidence, evidence-contract, and
+  command-step shapes before dry-run output or verifier execution.
 - `fixtures/sorafs_manifest/pdp/` now contains canonical PDP commitment,
   challenge, and proof `.to`/JSON pairs plus negative fixtures for duplicate
   hot-leaf challenge material and missing proof signatures. The fixture bundle

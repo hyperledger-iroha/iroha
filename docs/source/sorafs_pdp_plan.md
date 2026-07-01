@@ -36,14 +36,16 @@ Implemented locally:
   replay, governance/repair, observability, and governance approval evidence to
   carry a `proof_summary_digest_hex` matching a valid proof-generation artifact
   in the same bundle. Proof-generation artifacts also carry
-  `policy_digest_hex`, valid PDP policy digests are published as
-  `valid_policy_digests`, and governance approval evidence must bind its
-  `policy_digest_hex` to one of those valid proof-generation policy digests.
+  `policy_digest_hex` and `provider_roster_digest_hex`, valid PDP policy and
+  provider-roster digests are published as `valid_policy_digests` and
+  `valid_provider_roster_digests`, and governance approval evidence must bind
+  its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
+  valid proof-generation digests.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
-  summary before required-kind validity is reported. Policy mismatches are
-  recorded on the offending governance approval artifact through the same
-  summary path. The checker exports its required top-level payload fields as
-  `EVIDENCE_REQUIRED_FIELDS`, and the collection runner includes the
+  summary before required-kind validity is reported. Policy and provider-roster
+  mismatches are recorded on the offending governance approval artifact through
+  the same summary path. The checker exports its required top-level payload
+  fields as `EVIDENCE_REQUIRED_FIELDS`, and the collection runner includes the
   checker-backed `evidence_contract` map in dry-run output for the selected
   required kinds, and validates the schema-closed collection plan, required
   kinds, thresholds, external evidence map, evidence contract, and command steps
@@ -57,8 +59,9 @@ Implemented locally:
   builder requires reviewed deployment context, complete PDP route and metric
   coverage where applicable, proof-summary digest bindings, provider/challenge/
   proof minimum counts, route/proof latency thresholds, config-backed
-  governance metadata, and reviewed policy digest input for proof-generation and
-  governance-approval canaries, then validates every generated artifact through
+  governance metadata, and reviewed policy and provider-roster digest input for
+  proof-generation and governance-approval canaries, then validates every
+  generated artifact through
   `scripts/check_sorafs_pdp_rollout_evidence.py` before writing. Checked-in
   response-file examples cover provider transport and proof-generation
   canaries.

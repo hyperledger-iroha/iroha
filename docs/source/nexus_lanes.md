@@ -490,9 +490,11 @@ LaneConfigEntry {
   coordinator route is unchanged. Proposal size-cap trimming preserves full
   routing plans for removed transactions too, so overflow requeue keeps Native
   AMX participant metadata. Proposal lookahead is enabled only when the
-  committed Nexus snapshot has more than one active lane at the candidate block
-  height, so future-created autoscale lanes cannot trigger scan-budget overfetch
-  before activation.
+  committed Nexus snapshot has more than one policy-reachable active lane at the
+  candidate block height. Default-route autoscale candidates, canonical
+  dataspace routes, and explicit rule lanes count; unrouted same-dataspace
+  sidecar lanes and future-created autoscale lanes cannot trigger scan-budget
+  overfetch before routing policy can select them.
 - Block validation and block execution use that same live Nexus autoscale range
   when recomputing execution-context routing and per-lane transaction
   summaries. Validators therefore accept matching elastic execution contexts

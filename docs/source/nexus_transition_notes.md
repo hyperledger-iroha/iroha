@@ -426,9 +426,10 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   proposal assembly also defers an oversized first candidate when another
   scanned transaction fits the remaining gas and IVM budgets, preventing a
   gas-heavy lane from suppressing fitting cross-lane work during multilane
-  lookahead. The lookahead gate now counts active lanes at the candidate block
-  height, so future-created autoscale lanes cannot make an otherwise single-lane
-  proposal overfetch and churn deferred transactions before activation.
+  lookahead. The lookahead gate now counts policy-reachable active lanes at the
+  candidate block height, so unrouted same-dataspace sidecars and
+  future-created autoscale lanes cannot make an otherwise single-lane proposal
+  overfetch and churn deferred transactions before activation.
 - Block validation and block execution also recompute execution-context routing
   and per-lane transaction summaries with the live Nexus autoscale range.
   Matching elastic execution contexts validate, while stale base-lane contexts

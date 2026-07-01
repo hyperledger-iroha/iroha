@@ -19419,10 +19419,10 @@ operator-provided rollout bundles.
   defers an oversized first candidate when a later scanned transaction still
   fits the remaining gas and IVM budgets, so one gas-heavy lane cannot suppress
   fitting cross-lane work under multilane lookahead. Proposal lookahead now
-  gates on active lanes at the candidate block height rather than raw catalog
-  overrides, so future-created autoscale lanes cannot cause scan-budget
-  overfetch while the committed routing surface is still effectively
-  single-lane.
+  gates on policy-reachable active lanes at the candidate block height rather
+  than raw catalog overrides, so unrouted same-dataspace sidecars and
+  future-created autoscale lanes cannot cause scan-budget overfetch while the
+  committed routing surface is still effectively single-lane.
 - Commit event production now consumes the full routing plan before any legacy
   coordinator-only routing hint, so partial ledger cleanup or stale single-route
   metadata cannot override digest-checked lane/dataspace metadata when both

@@ -836,6 +836,29 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         "principal-amount payload mutation must fail signature admission, got {signature_error}"
     );
 
+    let (alternate_recipient, _) = account(4);
+    let wrong_principal_recipient_tx = signed_transfer_with_principal_and_fee_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &alternate_recipient,
+        &fee_asset,
+        Numeric::new(1, 0),
+        Some((
+            policy.fee_amount_numeric(),
+            policy_treasury_account(&policy),
+        )),
+        metadata_for_policy(&policy, 1),
+    );
+    let mut principal_recipient_mutation_tx = exact_fee_tx.clone();
+    principal_recipient_mutation_tx.set_signature(wrong_principal_recipient_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, principal_recipient_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "principal-recipient payload mutation must fail signature admission, got {signature_error}"
+    );
+
     let exact_batch_tx = signed_batch_transfer_with_principal_amounts(
         &state,
         &user,
@@ -859,13 +882,32 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         Numeric::new(1, 0),
         Numeric::new(2, 0),
     );
-    let mut batch_principal_mutation_tx = exact_batch_tx;
+    let mut batch_principal_mutation_tx = exact_batch_tx.clone();
     batch_principal_mutation_tx.set_signature(wrong_batch_principal_tx.signature().clone());
     let signature_error = accept_transaction_error(&state, batch_principal_mutation_tx);
     assert!(
         signature_error.contains("SignatureVerification")
             || signature_error.contains("signature verification"),
         "batch-principal payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_batch_recipient_tx = signed_batch_transfer_with_principal_amounts(
+        &state,
+        &user,
+        &user_key_pair,
+        &alternate_recipient,
+        &fee_asset,
+        &policy,
+        Numeric::new(1, 0),
+        Numeric::new(1, 0),
+    );
+    let mut batch_recipient_mutation_tx = exact_batch_tx;
+    batch_recipient_mutation_tx.set_signature(wrong_batch_recipient_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, batch_recipient_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "batch-recipient payload mutation must fail signature admission, got {signature_error}"
     );
 
     let wrong_fee_amount_tx = signed_transfer_with_fee_instruction(

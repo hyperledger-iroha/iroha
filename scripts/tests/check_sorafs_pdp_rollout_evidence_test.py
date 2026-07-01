@@ -20,6 +20,7 @@ NOW_UNIX = 1_800_500_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ef" * 32
 DIGEST_2 = "12" * 32
+ROSTER_DIGEST = "34" * 32
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -102,6 +103,7 @@ def proof_generation(
             "max_proof_latency_ms": proof_latency_ms,
             "proof_summary_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
+            "provider_roster_digest_hex": ROSTER_DIGEST,
             "raw_challenge_bytes_included": False,
             "raw_proof_bytes_included": False,
         }
@@ -191,6 +193,7 @@ def governance_approval() -> dict:
             "config_source": "iroha_config",
             "proof_summary_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
+            "provider_roster_digest_hex": ROSTER_DIGEST,
         }
     )
     return payload
@@ -220,6 +223,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["status"] == "ready"
     assert payload["required"]["provider_transport"]["valid"] is True
     assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["valid_provider_roster_digests"] == [ROSTER_DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -331,6 +335,22 @@ def test_proof_generation_requires_policy_digest(tmp_path: Path) -> None:
     assert result["valid_policy_digests"] == []
 
 
+def test_proof_generation_requires_provider_roster_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    del payload["provider_roster_digest_hex"]
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "provider_roster_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_provider_roster_digests"] == []
+
+
 def test_governance_repair_proof_summary_digest_must_match(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = governance_repair()
@@ -371,6 +391,29 @@ def test_governance_approval_policy_digest_must_match_proof_generation(
     assert artifact["errors"] == [
         "governance_approval policy_digest_hex must reference a valid "
         "proof_generation policy_digest_hex"
+    ]
+
+
+def test_governance_approval_provider_roster_digest_must_match_proof_generation(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["provider_roster_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_provider_roster_digests"] == [ROSTER_DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval provider_roster_digest_hex must reference a valid "
+        "proof_generation provider_roster_digest_hex"
     ]
 
 
@@ -415,6 +458,29 @@ def test_stale_proof_generation_does_not_anchor_policy_bound_evidence(
     assert (
         "governance_approval policy_digest_hex requires a valid "
         "proof_generation policy_digest_hex"
+    ) in artifact["errors"]
+
+
+def test_stale_proof_generation_does_not_anchor_provider_roster_bound_evidence(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["generated_at_unix"] = NOW_UNIX - MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS - 1
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_provider_roster_digests"] == []
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval provider_roster_digest_hex requires a valid "
+        "proof_generation provider_roster_digest_hex"
     ) in artifact["errors"]
 
 
