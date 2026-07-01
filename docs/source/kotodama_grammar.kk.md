@@ -248,7 +248,7 @@ register_trigger wake {
 Хост/жүйелік қоңыраулар құрастырулары (SCALL картасы; ivm.md ішіндегі нақты сандар)
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `execute_instruction(Blob[NoritoBytes])`
 - `execute_query(Blob[NoritoBytes]) -> Blob`

@@ -56,6 +56,40 @@ pub struct BridgeReceipt {
     pub recipient: Vec<u8>,
 }
 
+/// Chain-wide replay key for an outbound SCCP message emitted by Iroha.
+///
+/// The key intentionally does not include a Nexus lane identifier. A SORA-origin
+/// SCCP message may be routed through different lanes over time, but it must be
+/// recorded at most once globally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+pub struct SccpOutboundMessageKey {
+    /// SCCP source domain encoded in the payload.
+    pub source_domain: u32,
+    /// SCCP target domain encoded in the payload.
+    pub target_domain: u32,
+    /// SCCP message identifier derived from the canonical payload.
+    pub message_id: [u8; 32],
+}
+
+/// Durable record for a SORA-origin outbound SCCP message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+pub struct SccpOutboundMessageRecord {
+    /// Hash of the canonical SCCP payload bytes.
+    pub payload_hash: [u8; 32],
+    /// Block height where the message was first recorded.
+    pub recorded_at_height: u64,
+}
+
 /// Hash function used by bridge Merkle proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1111,6 +1145,29 @@ mod tests {
         let buf = r.encode();
         let dec = BridgeReceipt::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(r, dec);
+    }
+
+    #[test]
+    fn sccp_outbound_message_key_roundtrip() {
+        let key = SccpOutboundMessageKey {
+            source_domain: 1,
+            target_domain: 2,
+            message_id: [0x42; 32],
+        };
+        let buf = key.encode();
+        let dec = SccpOutboundMessageKey::decode_all(&mut &buf[..]).expect("decode");
+        assert_eq!(key, dec);
+    }
+
+    #[test]
+    fn sccp_outbound_message_record_roundtrip() {
+        let record = SccpOutboundMessageRecord {
+            payload_hash: [0x24; 32],
+            recorded_at_height: 77,
+        };
+        let buf = record.encode();
+        let dec = SccpOutboundMessageRecord::decode_all(&mut &buf[..]).expect("decode");
+        assert_eq!(record, dec);
     }
 
     #[test]

@@ -57,7 +57,7 @@ seiyaku TransferDemo {
 ```
 
 ས་ཁྲ་ (pointer‑ABI):
-→ `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, Kotodama, དེ་ལས་ `SCALL 0x24`, དེ་ལས་ `SCALL 0x24`, དེ་ལས་ `SCALL 0x24`,
+→ `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, Kotodama, དེ་ལས་ `SCALL 0x2C`, དེ་ལས་ `SCALL 0x2C`, དེ་ལས་ `SCALL 0x2C`,
 
 ## NFT གསར་བསྐྲུན་ + སྤོ་བཤུད།
 

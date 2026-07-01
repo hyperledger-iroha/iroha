@@ -6,8 +6,7 @@ use std::collections::BTreeSet;
 
 use blake3::Hasher;
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Signer, SigningKey, Verifier,
-    VerifyingKey,
+    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey, Verifier, VerifyingKey,
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
@@ -1067,7 +1066,12 @@ fn verify_ed25519_pop_signature(
 
     let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
     signature_bytes.copy_from_slice(&signature.signature);
-    let signature = DalekSignature::from_bytes(&signature_bytes);
+    let signature =
+        crate::checked_ed25519_signature_from_bytes(&signature_bytes).ok_or_else(|| {
+            PopCredentialValidationError::SignatureVerification {
+                reason: "signature payload must not be all zero".to_owned(),
+            }
+        })?;
 
     verifying_key.verify(digest, &signature).map_err(|err| {
         PopCredentialValidationError::SignatureVerification {
@@ -1333,6 +1337,38 @@ mod tests {
         assert!(matches!(
             err,
             PopCredentialValidationError::SignatureVerification { .. }
+        ));
+    }
+
+    #[test]
+    fn signatures_reject_all_zero_signature_material() {
+        let (mut credential, mut root, mut revocations) = signed_material();
+        credential.issuer_signature.signature.fill(0);
+        root.publisher_signature.signature.fill(0);
+        revocations.publisher_signature.signature.fill(0);
+
+        let err = verify_pop_credential_signature_v1(&credential)
+            .expect_err("all-zero POP credential signature must be rejected");
+        assert!(matches!(
+            err,
+            PopCredentialValidationError::SignatureVerification { reason }
+                if reason.contains("all zero")
+        ));
+
+        let err = verify_pop_commitment_root_signature_v1(&root)
+            .expect_err("all-zero POP root signature must be rejected");
+        assert!(matches!(
+            err,
+            PopCredentialValidationError::SignatureVerification { reason }
+                if reason.contains("all zero")
+        ));
+
+        let err = verify_pop_revocation_list_signature_v1(&revocations)
+            .expect_err("all-zero POP revocation signature must be rejected");
+        assert!(matches!(
+            err,
+            PopCredentialValidationError::SignatureVerification { reason }
+                if reason.contains("all zero")
         ));
     }
 

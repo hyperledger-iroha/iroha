@@ -11,9 +11,9 @@ import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/koto
 import { normalizeAssetDefinitionIdLiteral } from "../src/kotodamaCompiler/assetDefinitionLiteral.js";
 import { blake2b256 } from "../src/blake2b.js";
 
-const CURRENT_ABI_V1_HASH_HEX = "73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d";
+const CURRENT_ABI_V1_HASH_HEX = "cfedd3f16e55a2db43076d7ac0daabc92c19684143af89594b841234ca17037d";
 const CURRENT_ABI_V1_HASH_LITERAL =
-  "hash:73CEFB1B419F97B9E2864CDC6545D3F80AE2328DC0FBE2FBD034CD51A837BA0D#4D00";
+  "hash:CFEDD3F16E55A2DB43076D7AC0DAABC92C19684143AF89594B841234CA17037D#A42D";
 const NORITO_HEADER_FLAG_COMPACT_LEN = 0x02;
 const CREATE_ELECTION_TYPE_NAME = "iroha_data_model::isi::zk::CreateElection";
 const SUBMIT_BALLOT_TYPE_NAME = "iroha_data_model::isi::zk::SubmitBallot";
@@ -1140,7 +1140,7 @@ test("Kotodama compiler SDK rejects direct host side effects in view entrypoints
   const compiled = compileKotodamaProgram(`
 seiyaku ViewHostEffect {
   view fn move_tokens(from: AccountId, to: AccountId, asset: AssetDefinitionId) -> int {
-    transfer_asset(from, to, asset, 1);
+    transfer_asset(from, to, asset, 1, dataspace_id("0"));
     return 1;
   }
 }
@@ -1771,7 +1771,7 @@ test("Kotodama compiler SDK requires permission for public host side effects", (
   const compiled = compileKotodamaProgram(`
 seiyaku PublicHostEffect {
   kotoage fn move_tokens(from: AccountId, to: AccountId, asset: AssetDefinitionId) {
-    transfer_asset(from, to, asset, 1);
+    transfer_asset(from, to, asset, 1, dataspace_id("0"));
   }
 }
 `);
@@ -1786,7 +1786,7 @@ seiyaku PublicBatchHostEffect {
   const callCompiled = compileKotodamaProgram(`
 seiyaku PublicCallHostEffect {
   kotoage fn move_tokens(from: AccountId, to: AccountId, asset: AssetDefinitionId) {
-    call transfer_asset(from, to, asset, 1);
+    call transfer_asset(from, to, asset, 1, dataspace_id("0"));
   }
 }
 `);
@@ -2242,7 +2242,7 @@ test("Kotodama compiler SDK accepts public host side effects with permission", (
   const compiled = compileKotodamaProgram(`
 seiyaku PublicHostEffectAllowed {
   kotoage fn move_tokens(from: AccountId, to: AccountId, asset: AssetDefinitionId) permission(Admin) {
-    transfer_asset(from, to, asset, 1);
+    transfer_asset(from, to, asset, 1, dataspace_id("0"));
   }
 }
 `);
@@ -3325,7 +3325,7 @@ seiyaku CallStatementHostCalls {
     let role = name("auditor");
     let evidence = norito_bytes("00");
     let request = norito_bytes("01");
-    call transfer_asset(authority(), authority(), asset, 1);
+    call transfer_asset(authority(), authority(), asset, 1, dataspace_id("0"));
     call mint_asset(authority(), asset, 2);
     call burn_asset(authority(), asset, 1);
     call nft_mint_asset(nft, authority());
@@ -3374,7 +3374,7 @@ seiyaku CallStatementHostCalls {
   const invalidTransfer = compileKotodamaProgram(`
 seiyaku InvalidCallStatementTransfer {
   kotoage fn run() permission(Admin) {
-    call transfer_asset(authority(), authority(), name("rose"), 1);
+    call transfer_asset(authority(), authority(), name("rose"), 1, dataspace_id("0"));
   }
 }
 `);
@@ -3384,7 +3384,7 @@ seiyaku InvalidCallStatementTransfer {
   assert.deepEqual(valid.diagnostics, []);
   assert.notEqual(code.indexOf(syscallNeedle(0x02)), -1);
   assert.deepEqual(validHostCalls.diagnostics, []);
-  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x24)), -1);
+  assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x2c)), -1);
   assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x22)), -1);
   assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x23)), -1);
   assert.notEqual(hostCallCode.indexOf(syscallNeedle(0x25)), -1);
@@ -3432,7 +3432,7 @@ seiyaku InvalidCallStatementTransfer {
   assert.match(invalidIdentifier.diagnostics[0].message, /call expects a function call expression/);
   assert.equal(invalidTransfer.artifactBytes.length, 0);
   assert.equal(invalidTransfer.diagnostics.length, 1);
-  assert.match(invalidTransfer.diagnostics[0].message, /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric\)/);
+  assert.match(invalidTransfer.diagnostics[0].message, /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId\)/);
 });
 
 test("Kotodama compiler SDK accepts Rust string and Blob bytes equality", () => {
@@ -6263,7 +6263,7 @@ seiyaku LegacyTransferNoArgs {
   }
 }
 `,
-      /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric\)/,
+      /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId\)/,
     ],
     [
       `
@@ -12084,7 +12084,7 @@ test("Kotodama compiler SDK rejects invalid Iroha effect arguments semantically"
   const invalidTransfer = compileKotodamaProgram(`
 seiyaku InvalidTransfer {
   kotoage fn run() permission(Admin) {
-    transfer_asset(authority(), authority(), name("rose"), 1);
+    transfer_asset(authority(), authority(), name("rose"), 1, dataspace_id("0"));
   }
 }
 `);
@@ -12243,7 +12243,7 @@ seiyaku ValidEffects {
   kotoage fn run() permission(Admin) {
     let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     let nft = nft_id("n0$wonderland.universal");
-    transfer_asset(authority(), authority(), asset, 1);
+    transfer_asset(authority(), authority(), asset, 1, dataspace_id("0"));
     mint_asset(authority(), asset, 1);
     burn_asset(authority(), asset, 1);
     nft_mint_asset(nft, authority());
@@ -12263,7 +12263,7 @@ seiyaku ValidEffects {
   assert.equal(invalidTransfer.diagnostics.length, 1);
   assert.match(
     invalidTransfer.diagnostics[0].message,
-    /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric\)/,
+    /transfer_asset expects \(AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId\)/,
   );
   assert.equal(invalidSetDetail.artifactBytes.length, 0);
   assert.equal(invalidSetDetail.diagnostics.length, 1);
@@ -12350,6 +12350,7 @@ seiyaku ValidEffects {
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x27)), -1);
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x28)), -1);
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x29)), -1);
+  assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x2c)), -1);
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x24)), -1);
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x12)), -1);
   assert.notEqual(validEffectsCode.indexOf(syscallNeedle(0x2a)), -1);
@@ -16468,7 +16469,7 @@ seiyaku MixedLiteralTransfer {
     let caller = authority();
     let pool = account_id("${pool}");
     let asset = asset_definition("61CtjvNd9T3THAR65GsMVHr82Bjc");
-    transfer_asset(caller, pool, asset, 10);
+    transfer_asset(caller, pool, asset, 10, dataspace_id("0"));
   }
 }
 `, { sourceName: "mixed_literal_transfer.ko" });
@@ -16478,7 +16479,7 @@ seiyaku MixedLiteralTransfer {
     {
       function_name: "main",
       pc_start: 0,
-      pc_end: 292,
+      pc_end: 412,
       source_path: "mixed_literal_transfer.ko",
       line: 3,
       column: 14,
@@ -16493,7 +16494,7 @@ seiyaku MixedLiteralTransfer {
       entry.bytecode_words,
       entry.frame_bytes,
     ])),
-    [["main", 0, 292, 292, 73, 64]],
+    [["main", 0, 412, 412, 103, 56]],
   );
 });
 
@@ -16515,7 +16516,7 @@ seiyaku StaticPointerLocalAccess {
     let asset = asset_definition("${assetDefinition}");
     let source = account_id("${sourceAccount}");
     let destination = account_id("${destinationAccount}");
-    transfer_asset(source, destination, asset, 10);
+    transfer_asset(source, destination, asset, 10, dataspace_id("0"));
     mint_asset(destination, asset, 5);
   }
 }
@@ -16554,7 +16555,8 @@ seiyaku RuntimeAccountStaticAssetAccess {
       account_id("${sourceAccount}"),
       account_id("merchant@paynet"),
       asset_definition("${assetDefinition}"),
-      1
+      1,
+      dataspace_id("0")
     );
   }
 
@@ -16614,9 +16616,9 @@ seiyaku OrderedAccess {
     let asset = asset_definition("${assetDefinition}");
     let source = account_id("${sourceAccount}");
     let destination = account_id("${destinationAccount}");
-    transfer_asset(source, destination, asset, 10);
+    transfer_asset(source, destination, asset, 10, dataspace_id("0"));
     done = true;
-    transfer_asset(authority(), destination, asset, 1);
+    transfer_asset(authority(), destination, asset, 1, dataspace_id("0"));
   }
 }
 `);
@@ -16685,7 +16687,7 @@ seiyaku SysvarAuthorityAccess {
   kotoage fn main() permission(Admin) {
     let caller = sysvar_authority();
     let asset = asset_definition("${assetDefinition}");
-    transfer_asset(caller, caller, asset, 1);
+    transfer_asset(caller, caller, asset, 1, dataspace_id("0"));
     set_account_detail(caller, name("status"), json("{}"));
   }
 }
@@ -17059,8 +17061,8 @@ seiyaku DexContract {
                   reserve_in: int,
                   reserve_out: int) -> int permission(Admin) {
     let out = quote_sell(reserve_in, reserve_out, amount_in);
-    transfer_asset(trader, pool, input_asset, amount_in);
-    transfer_asset(pool, trader, output_asset, out);
+    transfer_asset(trader, pool, input_asset, amount_in, dataspace_id("0"));
+    transfer_asset(pool, trader, output_asset, out, dataspace_id("0"));
     return out;
   }
 }
@@ -17094,8 +17096,8 @@ seiyaku InlineQuote {
                   reserve_out: int) -> int permission(Admin) {
     let effective = (amount_in * 997) / 1000;
     let out = (reserve_out * effective) / (reserve_in + effective);
-    transfer_asset(trader, pool, input_asset, amount_in);
-    transfer_asset(pool, trader, output_asset, out);
+    transfer_asset(trader, pool, input_asset, amount_in, dataspace_id("0"));
+    transfer_asset(pool, trader, output_asset, out, dataspace_id("0"));
     return out;
   }
 }
@@ -17383,7 +17385,7 @@ test("Kotodama compiler SDK matches docs detail-transfer literal frame rows", ()
       entry.bytecode_bytes,
       entry.frame_bytes,
     ])),
-    [["set_cursor_and_transfer", 624, 48]],
+    [["set_cursor_and_transfer", 748, 48]],
   );
 });
 
@@ -18273,8 +18275,8 @@ test("Kotodama compiler SDK matches Rust raw asset helper rows", () => {
     ],
     [
       "raw_transfer_if",
-      "fn transfer(src_balance: int, dst_balance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) { if src_balance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; transfer_asset(from_account, to_account, asset, wad); } else { assert_eq(1, 0); } }",
-      [["transfer", 596, 112]],
+      "fn transfer(src_balance: int, dst_balance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) { if src_balance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; transfer_asset(from_account, to_account, asset, wad, dataspace_id(\"0\")); } else { assert_eq(1, 0); } }",
+      [["transfer", 708, 112]],
     ],
     [
       "helper_mint",
@@ -18288,8 +18290,8 @@ test("Kotodama compiler SDK matches Rust raw asset helper rows", () => {
     ],
     [
       "helper_transfer_nested",
-      "fn entry() { } fn transfer_from(src_balance: int, dst_balance: int, allowance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) { if src_balance >= wad { if allowance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; let new_allowance = allowance - wad; transfer_asset(from_account, to_account, asset, wad); } else { assert_eq(1, 0); } } else { assert_eq(1, 0); } }",
-      [["entry", 8, 8], ["transfer_from", 1240, 128]],
+      "fn entry() { } fn transfer_from(src_balance: int, dst_balance: int, allowance: int, from_account: AccountId, to_account: AccountId, asset: AssetDefinitionId, wad: int) { if src_balance >= wad { if allowance >= wad { let new_src = src_balance - wad; let new_dst = dst_balance + wad; let new_allowance = allowance - wad; transfer_asset(from_account, to_account, asset, wad, dataspace_id(\"0\")); } else { assert_eq(1, 0); } } else { assert_eq(1, 0); } }",
+      [["entry", 8, 8], ["transfer_from", 1352, 128]],
     ],
   ];
 
@@ -18330,9 +18332,9 @@ test("Kotodama compiler SDK matches Rust DAI budget rows", () => {
       entry.frame_bytes,
     ])),
     [
-      ["transfer", 596, 112],
+      ["transfer", 708, 112],
       ["approve", 44, 32],
-      ["transfer_from", 1136, 128],
+      ["transfer_from", 1248, 128],
       ["mint", 144, 64],
       ["burn", 1048, 96],
     ],
@@ -18357,18 +18359,18 @@ test("Kotodama compiler SDK matches Rust DAI budget rows", () => {
   assert.deepEqual(
     [119, 120, 122, 347, 348, 350, 401, 402, 404, 600, 601, 603].map((word) => code.readUInt32LE(word * 4)),
     [
-      ivmWord(0x20, 7, 0, 0),
-      ivmWord(0x40, 5, 7, 2),
-      ivmWord(0x20, 7, 0, 0),
-      ivmWord(0x20, 6, 0, 0),
+      ivmWord(0x20, 5, 0, 0),
+      ivmWord(0x46, 0, 0, 56),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 9, 9, 0),
+      ivmWord(0x20, 9, 9, 0),
+      ivmWord(0x20, 9, 9, 0),
+      ivmWord(0x20, 4, 0, 0),
+      ivmWord(0x20, 4, 4, 1),
       ivmWord(0x40, 4, 6, 2),
-      ivmWord(0x20, 6, 0, 0),
-      ivmWord(0x20, 6, 0, 0),
-      ivmWord(0x20, 6, 6, 1),
-      ivmWord(0x40, 6, 4, 2),
-      ivmWord(0x20, 8, 0, 0),
-      ivmWord(0x40, 6, 8, 2),
-      ivmWord(0x20, 8, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
     ],
   );
 });
@@ -18463,9 +18465,9 @@ test("Kotodama compiler SDK matches raw main fixed parameter frame homes", () =>
     ],
     [
       "raw_two_accounts_transfer",
-      'fn main(from: AccountId, to: AccountId) { let mfc = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"); transfer_asset(from, to, mfc, 1); }',
-      208,
-      64,
+      'fn main(from: AccountId, to: AccountId) { let mfc = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"); transfer_asset(from, to, mfc, 1, dataspace_id("0")); }',
+      324,
+      72,
     ],
     ["raw_name_info_int", "fn main(key: Name) { info(1); }", 48, 32],
   ];
@@ -18565,10 +18567,10 @@ test("Kotodama compiler SDK matches private transfer helper frame homes", () => 
     [
       "helper_transfer_asset_param",
       "fn main(from: AccountId, to: AccountId, mfc: AssetDefinitionId, amount: int) { send(from, to, mfc, amount); }\n"
-        + "fn send(from_account: AccountId, to_account: AccountId, mfc: AssetDefinitionId, amount: int) { transfer_asset(from_account, to_account, mfc, amount); }",
+        + "fn send(from_account: AccountId, to_account: AccountId, mfc: AssetDefinitionId, amount: int) { transfer_asset(from_account, to_account, mfc, amount, dataspace_id(\"0\")); }",
       [
         ["main", 160, 72],
-        ["send", 280, 80],
+        ["send", 392, 80],
       ],
     ],
     [
@@ -18576,11 +18578,11 @@ test("Kotodama compiler SDK matches private transfer helper frame homes", () => 
       `fn main(from: AccountId, to: AccountId) { send_mfc(from, to, 369); }\n`
         + `fn send_mfc(from_account: AccountId, to_account: AccountId, amount: int) {\n`
         + `  let mfc = asset_definition!("${assetDefinition}");\n`
-        + `  transfer_asset(from_account, to_account, mfc, amount);\n`
+        + `  transfer_asset(from_account, to_account, mfc, amount, dataspace_id("0"));\n`
         + `}`,
       [
         ["main", 164, 48],
-        ["send_mfc", 364, 72],
+        ["send_mfc", 480, 72],
       ],
     ],
     [
@@ -18588,12 +18590,12 @@ test("Kotodama compiler SDK matches private transfer helper frame homes", () => 
       `fn main(from: AccountId, to: AccountId) { send_mfc(from, to, 369); }\n`
         + `fn send_mfc(from_account: AccountId, to_account: AccountId, amount: int) {\n`
         + `  let mfc = mfc_asset();\n`
-        + `  transfer_asset(from_account, to_account, mfc, amount);\n`
+        + `  transfer_asset(from_account, to_account, mfc, amount, dataspace_id("0"));\n`
         + `}\n`
         + `fn mfc_asset() -> AssetDefinitionId { let mfc = asset_definition!("${assetDefinition}"); return mfc; }`,
       [
         ["main", 164, 48],
-        ["send_mfc", 364, 72],
+        ["send_mfc", 480, 72],
         ["mfc_asset", 348, 16],
       ],
     ],
@@ -18638,12 +18640,12 @@ test("Kotodama compiler SDK matches Rust-style for-loop transfer frame homes", (
       "fn main(from: AccountId, to: AccountId, mfc: AssetDefinitionId) { loop_mfc(from, to, mfc); }\n"
         + "fn loop_mfc(from_account: AccountId, to_account: AccountId, mfc: AssetDefinitionId) {\n"
         + "  for let qty = 369; qty <= 1337; qty++ {\n"
-        + "    transfer_asset(from_account, to_account, mfc, qty);\n"
+        + "    transfer_asset(from_account, to_account, mfc, qty, dataspace_id(\"0\"));\n"
         + "  }\n"
         + "}",
       [
         ["main", 148, 56],
-        ["loop_mfc", 916, 80],
+        ["loop_mfc", 1028, 80],
       ],
     ],
     [
@@ -18652,13 +18654,13 @@ test("Kotodama compiler SDK matches Rust-style for-loop transfer frame homes", (
         + `fn loop_mfc(from_account: AccountId, to_account: AccountId) {\n`
         + `  let mfc = mfc_asset();\n`
         + `  for let qty = 369; qty <= 1337; qty++ {\n`
-        + `    transfer_asset(from_account, to_account, mfc, qty);\n`
+        + `    transfer_asset(from_account, to_account, mfc, qty, dataspace_id("0"));\n`
         + `  }\n`
         + `}\n`
         + `fn mfc_asset() -> AssetDefinitionId { let mfc = asset_definition!("${assetDefinition}"); return mfc; }`,
       [
         ["main", 136, 40],
-        ["loop_mfc", 1000, 72],
+        ["loop_mfc", 1112, 72],
         ["mfc_asset", 348, 16],
       ],
     ],
@@ -18756,8 +18758,8 @@ test("Kotodama compiler SDK matches full MFC raw-main budget rows", () => {
     ])),
     [
       ["main", 940, 72],
-      ["send_mfc", 364, 72],
-      ["loop_mfc", 1000, 72],
+      ["send_mfc", 480, 72],
+      ["loop_mfc", 1112, 72],
       ["mfc_asset", 452, 16],
     ],
   );
@@ -18780,8 +18782,8 @@ test("Kotodama compiler SDK matches full MFC raw-main budget rows", () => {
       ivmWord(0x20, 24, 0, 0),
       ivmWord(0x20, 9, 8, 0),
       ivmWord(0x20, 8, 23, 0),
-      ivmWord(0x20, 12, 24, 0),
-      ivmWord(0x46, 0, 255, 136),
+      ivmWord(0x20, 26, 0, 7),
+      ivmWord(0x20, 0, 0, 0),
     ],
   );
 });
@@ -19003,34 +19005,34 @@ test("Kotodama compiler SDK keeps threshold escrow rows Rust-shaped", () => {
       {
         function_name: "__entrypoint_impl__deposit",
         pc_start: 4400,
-        pc_end: 5608,
-        bytecode_bytes: 1208,
-        bytecode_words: 302,
-        frame_bytes: 64,
+        pc_end: 5736,
+        bytecode_bytes: 1336,
+        bytecode_words: 334,
+        frame_bytes: 72,
       },
       {
         function_name: "deposit",
-        pc_start: 5608,
-        pc_end: 5992,
+        pc_start: 5736,
+        pc_end: 6120,
         bytecode_bytes: 384,
         bytecode_words: 96,
         frame_bytes: 32,
       },
       {
         function_name: "release_if_ready",
-        pc_start: 5992,
-        pc_end: 7168,
-        bytecode_bytes: 1176,
-        bytecode_words: 294,
-        frame_bytes: 48,
+        pc_start: 6120,
+        pc_end: 7428,
+        bytecode_bytes: 1308,
+        bytecode_words: 327,
+        frame_bytes: 56,
       },
       {
         function_name: "refund",
-        pc_start: 7168,
-        pc_end: 9488,
-        bytecode_bytes: 2320,
-        bytecode_words: 580,
-        frame_bytes: 48,
+        pc_start: 7428,
+        pc_end: 9876,
+        bytecode_bytes: 2448,
+        bytecode_words: 612,
+        frame_bytes: 56,
       },
     ],
   );
@@ -19082,29 +19084,29 @@ test("Kotodama compiler SDK keeps threshold escrow rows Rust-shaped", () => {
   assert.deepEqual(
     Array.from({ length: 6 }, (_, index) => code.readUInt32LE(depositImpl.pc_start + 756 + index * 4)),
     [
+      ivmWord(0x20, 8, 0, 0),
       ivmWord(0x60, 0, 0, 0xa4),
       ivmWord(0x20, 8, 10, 0),
-      ivmWord(0x20, 10, 24, 0),
-      ivmWord(0x60, 0, 0, 0x69),
-      ivmWord(0x20, 6, 10, 0),
-      ivmWord(0x20, 10, 8, 0),
+      ivmWord(0x20, 9, 0, 0),
+      ivmWord(0x20, 26, 0, 0),
+      ivmWord(0x20, 26, 0, 7),
     ],
   );
   assert.ok(releaseIfReady);
-  assert.equal(code.readUInt32LE(releaseIfReady.pc_start + 864), ivmWord(0x20, 8, 10, 0));
-  assert.equal(code.readUInt32LE(releaseIfReady.pc_start + 964), ivmWord(0x20, 11, 8, 0));
+  assert.equal(code.readUInt32LE(releaseIfReady.pc_start + 864), ivmWord(0x20, 6, 6, 0));
+  assert.equal(code.readUInt32LE(releaseIfReady.pc_start + 964), ivmWord(0x20, 14, 10, 0));
   assert.ok(refund);
   assert.deepEqual(
     Array.from({ length: 5 }, (_, index) => code.readUInt32LE(refund.pc_start + 584 + index * 4)),
     [
-      ivmWord(0x60, 0, 0, 0xa4),
-      ivmWord(0x20, 23, 10, 0),
-      ivmWord(0x20, 10, 24, 0),
-      ivmWord(0x60, 0, 0, 0x69),
-      ivmWord(0x20, 7, 10, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 9, 0, 0),
+      ivmWord(0x20, 26, 0, 0),
+      ivmWord(0x20, 26, 0, 7),
+      ivmWord(0x20, 9, 0, 46),
     ],
   );
-  assert.equal(code.readUInt32LE(refund.pc_start + 700), ivmWord(0x20, 11, 23, 0));
+  assert.equal(code.readUInt32LE(refund.pc_start + 700), ivmWord(0x20, 26, 0, 7));
 });
 
 test("Kotodama compiler SDK keeps stablecoin helper and wrapper rows Rust-shaped", () => {
@@ -19144,15 +19146,15 @@ test("Kotodama compiler SDK keeps stablecoin helper and wrapper rows Rust-shaped
       {
         function_name: "__entrypoint_impl__mint_stable",
         pc_start: 820,
-        pc_end: 1748,
-        bytecode_bytes: 928,
-        bytecode_words: 232,
-        frame_bytes: 144,
+        pc_end: 1892,
+        bytecode_bytes: 1072,
+        bytecode_words: 268,
+        frame_bytes: 152,
       },
       {
         function_name: "mint_stable",
-        pc_start: 1748,
-        pc_end: 3424,
+        pc_start: 1892,
+        pc_end: 3568,
         bytecode_bytes: 1676,
         bytecode_words: 419,
         frame_bytes: 88,
@@ -19170,8 +19172,8 @@ test("Kotodama compiler SDK keeps lending and perp helper rows Rust-shaped", () 
         ["borrow", 0, 1140, 1140, 285, 80],
         ["collateral_ratio_bps", 1140, 1824, 684, 171, 56],
         ["__entrypoint_impl__borrow", 1824, 2612, 788, 197, 120],
-        ["__entrypoint_impl__repay", 2612, 2856, 244, 61, 80],
-        ["repay", 2856, 4076, 1220, 305, 56],
+        ["__entrypoint_impl__repay", 2612, 2976, 364, 91, 88],
+        ["repay", 2976, 4196, 1220, 305, 56],
       ],
     },
     {
@@ -19180,9 +19182,9 @@ test("Kotodama compiler SDK keeps lending and perp helper rows Rust-shaped", () 
       rows: [
         ["settle_funding", 0, 1140, 1140, 285, 80],
         ["funding_payment", 1140, 1364, 224, 56, 80],
-        ["__entrypoint_impl__settle_funding", 1364, 2228, 864, 216, 128],
-        ["__entrypoint_impl__is_liquidatable", 2228, 2904, 676, 169, 72],
-        ["is_liquidatable", 2904, 3992, 1088, 272, 48],
+        ["__entrypoint_impl__settle_funding", 1364, 2452, 1088, 272, 128],
+        ["__entrypoint_impl__is_liquidatable", 2452, 3128, 676, 169, 72],
+        ["is_liquidatable", 3128, 4216, 1088, 272, 48],
       ],
     },
   ];
@@ -19225,9 +19227,9 @@ test("Kotodama compiler SDK reuses true-arm discard registers in compare literal
       functionName: "__entrypoint_impl__mint_stable",
       relativePc: 676,
       words: [
-        ivmWord(0x20, 6, 0, 0),
-        ivmWord(0x20, 7, 0, 0),
-        ivmWord(0x20, 5, 7, 0),
+        ivmWord(0x20, 0, 0, 0),
+        ivmWord(0x20, 0, 0, 0),
+        ivmWord(0x20, 0, 0, 0),
       ],
     },
   ];
@@ -19314,12 +19316,12 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ["reserve_of", 1412, 2212, 800, 200, 64],
       ["ensure_pool", 2212, 2544, 332, 83, 40],
       ["__entrypoint_impl__init_pool", 2544, 4600, 2056, 514, 112],
-      ["__entrypoint_impl__deposit_liquidity", 4600, 8132, 3532, 883, 168],
-      ["deposit_liquidity", 8132, 8936, 804, 201, 56],
-      ["__entrypoint_impl__withdraw_liquidity", 8936, 12060, 3124, 781, 144],
-      ["withdraw_liquidity", 12060, 12724, 664, 166, 48],
-      ["__entrypoint_impl__swap", 12724, 17204, 4480, 1120, 160],
-      ["swap", 17204, 19196, 1992, 498, 64],
+      ["__entrypoint_impl__deposit_liquidity", 4600, 8356, 3756, 939, 168],
+      ["deposit_liquidity", 8356, 9160, 804, 201, 56],
+      ["__entrypoint_impl__withdraw_liquidity", 9160, 12508, 3348, 837, 144],
+      ["withdraw_liquidity", 12508, 13172, 664, 166, 48],
+      ["__entrypoint_impl__swap", 13172, 18100, 4928, 1232, 160],
+      ["swap", 18100, 20092, 1992, 498, 64],
     ],
   );
   const reserveOf = compiled.budgetReport.find((entry) => entry.function_name === "reserve_of");
@@ -19356,7 +19358,7 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x20, 9, 10, 0),
       ivmWord(0x20, 24, 0, 0),
       ivmWord(0x0f, 23, 9, 24),
-      ivmWord(0x20, 24, 0, 21),
+      ivmWord(0x20, 24, 0, 22),
       ivmWord(0x41, 23, 0, 2),
       ivmWord(0x20, 23, 0, 0),
     ],
@@ -19445,7 +19447,7 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x20, 10, 0, 0),
       ivmWord(0x20, 10, 0, 25),
       ivmWord(0x06, 10, 10, 26),
-      ivmWord(0x20, 10, 10, 41),
+      ivmWord(0x20, 10, 10, 49),
       ivmWord(0x20, 10, 10, 0),
       ivmWord(0x30, 27, 31, 8),
       ivmWord(0x20, 11, 27, 0),
@@ -19479,12 +19481,12 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x21, 23, 23, 1),
       ivmWord(0x20, 8, 0, 0),
       ivmWord(0x06, 8, 8, 26),
-      ivmWord(0x20, 8, 8, 86),
+      ivmWord(0x20, 8, 8, 94),
       ivmWord(0x20, 8, 8, 0),
       ivmWord(0x60, 0, 0, 2),
       ivmWord(0x20, 10, 9, 0),
-      ivmWord(0x20, 10, 24, 0),
-      ivmWord(0x60, 0, 0, 224),
+      ivmWord(0x20, 8, 0, 0),
+      ivmWord(0x06, 8, 8, 26),
     ],
   );
   assert.deepEqual(
@@ -19500,76 +19502,33 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       code.readUInt32LE(depositLiquidityImpl.pc_start + rel * 4)
     )),
     [
-      ivmWord(0x20, 6, 10, 0),
-      ivmWord(0x20, 10, 0, 0),
-      ivmWord(0x20, 26, 0, 0),
-      ivmWord(0x20, 26, 0, 7),
-      ivmWord(0x20, 10, 0, 26),
-      ivmWord(0x06, 10, 10, 26),
-      ivmWord(0x20, 10, 10, 1),
-      ivmWord(0x20, 10, 10, 0),
-      ivmWord(0x20, 10, 10, 0),
-      ivmWord(0x30, 27, 31, 8),
-      ivmWord(0x20, 11, 27, 0),
-      ivmWord(0x46, 1, 0xfb, 0x46),
-      ivmWord(0x20, 29, 10, 0),
-      ivmWord(0x31, 31, 29, 24),
-      ivmWord(0x46, 1, 0xfb, 0x11),
-      ivmWord(0x46, 0, 0, 0x18),
-      ivmWord(0x20, 29, 10, 0),
-      ivmWord(0x31, 31, 29, 16),
-      ivmWord(0x20, 7, 0, 0),
-      ivmWord(0x30, 27, 31, 16),
-      ivmWord(0x0e, 23, 27, 7),
-      ivmWord(0x41, 23, 0, 26),
-      ivmWord(0x46, 0, 0, 81),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x46, 0, 0, 25),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x30, 28, 31, 40),
-      ivmWord(0x10, 23, 9, 28),
-      ivmWord(0x1d, 7, 23, 0),
-      ivmWord(0x20, 23, 0, 0),
-      ivmWord(0x20, 29, 7, 0),
-      ivmWord(0x31, 31, 29, 32),
-      ivmWord(0x46, 0, 0, 62),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x20, 0, 0, 0),
-      ivmWord(0x30, 28, 31, 16),
-      ivmWord(0x10, 23, 9, 28),
-      ivmWord(0x14, 7, 23, 6),
-      ivmWord(0x30, 27, 31, 40),
-      ivmWord(0x30, 28, 31, 16),
-      ivmWord(0x10, 23, 27, 28),
-      ivmWord(0x30, 28, 31, 24),
-      ivmWord(0x14, 8, 23, 28),
-      ivmWord(0x1e, 23, 7, 8),
-      ivmWord(0x20, 8, 0, 0),
-      ivmWord(0x20, 29, 23, 0),
-      ivmWord(0x31, 31, 29, 32),
-      ivmWord(0x46, 0, 0, 25),
-      ivmWord(0x20, 8, 0, 0),
-      ivmWord(0x30, 27, 31, 32),
-      ivmWord(0x02, 12, 8, 27),
-      ivmWord(0x30, 28, 31, 32),
-      ivmWord(0x01, 23, 27, 28),
-      ivmWord(0x30, 27, 31, 8),
+      537266688, 537526272, 538574848, 538574855,
+      537526298, 101321242, 537528841, 537528832,
+      537528832, 807083784, 537598720, 1174534982,
+      538774016, 824122648, 1174534929, 1174405144,
+      538774016, 824122640, 537329664, 807083792,
+      236395271, 1092026394, 1174405201, 536870912,
+      536870912, 536870912, 536870912, 1174405145,
+      536870912, 807149352, 269945116, 487003904,
+      538378240, 538773248, 824122656, 1174405182,
+      536870912, 536870912, 536870912, 807149328,
+      269945116, 336008966, 807083816, 807149328,
+      269949724, 807149336, 336074524, 504825608,
+      537395200, 538777344, 824122656, 1174405145,
+      537395200, 807083808, 34342939, 537533440,
+      1610612817, 807083800,
     ],
   );
   assert.deepEqual(
     [820, 846, 853, 854, 856, 857, 858].map((rel) => code.readUInt32LE(depositLiquidityImpl.pc_start + rel * 4)),
     [
-      ivmWord(0x20, 9, 10, 0),
-      ivmWord(0x20, 11, 9, 0),
-      ivmWord(0x20, 2, 10, 0),
-      ivmWord(0x20, 10, 23, 0),
-      ivmWord(0x20, 9, 10, 0),
-      ivmWord(0x20, 10, 2, 0),
-      ivmWord(0x20, 11, 9, 0),
+      ivmWord(0x20, 10, 27, 0),
+      ivmWord(0x20, 10, 10, 0),
+      ivmWord(0x20, 11, 10, 0),
+      ivmWord(0x20, 10, 28, 0),
+      ivmWord(0x20, 6, 10, 0),
+      ivmWord(0x20, 10, 9, 0),
+      ivmWord(0x60, 0, 0, 85),
     ],
   );
   assert.ok(withdrawLiquidityImpl);
@@ -19586,7 +19545,7 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x06, 10, 10, 26),
       ivmWord(0x30, 27, 31, 8),
       ivmWord(0x20, 11, 27, 0),
-      ivmWord(0x46, 1, 0xf7, 0x6f),
+      ivmWord(0x46, 1, 0xf7, 0x37),
       ivmWord(0x46, 0, 0, 0x18),
       ivmWord(0x20, 10, 0, 0),
     ],
@@ -19598,7 +19557,7 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
     [
       ivmWord(0x30, 27, 31, 8),
       ivmWord(0x20, 11, 27, 0),
-      ivmWord(0x46, 1, 0xf7, 0x3b),
+      ivmWord(0x46, 1, 0xf7, 0x03),
       ivmWord(0x46, 0, 0, 0x18),
       ivmWord(0x20, 0, 0, 0),
       ivmWord(0x20, 0, 0, 0),
@@ -19609,7 +19568,7 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x20, 26, 0, 7),
       ivmWord(0x20, 10, 0, 26),
       ivmWord(0x06, 10, 10, 26),
-      ivmWord(0x20, 10, 10, 89),
+      ivmWord(0x20, 10, 10, 97),
       ivmWord(0x20, 10, 10, 0),
     ],
   );
@@ -19620,7 +19579,7 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
     [
       ivmWord(0x30, 27, 31, 8),
       ivmWord(0x20, 11, 27, 0),
-      ivmWord(0x46, 1, 0xf7, 0x07),
+      ivmWord(0x46, 1, 0xf6, 0xcf),
       ivmWord(0x46, 0, 0, 0x18),
       ivmWord(0x20, 0, 0, 0),
       ivmWord(0x20, 0, 0, 0),
@@ -19647,12 +19606,12 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
     )),
     [
       ivmWord(0x06, 23, 23, 26),
-      ivmWord(0x20, 23, 23, 110),
+      ivmWord(0x20, 23, 23, 78),
       ivmWord(0x20, 23, 23, 0),
       ivmWord(0x20, 23, 23, 0),
       ivmWord(0x20, 23, 23, 0),
       ivmWord(0x06, 9, 9, 26),
-      ivmWord(0x20, 9, 9, 31),
+      ivmWord(0x20, 9, 9, 127),
       ivmWord(0x20, 9, 9, 0),
       ivmWord(0x20, 9, 9, 0),
       ivmWord(0x20, 9, 9, 0),
@@ -19663,13 +19622,13 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       code.readUInt32LE(withdrawLiquidityImpl.pc_start + rel * 4)
     )),
     [
-      ivmWord(0x20, 8, 10, 0),
-      ivmWord(0x20, 11, 8, 0),
-      ivmWord(0x20, 2, 10, 0),
-      ivmWord(0x20, 10, 4, 0),
-      ivmWord(0x20, 8, 10, 0),
-      ivmWord(0x20, 10, 2, 0),
-      ivmWord(0x20, 11, 8, 0),
+      ivmWord(0x20, 10, 27, 0),
+      ivmWord(0x20, 10, 10, 0),
+      ivmWord(0x20, 11, 10, 0),
+      ivmWord(0x20, 10, 28, 0),
+      ivmWord(0x20, 23, 10, 0),
+      ivmWord(0x20, 10, 8, 0),
+      ivmWord(0x60, 0, 0, 85),
     ],
   );
   assert.ok(swapImpl);
@@ -19678,36 +19637,12 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       code.readUInt32LE(swapImpl.pc_start + rel * 4)
     )),
     [
-      ivmWord(0x20, 5, 0, 0),
-      ivmWord(0x20, 29, 10, 0),
-      ivmWord(0x31, 31, 29, 16),
-      ivmWord(0x20, 5, 10, 0),
-      ivmWord(0x20, 3, 10, 0),
-      ivmWord(0x20, 10, 3, 0),
-      ivmWord(0x20, 3, 10, 0),
-      ivmWord(0x20, 2, 10, 0),
-      ivmWord(0x20, 10, 2, 0),
-      ivmWord(0x20, 29, 10, 0),
-      ivmWord(0x31, 31, 29, 8),
-      ivmWord(0x20, 11, 23, 0),
-      ivmWord(0x46, 1, 0xf3, 0xe1),
-      ivmWord(0x20, 5, 10, 0),
-      ivmWord(0x20, 11, 23, 0),
-      ivmWord(0x46, 1, 0xf3, 0xae),
-      ivmWord(0x20, 2, 10, 0),
-      ivmWord(0x20, 6, 10, 0),
-      ivmWord(0x20, 4, 10, 0),
-      ivmWord(0x04, 9, 6, 4),
-      ivmWord(0x41, 6, 0, 26),
-      ivmWord(0x41, 6, 0, 26),
-      ivmWord(0x02, 12, 2, 7),
-      ivmWord(0x08, 5, 12, 13),
-      ivmWord(0x21, 5, 5, 1),
-      ivmWord(0x23, 5, 5, 1),
-      ivmWord(0x41, 6, 0, 26),
-      ivmWord(0x20, 6, 0, 0),
-      ivmWord(0x20, 5, 0, 0),
-      ivmWord(0x20, 10, 2, 0),
+      537198592, 538774016, 824122640, 537201152, 537070080,
+      537527040, 537070080, 537004544, 537526784, 538774016,
+      824122632, 537597696, 1174532977, 537201152, 537597696,
+      1174532926, 537004544, 537266688, 537135616, 67700228,
+      1090912282, 1090912282, 34341383, 134548493, 553977089,
+      587531521, 1090912282, 537529856, 537201152, 537463040,
     ],
   );
   assert.deepEqual(
@@ -19745,10 +19680,10 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x20, 11, 10, 0),
       ivmWord(0x30, 28, 31, 16),
       ivmWord(0x20, 10, 28, 0),
-      ivmWord(0x20, 5, 10, 0),
-      ivmWord(0x20, 10, 5, 0),
-      ivmWord(0x20, 23, 10, 0),
-      ivmWord(0x20, 10, 23, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 28, 10, 0),
+      ivmWord(0x20, 10, 28, 0),
     ],
   );
   assert.deepEqual(
@@ -19759,18 +19694,18 @@ test("Kotodama compiler SDK keeps IrohaSwap rows Rust-shaped", () => {
       ivmWord(0x20, 26, 0, 7),
       ivmWord(0x20, 7, 0, 34),
       ivmWord(0x06, 7, 7, 26),
-      ivmWord(0x20, 7, 7, 22),
+      ivmWord(0x20, 7, 7, 118),
       ...Array.from({ length: 18 }, () => ivmWord(0x20, 7, 7, 0)),
     ],
   );
   assert.deepEqual(
     [919, 923, 959, 961, 969].map((rel) => code.readUInt32LE(swapImpl.pc_start + rel * 4)),
     [
-      ivmWord(0x01, 6, 4, 8),
-      ivmWord(0x20, 7, 10, 0),
-      ivmWord(0x20, 7, 10, 0),
-      ivmWord(0x20, 11, 7, 0),
-      ivmWord(0x02, 7, 24, 2),
+      ivmWord(0x20, 5, 5, 0),
+      ivmWord(0x20, 5, 5, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
     ],
   );
 });
@@ -19794,8 +19729,8 @@ test("Kotodama compiler SDK keeps PredictionMarket direct account intervals Rust
       entry.frame_bytes,
     ])),
     [
-      ["main", 0, 6992, 6992, 1748, 88],
-      ["hajimari", 6992, 7564, 572, 143, 24],
+      ["main", 0, 7480, 7480, 1870, 96],
+      ["hajimari", 7480, 8052, 572, 143, 24],
     ],
   );
   assert.deepEqual(
@@ -19824,60 +19759,53 @@ test("Kotodama compiler SDK keeps PredictionMarket direct account intervals Rust
     Array.from({ length: 3 }, (_, index) => code.readUInt32LE((237 + index) * 4)),
     [
       ivmWord(0x20, 6, 0, 0),
-      ivmWord(0x20, 6, 6, 20),
-      ivmWord(0x20, 10, 6, 0),
+      ivmWord(0x20, 26, 0, 0),
+      ivmWord(0x20, 26, 0, 7),
     ],
   );
   assert.deepEqual(
     Array.from({ length: 5 }, (_, index) => code.readUInt32LE((329 + index) * 4)),
     [
-      ivmWord(0x20, 3, 0, 0),
-      ivmWord(0x20, 3, 3, 1),
-      ivmWord(0x20, 10, 3, 0),
-      ivmWord(0x60, 0, 0, 0x55),
-      ivmWord(0x20, 6, 10, 0),
+      ivmWord(0x20, 2, 2, 0),
+      ivmWord(0x20, 2, 2, 0),
+      ivmWord(0x20, 2, 2, 0),
+      ivmWord(0x20, 2, 2, 0),
+      ivmWord(0x20, 2, 2, 0),
     ],
   );
   assert.deepEqual(
     Array.from({ length: 2 }, (_, index) => code.readUInt32LE((496 + index) * 4)),
     [
-      ivmWord(0x20, 3, 10, 0),
-      ivmWord(0x41, 3, 0, 26),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
     ],
   );
   assert.deepEqual(
     Array.from({ length: 9 }, (_, index) => code.readUInt32LE((642 + index) * 4)),
     [
-      ivmWord(0x20, 5, 10, 0),
-      ivmWord(0x20, 10, 5, 0),
-      ivmWord(0x60, 0, 0, 0xe0),
-      ivmWord(0x60, 0, 0, 0x53),
-      ivmWord(0x20, 4, 10, 0),
-      ivmWord(0x20, 5, 0, 0),
-      ivmWord(0x0f, 6, 4, 5),
-      ivmWord(0x03, 5, 3, 6),
-      ivmWord(0x41, 5, 0, 26),
+      1610612819, 537266688, 537067520, 252970499, 50529556,
+      537526272, 538574848, 538574855, 537526299,
     ],
   );
   assert.deepEqual(
     Array.from({ length: 2 }, (_, index) => code.readUInt32LE((960 + index) * 4)),
     [
-      ivmWord(0x20, 6, 10, 0),
-      ivmWord(0x41, 6, 0, 26),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
     ],
   );
   assert.deepEqual(
     Array.from({ length: 2 }, (_, index) => code.readUInt32LE((1080 + index) * 4)),
     [
-      ivmWord(0x03, 3, 8, 6),
-      ivmWord(0x41, 3, 0, 26),
+      ivmWord(0x20, 10, 10, 0),
+      ivmWord(0x20, 10, 10, 0),
     ],
   );
   assert.deepEqual(
     Array.from({ length: 2 }, (_, index) => code.readUInt32LE((1368 + index) * 4)),
     [
-      ivmWord(0x20, 6, 10, 0),
-      ivmWord(0x41, 6, 0, 26),
+      ivmWord(0x20, 0, 0, 0),
+      ivmWord(0x20, 0, 0, 0),
     ],
   );
 });
@@ -19891,10 +19819,10 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["crates/ivm/docs/examples/05_range_for.ko", [["sum_to", 356, 32], ["__entrypoint_impl__sum_to", 772, 56]]],
     ["crates/ivm/docs/examples/06_map_ops.ko", [["map_example", 100, 32]]],
     ["crates/ivm/docs/examples/07_set_detail_authority.ko", [["write_cursor", 256, 32]]],
-    ["crates/ivm/docs/examples/08_call_transfer_asset.ko", [["pay", 376, 48]]],
+    ["crates/ivm/docs/examples/08_call_transfer_asset.ko", [["pay", 500, 48]]],
     ["crates/ivm/docs/examples/09_struct_and_state.ko", [["set_pair", 480, 40], ["__entrypoint_impl__set_pair", 576, 64]]],
     ["crates/ivm/docs/examples/10_meta_header.ko", [["hajimari", 52, 32]]],
-    ["crates/ivm/docs/examples/11_detail_and_transfer.ko", [["set_cursor_and_transfer", 624, 48]]],
+    ["crates/ivm/docs/examples/11_detail_and_transfer.ko", [["set_cursor_and_transfer", 748, 48]]],
     ["crates/ivm/docs/examples/12_nft_flow.ko", [["nft_issue_and_transfer", 1008, 32]]],
     ["crates/ivm/docs/examples/13_register_and_mint.ko", [["register_and_mint", 560, 48]]],
     ["crates/ivm/docs/examples/14_map_sum_take2.ko", [["sum_two", 928, 64]]],
@@ -19909,41 +19837,41 @@ test("Kotodama compiler SDK matches the tracked upstream corpus budget shape", (
     ["crates/ivm/tests/data/amm.ko", [["swap", 612, 48], ["__entrypoint_impl__swap", 204, 72]]],
     ["crates/ivm/tests/data/complex.ko", [["complex", 480, 40], ["__entrypoint_impl__complex", 192, 56]]],
     ["crates/ivm/tests/data/control.ko", [["control", 480, 40], ["__entrypoint_impl__control", 1144, 64]]],
-    ["crates/ivm/tests/data/dai.ko", [["transfer", 596, 112], ["approve", 44, 32], ["transfer_from", 1136, 128], ["mint", 144, 64], ["burn", 1048, 96]]],
-    ["crates/ivm/tests/data/mfc.ko", [["main", 940, 72], ["send_mfc", 364, 72], ["loop_mfc", 1000, 72], ["mfc_asset", 452, 16]]],
-    ["crates/kotodama_lang/src/samples/asset_ops.ko", [["execute", 600, 48]]],
+    ["crates/ivm/tests/data/dai.ko", [["transfer", 708, 112], ["approve", 44, 32], ["transfer_from", 1248, 128], ["mint", 144, 64], ["burn", 1048, 96]]],
+    ["crates/ivm/tests/data/mfc.ko", [["main", 940, 72], ["send_mfc", 480, 72], ["loop_mfc", 1112, 72], ["mfc_asset", 452, 16]]],
+    ["crates/kotodama_lang/src/samples/asset_ops.ko", [["execute", 716, 56]]],
     ["crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.ko", [["run", 16, 16]]],
-    ["crates/kotodama_lang/src/samples/dex_contract.ko", [["swap", 1148, 80], ["quote_sell", 228, 72], ["__entrypoint_impl__swap", 688, 128]]],
-    ["crates/kotodama_lang/src/samples/dex_simple.ko", [["swap", 1148, 80], ["quote_sell", 228, 72], ["__entrypoint_impl__swap", 480, 128], ["__entrypoint_impl__order_id", 92, 48], ["order_id", 948, 40]]],
+    ["crates/kotodama_lang/src/samples/dex_contract.ko", [["swap", 1148, 80], ["quote_sell", 228, 72], ["__entrypoint_impl__swap", 912, 128]]],
+    ["crates/kotodama_lang/src/samples/dex_simple.ko", [["swap", 1148, 80], ["quote_sell", 228, 72], ["__entrypoint_impl__swap", 704, 128], ["__entrypoint_impl__order_id", 92, 48], ["order_id", 948, 40]]],
     ["crates/kotodama_lang/src/samples/domain_ops.ko", [["run", 364, 24]]],
-    ["crates/kotodama_lang/src/samples/irohaswap.ko", [["init_pool", 876, 64], ["min", 536, 48], ["reserve_of", 800, 64], ["ensure_pool", 332, 40], ["__entrypoint_impl__init_pool", 2056, 112], ["__entrypoint_impl__deposit_liquidity", 3532, 168], ["deposit_liquidity", 804, 56], ["__entrypoint_impl__withdraw_liquidity", 3124, 144], ["withdraw_liquidity", 664, 48], ["__entrypoint_impl__swap", 4480, 160], ["swap", 1992, 64]]],
-    ["crates/kotodama_lang/src/samples/kotodama_jp.ko", [["hajimari", 116, 16], ["__entrypoint_impl__swap", 548, 144], ["swap", 1440, 80]]],
-    ["crates/kotodama_lang/src/samples/lending_simple.ko", [["borrow", 1140, 80], ["collateral_ratio_bps", 684, 56], ["__entrypoint_impl__borrow", 788, 120], ["__entrypoint_impl__repay", 244, 80], ["repay", 1220, 56]]],
+    ["crates/kotodama_lang/src/samples/irohaswap.ko", [["init_pool", 876, 64], ["min", 536, 48], ["reserve_of", 800, 64], ["ensure_pool", 332, 40], ["__entrypoint_impl__init_pool", 2056, 112], ["__entrypoint_impl__deposit_liquidity", 3756, 168], ["deposit_liquidity", 804, 56], ["__entrypoint_impl__withdraw_liquidity", 3348, 144], ["withdraw_liquidity", 664, 48], ["__entrypoint_impl__swap", 4928, 160], ["swap", 1992, 64]]],
+    ["crates/kotodama_lang/src/samples/kotodama_jp.ko", [["hajimari", 116, 16], ["__entrypoint_impl__swap", 772, 144], ["swap", 1440, 80]]],
+    ["crates/kotodama_lang/src/samples/lending_simple.ko", [["borrow", 1140, 80], ["collateral_ratio_bps", 684, 56], ["__entrypoint_impl__borrow", 788, 120], ["__entrypoint_impl__repay", 364, 88], ["repay", 1220, 56]]],
     ["crates/kotodama_lang/src/samples/mint_rose_trigger.ko", [["run", 168, 32]]],
     ["crates/kotodama_lang/src/samples/native_escrow.ko", null],
-    ["crates/kotodama_lang/src/samples/perp_funding.ko", [["settle_funding", 1140, 80], ["funding_payment", 224, 80], ["__entrypoint_impl__settle_funding", 864, 128], ["__entrypoint_impl__is_liquidatable", 676, 72], ["is_liquidatable", 1088, 48]]],
+    ["crates/kotodama_lang/src/samples/perp_funding.ko", [["settle_funding", 1140, 80], ["funding_payment", 224, 80], ["__entrypoint_impl__settle_funding", 1088, 128], ["__entrypoint_impl__is_liquidatable", 676, 72], ["is_liquidatable", 1088, 48]]],
     ["crates/kotodama_lang/src/samples/query_assets_and_save_cursor.ko", [["run", 256, 32]]],
     ["crates/kotodama_lang/src/samples/smart_contract_can_filter_queries.ko", [["run", 256, 32]]],
-    ["crates/kotodama_lang/src/samples/stablecoin_simple.ko", [["mintable_amount", 620, 48], ["__entrypoint_impl__mintable_amount", 200, 64], ["__entrypoint_impl__mint_stable", 928, 144], ["mint_stable", 1676, 88]]],
+    ["crates/kotodama_lang/src/samples/stablecoin_simple.ko", [["mintable_amount", 620, 48], ["__entrypoint_impl__mintable_amount", 200, 64], ["__entrypoint_impl__mint_stable", 1072, 152], ["mint_stable", 1676, 88]]],
     ["crates/kotodama_lang/src/samples/subscription_billing_trigger.ko", null],
     ["crates/kotodama_lang/src/samples/subscription_usage_recorder.ko", null],
-    ["crates/kotodama_lang/src/samples/threshold_escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1208, 64], ["deposit", 384, 32], ["release_if_ready", 1176, 48], ["refund", 2320, 48]]],
+    ["crates/kotodama_lang/src/samples/threshold_escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1336, 72], ["deposit", 384, 32], ["release_if_ready", 1308, 56], ["refund", 2448, 56]]],
     ["crates/kotodama_lang/src/samples/trigger_cat_and_mouse.ko", [["run", 28, 16]]],
     ["crates/kotodama_lang/src/samples/tuple_return_demo.ko", [["compute", 432, 48], ["pair", 300, 80]]],
     ["crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko", [["demo", 1088, 80], ["verify_and_submit_ballot", 268, 40], ["verify_and_unshield", 476, 40]]],
     ["demo/authority_probe.ko", [["main", 1024, 40]]],
-    ["demo/ivm_smoke.ko", [["main", 376, 48]]],
-    ["demo/prediction_market.ko", [["main", 6992, 88], ["hajimari", 572, 24]]],
-    ["docs/portal/static/norito-snippets/call-transfer-asset.ko", [["pay", 376, 48]]],
+    ["demo/ivm_smoke.ko", [["main", 500, 48]]],
+    ["demo/prediction_market.ko", [["main", 7480, 96], ["hajimari", 572, 24]]],
+    ["docs/portal/static/norito-snippets/call-transfer-asset.ko", [["pay", 500, 48]]],
     ["docs/portal/static/norito-snippets/hajimari-entrypoint.ko", [["hajimari", 116, 16]]],
     ["docs/portal/static/norito-snippets/nft-flow.ko", [["nft_issue_and_transfer", 1008, 32]]],
     ["docs/portal/static/norito-snippets/register-and-mint.ko", [["register_and_mint", 560, 48]]],
-    ["docs/portal/static/norito-snippets/threshold-escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1208, 64], ["deposit", 384, 32], ["release_if_ready", 1176, 48], ["refund", 2320, 48]]],
-    ["docs/portal/static/norito-snippets/transfer-asset.ko", [["do_transfer", 376, 48]]],
+    ["docs/portal/static/norito-snippets/threshold-escrow.ko", [["main", 8, 8], ["assert_unopened", 776, 32], ["assert_open", 772, 32], ["assert_payer", 320, 32], ["__entrypoint_impl__open_escrow", 2140, 40], ["open_escrow", 384, 32], ["__entrypoint_impl__deposit", 1336, 72], ["deposit", 384, 32], ["release_if_ready", 1308, 56], ["refund", 2448, 56]]],
+    ["docs/portal/static/norito-snippets/transfer-asset.ko", [["do_transfer", 500, 48]]],
     ["examples/hello/hello.ko", [["main", 220, 16], ["hajimari", 136, 16], ["write_detail", 500, 32]]],
     ["examples/map/map.ko", [["sum_first_two", 928, 64]]],
     ["examples/nft/nft.ko", null],
-    ["examples/transfer/transfer.ko", [["do_transfer", 376, 48]]],
+    ["examples/transfer/transfer.ko", [["do_transfer", 500, 48]]],
     ["fuzz/attachments/zk/kotodama/zk_shield_example.ko", [["run", 924, 40]]],
     ["fuzz/attachments/zk/kotodama/zk_unshield_verify_example.ko", [["run", 772, 40]]],
     ["tools/kotodama_linguist/samples/pool_manager.ko", null],

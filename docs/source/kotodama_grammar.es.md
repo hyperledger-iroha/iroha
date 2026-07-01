@@ -237,7 +237,7 @@ Estado de implementación
 Builtins de host/syscall (mapean a SCALL; números exactos en ivm.md)
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

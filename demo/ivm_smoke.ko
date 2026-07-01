@@ -6,7 +6,8 @@ seiyaku SmokeTransfer {
       account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
       account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
       asset_definition!("61CtjvNd9T3THAR65GsMVHr82Bjc"),
-      1
+      1,
+      dataspace_id("0")
     );
   }
 }

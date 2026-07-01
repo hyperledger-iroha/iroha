@@ -304,8 +304,7 @@ def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
     for log_index, log in enumerate(logs):
         if not isinstance(log, dict):
             raise RuntimeError(f"receipt.logs[{log_index}] must be an object")
-        if log.get("removed") is True:
-            raise RuntimeError(f"receipt.logs[{log_index}] must not be removed")
+        _require_log_not_removed(log, label=f"receipt.logs[{log_index}]")
         address = _rpc_fixed_hex_data(
             log.get("address"),
             method=f"receipt.logs[{log_index}].address",
@@ -358,6 +357,17 @@ def canonical_receipt_rlp(receipt: dict[str, Any]) -> bytes:
     )
     receipt_type = _receipt_type(receipt)
     return payload if receipt_type is None else bytes([receipt_type]) + payload
+
+
+def _require_log_not_removed(log: dict[str, Any], *, label: str) -> None:
+    if "removed" not in log:
+        return
+    removed = log["removed"]
+    if removed is False:
+        return
+    if removed is True:
+        raise RuntimeError(f"{label} must not be removed")
+    raise RuntimeError(f"{label}.removed must be a boolean")
 
 
 def _encode_compact_path(nibbles: Sequence[int], *, leaf: bool) -> bytes:
@@ -617,8 +627,7 @@ def _source_event_digest_from_receipt(
     for index, log in enumerate(logs):
         if not isinstance(log, dict):
             raise RuntimeError(f"receipt.logs[{index}] must be an object")
-        if log.get("removed") is True:
-            raise RuntimeError(f"receipt.logs[{index}] must not be removed")
+        _require_log_not_removed(log, label=f"receipt.logs[{index}]")
         address = _rpc_fixed_hex_data(
             log.get("address"),
             method=f"receipt.logs[{index}].address",

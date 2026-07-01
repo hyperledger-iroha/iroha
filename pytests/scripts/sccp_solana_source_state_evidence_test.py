@@ -624,6 +624,28 @@ def test_solana_source_evidence_rejects_adapter_verifier_vk_hash_mismatch():
         raise AssertionError("mismatched Solana adapter verifier vk hash was accepted")
 
 
+def test_solana_source_evidence_rejects_wrong_lane_domains_with_named_constants():
+    module = load_evidence_module()
+
+    source_args = solana_args(module)
+    source_args.source_domain = module.SCCP_DOMAIN_SORA
+    try:
+        module.render_toml(source_args)
+    except SystemExit as exc:
+        assert "source_domain = SCCP_DOMAIN_SOL (3)" in str(exc)
+    else:
+        raise AssertionError("Solana source evidence accepted non-Solana source domain")
+
+    target_args = solana_args(module)
+    target_args.target_domain = module.SCCP_DOMAIN_SOL
+    try:
+        module.render_toml(target_args)
+    except SystemExit as exc:
+        assert "target_domain = SCCP_DOMAIN_SORA (0)" in str(exc)
+    else:
+        raise AssertionError("Solana source evidence accepted non-SORA target domain")
+
+
 def test_solana_cli_json_summary_and_toml_output(capsys):
     module = load_evidence_module()
     args = [

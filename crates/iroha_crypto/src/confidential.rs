@@ -28,8 +28,8 @@ pub enum ConfidentialKeyError {
     /// Spend key must be exactly 32 bytes.
     #[error("expected 32-byte spend key, got {0} bytes")]
     InvalidSpendKeyLength(usize),
-    /// Random spend-key generation returned an inert all-zero placeholder.
-    #[error("generated spend key material must not be all zero")]
+    /// Spend-key material was an inert all-zero placeholder.
+    #[error("spend key material must not be all zero")]
     InertSpendKey,
     /// Random spend-key generation failed.
     #[error("random spend-key generation failed")]
@@ -120,8 +120,13 @@ fn expand_key(
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 ///
 /// # Errors
-/// Returns [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
+/// Returns [`ConfidentialKeyError::InertSpendKey`] if the spend key is all zero, or
+/// [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
 pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
+    if spend_key.iter().all(|&byte| byte == 0) {
+        spend_key.zeroize();
+        return Err(ConfidentialKeyError::InertSpendKey);
+    }
     let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &spend_key);
 
     let nk = expand_key(&hkdf, "nk", INFO_NK)?;
@@ -144,6 +149,7 @@ pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
 ///
 /// # Errors
 /// Returns [`ConfidentialKeyError::InvalidSpendKeyLength`] when the slice does not contain exactly 32 bytes,
+/// [`ConfidentialKeyError::InertSpendKey`] if the spend key is all zero, or
 /// [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
 pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> {
     if spend_key.len() != 32 {
@@ -188,12 +194,11 @@ mod tests {
     }
 
     #[test]
-    fn derive_keyset_accepts_all_zero_fixture_spend_key() {
-        let keyset = derive_keyset([0u8; 32]).expect("derive all-zero fixture keyset");
-        assert_eq!(
-            hex::encode(keyset.nullifier_key()),
-            "982df44a1f2e7f1d914e3da70f745f56d7f1652ab2c82186277e09e454aab32a"
-        );
+    fn derive_keyset_rejects_all_zero_spend_key() {
+        assert!(matches!(
+            derive_keyset([0u8; 32]),
+            Err(ConfidentialKeyError::InertSpendKey)
+        ));
     }
 
     #[test]
@@ -202,12 +207,11 @@ mod tests {
     }
 
     #[test]
-    fn derive_keyset_from_slice_accepts_all_zero_fixture_spend_key() {
-        let keyset = derive_keyset_from_slice(&[0u8; 32]).expect("derive all-zero fixture keyset");
-        assert_eq!(
-            hex::encode(keyset.full_view_key()),
-            "45cff7ac6465b7a162de9e43fb8d5bd1bd1d2deb8818a088f7654b9081587006"
-        );
+    fn derive_keyset_from_slice_rejects_all_zero_spend_key() {
+        assert!(matches!(
+            derive_keyset_from_slice(&[0u8; 32]),
+            Err(ConfidentialKeyError::InertSpendKey)
+        ));
     }
 
     #[test]

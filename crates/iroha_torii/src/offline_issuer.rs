@@ -302,6 +302,9 @@ fn verify_ed25519_signature(
     let signature: [u8; 64] = signature
         .try_into()
         .map_err(|_| "ed25519_signature_invalid")?;
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err("signature_invalid");
+    }
     let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)
         .map_err(|_| "ed25519_public_key_invalid")?;
     let signature = ed25519_dalek::Signature::from_bytes(&signature);
@@ -317,6 +320,9 @@ fn verify_p256_signature(
 ) -> Result<(), &'static str> {
     let verifying_key =
         P256VerifyingKey::from_sec1_bytes(public_key).map_err(|_| "p256_public_key_invalid")?;
+    if !signature.is_empty() && signature.iter().all(|byte| *byte == 0) {
+        return Err("p256_signature_invalid");
+    }
     let signature = P256Signature::from_der(signature).map_err(|_| "p256_signature_invalid")?;
     verifying_key
         .verify(payload, &signature)
@@ -1809,7 +1815,9 @@ fn verify_json_signature(
     let signature_bytes = BASE64_STANDARD
         .decode(signature_base64)
         .map_err(|_| validation(code, message))?;
-    Signature::from_bytes(&signature_bytes)
+    let signature =
+        Signature::try_from_bytes(&signature_bytes).map_err(|_| validation(code, message))?;
+    signature
         .verify(public_key, &bytes)
         .map_err(|_| validation(code, message))
 }
@@ -1923,6 +1931,29 @@ mod tests {
         tx.verify_signature()
             .expect("checked offline note issue transaction signature should verify");
         assert_eq!(tx.authority(), &issuer.authority);
+    }
+
+    #[test]
+    fn legacy_ed25519_signature_helper_rejects_all_zero_signature_material() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x31; 32]);
+        let public_key = signing_key.verifying_key().to_bytes();
+
+        let err = verify_ed25519_signature(&public_key, b"offline-helper", &[0u8; 64])
+            .expect_err("all-zero Ed25519 helper signatures must fail closed");
+
+        assert_eq!(err, "signature_invalid");
+    }
+
+    #[test]
+    fn legacy_p256_signature_helper_rejects_all_zero_signature_material() {
+        let signing_key = p256::ecdsa::SigningKey::from_bytes(&[0x31; 32].into())
+            .expect("deterministic P-256 key");
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+
+        let err = verify_p256_signature(public_key.as_bytes(), b"offline-helper", &[0u8; 72])
+            .expect_err("all-zero P-256 helper signatures must fail closed");
+
+        assert_eq!(err, "p256_signature_invalid");
     }
 
     fn sample_request(
@@ -2414,6 +2445,26 @@ mod tests {
         let (issuer, _verifier) = sample_issuer();
         let wrong_verifier = checked_seed_keypair(0x23);
         let request = sample_request(&wrong_verifier, [0xA5; 32], vec![0xB6; 65]);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_all_zero_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let receipt = request
+            .device_binding
+            .get_mut("attestation_receipt")
+            .expect("attestation receipt");
+        insert_field(
+            receipt,
+            "signature_base64",
+            string_value(BASE64_STANDARD.encode([0_u8; 64])),
+        );
 
         assert_eq!(
             validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),

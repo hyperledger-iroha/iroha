@@ -92,6 +92,7 @@ impl Ticket {
         let difficulty = read_ticket_byte(bytes, &mut cursor)?;
         let expires_at_bytes = read_ticket_field::<8>(bytes, &mut cursor)?;
         let expires_at = u64::from_be_bytes(expires_at_bytes);
+        unix_time_from_secs(expires_at).ok_or(Error::ExpiryTimestampOverflow(expires_at))?;
         let client_nonce = read_ticket_field::<32>(bytes, &mut cursor)?;
         let solution = read_ticket_field::<32>(bytes, &mut cursor)?;
         if cursor != bytes.len() {
@@ -222,6 +223,10 @@ impl SignedTicket {
         if decoded.ticket.version != Ticket::VERSION {
             return Err(Error::UnsupportedVersion(decoded.ticket.version));
         }
+        decoded
+            .ticket
+            .checked_expires_at_time()
+            .ok_or(Error::ExpiryTimestampOverflow(decoded.ticket.expires_at))?;
         Self::validate_signature_material(&decoded.signature)?;
         Ok(decoded)
     }
@@ -879,6 +884,9 @@ pub enum Error {
     /// Ticket expires too far in the future relative to the relay clock.
     #[error("pow ticket expires too far in the future (>{0:?})")]
     FutureSkewExceeded(Duration),
+    /// Ticket expiry timestamp cannot be represented by `SystemTime`.
+    #[error("pow ticket expiry timestamp {0} overflows system time")]
+    ExpiryTimestampOverflow(u64),
     /// Ticket TTL is shorter than the policy minimum.
     #[error("pow ticket ttl shorter than required min ({0:?})")]
     ExpiryWindowTooSmall(Duration),
@@ -1085,6 +1093,8 @@ fn validate_ticket_policy_at(
     }
     let now_duration = now.duration_since(UNIX_EPOCH)?;
     let now_secs = now_duration.as_secs();
+    unix_time_from_secs(ticket.expires_at)
+        .ok_or(Error::ExpiryTimestampOverflow(ticket.expires_at))?;
     let expires_at = Duration::from_secs(ticket.expires_at);
     let ttl_remaining = expires_at
         .checked_sub(now_duration)
@@ -1679,6 +1689,59 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_unrepresentable_expiry_before_solution_work() {
+        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
+        let descriptor = [0xAA; 32];
+        let binding = binding(&descriptor);
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: params.difficulty(),
+            expires_at: u64::MAX,
+            client_nonce: [0x11; 32],
+            solution: [0x22; 32],
+        };
+
+        let err = verify_at(
+            &ticket,
+            &binding,
+            &params,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        )
+        .expect_err("unrepresentable expiry must fail before challenge verification");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
+    }
+
+    #[test]
+    fn signed_ticket_verifier_rejects_unrepresentable_expiry_before_signature_preflight() {
+        let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
+        let descriptor = [0xCC; 32];
+        let binding = binding(&descriptor);
+        let signed = SignedTicket {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: params.difficulty(),
+                expires_at: u64::MAX,
+                client_nonce: [0xAA; 32],
+                solution: [0xBB; 32],
+            },
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: Vec::new(),
+        };
+
+        let err = verify_signed_ticket_at(
+            &signed,
+            &[],
+            &binding,
+            &params,
+            None,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        )
+        .expect_err("expiry overflow must fail before signature or key preflight");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
+    }
+
+    #[test]
     fn mint_ticket_rejects_ttl_that_overflows_system_time() {
         let mut rng = rand::rngs::StdRng::from_seed([0x24; 32]);
         let params = Parameters::try_new(0, Duration::from_secs(u64::MAX), Duration::from_secs(1))
@@ -1725,6 +1788,21 @@ mod tests {
                 .expect_err("truncated ticket prefix should fail closed");
             assert!(matches!(err, Error::Malformed(_)));
         }
+    }
+
+    #[test]
+    fn ticket_parse_rejects_unrepresentable_expiry() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: u64::MAX,
+            client_nonce: [0x11; 32],
+            solution: [0x22; 32],
+        };
+
+        let err = Ticket::parse(&ticket.to_bytes())
+            .expect_err("unrepresentable expiry must fail at ticket parse time");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
     }
 
     #[test]
@@ -2053,6 +2131,27 @@ mod tests {
             Error::Malformed(message) => assert!(message.contains("all zero")),
             other => panic!("expected malformed all-zero signature, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn signed_ticket_decode_rejects_unrepresentable_expiry_before_signature_preflight() {
+        let signed = SignedTicket {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: 0,
+                expires_at: u64::MAX,
+                client_nonce: [0xAA; 32],
+                solution: [0xBB; 32],
+            },
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: Vec::new(),
+        };
+        let encoded = signed.encode();
+
+        let err = SignedTicket::decode(&encoded)
+            .expect_err("unrepresentable expiry must fail before signature preflight");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
     }
 
     #[test]

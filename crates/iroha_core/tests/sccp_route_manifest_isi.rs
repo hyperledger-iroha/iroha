@@ -221,6 +221,72 @@ fn production_ton_route_manifest() -> SccpRouteManifest {
     }
 }
 
+fn production_tron_route_manifest() -> SccpRouteManifest {
+    let network_id_hex = "0x000000000000000000000000000000000000000000000000000000002b6653dc";
+    let verifier_address = "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ";
+    let verifier_code_hash = hex32(0xab);
+    let verifier_key_hash = hex32(0xac);
+    let destination_binding_key = format!(
+        "tron:0:5:{}:{verifier_address}:{verifier_code_hash}:{verifier_key_hash}",
+        network_id_hex
+            .strip_prefix("0x")
+            .expect("fixture network id is 0x-prefixed")
+    );
+    SccpRouteManifest {
+        version: 1,
+        route_id: "taira_tron_xor".to_owned(),
+        asset_key: "xor".to_owned(),
+        tron_network: "mainnet".to_owned(),
+        chain: "tron-mainnet".to_owned(),
+        chain_id_hex: "0x2b6653dc".to_owned(),
+        explorer_url: None,
+        explorer_host: None,
+        counterparty_account_codec: None,
+        counterparty_account_codec_key: None,
+        counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+        verifier_target: "TronContract".to_owned(),
+        production_ready: true,
+        disabled_reason: None,
+        network_id_hex: network_id_hex.to_owned(),
+        taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
+        taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
+        sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
+        tron_verifier_address: verifier_address.to_owned(),
+        verifier_code_hash,
+        verifier_key_hash,
+        proof_artifact_hash: None,
+        proving_key_hash: None,
+        native_evm_prover_bundle_hash: None,
+        native_evm_prover_bundle: None,
+        source_verifier_material: None,
+        source_adapter_engine_deployment: None,
+        source_adapter_engine: None,
+        destination_browser_prover: None,
+        source_browser_prover: None,
+        deployment_evidence_sha256: None,
+        destination_binding_key,
+        destination_binding_hash:
+            "0x4c5b208d148cee784d611f77434a7dfac6b22a37b86faf82063d371ba7d3a1bc".to_owned(),
+        taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".to_owned(),
+        taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
+        taira_burn_record_artifact_sha256: hex32(0xae),
+        taira_burn_record_code_hash: hex32(0xaf),
+        taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+        taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+        taira_burn_record_gas_limit: 2_000_000,
+        settlement_contract_address: None,
+        settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+        post_deploy_full_toml_ready: Some(true),
+        post_deploy_source_bridge_config_hash: Some(hex32(0xb1)),
+        post_deploy_source_event_transaction_id: Some(hex32(0xb2)),
+        post_deploy_source_event_explorer_url: None,
+        post_deploy_route_canary_evidence_hash: Some(hex32(0xb3)),
+        post_deploy_route_canary_transaction_id: Some(hex32(0xb4)),
+        post_deploy_route_canary_explorer_url: None,
+        post_deploy_offline_full_toml_sha256: Some(hex32(0xb5)),
+    }
+}
+
 fn test_state() -> State {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
@@ -542,5 +608,68 @@ fn production_bsc_route_manifest_isi_rejects_untrusted_browser_prover_material_w
     assert_eq!(
         stx.zk.sccp_route_manifests[0].taira_xor_bridge_address,
         manifest.taira_xor_bridge_address
+    );
+}
+
+#[test]
+fn production_tron_route_manifest_isi_enforces_mainnet_binding_without_mutating_state() {
+    let state = test_state();
+    let mut block = state.block(test_header());
+    let mut stx = block.transaction();
+    grant_route_manifest_permission(&mut stx);
+    let manifest = production_tron_route_manifest();
+    UpsertSccpRouteManifest::new(manifest.clone())
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect("insert TRON route manifest");
+    assert_eq!(stx.zk.sccp_route_manifests.len(), 1);
+    assert_eq!(stx.zk.sccp_route_manifests[0].route_id, "taira_tron_xor");
+    assert_eq!(
+        stx.zk.sccp_route_manifests[0].counterparty_domain,
+        iroha_sccp::SCCP_DOMAIN_TRON
+    );
+
+    let mut wrong_route = manifest.clone();
+    wrong_route.route_id = "foreign_tron_xor".to_owned();
+    let err = UpsertSccpRouteManifest::new(wrong_route)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("production TRON route must be taira_tron_xor/xor");
+    assert!(
+        format!("{err:?}").contains("production_ready requires route_id = taira_tron_xor"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut wrong_domain = manifest.clone();
+    wrong_domain.counterparty_domain = 6;
+    let err = UpsertSccpRouteManifest::new(wrong_domain)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("production TRON route must keep the TRON counterparty domain");
+    assert!(
+        format!("{err:?}").contains("production_ready requires counterparty_domain = 5"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut replayed_post_deploy_hash = manifest.clone();
+    replayed_post_deploy_hash.post_deploy_route_canary_evidence_hash = replayed_post_deploy_hash
+        .post_deploy_source_bridge_config_hash
+        .clone();
+    let err = UpsertSccpRouteManifest::new(replayed_post_deploy_hash)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("TRON route canary evidence hash must not replay source bridge config hash");
+    assert!(
+        format!("{err:?}").contains(
+            "post_deploy_route_canary_evidence_hash must not equal \
+             post_deploy_source_bridge_config_hash"
+        ),
+        "unexpected error: {err:?}"
+    );
+
+    assert_eq!(
+        stx.zk.sccp_route_manifests.len(),
+        1,
+        "rejected TRON route manifests must not replace the existing manifest"
+    );
+    assert_eq!(
+        stx.zk.sccp_route_manifests[0].destination_binding_hash,
+        manifest.destination_binding_hash
     );
 }

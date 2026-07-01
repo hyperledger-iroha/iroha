@@ -8,9 +8,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Verifier, VerifyingKey};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -532,7 +530,12 @@ impl SignedReplicationOrderV1 {
 
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(&self.signature.signature);
-        let signature = DalekSignature::from_bytes(&signature);
+        let signature =
+            crate::checked_ed25519_signature_from_bytes(&signature).ok_or_else(|| {
+                ReplicationOrderSignatureVerificationError::Verification {
+                    reason: "signature payload must not be all zero".to_owned(),
+                }
+            })?;
 
         let payload_bytes = self.signature_payload_bytes().map_err(|err| {
             ReplicationOrderSignatureVerificationError::PayloadEncoding {
@@ -1386,6 +1389,21 @@ mod tests {
         assert!(matches!(
             envelope.verify_signature(),
             Err(ReplicationOrderSignatureVerificationError::Verification { .. })
+        ));
+    }
+
+    #[test]
+    fn signed_replication_order_rejects_all_zero_signature_material() {
+        let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+        envelope.signature.signature.fill(0);
+
+        let err = envelope
+            .verify_signature()
+            .expect_err("all-zero replication order signature must be rejected");
+        assert!(matches!(
+            err,
+            ReplicationOrderSignatureVerificationError::Verification { reason }
+                if reason.contains("all zero")
         ));
     }
 

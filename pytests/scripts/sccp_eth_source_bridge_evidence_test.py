@@ -1086,6 +1086,28 @@ def test_eth_source_evidence_rejects_template_component_hashes():
             raise AssertionError(f"template ETH {label} was accepted")
 
 
+def test_eth_source_evidence_rejects_wrong_lane_domains_with_named_constants():
+    module = load_evidence_module()
+
+    source_args = eth_args(module)
+    source_args.source_domain = module.SCCP_DOMAIN_SORA
+    try:
+        module.render_toml(source_args)
+    except ValueError as exc:
+        assert "source_domain = SCCP_DOMAIN_ETH (1)" in str(exc)
+    else:
+        raise AssertionError("ETH source evidence accepted non-ETH source domain")
+
+    target_args = eth_args(module)
+    target_args.target_domain = module.SCCP_DOMAIN_ETH
+    try:
+        module.render_toml(target_args)
+    except ValueError as exc:
+        assert "target_domain = SCCP_DOMAIN_SORA (0)" in str(exc)
+    else:
+        raise AssertionError("ETH source evidence accepted non-SORA target domain")
+
+
 def test_eth_cli_json_summary_and_toml_output(capsys):
     module = load_evidence_module()
     hash_only_args = [

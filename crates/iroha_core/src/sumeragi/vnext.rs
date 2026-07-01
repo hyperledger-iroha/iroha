@@ -1158,6 +1158,8 @@ fn verify_preaggregated_vnext_signature(
     if aggregate_signature.is_empty() {
         return Err(VNextSignatureError::MissingAggregateSignature);
     }
+    let aggregate_signature = Signature::try_from_bytes(aggregate_signature)
+        .map_err(|_| VNextSignatureError::BadAggregateSignature)?;
     if signer_pops.len() != signer_roster.len() {
         return Err(VNextSignatureError::SignerPopLength {
             expected: signer_roster.len(),
@@ -1193,7 +1195,7 @@ fn verify_preaggregated_vnext_signature(
         .collect::<Vec<_>>();
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
-        aggregate_signature,
+        aggregate_signature.payload(),
         &public_keys,
         &signer_pop_refs,
     )
@@ -1864,6 +1866,29 @@ mod tests {
             .expect("aggregate verifies");
 
         assert_eq!(signers, signer_roster);
+    }
+
+    #[test]
+    fn preaggregated_vnext_signature_rejects_all_zero_signature_material() {
+        let keypairs = bls_keypairs(4);
+        let signer_roster = peers_from_keypairs(&keypairs);
+        let signer_indices = [0, 1, 2];
+        let signer_bitmap =
+            build_signer_bitmap(&signer_indices, signer_roster.len()).expect("signer bitmap");
+        let pops = pops_for_roster(&signer_roster, &keypairs);
+        let pop_refs = pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
+
+        assert_eq!(
+            verify_preaggregated_vnext_signature(
+                b"vnext-all-zero-aggregate".to_vec(),
+                &signer_bitmap,
+                &[0u8; 96],
+                &signer_roster,
+                &pop_refs,
+                &QuorumPolicy::Count { required: 3 },
+            ),
+            Err(VNextSignatureError::BadAggregateSignature)
+        );
     }
 
     #[test]

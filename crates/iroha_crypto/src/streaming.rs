@@ -186,8 +186,8 @@ pub enum HandshakeError {
     /// Secure random generation failed while preparing local streaming material.
     #[error("secure random generation failed")]
     Randomness(#[source] OsError),
-    /// Random generation returned inert all-zero local streaming material.
-    #[error("generated {operation} material must not be all zero")]
+    /// Local streaming material was inert all-zero bytes after generation or explicit setup.
+    #[error("{operation} material must not be all zero")]
     InertRandomMaterial {
         /// Operation that produced inert all-zero material.
         operation: &'static str,
@@ -1517,13 +1517,25 @@ impl StreamingSession {
     ///
     /// Returns the derived public key so callers can advertise it in outbound `KeyUpdate`
     /// frames.
-    pub fn set_local_ephemeral_x25519(&mut self, secret_bytes: [u8; 32]) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandshakeError::InertRandomMaterial`] when the supplied secret bytes are all zero.
+    pub fn set_local_ephemeral_x25519(
+        &mut self,
+        secret_bytes: [u8; 32],
+    ) -> Result<Vec<u8>, HandshakeError> {
+        if secret_bytes.iter().all(|&byte| byte == 0) {
+            return Err(HandshakeError::InertRandomMaterial {
+                operation: "X25519 ephemeral secret",
+            });
+        }
         let secret_bytes = Zeroizing::new(secret_bytes);
         let secret = StaticSecret::from(*secret_bytes);
         let eph = X25519Ephemeral::from_secret(secret);
         let public = eph.public.to_vec();
         self.local_ephemeral = Some(EphemeralState::X25519(eph));
-        public
+        Ok(public)
     }
 
     /// Configure the remote Kyber public key expected for HPKE handshakes.
@@ -2206,6 +2218,23 @@ mod key_update_tests {
     }
 
     #[test]
+    fn set_local_ephemeral_x25519_rejects_all_zero_secret_material() {
+        let mut session = StreamingSession::new(CapabilityRole::Viewer);
+
+        let err = session
+            .set_local_ephemeral_x25519([0_u8; 32])
+            .expect_err("all-zero deterministic X25519 ephemeral secret must fail");
+
+        match err {
+            HandshakeError::InertRandomMaterial { operation } => {
+                assert_eq!(operation, "X25519 ephemeral secret");
+            }
+            other => panic!("expected inert material error, got {other:?}"),
+        }
+        assert!(session.local_ephemeral.is_none());
+    }
+
+    #[test]
     fn random_gck_nonce_rejects_all_zero_material() {
         let mut rng = FixedTryRng { byte: 0 };
 
@@ -2252,13 +2281,17 @@ mod key_update_tests {
         let session_id = [0xC7; 32];
 
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-        publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+        publisher_session
+            .set_local_ephemeral_x25519([0x11; 32])
+            .expect("deterministic x25519 ephemeral");
         let publisher_update = publisher_session
             .build_key_update(session_id, &suite, 1, 1, publisher_keys.private_key())
             .expect("publisher key update");
 
         let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-        viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+        viewer_session
+            .set_local_ephemeral_x25519([0x22; 32])
+            .expect("deterministic x25519 ephemeral");
         viewer_session
             .process_remote_key_update(&publisher_update, publisher_keys.public_key())
             .expect("viewer transport keys");
@@ -2436,7 +2469,9 @@ mod key_update_tests {
         let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
 
         let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-        publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+        publisher_session
+            .set_local_ephemeral_x25519([0x11; 32])
+            .expect("deterministic x25519 ephemeral");
         let update = publisher_session
             .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
             .expect("key update");
@@ -2445,7 +2480,9 @@ mod key_update_tests {
             crate::PublicKey(crate::PublicKeyCompact::new(Algorithm::Ed25519, &[]));
 
         let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-        viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+        viewer_session
+            .set_local_ephemeral_x25519([0x22; 32])
+            .expect("deterministic x25519 ephemeral");
         let err = viewer_session
             .process_remote_key_update(&update, &malformed_identity)
             .expect_err("malformed identity must fail before signature verification");

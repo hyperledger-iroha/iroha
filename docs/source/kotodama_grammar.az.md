@@ -248,7 +248,7 @@ Makroslar yuxarıdakı konstruktorlara qədər genişlənir və tərtib zamanı 
 Host/syscall qurğuları (SCALL üçün xəritə; ivm.md-də dəqiq nömrələr)
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `execute_instruction(Blob[NoritoBytes])`
 - `execute_query(Blob[NoritoBytes]) -> Blob`

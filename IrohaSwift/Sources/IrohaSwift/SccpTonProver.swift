@@ -21,6 +21,11 @@ private let sccpTonTemplateSourceMaterialHashesV1 = [
     "50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43",
     sccpTonTemplateSourceStateVerifierHashV1,
 ]
+private let sccpGovernedTonFullLightClientAuditHashesV1 = [
+    "0x2626262626262626262626262626262626262626262626262626262626262626",
+    "0x2727272727272727272727272727272727272727272727272727272727272727",
+    "0x2828282828282828282828282828282828282828282828282828282828282828",
+]
 
 /// OpenVerify circuit id used by TON shard-state source-state proof requests.
 public let sccpTonShardStateOpenVerifyCircuitIdV1 = "sccp-ton-shard-state-light-client-v1"
@@ -4004,12 +4009,26 @@ public func sccpTonSourceAdapterDeploymentBindingFromDeployment(
         tonValidatorSetTransitionVerifierHash: input.tonValidatorSetTransitionVerifierHash,
         tonShardAccountsDictionaryVerifierHash: input.tonShardAccountsDictionaryVerifierHash
     )
+    try requireGovernedTonSourceAdapterDeploymentAuditForBinding(input)
     return try normalizeTonSccpSourceAdapterDeploymentBinding(
         sourceDomain: input.sourceDomain,
         targetDomain: input.targetDomain,
         sourceAdapterDeploymentHash: sourceAdapterDeploymentHash,
         sourceAdapterDeploymentReceiptHash: input.deploymentReceiptHash
     )
+}
+
+private func requireGovernedTonSourceAdapterDeploymentAuditForBinding(
+    _ input: TonSccpSourceAdapterDeploymentInput
+) throws {
+    let auditHashes = try [
+        tonNormalizeHex32(input.tonMasterchainConfigVerifierHash, field: "tonMasterchainConfigVerifierHash"),
+        tonNormalizeHex32(input.tonValidatorSetTransitionVerifierHash, field: "tonValidatorSetTransitionVerifierHash"),
+        tonNormalizeHex32(input.tonShardAccountsDictionaryVerifierHash, field: "tonShardAccountsDictionaryVerifierHash"),
+    ]
+    guard auditHashes == sccpGovernedTonFullLightClientAuditHashesV1 else {
+        throw SccpSourceProofHashError.invalidSourceMaterial("tonGovernedFullLightClientAuditHash")
+    }
 }
 
 private func selectTonProofRequestDeploymentHash(supplied: String,

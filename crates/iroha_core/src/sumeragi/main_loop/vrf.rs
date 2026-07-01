@@ -167,6 +167,40 @@ impl VrfActor {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VrfSignatureCheckError {
+    Malformed,
+    Invalid,
+}
+
+fn vrf_commit_signature_check(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    commit: &crate::sumeragi::consensus::VrfCommit,
+    peer: &PeerId,
+) -> std::result::Result<(), VrfSignatureCheckError> {
+    let signature = Signature::try_from_bytes(&commit.bls_sig)
+        .map_err(|_| VrfSignatureCheckError::Malformed)?;
+    let preimage = vrf_commit_preimage(chain_id, mode_tag, commit);
+    signature
+        .verify(peer.public_key(), &preimage)
+        .map_err(|_| VrfSignatureCheckError::Invalid)
+}
+
+fn vrf_reveal_signature_check(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    reveal: &crate::sumeragi::consensus::VrfReveal,
+    peer: &PeerId,
+) -> std::result::Result<(), VrfSignatureCheckError> {
+    let signature = Signature::try_from_bytes(&reveal.bls_sig)
+        .map_err(|_| VrfSignatureCheckError::Malformed)?;
+    let preimage = vrf_reveal_preimage(chain_id, mode_tag, reveal);
+    signature
+        .verify(peer.public_key(), &preimage)
+        .map_err(|_| VrfSignatureCheckError::Invalid)
+}
+
 impl Actor {
     fn derive_vrf_material(
         &self,
@@ -235,9 +269,7 @@ impl Actor {
             );
             return false;
         }
-        let preimage = vrf_commit_preimage(&self.common_config.chain, mode_tag, commit);
-        Signature::from_bytes(&commit.bls_sig)
-            .verify(peer.public_key(), &preimage)
+        vrf_commit_signature_check(&self.common_config.chain, mode_tag, commit, peer)
             .inspect_err(|err| {
                 warn!(
                     ?err,
@@ -276,9 +308,7 @@ impl Actor {
             );
             return false;
         }
-        let preimage = vrf_reveal_preimage(&self.common_config.chain, mode_tag, reveal);
-        Signature::from_bytes(&reveal.bls_sig)
-            .verify(peer.public_key(), &preimage)
+        vrf_reveal_signature_check(&self.common_config.chain, mode_tag, reveal, peer)
             .inspect_err(|err| {
                 warn!(
                     ?err,
@@ -1244,5 +1274,95 @@ impl Actor {
                 msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod checked_vrf_signature_tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_data_model::{ChainId, peer::PeerId};
+
+    use super::{VrfSignatureCheckError, vrf_commit_signature_check, vrf_reveal_signature_check};
+    use crate::sumeragi::consensus::{
+        PERMISSIONED_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage,
+    };
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x67; 32], Algorithm::BlsNormal)
+            .expect("derive VRF BLS fixture key")
+    }
+
+    #[test]
+    fn vrf_commit_signature_check_rejects_all_zero_signature_material() {
+        let chain: ChainId = "vrf-commit-all-zero-helper".parse().expect("chain id");
+        let keypair = checked_bls_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let commit = VrfCommit {
+            epoch: 7,
+            commitment: [0xA7; 32],
+            signer: 0,
+            bls_sig: vec![0_u8; 96],
+        };
+
+        assert_eq!(
+            vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+            Err(VrfSignatureCheckError::Malformed)
+        );
+    }
+
+    #[test]
+    fn vrf_reveal_signature_check_rejects_all_zero_signature_material() {
+        let chain: ChainId = "vrf-reveal-all-zero-helper".parse().expect("chain id");
+        let keypair = checked_bls_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let reveal = VrfReveal {
+            epoch: 7,
+            reveal: [0xB7; 32],
+            signer: 0,
+            bls_sig: vec![0_u8; 96],
+        };
+
+        assert_eq!(
+            vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+            Err(VrfSignatureCheckError::Malformed)
+        );
+    }
+
+    #[test]
+    fn vrf_signature_checks_accept_checked_bls_signatures() {
+        let chain: ChainId = "vrf-valid-helper".parse().expect("chain id");
+        let keypair = checked_bls_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let mut commit = VrfCommit {
+            epoch: 7,
+            commitment: [0xC7; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit);
+        commit.bls_sig = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("sign VRF commit")
+            .payload()
+            .to_vec();
+        assert_eq!(
+            vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+            Ok(())
+        );
+
+        let mut reveal = VrfReveal {
+            epoch: 7,
+            reveal: [0xD7; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal);
+        reveal.bls_sig = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("sign VRF reveal")
+            .payload()
+            .to_vec();
+        assert_eq!(
+            vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+            Ok(())
+        );
     }
 }

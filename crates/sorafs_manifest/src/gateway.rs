@@ -74,6 +74,9 @@ pub enum GatewayAuthorizationError {
         /// Observed signature length.
         found: usize,
     },
+    /// Signature bytes were structurally invalid before backend verification.
+    #[error("invalid signature material")]
+    InvalidSignatureMaterial(#[source] iroha_crypto::error::ParseError),
     /// Signature verification failed.
     #[error("signature verification failed")]
     Signature(#[source] iroha_crypto::error::Error),
@@ -405,7 +408,8 @@ impl GatewayAuthorizationVerifier {
         }
 
         let signing_input = format!("{header_segment}.{payload_segment}");
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .map_err(GatewayAuthorizationError::InvalidSignatureMaterial)?;
 
         let header_value: Value = norito::json::from_slice(&header_bytes)
             .map_err(|err| GatewayAuthorizationError::Json(format!("header: {err}")))?;
@@ -1057,6 +1061,24 @@ mod tests {
         let jws = String::from_utf8(jws).expect("valid UTF-8");
         let err = verifier.verify(&jws).expect_err("signature must fail");
         assert!(matches!(err, GatewayAuthorizationError::Signature(_)));
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_signature_material() {
+        let (verifier, signing_key) = build_test_verifier();
+        let payload = base_payload();
+        let jws = build_jws(&signing_key, &payload);
+        let mut segments = jws.split('.').map(ToOwned::to_owned).collect::<Vec<_>>();
+        segments[2] = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+        let jws = segments.join(".");
+
+        let err = verifier
+            .verify(&jws)
+            .expect_err("all-zero signature material must fail closed");
+        assert!(matches!(
+            err,
+            GatewayAuthorizationError::InvalidSignatureMaterial(_)
+        ));
     }
 
     #[test]

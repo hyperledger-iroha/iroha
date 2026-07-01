@@ -16104,18 +16104,71 @@ export interface DeployContractRequest {
   leaseExpiryMs?: number | null;
 }
 
-export interface DeployContractResponse {
-  ok: boolean;
-  contract_alias: string | null;
-  contract_address: string | null;
+export interface DeployContractReceiptContract {
+  name: string;
+  contract_alias: string;
+  contract_address: string;
   previous_contract_address: string | null;
   upgraded: boolean;
-  dataspace: string | null;
-  deploy_nonce: number | null;
-  tx_hash_hex: string | null;
-  pipeline_status?: ToriiPipelineTransactionStatus | null;
+  dataspace: string;
+  deploy_nonce: number;
   code_hash_hex: string;
   abi_hash_hex: string;
+  tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
+  status: string;
+}
+
+export interface DeployContractInitCallReceipt {
+  id: string;
+  contract_alias: string;
+  entrypoint: string | null;
+  tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
+  status: string;
+}
+
+export interface DeployContractAssertionReceipt {
+  id: string;
+  contract_alias: string;
+  entrypoint: string | null;
+  status: string;
+  actual_result?: unknown;
+  expected_result?: unknown;
+  error?: string | null;
+}
+
+export interface DeployContractOperationReceipt {
+  operation_kind: string;
+  status: string;
+  transport: string;
+  dataspace: string;
+  contract_alias: string | null;
+  contract_address: string | null;
+  code_hash_hex: string | null;
+  abi_hash_hex: string | null;
+  tx_hash_hex: string | null;
+  entrypoint: string | null;
+  entrypoint_hash_hex: string | null;
+  gas_limit: number | null;
+  gas_used: number | null;
+  gas_asset_id: string | null;
+  fee_sponsor: string | null;
+  payload_digest_hex: string;
+}
+
+export interface DeployContractResponse {
+  ok: boolean;
+  bundle_name: string;
+  bundle_digest: string;
+  chain_fingerprint: string;
+  dry_run: boolean;
+  completed_stages: string[];
+  failure_point: string | null;
+  contracts: DeployContractReceiptContract[];
+  init_calls: DeployContractInitCallReceipt[];
+  assertions: DeployContractAssertionReceipt[];
+  operation_receipt?: DeployContractOperationReceipt | null;
 }
 
 export interface SetContractAliasRequest {

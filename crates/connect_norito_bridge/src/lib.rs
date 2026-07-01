@@ -582,10 +582,7 @@ unsafe fn parse_optional_string_bridge(
     unsafe { read_string_bridge(ptr, len) }.map(Some)
 }
 
-unsafe fn parse_metadata_object_bridge(
-    ptr: *const c_char,
-    len: c_ulong,
-) -> BridgeResult<Metadata> {
+unsafe fn parse_metadata_object_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<Metadata> {
     let mut metadata = Metadata::default();
     if ptr.is_null() || len == 0 {
         return Ok(metadata);
@@ -3887,7 +3884,7 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    Ok(Signature::from_bytes(&signature_bytes))
+    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_payload_value(
@@ -4347,7 +4344,10 @@ pub unsafe extern "C" fn connect_norito_verify_detached(
         let message = unsafe { slice::from_raw_parts(message_ptr, message_len as usize) };
         let signature_bytes =
             unsafe { slice::from_raw_parts(signature_ptr, signature_len as usize) };
-        let signature = Signature::from_bytes(signature_bytes);
+        let signature = match Signature::try_from_bytes(signature_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(()),
+        };
         match signature.verify(&public_key, message) {
             Ok(()) => {
                 unsafe { *out_valid = 1 };
@@ -6624,7 +6624,10 @@ pub unsafe extern "C" fn connect_norito_encode_control_approve_ext_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = Signature::from_bytes(sig_bytes);
+        let signature = match Signature::try_from_bytes(sig_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return -4,
+        };
         let ctrl = proto::ConnectControlV1::Approve {
             wallet_pk: wallet_pk_arr,
             account_id,
@@ -14612,7 +14615,10 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_ok_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = Signature::from_bytes(sig_bytes);
+        let signature = match Signature::try_from_bytes(sig_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return -2,
+        };
         let env = proto::EnvelopeV1 {
             seq,
             payload: proto::ConnectPayloadV1::SignResultOk {
@@ -15484,8 +15490,11 @@ pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_tr
 
         let principal_asset_id =
             AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let fee_asset_id =
-            AssetId::with_scope(fee_asset_definition.clone(), authority.clone(), fee_asset_scope);
+        let fee_asset_id = AssetId::with_scope(
+            fee_asset_definition.clone(),
+            authority.clone(),
+            fee_asset_scope,
+        );
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
@@ -21656,7 +21665,10 @@ fn java_verify_detached_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let public_key = PublicKey::from_bytes(algorithm, public_key)
         .map_err(|_| "invalid public key bytes".to_string())?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match Signature::try_from_bytes(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     match signature.verify(&public_key, message) {
         Ok(()) => Ok(true),
         Err(CryptoError::BadSignature) => Ok(false),
@@ -32448,6 +32460,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_identifier_receipt_rejects_all_zero_signed_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let mut value = sample_identifier_signed_receipt_json(&payload);
+        set_json_string_at_path(&mut value, &["attestation", "signature"], "00".repeat(64));
+
+        let err = parse_identifier_receipt_value(value)
+            .expect_err("all-zero identifier receipt signature must reject");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
     fn validate_identifier_claim_account_rejects_mismatched_receipt_account() {
         let payload = sample_identifier_receipt_payload();
         let receipt =
@@ -32803,6 +32826,47 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_all_zero_signature_material() {
+        let private = vec![0x11; 32];
+        let message = b"ffi-ed25519-signing";
+        let mut pk_ptr: *mut c_uchar = ptr::null_mut();
+        let mut pk_len: c_ulong = 0;
+        let rc_pk = unsafe {
+            connect_norito_public_key_from_private(
+                Algorithm::Ed25519 as u8,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut pk_ptr,
+                &mut pk_len,
+            )
+        };
+        assert_eq!(rc_pk, 0, "public key derivation must succeed");
+        let public_key = unsafe { slice::from_raw_parts(pk_ptr, pk_len as usize).to_vec() };
+        connect_norito_free(pk_ptr);
+
+        let signature = [0_u8; 64];
+        let mut valid: c_uchar = 1;
+        let rc_verify = unsafe {
+            connect_norito_verify_detached(
+                Algorithm::Ed25519 as u8,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut valid,
+            )
+        };
+
+        assert_eq!(
+            rc_verify, 0,
+            "verification call must stay fallible only for API errors"
+        );
+        assert_eq!(valid, 0, "malformed signature material must not verify");
+    }
+
+    #[test]
     fn ffi_sign_verify_secp256k1() {
         let mut private = [0u8; 32];
         private[31] = 1;
@@ -32847,6 +32911,86 @@ mod tests {
                 .expect("Java verify helper runs"),
             "Java helper signature must verify"
         );
+    }
+
+    #[test]
+    fn java_detached_verify_helper_rejects_all_zero_signature_material() {
+        let private = vec![0x21; 32];
+        let message = b"java-helper-detached-signing";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        let public = java_public_key_from_private_bytes(algorithm, &private)
+            .expect("Java public-key helper derives key");
+        let signature = [0_u8; 64];
+
+        assert!(
+            !java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "all-zero signature material must not verify"
+        );
+    }
+
+    #[test]
+    fn encode_control_approve_ext_with_alg_rejects_all_zero_signature_material() {
+        let sid = [0x11_u8; 32];
+        let wallet_pk = [0x22_u8; 32];
+        let account = b"wallet-account";
+        let algorithm = b"ed25519";
+        let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_control_approve_ext_with_alg(
+                sid.as_ptr(),
+                1,
+                7,
+                wallet_pk.as_ptr(),
+                account.as_ptr().cast::<c_char>(),
+                account.len() as c_ulong,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -4);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn encode_envelope_sign_result_ok_with_alg_rejects_all_zero_signature_material() {
+        let algorithm = b"ed25519";
+        let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_envelope_sign_result_ok_with_alg(
+                9,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -2);
+        assert_eq!(out_len, 0);
     }
 
     #[test]

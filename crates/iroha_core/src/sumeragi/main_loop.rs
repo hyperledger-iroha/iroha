@@ -84,9 +84,18 @@ fn try_sign_consensus_preimage(
 
 #[cfg(test)]
 mod checked_consensus_signing_tests {
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::{ChainId, block::BlockHeader, peer::PeerId};
 
-    use super::try_sign_consensus_preimage;
+    use super::{
+        PERMISSIONED_TAG, VoteSignatureError, merge_signature_valid, network_topology::Topology,
+        try_sign_consensus_preimage, vote_signature_check,
+    };
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x43; 32], Algorithm::BlsNormal)
+            .expect("derive consensus BLS fixture key")
+    }
 
     #[test]
     fn consensus_preimage_checked_signature_verifies() {
@@ -100,6 +109,49 @@ mod checked_consensus_signing_tests {
         Signature::from_bytes(&payload)
             .verify(keypair.public_key(), preimage)
             .expect("signature verifies");
+    }
+
+    #[test]
+    fn vote_signature_check_rejects_all_zero_signature_material() {
+        let chain: ChainId = "vote-all-zero-helper".parse().expect("chain id");
+        let keypair = checked_bls_keypair();
+        let topology = Topology::new(vec![PeerId::new(keypair.public_key().clone())]);
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1_u8; Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: vec![0_u8; 96],
+        };
+
+        assert_eq!(
+            vote_signature_check(&vote, &topology, &chain, PERMISSIONED_TAG),
+            Err(VoteSignatureError::SignatureInvalid)
+        );
+    }
+
+    #[test]
+    fn merge_signature_valid_rejects_all_zero_signature_material() {
+        let keypair = checked_bls_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let signature = super::MergeCommitteeSignature {
+            epoch_id: 0,
+            view: 0,
+            signer: 0,
+            message_digest: Hash::prehashed([0x48; Hash::LENGTH]),
+            bls_sig: vec![0_u8; 96],
+        };
+
+        assert!(!merge_signature_valid(&peer, &signature));
     }
 }
 
@@ -3490,10 +3542,20 @@ pub(super) fn vote_signature_check(
     if vote.bls_sig.is_empty() {
         return Err(VoteSignatureError::SignatureInvalid);
     }
-    let bls_signature = Signature::from_bytes(&vote.bls_sig);
+    let bls_signature = Signature::try_from_bytes(&vote.bls_sig)
+        .map_err(|_| VoteSignatureError::SignatureInvalid)?;
     bls_signature
         .verify(peer.public_key(), &preimage)
         .map_err(|_| VoteSignatureError::SignatureInvalid)
+}
+
+fn merge_signature_valid(peer: &PeerId, signature: &MergeCommitteeSignature) -> bool {
+    let Ok(bls_signature) = Signature::try_from_bytes(&signature.bls_sig) else {
+        return false;
+    };
+    bls_signature
+        .verify(peer.public_key(), signature.message_digest.as_ref())
+        .is_ok()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -25482,11 +25544,8 @@ impl Actor {
         }
 
         let peer = &commit_topology[signer_idx];
-        let bls_signature = Signature::from_bytes(&signature.bls_sig);
-        if let Err(err) = bls_signature.verify(peer.public_key(), signature.message_digest.as_ref())
-        {
+        if !merge_signature_valid(peer, &signature) {
             iroha_logger::warn!(
-                ?err,
                 signer = signer_idx,
                 epoch = signature.epoch_id,
                 "merge signature verification failed"

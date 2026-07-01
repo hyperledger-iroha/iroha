@@ -1134,7 +1134,11 @@ impl SignedAuditorRequestV1 {
             .map_err(|err| AuditorSignatureVerificationError::InvalidPublicKey {
                 reason: err.to_string(),
             })?;
-        let signature = Signature::from_bytes(&self.signature.signature);
+        let signature = Signature::try_from_bytes(&self.signature.signature).map_err(|err| {
+            AuditorSignatureVerificationError::Verification {
+                reason: format!("invalid signature material: {err}"),
+            }
+        })?;
         let payload_bytes = norito::to_bytes(&self.signature_payload()).map_err(|err| {
             AuditorSignatureVerificationError::PayloadEncoding {
                 reason: err.to_string(),
@@ -1731,6 +1735,21 @@ mod tests {
             envelope.verify_signature(),
             Err(AuditorSignatureVerificationError::Verification { .. })
         ));
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_rejects_all_zero_signature_material() {
+        let key_pair = checked_auditor_keypair();
+        let mut envelope = signed_auditor_report(&key_pair, "REP-366");
+        envelope.signature.signature.fill(0);
+
+        let err = envelope
+            .verify_signature()
+            .expect_err("all-zero signature material must fail closed");
+        assert!(
+            matches!(err, AuditorSignatureVerificationError::Verification { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]

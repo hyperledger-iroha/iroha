@@ -379,6 +379,13 @@ pub enum Instr {
         amount: Temp,
         dataspace: Temp,
     },
+    /// Add one transfer entry to the active FASTPQ transfer batch.
+    TransferBatchAsset {
+        from: Temp,
+        to: Temp,
+        asset: Temp,
+        amount: Temp,
+    },
     /// Open and fund a native asset escrow.
     EscrowOpenOffer {
         escrow: Temp,
@@ -3103,6 +3110,7 @@ fn lower_transfer_batch_call(
     args: &[semantic::TypedExpr],
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
+    ctx.current_instr(Instr::TransferBatchBegin);
     for entry in args {
         let tuple = lower_expr(ctx, entry, vars);
         let from = ctx.new_temp();
@@ -3149,20 +3157,14 @@ fn lower_transfer_batch_call(
             });
             out
         };
-        let dataspace = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: dataspace,
-            tuple,
-            index: 4,
-        });
-        ctx.current_instr(Instr::TransferAsset {
+        ctx.current_instr(Instr::TransferBatchAsset {
             from,
             to,
             asset,
             amount,
-            dataspace,
         });
     }
+    ctx.current_instr(Instr::TransferBatchEnd);
     let t = ctx.new_temp();
     ctx.current_instr(Instr::Const { dest: t, value: 0 });
     t

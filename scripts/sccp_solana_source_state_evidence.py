@@ -616,9 +616,15 @@ def _require_solana_sora_lane(args: argparse.Namespace) -> None:
     source_domain = _require_exact_u32(args.source_domain, "source_domain")
     target_domain = _require_exact_u32(args.target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_SOL:
-        raise SystemExit("Solana production source evidence requires source_domain = 3")
+        raise SystemExit(
+            "Solana production source evidence requires source_domain = "
+            f"SCCP_DOMAIN_SOL ({SCCP_DOMAIN_SOL})"
+        )
     if target_domain != SCCP_DOMAIN_SORA:
-        raise SystemExit("Solana production source evidence requires target_domain = 0")
+        raise SystemExit(
+            "Solana production source evidence requires target_domain = "
+            f"SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})"
+        )
 
 
 def _component_hash_args() -> tuple[str, ...]:

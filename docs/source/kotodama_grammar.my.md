@@ -248,7 +248,7 @@ Pointer constructors (Norito TLV ကို INPUT သို့ ထုတ်ပြ
 host/syscall builtins (SCALL သို့ မြေပုံ၊ ivm.md ရှိ နံပါတ်အတိအကျ)
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `execute_instruction(Blob[NoritoBytes])`
 - `execute_query(Blob[NoritoBytes]) -> Blob`

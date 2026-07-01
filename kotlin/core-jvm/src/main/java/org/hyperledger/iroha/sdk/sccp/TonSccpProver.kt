@@ -61,6 +61,11 @@ object SccpTon {
         ),
         TEMPLATE_SHARD_STATE_VERIFIER_HASH,
     )
+    private val GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1: List<String> = listOf(
+        "0x" + "26".repeat(32),
+        "0x" + "27".repeat(32),
+        "0x" + "28".repeat(32),
+    )
     const val CURRENT_VALIDATOR_SET_CONFIG_PARAM: Long = 34L
     const val CONFIG_PARAM_KEY_BITS: Int = 32
 
@@ -2244,12 +2249,32 @@ object SccpTon {
             tonValidatorSetTransitionVerifierHash = input.tonValidatorSetTransitionVerifierHash,
             tonShardAccountsDictionaryVerifierHash = input.tonShardAccountsDictionaryVerifierHash,
         )
+        requireGovernedSourceAdapterDeploymentAuditForBinding(input)
         return SccpSolana.normalizeSourceAdapterDeploymentBinding(
             sourceDomain = input.sourceDomain,
             targetDomain = input.targetDomain,
             sourceAdapterDeploymentHash = sourceAdapterDeploymentHash,
             sourceAdapterDeploymentReceiptHash = input.deploymentReceiptHash,
         )
+    }
+
+    private fun requireGovernedSourceAdapterDeploymentAuditForBinding(
+        input: TonSccpSourceAdapterDeploymentInput,
+    ) {
+        val auditHashes = listOf(
+            normalizeHex32(input.tonMasterchainConfigVerifierHash, "tonMasterchainConfigVerifierHash"),
+            normalizeHex32(
+                input.tonValidatorSetTransitionVerifierHash,
+                "tonValidatorSetTransitionVerifierHash",
+            ),
+            normalizeHex32(
+                input.tonShardAccountsDictionaryVerifierHash,
+                "tonShardAccountsDictionaryVerifierHash",
+            ),
+        )
+        require(auditHashes == GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1) {
+            "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes"
+        }
     }
 
     @JvmStatic

@@ -5873,7 +5873,17 @@ pub(crate) fn enforce_fraud_policy(
                 ValidationFail::NotPermitted("fraud assessment signature must be 64 bytes".into()),
             ));
         }
-        let signature = iroha_crypto::Signature::from_bytes(signature_bytes);
+        let signature =
+            iroha_crypto::Signature::try_from_bytes(signature_bytes).map_err(|err| {
+                #[cfg(feature = "telemetry")]
+                if let Some(ctx) = fraud_ctx.as_ref() {
+                    ctx.record_invalid("attestation_signature");
+                    ctx.record_attestation(attester_label, "signature_parse");
+                }
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "fraud assessment signature is malformed: {err}"
+                )))
+            })?;
         let typed = iroha_crypto::SignatureOf::<FraudAssessment>::from_signature(signature);
         typed.verify(&attester.public_key, &unsigned).map_err(|_| {
             #[cfg(feature = "telemetry")]
@@ -8585,6 +8595,49 @@ pub mod tests {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                 assert!(
                     reason.contains("64 bytes"),
+                    "unexpected rejection reason: {reason}"
+                );
+            }
+            other => panic!("expected Validation::NotPermitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fraud_policy_rejects_all_zero_attestation_signature_before_backend() {
+        let attester =
+            checked_fixture_keypair(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
+        let assessment = FraudAssessment::new(
+            Vec::new(),
+            iroha_data_model::fraud::types::FraudAssessmentParts {
+                query_id: [0xFA; 32],
+                engine_id: "risk-engine-eu".to_owned(),
+                risk_score_bps: 650,
+                confidence_bps: 9_000,
+                decision: iroha_data_model::fraud::types::AssessmentDecision::Allow,
+                generated_at_ms: 1,
+                signature: Some(vec![0_u8; ED25519_SIGNATURE_LENGTH]),
+            },
+        );
+        let metadata = fraud_metadata_with_assessment(&assessment);
+        let cfg = iroha_config::parameters::actual::FraudMonitoring {
+            enabled: true,
+            required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::Medium),
+            attesters: vec![iroha_config::parameters::actual::FraudAttester {
+                engine_id: "risk-engine-eu".to_owned(),
+                public_key: attester.public_key().clone(),
+            }],
+            ..Default::default()
+        };
+        let catalog = DataSpaceCatalog::default();
+        let assignment = single_lane_assignment(&catalog);
+
+        let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
+            .expect_err("all-zero Ed25519 attestation signature must be rejected");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                assert!(
+                    reason.contains("signature payload must not be all zero"),
                     "unexpected rejection reason: {reason}"
                 );
             }
