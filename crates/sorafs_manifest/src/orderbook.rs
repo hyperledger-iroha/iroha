@@ -14,8 +14,7 @@ use std::collections::BTreeSet;
 
 use blake3::Hasher;
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Signer, SigningKey, Verifier,
-    VerifyingKey,
+    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey, Verifier, VerifyingKey,
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
@@ -1189,7 +1188,12 @@ fn verify_ed25519_orderbook_signature(
 
     let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
     signature_bytes.copy_from_slice(&signature.signature);
-    let signature = DalekSignature::from_bytes(&signature_bytes);
+    let signature =
+        crate::checked_ed25519_signature_from_bytes(&signature_bytes).ok_or_else(|| {
+            OrderbookValidationError::SignatureVerification {
+                reason: "signature payload must not be all zero".to_owned(),
+            }
+        })?;
 
     verifying_key.verify(digest, &signature).map_err(|err| {
         OrderbookValidationError::SignatureVerification {
@@ -2013,6 +2017,20 @@ mod tests {
         assert!(matches!(
             verify_order_request_signature_v1(&tampered),
             Err(OrderbookValidationError::SignatureVerification { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_order_signature_rejects_all_zero_signature_material() {
+        let mut signed = sign_order(order(), 0x18);
+        signed.signature.signature.fill(0);
+
+        let err = verify_order_request_signature_v1(&signed)
+            .expect_err("all-zero order signature must be rejected");
+        assert!(matches!(
+            err,
+            OrderbookValidationError::SignatureVerification { reason }
+                if reason.contains("all zero")
         ));
     }
 

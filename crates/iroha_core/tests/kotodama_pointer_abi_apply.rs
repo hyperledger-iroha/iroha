@@ -417,7 +417,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
             let base_amount = ev.get_int(name("base_amount"));
             let vault = VaultAccount[key];
             if base_amount > 0 {{
-              transfer_asset(provider, vault, BaseAsset[key], base_amount);
+              transfer_asset(provider, vault, BaseAsset[key], base_amount, dataspace_id("0"));
             }}
           }}
         }}
@@ -493,8 +493,8 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
                               quote_amount: int) permission(Admin) {
             let pool = name!("pool");
             let vault = VaultAccount[pool];
-            transfer_asset(provider, vault, BaseAsset[pool], base_amount);
-            transfer_asset(provider, vault, QuoteAsset[pool], quote_amount);
+            transfer_asset(provider, vault, BaseAsset[pool], base_amount, dataspace_id("0"));
+            transfer_asset(provider, vault, QuoteAsset[pool], quote_amount, dataspace_id("0"));
             SeededBase[bin_id] = base_amount;
             SeededQuote[bin_id] = quote_amount;
           }

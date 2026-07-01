@@ -18199,6 +18199,9 @@ fn manifest_verify_signature(raw_args: Vec<String>) -> Result<(), String> {
     let signature_bytes: [u8; 64] = signature_bytes_vec
         .try_into()
         .map_err(|_| "failed to convert signature bytes".to_string())?;
+    if signature_bytes.iter().all(|byte| *byte == 0) {
+        return Err("signature material must not be all zero".to_string());
+    }
     let signature = Signature::from_bytes(&signature_bytes);
 
     let public_key_bytes_vec = parse_hex_vec(&public_key_hex)?;

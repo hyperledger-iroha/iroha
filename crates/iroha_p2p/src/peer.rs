@@ -8256,7 +8256,9 @@ mod state {
                 Ok(pk) => pk,
                 Err(e) => return Err(crate::Error::from(iroha_crypto::error::Error::from(e))),
             };
-            let signature = Signature::from_bytes(&signature);
+            let signature = Signature::try_from_bytes(&signature)
+                .map_err(iroha_crypto::error::Error::from)
+                .map_err(crate::Error::Keys)?;
 
             let payload = handshake_signature_payload::<K, E>(
                 &cryptographer,
@@ -9072,6 +9074,88 @@ mod tests {
         assert!(
             ready.scion_supported,
             "handshake should propagate SCION support flag"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_all_zero_signature_material() {
+        use tokio::io::AsyncWriteExt;
+
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
+        let hello = HandshakeHelloV1 {
+            algorithm,
+            public_key: public_key.to_vec(),
+            signature: vec![0u8; 64],
+            addr,
+            relay: RelayRole::Disabled,
+            consensus: HandshakeConsensusMeta {
+                mode_tag: None,
+                proto_version: None,
+                consensus_fingerprint: None,
+                config: None,
+            },
+            confidential: HandshakeConfidentialMeta {
+                enabled: None,
+                assume_valid: None,
+                verifier_backend: None,
+                features: None,
+            },
+            crypto: HandshakeCryptoMeta {
+                sm_enabled: None,
+                sm_openssl_preview: None,
+            },
+            trust: HandshakeTrustMeta {
+                trust_gossip: true,
+                scion_supported: false,
+            },
+        };
+        let encoded =
+            encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
+
+        let (stream_a, stream_b) = tokio::io::duplex(4096);
+        let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+        sender_write
+            .write_u16(encoded.len() as u16)
+            .await
+            .expect("write hello length");
+        sender_write
+            .write_all(&encoded)
+            .await
+            .expect("write hello bytes");
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split(15, receiver_read, receiver_write),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("all-zero handshake signature material must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, crate::Error::Keys(_)),
+            "expected signature parse failure, got {err:?}"
         );
     }
 

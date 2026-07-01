@@ -2608,6 +2608,9 @@ mod imp {
     }
 
     pub fn ed25519_verify_cuda(msg: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> Option<bool> {
+        if crate::signature::signature_bytes_are_all_zero(sig) {
+            return Some(false);
+        }
         let task_id = cuda_task_id(TASK_ED25519_SINGLE, &[msg.len() as u64, u64::from(sig[0])]);
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {
@@ -2646,16 +2649,31 @@ mod imp {
             return None;
         }
         let count = signatures.len();
-        let task_id = cuda_task_id(TASK_ED25519_BATCH, &[count as u64]);
+        let zero_signatures = signatures
+            .iter()
+            .map(|sig| crate::signature::signature_bytes_are_all_zero(sig))
+            .collect::<Vec<_>>();
+        let nonzero_count = zero_signatures.iter().filter(|&&is_zero| !is_zero).count();
+        if nonzero_count == 0 {
+            return Some(vec![false; count]);
+        }
+        let task_id = cuda_task_id(TASK_ED25519_BATCH, &[nonzero_count as u64]);
         with_cuda_task_scope(task_id, || {
             if !ensure_cuda_selftest() {
                 return None;
             }
 
-            let mut flat_sigs = Vec::with_capacity(count * 64);
-            let mut flat_pks = Vec::with_capacity(count * 32);
-            let mut flat_hrams = Vec::with_capacity(count * 32);
-            for ((sig, pk), hram) in signatures.iter().zip(public_keys).zip(hrams) {
+            let mut nonzero_indices = Vec::with_capacity(nonzero_count);
+            let mut flat_sigs = Vec::with_capacity(nonzero_count * 64);
+            let mut flat_pks = Vec::with_capacity(nonzero_count * 32);
+            let mut flat_hrams = Vec::with_capacity(nonzero_count * 32);
+            for (index, ((sig, pk), hram)) in
+                signatures.iter().zip(public_keys).zip(hrams).enumerate()
+            {
+                if zero_signatures[index] {
+                    continue;
+                }
+                nonzero_indices.push(index);
                 flat_sigs.extend_from_slice(sig);
                 flat_pks.extend_from_slice(pk);
                 flat_hrams.extend_from_slice(hram);
@@ -2669,28 +2687,34 @@ mod imp {
                     let d_sig = cuda_buffer_from_slice(&flat_sigs)?;
                     let d_pk = cuda_buffer_from_slice(&flat_pks)?;
                     let d_hram = cuda_buffer_from_slice(&flat_hrams)?;
-                    let d_out = device_buffer_uninitialized::<u8>(count)?;
+                    let d_out = device_buffer_uninitialized::<u8>(nonzero_count)?;
                     let threads: u32 = 128;
-                    let blocks: u32 = ((count as u32) + threads - 1) / threads;
+                    let blocks: u32 = ((nonzero_count as u32) + threads - 1) / threads;
                     unsafe {
                         launch!(function<<<blocks.max(1), threads, 0, stream>>>(
                             d_sig.as_device_ptr(),
                             d_pk.as_device_ptr(),
                             d_hram.as_device_ptr(),
-                            count as u32,
+                            nonzero_count as u32,
                             d_out.as_device_ptr()
                         ))
                         .ok()?;
                     }
                     wait_for_cuda_stream(stream, "cuda kernel")?;
-                    let mut out = vec![0u8; count];
+                    let mut out = vec![0u8; nonzero_count];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out.into_iter().map(|b| b != 0).collect())
                 })
             });
 
             match gpu_result {
-                Some(Some(result)) => Some(result),
+                Some(Some(result)) if result.len() == nonzero_count => {
+                    let mut merged = vec![false; count];
+                    for (index, verified) in nonzero_indices.into_iter().zip(result) {
+                        merged[index] = verified;
+                    }
+                    Some(merged)
+                }
                 _ => {
                     record_cuda_disable(
                         "ed25519 batch signature kernel unavailable; falling back to CPU path",
@@ -3660,6 +3684,22 @@ mod imp {
         }
 
         #[test]
+        fn public_ed25519_verify_helpers_reject_all_zero_signature_material_before_cuda() {
+            let zero_sig = [0_u8; 64];
+            let public_key = [0x42_u8; 32];
+            let hram = [0x24_u8; 32];
+
+            assert_eq!(
+                ed25519_verify_cuda(b"message", &zero_sig, &public_key),
+                Some(false)
+            );
+            assert_eq!(
+                ed25519_verify_batch_cuda(&[zero_sig], &[public_key], &[hram]),
+                Some(vec![false])
+            );
+        }
+
+        #[test]
         fn public_ed25519_single_helper_matches_singleton_batch_when_cuda_available() {
             use ed25519_dalek::{Signer, SigningKey};
 
@@ -3997,15 +4037,45 @@ pub fn bn254_mul_cuda(_a: [u64; 4], _b: [u64; 4]) -> Option<[u64; 4]> {
 }
 
 #[cfg(not(feature = "cuda"))]
-pub fn ed25519_verify_cuda(_msg: &[u8], _sig: &[u8; 64], _pk: &[u8; 32]) -> Option<bool> {
-    None
+pub fn ed25519_verify_cuda(_msg: &[u8], sig: &[u8; 64], _pk: &[u8; 32]) -> Option<bool> {
+    crate::signature::signature_bytes_are_all_zero(sig).then_some(false)
 }
 
 #[cfg(not(feature = "cuda"))]
 pub fn ed25519_verify_batch_cuda(
-    _signatures: &[[u8; 64]],
-    _public_keys: &[[u8; 32]],
-    _hrams: &[[u8; 32]],
+    signatures: &[[u8; 64]],
+    public_keys: &[[u8; 32]],
+    hrams: &[[u8; 32]],
 ) -> Option<Vec<bool>> {
-    None
+    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
+        return None;
+    }
+    if signatures.is_empty() {
+        return Some(Vec::new());
+    }
+    signatures
+        .iter()
+        .all(|sig| crate::signature::signature_bytes_are_all_zero(sig))
+        .then(|| vec![false; signatures.len()])
+}
+
+#[cfg(all(test, not(feature = "cuda")))]
+mod tests {
+    use super::{ed25519_verify_batch_cuda, ed25519_verify_cuda};
+
+    #[test]
+    fn ed25519_cuda_stubs_reject_all_zero_signature_material_before_backend_absence() {
+        let zero_sig = [0_u8; 64];
+        let public_key = [0x42_u8; 32];
+        let hram = [0x24_u8; 32];
+
+        assert_eq!(
+            ed25519_verify_cuda(b"message", &zero_sig, &public_key),
+            Some(false)
+        );
+        assert_eq!(
+            ed25519_verify_batch_cuda(&[zero_sig], &[public_key], &[hram]),
+            Some(vec![false])
+        );
+    }
 }

@@ -32,6 +32,18 @@ fn ed25519_batch_mixed_validity() {
     assert_eq!(results, vec![true, false]);
 }
 
+#[test]
+fn ed25519_batch_rejects_all_zero_signature_material() {
+    let key = SigningKey::from_bytes(&[0x27; 32]);
+    let item = Ed25519BatchItem {
+        message: b"batch-zero",
+        signature: [0u8; 64],
+        public_key: key.verifying_key().to_bytes(),
+    };
+
+    assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+}
+
 #[cfg(feature = "cuda")]
 fn compute_hram(sig: &[u8; 64], pk: &[u8; 32], msg: &[u8]) -> [u8; 32] {
     use curve25519_dalek::scalar::Scalar;

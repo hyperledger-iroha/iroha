@@ -100,7 +100,7 @@ seiyaku ThresholdEscrow {
     let next_funded = funded_amount_value + amount;
     assert(next_funded <= target_amount_value, "deposit exceeds target_amount");
 
-    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount);
+    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount, dataspace_id("0"));
     funded_amount_value = next_funded;
   }
 

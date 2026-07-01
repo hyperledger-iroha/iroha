@@ -2107,7 +2107,8 @@ def _require_tron_sora_production_lane(args: argparse.Namespace, output: str) ->
     if source_domain != SCCP_DOMAIN_TRON or target_domain != SCCP_DOMAIN_SORA:
         raise ValueError(
             f"--{output} requires the production TRON -> SORA source lane "
-            f"(--source-domain {SCCP_DOMAIN_TRON} --target-domain {SCCP_DOMAIN_SORA})"
+            f"(source_domain = SCCP_DOMAIN_TRON ({SCCP_DOMAIN_TRON}), "
+            f"target_domain = SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA}))"
         )
 
 

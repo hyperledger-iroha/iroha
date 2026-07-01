@@ -47,7 +47,10 @@ impl WalletSignatureV1 {
     /// Construct an Ed25519 signature from raw bytes.
     #[must_use]
     pub fn from_ed25519_bytes(bytes: &[u8]) -> Option<Self> {
-        (bytes.len() == 64).then(|| Self::new(Algorithm::Ed25519, Signature::from_bytes(bytes)))
+        (bytes.len() == 64)
+            .then(|| Signature::try_from_bytes(bytes).ok())
+            .flatten()
+            .map(|signature| Self::new(Algorithm::Ed25519, signature))
     }
 }
 
@@ -1129,6 +1132,18 @@ mod tests {
                 Signature::from_bytes(&[9u8; 64]),
             ),
         }
+    }
+
+    #[test]
+    fn wallet_signature_from_ed25519_bytes_rejects_inert_payload() {
+        assert!(
+            WalletSignatureV1::from_ed25519_bytes(&[0u8; 64]).is_none(),
+            "all-zero wallet signatures must fail at the Connect boundary"
+        );
+        assert!(
+            WalletSignatureV1::from_ed25519_bytes(&[]).is_none(),
+            "empty wallet signatures must fail at the Connect boundary"
+        );
     }
 
     #[test]

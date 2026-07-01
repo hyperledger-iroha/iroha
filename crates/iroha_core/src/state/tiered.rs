@@ -2000,6 +2000,11 @@ impl TieredStateBackend {
             AccountRole,
             world.account_roles
         );
+        collect_map!(
+            TieredSegment::SccpOutboundMessages,
+            SccpOutboundMessage,
+            world.sccp_outbound_messages
+        );
         collect_map!(TieredSegment::TxSequences, TxSequence, world.tx_sequences);
         collect_map!(
             TieredSegment::VerifyingKeys,
@@ -2627,7 +2632,7 @@ mod measured_bytes_impls {
         },
         bridge::{
             BridgeHashFunction, BridgeIcsProof, BridgeProof, BridgeProofPayload, BridgeProofRange,
-            BridgeProofRecord, BridgeTransparentProof,
+            BridgeProofRecord, BridgeTransparentProof, SccpOutboundMessageRecord,
         },
         common::Owned,
         confidential::ConfidentialStatus,
@@ -3383,6 +3388,15 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for SccpOutboundMessageRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<SccpOutboundMessageRecord>();
+            total = total.saturating_add(self.payload_hash.measured_bytes_extra());
+            total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for ProofRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofRecord>();
@@ -4004,6 +4018,7 @@ enum TieredSegment {
     Roles,
     AccountPermissions,
     AccountRoles,
+    SccpOutboundMessages,
     TxSequences,
     VerifyingKeys,
     RuntimeUpgrades,
@@ -4043,6 +4058,7 @@ impl TieredSegment {
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
+            TieredSegment::SccpOutboundMessages => "sccp_outbound_messages",
             TieredSegment::TxSequences => "tx_sequences",
             TieredSegment::VerifyingKeys => "verifying_keys",
             TieredSegment::RuntimeUpgrades => "runtime_upgrades",
@@ -4092,6 +4108,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
+            "sccp_outbound_messages" => TieredSegment::SccpOutboundMessages,
             "account_roles" => TieredSegment::AccountRoles,
             "tx_sequences" => TieredSegment::TxSequences,
             "verifying_keys" => TieredSegment::VerifyingKeys,
@@ -4286,6 +4303,7 @@ pub(crate) enum TieredKeyHandle {
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
+    SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKey),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
     RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
@@ -4325,6 +4343,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
+            TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundMessages,
             TieredKeyHandle::TxSequence(_) => TieredSegment::TxSequences,
             TieredKeyHandle::VerifyingKey(_) => TieredSegment::VerifyingKeys,
             TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
@@ -4365,6 +4384,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpOutboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4427,6 +4447,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
@@ -4487,6 +4508,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
@@ -4536,6 +4558,15 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
             TieredKeyHandle::AccountPermission(id) => write!(f, "account_permission:{id}"),
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
+            TieredKeyHandle::SccpOutboundMessage(id) => {
+                write!(
+                    f,
+                    "sccp_outbound_message:{}:{}:{}",
+                    id.source_domain,
+                    id.target_domain,
+                    id.message_id.encode_hex::<String>()
+                )
+            }
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
             TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
@@ -4938,6 +4969,44 @@ mod tests {
 
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
+    }
+
+    #[test]
+    fn record_world_snapshot_includes_sccp_outbound_messages() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+        let key = iroha_data_model::bridge::SccpOutboundMessageKey {
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            message_id: [0xA5; 32],
+        };
+        let record = iroha_data_model::bridge::SccpOutboundMessageRecord {
+            payload_hash: [0x5A; 32],
+            recorded_at_height: 42,
+        };
+        world.sccp_outbound_messages.insert(key.clone(), record);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot with SCCP outbound outbox");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let key_payload = TieredKeyHandle::SccpOutboundMessage(key)
+            .encode_key()
+            .expect("SCCP outbound key encodes");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SccpOutboundMessages
+                    && entry.key_payload == key_payload
+            })
+            .expect("SCCP outbound replay key should be snapshotted");
+
+        assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
+        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
     }
 
     #[test]

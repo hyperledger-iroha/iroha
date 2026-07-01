@@ -2787,6 +2787,64 @@ mod tests {
     }
 
     #[test]
+    async fn snapshot_roundtrip_preserves_sccp_outbound_messages() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block =
+            signed_block_with_transaction(accepted_log_transaction("sccp-outbound-snapshot"));
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let key = iroha_data_model::bridge::SccpOutboundMessageKey {
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            message_id: [0xA5; 32],
+        };
+        let record = iroha_data_model::bridge::SccpOutboundMessageRecord {
+            payload_hash: [0x5A; 32],
+            recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
+        };
+        state
+            .world
+            .sccp_outbound_messages
+            .insert(key.clone(), record);
+        let key_pair = checked_random_snapshot_keypair();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let snapshot_bytes =
+            std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
+        let snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
+        assert!(
+            snapshot_world_has_field(&snapshot_value, "sccp_outbound_messages"),
+            "new snapshots must carry the SCCP outbound replay registry"
+        );
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read");
+
+        let restored = snapshot_state
+            .view()
+            .world
+            .sccp_outbound_messages
+            .get(&key)
+            .copied()
+            .expect("SCCP outbound replay key should survive snapshot roundtrip");
+        assert_eq!(restored, record);
+    }
+
+    #[test]
     async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");

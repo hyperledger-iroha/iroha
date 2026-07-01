@@ -268,14 +268,18 @@ fn session_snapshot_preserves_replay_protection() {
     let session_id = [0xC3; 32];
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x10; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x10; 32])
+        .expect("deterministic x25519 ephemeral");
     let update = publisher_session
         .build_key_update(session_id, &suite, 1, 1, publisher_keys.private_key())
         .expect("build initial key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
     let viewer_ephemeral = [0x55; 32];
-    viewer_session.set_local_ephemeral_x25519(viewer_ephemeral);
+    viewer_session
+        .set_local_ephemeral_x25519(viewer_ephemeral)
+        .expect("deterministic x25519 ephemeral");
     let transport = *viewer_session
         .process_remote_key_update(&update, publisher_keys.public_key())
         .expect("initial key update accepted");
@@ -284,7 +288,9 @@ fn session_snapshot_preserves_replay_protection() {
     assert_eq!(snapshot.role, CapabilityRole::Viewer);
 
     let mut restored_session = StreamingSession::new(CapabilityRole::Viewer);
-    restored_session.set_local_ephemeral_x25519(viewer_ephemeral);
+    restored_session
+        .set_local_ephemeral_x25519(viewer_ephemeral)
+        .expect("deterministic x25519 ephemeral");
     restored_session
         .restore_from_snapshot(snapshot.clone())
         .expect("restore snapshot");
@@ -309,7 +315,9 @@ fn session_snapshot_preserves_replay_protection() {
         other => panic!("unexpected error variant: {other:?}"),
     }
 
-    publisher_session.set_local_ephemeral_x25519([0x22; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x22; 32])
+        .expect("deterministic x25519 ephemeral");
     let follow_up = publisher_session
         .build_key_update(session_id, &suite, 1, 2, publisher_keys.private_key())
         .expect("follow-up key update");
@@ -504,14 +512,18 @@ fn streaming_handshake_and_chunk_encryption_roundtrip() {
     let publisher_secret_bytes = [0x45u8; 32];
     let publisher_secret = StaticSecret::from(publisher_secret_bytes);
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    publisher_session
+        .set_local_ephemeral_x25519(publisher_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x01; 32], &suite, 1, 1, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
     let viewer_secret_bytes = [0x33u8; 32];
-    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519(viewer_secret_bytes);
+    let viewer_public_bytes = viewer_session
+        .set_local_ephemeral_x25519(viewer_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let transport_viewer = *viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -717,24 +729,32 @@ fn x25519_process_remote_key_update_resets_on_session_change() {
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x11; 32])
+        .expect("deterministic x25519 ephemeral");
     let first_update = publisher_session
         .build_key_update([0x01; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("first key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x22; 32])
+        .expect("deterministic x25519 ephemeral");
     let initial_keys = *viewer_session
         .process_remote_key_update(&first_update, publisher_keys.public_key())
         .expect("initial update accepted");
 
     let mut restarted_session = StreamingSession::new(CapabilityRole::Publisher);
-    restarted_session.set_local_ephemeral_x25519([0x33; 32]);
+    restarted_session
+        .set_local_ephemeral_x25519([0x33; 32])
+        .expect("deterministic x25519 ephemeral");
     let restarted_update = restarted_session
         .build_key_update([0x02; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("restart key update");
 
-    viewer_session.set_local_ephemeral_x25519([0x44; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x44; 32])
+        .expect("deterministic x25519 ephemeral");
     let restarted_keys = *viewer_session
         .process_remote_key_update(&restarted_update, publisher_keys.public_key())
         .expect("restart update accepted");
@@ -756,7 +776,9 @@ fn x25519_process_remote_key_update_lazily_generates_local_ephemeral() {
     let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x11; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x03; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("publisher key update");
@@ -777,7 +799,9 @@ fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x11; 32])
+        .expect("deterministic x25519 ephemeral");
     let mut key_update = publisher_session
         .build_key_update([0x03; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("key update");
@@ -788,7 +812,9 @@ fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
     key_update.signature.copy_from_slice(signature.payload());
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x22; 32])
+        .expect("deterministic x25519 ephemeral");
     let err = viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect_err("low-order x25519 ephemeral must be rejected");
@@ -806,7 +832,9 @@ fn x25519_process_remote_key_update_rejects_zero_counter_without_state_change() 
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x13; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x13; 32])
+        .expect("deterministic x25519 ephemeral");
     let mut key_update = publisher_session
         .build_key_update([0x13; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("key update");
@@ -817,7 +845,9 @@ fn x25519_process_remote_key_update_rejects_zero_counter_without_state_change() 
     key_update.signature.copy_from_slice(signature.payload());
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x24; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x24; 32])
+        .expect("deterministic x25519 ephemeral");
     let err = viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect_err("zero counter rejected");
@@ -837,7 +867,9 @@ fn x25519_process_remote_key_update_rejects_zero_protocol_version_without_state_
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAE; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x14; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x14; 32])
+        .expect("deterministic x25519 ephemeral");
     let mut key_update = publisher_session
         .build_key_update([0x14; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("key update");
@@ -848,7 +880,9 @@ fn x25519_process_remote_key_update_rejects_zero_protocol_version_without_state_
     key_update.signature.copy_from_slice(signature.payload());
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x25; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x25; 32])
+        .expect("deterministic x25519 ephemeral");
     let err = viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect_err("zero protocol version rejected");
@@ -869,13 +903,17 @@ fn x25519_content_key_update_authenticates_before_recording_state() {
 
     let publisher_secret_bytes = [0x31u8; 32];
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    publisher_session
+        .set_local_ephemeral_x25519(publisher_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x04; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("publisher key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x42u8; 32]);
+    let viewer_public_bytes = viewer_session
+        .set_local_ephemeral_x25519([0x42u8; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect("viewer processes key update");
@@ -935,13 +973,17 @@ fn x25519_content_key_update_rejects_invalid_gck_length_before_recording_state()
 
     let publisher_secret_bytes = [0x32u8; 32];
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    publisher_session
+        .set_local_ephemeral_x25519(publisher_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x1C; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("publisher key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x43u8; 32]);
+    let viewer_public_bytes = viewer_session
+        .set_local_ephemeral_x25519([0x43u8; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect("viewer processes key update");
@@ -995,13 +1037,17 @@ fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
 
     let publisher_secret_bytes = [0x51u8; 32];
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    publisher_session
+        .set_local_ephemeral_x25519(publisher_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let first_update = publisher_session
         .build_key_update([0x05; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("first key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x62u8; 32]);
+    let viewer_public_bytes = viewer_session
+        .set_local_ephemeral_x25519([0x62u8; 32])
+        .expect("deterministic x25519 ephemeral");
     let initial_transport = *viewer_session
         .process_remote_key_update(&first_update, publisher_keys.public_key())
         .expect("initial key update");
@@ -1031,7 +1077,9 @@ fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
         .expect("content key accepted");
 
     let mut restarted_session = StreamingSession::new(CapabilityRole::Publisher);
-    restarted_session.set_local_ephemeral_x25519([0x91; 32]);
+    restarted_session
+        .set_local_ephemeral_x25519([0x91; 32])
+        .expect("deterministic x25519 ephemeral");
     let mut malformed_restart = restarted_session
         .build_key_update([0x06; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("restart key update");
@@ -1064,13 +1112,17 @@ fn outbound_key_update_failure_preserves_existing_session() {
 
     let publisher_secret_bytes = [0x71u8; 32];
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    publisher_session
+        .set_local_ephemeral_x25519(publisher_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x08; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("publisher key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x82u8; 32]);
+    let viewer_public_bytes = viewer_session
+        .set_local_ephemeral_x25519([0x82u8; 32])
+        .expect("deterministic x25519 ephemeral");
     let initial_transport = *viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect("viewer processes key update");
@@ -1602,13 +1654,17 @@ fn outbound_content_key_update_rejects_regression_before_state_change() {
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAC; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x19; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x19; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x0A; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("publisher key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x29; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x29; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect("viewer processes key update");
@@ -1645,13 +1701,17 @@ fn outbound_content_key_update_rejects_invalid_gck_length_before_state_change() 
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x1A; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x1A; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x0B; 32], &suite, 1, 1, publisher_keys.private_key())
         .expect("publisher key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x2A; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x2A; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
         .expect("viewer processes key update");
@@ -1863,14 +1923,18 @@ fn streaming_session_snapshot_roundtrip() {
 
     let publisher_secret_bytes = [0x10u8; 32];
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    publisher_session
+        .set_local_ephemeral_x25519(publisher_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0xAA; 32], &suite, 3, 9, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
     let viewer_secret_bytes = [0x20u8; 32];
-    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519(viewer_secret_bytes);
+    let viewer_public_bytes = viewer_session
+        .set_local_ephemeral_x25519(viewer_secret_bytes)
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -1958,13 +2022,17 @@ fn restore_from_snapshot_rejects_zero_key_counter_without_resetting_session() {
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2A; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x1A; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x1A; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x2A; 32], &suite, 1, 3, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x3A; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x3A; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -1992,13 +2060,17 @@ fn restore_from_snapshot_rejects_invalid_kem_suite_without_resetting_session() {
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x24; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x14; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x14; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x44; 32], &suite, 1, 3, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x34; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x34; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2024,13 +2096,17 @@ fn restore_from_snapshot_rejects_invalid_transport_capabilities_without_resettin
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2B; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x1B; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x1B; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x4B; 32], &suite, 1, 10, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x3B; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x3B; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2085,13 +2161,17 @@ fn restore_from_snapshot_rejects_kyber_suite_kem_mismatch_without_resetting_sess
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x29; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x19; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x19; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x49; 32], &suite, 1, 8, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x39; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x39; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2130,13 +2210,17 @@ fn restore_from_snapshot_rejects_kyber_suite_fingerprint_drift_without_resetting
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2A; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x1A; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x1A; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x4A; 32], &suite, 1, 9, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x3A; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x3A; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2173,13 +2257,17 @@ fn restore_from_snapshot_rejects_partial_content_key_metadata() {
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x25; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x15; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x15; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x45; 32], &suite, 1, 4, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x35; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x35; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2207,13 +2295,17 @@ fn restore_from_snapshot_rejects_invalid_gck_length_without_resetting_session() 
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x28; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x18; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x18; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x48; 32], &suite, 1, 7, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x38; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x38; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2247,13 +2339,17 @@ fn restore_from_snapshot_rejects_partial_kyber_remote_metadata() {
     let (kyber_public, _kyber_secret) = mlkem_keypair_bytes();
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x16; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x16; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x46; 32], &suite, 1, 5, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x36; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x36; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");
@@ -2284,13 +2380,17 @@ fn restore_from_snapshot_rejects_kyber_remote_fingerprint_drift() {
     wrong_fingerprint[0] ^= 0x5A;
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
-    publisher_session.set_local_ephemeral_x25519([0x17; 32]);
+    publisher_session
+        .set_local_ephemeral_x25519([0x17; 32])
+        .expect("deterministic x25519 ephemeral");
     let key_update = publisher_session
         .build_key_update([0x47; 32], &suite, 1, 6, key_pair.private_key())
         .expect("build key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    viewer_session.set_local_ephemeral_x25519([0x37; 32]);
+    viewer_session
+        .set_local_ephemeral_x25519([0x37; 32])
+        .expect("deterministic x25519 ephemeral");
     viewer_session
         .process_remote_key_update(&key_update, key_pair.public_key())
         .expect("process key update");

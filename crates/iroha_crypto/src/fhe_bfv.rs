@@ -13,9 +13,9 @@
 //! - ciphertext-by-ciphertext multiplication with relinearization,
 //! - and a compact affine-circuit evaluator over scalar ciphertext inputs.
 //!
-//! TODO: Replace the exact plaintext-multiple error profile with the planned
-//! BFV-RNS modulus-chain, bounded RLWE noise, and bootstrapping engine before
-//! calling this a security-complete BFV implementation.
+//! TODO: Continue retiring the exact plaintext-multiple bridge as bounded RLWE
+//! noise, registered RNS arithmetic, and audited artifact-aware bootstrapping
+//! cover the remaining production evaluator surfaces.
 //!
 //! The implementation keeps a deterministic scalar fallback for every path.
 //! When the `bfv-accel` feature is enabled, polynomial multiplication switches
@@ -4420,10 +4420,11 @@ pub struct BfvBootstrapKey {
     pub round_refreshes: Vec<BfvCiphertext>,
     /// Bootstrap key execution mode.
     ///
-    /// The first-release execution path only uses public encrypted-zero refresh
-    /// masks. `FullBootstrapV1` can be admitted only with
-    /// [`BfvFullBootstrapCircuitMaterialV1`] commitments, and execution remains
-    /// fail-closed until the full bootstrap evaluator is implemented.
+    /// `RefreshOnlyV1` uses public encrypted-zero refresh masks.
+    /// `FullBootstrapV1` is admitted with
+    /// [`BfvFullBootstrapCircuitMaterialV1`] commitments and executes only
+    /// through governed artifact-aware APIs; direct material-only refresh
+    /// surfaces remain fail-closed with an explicit artifact requirement.
     #[norito(default)]
     pub mode: BfvBootstrapKeyMode,
     /// Full-bootstrap circuit/key material commitments.
@@ -5787,8 +5788,8 @@ pub fn bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_v1(
 ///
 /// This is the witness-bound companion to
 /// [`bfv_full_bootstrap_galois_key_set_digest_from_bytes_v1`]. It rejects
-/// non-canonical key-set bytes first, validates `material`, then returns the
-/// byte-admitted digest only when it matches the Galois-key digest already bound
+/// invalid witness material first, then returns the byte-admitted digest only
+/// when the canonical key-set bytes match the Galois-key digest already bound
 /// into `material`.
 ///
 /// # Errors
@@ -5810,8 +5811,8 @@ pub fn bfv_full_bootstrap_galois_key_set_digest_from_bytes_for_witness_material_
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_galois_key_set_digest_from_bytes_v1`]. It rejects
-/// non-canonical key-set bytes first, then verifies that the decoded key set
-/// hashes to the Galois-key digest already bound into `material` before
+/// invalid witness material first, then verifies that the decoded key set hashes
+/// to the Galois-key digest already bound into `material` before
 /// returning the sorted typed keys and digest.
 ///
 /// # Errors
@@ -5822,9 +5823,9 @@ pub fn bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_for_witness_mater
     material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
     bytes: &[u8],
 ) -> Result<(Vec<BfvGaloisKey>, Hash), BfvError> {
+    validate_bfv_full_bootstrap_execution_witness_digest_material_v1(material)?;
     let (galois_keys, decoded_digest) =
         bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_v1(params, bytes)?;
-    validate_bfv_full_bootstrap_execution_witness_digest_material_v1(material)?;
     if decoded_digest != material.galois_key_set_digest {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap Galois key set bytes do not match execution witness material"
@@ -5838,8 +5839,8 @@ pub fn bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_for_witness_mater
 ///
 /// This is the decoded-object companion to
 /// [`bfv_full_bootstrap_galois_key_set_digest_from_bytes_for_witness_material_v1`].
-/// It rejects non-canonical key-set bytes first, then verifies that the decoded
-/// key set hashes to the Galois-key digest already bound into `material` before
+/// It rejects invalid witness material first, then verifies that the decoded key
+/// set hashes to the Galois-key digest already bound into `material` before
 /// returning the sorted typed keys.
 ///
 /// # Errors
@@ -6477,6 +6478,7 @@ pub fn bfv_public_key_proof_statement_and_digest_from_public_key_bytes_v1(
     params: &BfvParameters,
     public_key_bytes: &[u8],
 ) -> Result<(BfvPublicKey, Hash), BfvError> {
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
     let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
     let digest = bfv_public_key_proof_statement_digest(params, &public_key)?;
     Ok((public_key, digest))
@@ -6528,6 +6530,7 @@ pub fn bfv_bounded_noise_public_key_proof_statement_and_digest_from_public_key_b
     params: &BfvParameters,
     public_key_bytes: &[u8],
 ) -> Result<(BfvPublicKey, Hash), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
     let digest = bfv_bounded_noise_public_key_proof_statement_digest(params, &public_key)?;
     Ok((public_key, digest))
@@ -6592,13 +6595,13 @@ pub fn bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
     ciphertext_bytes: &[u8],
     max_abs_residual_multiple: u128,
 ) -> Result<(BfvPublicKey, BfvCiphertext, Hash), BfvError> {
-    let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
     validate_bfv_seeded_encryption_residual_capacity(params)?;
     validate_exact_residual_bound_within_centered_capacity(
         params,
         max_abs_residual_multiple,
         "BFV ciphertext proof statement exact residual caller-declared bound",
     )?;
+    let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
     let ciphertext = decode_bfv_ciphertext_bytes_v1(params, ciphertext_bytes)?;
     let digest = bfv_ciphertext_exact_residual_proof_statement_digest(
         params,
@@ -6666,13 +6669,13 @@ pub fn bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
     ciphertext_bytes: &[u8],
     max_abs_noise: u128,
 ) -> Result<(BfvPublicKey, BfvCiphertext, Hash), BfvError> {
-    let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bounded_noise_bound_within_decoding_capacity(
         params,
         max_abs_noise,
         "BFV ciphertext proof statement bounded-noise caller-declared bound",
     )?;
+    let public_key = decode_bfv_public_key_bytes_v1(params, public_key_bytes)?;
     let ciphertext = decode_bfv_ciphertext_bytes_v1(params, ciphertext_bytes)?;
     let digest = bfv_bounded_noise_ciphertext_proof_statement_digest(
         params,
@@ -7611,6 +7614,8 @@ pub fn bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_
     public_key: &BfvPublicKey,
     bytes: &[u8],
 ) -> Result<(BfvExactResidualPublicKeyProofInputMaterialV1, Hash), BfvError> {
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_bfv_admission_public_key_proof_input_caller_v1(params, public_key)?;
     let (material, digest) =
         bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_admission_public_key_proof_input_material_context_v1(
@@ -7686,9 +7691,9 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_dig
     ),
     BfvError,
 > {
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
-    validate_bfv_seeded_encryption_residual_capacity(params)?;
     let (material, proof_input_digest) =
         bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
             params,
@@ -7807,6 +7812,8 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_f
     public_key: &BfvPublicKey,
     bytes: &[u8],
 ) -> Result<(BfvBoundedNoisePublicKeyProofInputMaterialV1, Hash), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_admission_public_key_proof_input_caller_v1(params, public_key)?;
     let (material, digest) =
         bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_admission_public_key_proof_input_material_context_v1(
@@ -7882,9 +7889,9 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_dige
     ),
     BfvError,
 > {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let (material, proof_input_digest) =
         bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
             params,
@@ -8011,6 +8018,13 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_
     declared_bound: u128,
     bytes: &[u8],
 ) -> Result<(BfvExactResidualCiphertextProofInputMaterialV1, Hash), BfvError> {
+    validate_bfv_seeded_encryption_residual_capacity(params)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        declared_bound,
+        "exact-residual BFV ciphertext proof input caller-declared bound",
+    )?;
+    validate_bfv_admission_ciphertext_proof_input_caller_v1(params, public_key, ciphertext)?;
     let (material, digest) =
         bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_admission_ciphertext_proof_input_material_context_v1(
@@ -8109,20 +8123,20 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_dig
     ),
     BfvError,
 > {
-    let (public_key, public_key_digest) =
-        bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
     validate_bfv_seeded_encryption_residual_capacity(params)?;
     validate_exact_residual_bound_within_centered_capacity(
         params,
         declared_bound,
         "exact-residual BFV ciphertext proof input caller-declared bound",
     )?;
+    let (public_key, public_key_digest) =
+        bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
+    let (ciphertext, ciphertext_digest) =
+        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
     let (material, proof_input_digest) =
         bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1(
             proof_input_material_bytes,
         )?;
-    let (ciphertext, ciphertext_digest) =
-        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
     validate_bfv_admission_ciphertext_proof_input_material_context_v1(
         "exact-residual BFV ciphertext proof input material bytes",
         BfvRefreshTranscriptMode::Exact,
@@ -8274,6 +8288,13 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_f
     declared_bound: u128,
     bytes: &[u8],
 ) -> Result<(BfvBoundedNoiseCiphertextProofInputMaterialV1, Hash), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        declared_bound,
+        "bounded-noise BFV ciphertext proof input caller-declared bound",
+    )?;
+    validate_bfv_admission_ciphertext_proof_input_caller_v1(params, public_key, ciphertext)?;
     let (material, digest) =
         bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     validate_bfv_admission_ciphertext_proof_input_material_context_v1(
@@ -8372,20 +8393,20 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_dige
     ),
     BfvError,
 > {
-    let (public_key, public_key_digest) =
-        bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bounded_noise_bound_within_decoding_capacity(
         params,
         declared_bound,
         "bounded-noise BFV ciphertext proof input caller-declared bound",
     )?;
+    let (public_key, public_key_digest) =
+        bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
+    let (ciphertext, ciphertext_digest) =
+        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
     let (material, proof_input_digest) =
         bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1(
             proof_input_material_bytes,
         )?;
-    let (ciphertext, ciphertext_digest) =
-        bfv_ciphertext_and_digest_from_bytes_v1(params, ciphertext_bytes)?;
     validate_bfv_admission_ciphertext_proof_input_material_context_v1(
         "bounded-noise BFV ciphertext proof input material bytes",
         BfvRefreshTranscriptMode::BoundedNoise,
@@ -8438,6 +8459,22 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciph
             proof_input_material_bytes,
         )?;
     Ok((public_key, ciphertext, material))
+}
+
+fn validate_bfv_admission_public_key_proof_input_caller_v1(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+) -> Result<(), BfvError> {
+    bfv_public_key_digest(params, public_key).map(|_| ())
+}
+
+fn validate_bfv_admission_ciphertext_proof_input_caller_v1(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    ciphertext: &BfvCiphertext,
+) -> Result<(), BfvError> {
+    validate_bfv_admission_public_key_proof_input_caller_v1(params, public_key)?;
+    bfv_ciphertext_digest(params, ciphertext).map(|_| ())
 }
 
 fn validate_bfv_admission_public_key_proof_input_material_context_v1(
@@ -9955,9 +9992,10 @@ fn canonical_galois_automorphism_powers(params: &BfvParameters) -> Result<Vec<u3
 /// The resulting key contains an encryption of zero. Adding it to any
 /// ciphertext under the same parameters preserves the plaintext while changing
 /// the ciphertext bytes. This is the deterministic in-repo refresh primitive
-/// used by Soracloud Bootstrap jobs; it keeps evaluators secret-key free.
-/// TODO: Replace this encrypted-zero refresh with full BFV-RNS bootstrapping
-/// once the RNS modulus-chain engine lands.
+/// used by Soracloud refresh-only Bootstrap jobs; it keeps evaluators
+/// secret-key free. TODO: Retain this only as the refresh-only compatibility
+/// bridge while production full-bootstrap jobs carry governed artifacts and
+/// release-audit context.
 ///
 /// # Errors
 /// Returns [`BfvError`] when parameter, public-key, or public transcript seed
@@ -23195,6 +23233,14 @@ fn bfv_full_bootstrap_release_audit_indexed_value_for_label_v1<'a>(
     let mut matching_label_count = 0_usize;
     let mut indexed_value = None;
     for field in &fields.fields {
+        if bfv_full_bootstrap_release_audit_label_has_canonical_alias_drift_v1(
+            field.label,
+            label_aliases,
+        ) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap release audit evidence archive body must contain only canonical {label} hex labels"
+            )));
+        }
         if !label_aliases
             .iter()
             .copied()
@@ -23224,6 +23270,12 @@ fn bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
 ) -> bool {
     let mut matching_label_count = 0_usize;
     for field in &fields.fields {
+        if bfv_full_bootstrap_release_audit_label_has_canonical_alias_drift_v1(
+            field.label,
+            label_aliases,
+        ) {
+            return false;
+        }
         if !label_aliases
             .iter()
             .copied()
@@ -23242,6 +23294,61 @@ fn bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
                     value,
                 )
         }) {
+            return false;
+        }
+    }
+    matching_label_count == 1
+}
+
+fn bfv_full_bootstrap_release_audit_label_has_canonical_alias_drift_v1(
+    label: &[u8],
+    label_aliases: &[&[u8]],
+) -> bool {
+    if label.is_empty()
+        || label_aliases
+            .iter()
+            .copied()
+            .any(|alias| !alias.is_empty() && label == alias)
+    {
+        return false;
+    }
+    let normalized_label = ascii_lower_alnum_collapsed(label);
+    !normalized_label.is_empty()
+        && label_aliases.iter().copied().any(|alias| {
+            !alias.is_empty() && normalized_label == ascii_lower_alnum_collapsed(alias)
+        })
+}
+
+fn bfv_full_bootstrap_release_audit_field_index_contains_exact_labelled_value_v1(
+    fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
+    label_aliases: &[&[u8]],
+    value: &[u8],
+) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    let mut matching_label_count = 0_usize;
+    for field in &fields.fields {
+        if bfv_full_bootstrap_release_audit_label_has_canonical_alias_drift_v1(
+            field.label,
+            label_aliases,
+        ) {
+            return false;
+        }
+        if !label_aliases
+            .iter()
+            .copied()
+            .any(|label| !label.is_empty() && field.label == label)
+        {
+            continue;
+        }
+        matching_label_count += 1;
+        if matching_label_count > 1 {
+            return false;
+        }
+        if bfv_full_bootstrap_release_audit_value_without_trailing_whitespace_v1(field.value)
+            != value
+        {
             return false;
         }
     }
@@ -23446,10 +23553,10 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
         ));
     }
     let generated_circuit_body_len = generated_circuit_body.len().to_string();
-    if bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+    if bfv_full_bootstrap_release_audit_field_index_contains_exact_labelled_value_v1(
         archive_fields,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_LENGTH_LABEL_ALIASES,
-        &[generated_circuit_body_len.as_bytes()],
+        generated_circuit_body_len.as_bytes(),
     ) {
         return Ok(());
     }
@@ -25112,6 +25219,15 @@ fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
                 .to_owned(),
         ));
     }
+    if reviewer_id
+        .bytes()
+        .any(|byte| matches!(byte, b',' | b'(' | b')' | b';'))
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit reviewer id must not contain external-review marker token separators"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -25141,7 +25257,8 @@ fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
 ///
 /// # Errors
 /// Returns [`BfvError`] when the reviewer id is empty, non-canonical,
-/// non-printable, too long, or carries placeholder/non-production marker text.
+/// non-printable, too long, contains external-review marker token
+/// separators, or carries placeholder/non-production marker text.
 pub fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(
     reviewer_id: &str,
 ) -> Result<(), BfvError> {
@@ -26220,15 +26337,7 @@ fn bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(
         prover_key_digest: Hash::new(&artifacts.prover_key),
         verifier_key_digest: Hash::new(&artifacts.verifier_key),
     };
-    let bytes = norito::to_bytes(&digest_material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap circuit artifact bundle digest material encoding failed: {err}"
-        ))
-    })?;
-    Ok(Hash::new_from_chunks(&[
-        BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN,
-        bytes.as_slice(),
-    ]))
+    hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(&digest_material)
 }
 
 fn validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
@@ -26458,13 +26567,13 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v
     artifact_bundle: &BfvFullBootstrapCircuitArtifactBundleV1,
     material: &BfvFullBootstrapMaterialProofInputMaterialV1,
 ) -> Result<(), BfvError> {
-    validate_bfv_full_bootstrap_material_proof_input_material_v1(material)?;
     let expected_material = bfv_full_bootstrap_material_proof_input_material_v1(
         params,
         public_key,
         evaluation_keys,
         artifact_bundle,
     )?;
+    validate_bfv_full_bootstrap_material_proof_input_material_v1(material)?;
     if material != &expected_material {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap material proof input material does not match caller artifacts"
@@ -26807,16 +26916,16 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_diges
         )
     })?;
     validate_bootstrap_key_public_key_digest(params, &public_key, bootstrap_key)?;
-    let (proof_input, proof_input_digest) =
-        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(
-            proof_input_material_bytes,
-        )?;
     let governed_material = full_bootstrap_material_from_key(bootstrap_key)?;
     let (artifact_bundle, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
             params,
             governed_material,
             artifact_bundle_bytes,
+        )?;
+    let (proof_input, proof_input_digest) =
+        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(
+            proof_input_material_bytes,
         )?;
     validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
         params,
@@ -27285,6 +27394,12 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifac
     galois_keys: &[BfvGaloisKey],
     material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
 ) -> Result<(), BfvError> {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     validate_bfv_full_bootstrap_execution_witness_digest_material_v1(material)?;
     if material.params != *params {
         return Err(BfvError::InvalidParameters(
@@ -28068,6 +28183,12 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_
     galois_keys: &[BfvGaloisKey],
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<(), BfvError> {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(material)?;
     bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1(
         params,
@@ -28471,6 +28592,10 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
 
 /// Decode canonical public-key bytes and proof-input bytes with all admitted digests.
 ///
+/// The supplied full-bootstrap key, artifact bundle, and Galois keys are
+/// preflighted before public-key bytes are decoded, then the decoded public key
+/// is bound to that context before proof-input bytes are admitted.
+///
 /// # Errors
 /// Returns [`BfvError`] when public-key byte admission, proof-input byte
 /// admission, caller-public-key binding, artifact-aware proof-input validation,
@@ -28491,6 +28616,12 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
     ),
     BfvError,
 > {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
     let (proof_input, proof_input_digest) =
@@ -28575,7 +28706,6 @@ fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_pr
         )
     })?;
     validate_bootstrap_key_public_key_digest(params, &public_key, bootstrap_key)?;
-    let key_preflight_output = key_preflight()?;
     let governed_material = full_bootstrap_material_from_key(bootstrap_key)?;
     let (artifact_bundle, artifact_bundle_digest) =
         bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
@@ -28585,6 +28715,7 @@ fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_pr
         )?;
     let (galois_keys, galois_key_set_digest) =
         bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_v1(params, galois_key_set_bytes)?;
+    let key_preflight_output = key_preflight()?;
     Ok((
         BfvFullBootstrapExecutionGovernanceBytesV1 {
             public_key,
@@ -30936,6 +31067,12 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts
     galois_keys: &[BfvGaloisKey],
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<(), BfvError> {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)?;
     bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1(
         params,
@@ -31364,6 +31501,10 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
 
 /// Decode canonical public-key bytes and release-prover input bytes with all admitted digests.
 ///
+/// The supplied full-bootstrap key, artifact bundle, and Galois keys are
+/// preflighted before public-key bytes are decoded, then the decoded public key
+/// is bound to that context before release-prover input bytes are admitted.
+///
 /// # Errors
 /// Returns [`BfvError`] when public-key byte admission, prover-input byte
 /// admission, caller-public-key binding, artifact-aware prover-input validation,
@@ -31384,6 +31525,12 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
     ),
     BfvError,
 > {
+    preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+    )?;
     let (public_key, public_key_digest) =
         bfv_public_key_and_digest_from_bytes_v1(params, public_key_bytes)?;
     let (prover_input, prover_input_digest) =
@@ -33301,10 +33448,11 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_r
 
 /// Validate the public inputs needed before full BFV bootstrap execution.
 ///
-/// This is the checked boundary that the future full-bootstrap evaluator will
-/// consume. It validates `FullBootstrapV1` mode, governed circuit-material
-/// commitments, registered RNS/decomposition profile digests, refresh-material
-/// shapes still carried by the versioned key, and the input ciphertext shape.
+/// This is the checked boundary shared by direct fail-closed entries and
+/// artifact-aware full-bootstrap evaluators. It validates `FullBootstrapV1`
+/// mode, governed circuit-material commitments, registered RNS/decomposition
+/// profile digests, refresh-material shapes still carried by the versioned key,
+/// and the input ciphertext shape.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the key is not a full-bootstrap key, material is
@@ -40195,6 +40343,10 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     native_payload_circuit_id: &str,
     bytes: &[u8],
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_native_payload_circuit_id(
+        "BFV full-bootstrap native transparent prover payload expected circuit id",
+        native_payload_circuit_id,
+    )?;
     validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(bytes)?;
     let payload = norito::decode_from_bytes::<
         BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
@@ -40352,6 +40504,10 @@ fn validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_al
 
 /// Validate canonical native STARK/FRI verifier-key payload bytes for BFV full-bootstrap proofs.
 ///
+/// The caller-expected native circuit id is validated before payload bytes are
+/// admitted, so malformed or placeholder routing inputs cannot be hidden by a
+/// separate byte-framing error.
+///
 /// # Errors
 /// Returns [`BfvError`] when the payload is not the canonical first-release
 /// native verifier-key layout for `native_payload_circuit_id`.
@@ -40359,6 +40515,10 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
     native_payload_circuit_id: &str,
     bytes: &[u8],
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_native_payload_circuit_id(
+        "BFV full-bootstrap native verifier payload expected circuit id",
+        native_payload_circuit_id,
+    )?;
     validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(bytes)?;
     let payload =
         norito::decode_from_bytes::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(bytes)
@@ -44310,6 +44470,44 @@ mod tests {
     }
 
     #[test]
+    fn release_audit_reviewer_id_rejects_external_review_marker_token_separators() {
+        let reviewer_key_pair =
+            crate::KeyPair::try_from_seed(vec![0xB7; 32], crate::Algorithm::Ed25519)
+                .expect("fixture seed derives reviewer Ed25519 keypair");
+        validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+            "sora-zk-audit-wg-2026",
+            reviewer_key_pair.public_key(),
+        )
+        .expect("canonical reviewer id and Ed25519 key pass preflight");
+
+        for reviewer_id in [
+            "sora-zk-audit,wg-2026",
+            "sora-zk-audit(wg)-2026",
+            "sora-zk-audit-wg-2026)",
+            "sora-zk-audit-wg-2026;reviewer=other",
+        ] {
+            let context =
+                format!("trusted reviewer id must reject marker-token separator `{reviewer_id}`");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(reviewer_id),
+                "marker token separators",
+                &context,
+            );
+            let context = format!(
+                "trusted reviewer inputs must reject marker-token separator `{reviewer_id}`"
+            );
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+                    reviewer_id,
+                    reviewer_key_pair.public_key(),
+                ),
+                "marker token separators",
+                &context,
+            );
+        }
+    }
+
+    #[test]
     fn release_audit_external_review_marker_statements_reject_same_statement_duplicates() {
         let valid_report_body =
             b"external-review-approved: reviewer-id=sora-zk-audit-wg-2026 independent BFV full-bootstrap release audit report v1";
@@ -44510,6 +44708,108 @@ mod tests {
             ),
             "canonical lowercase signed reviewer id labels",
             "dotted reviewed-by aliases must fail instead of becoming review prose",
+        );
+    }
+
+    #[test]
+    fn release_audit_field_index_rejects_separator_alias_label_drift() {
+        let generated_body_digest_hex = hex::encode(<[u8; Hash::LENGTH]>::from(Hash::new(
+            b"generated-body-digest",
+        )));
+        let canonical_digest_body = [
+            b"generated circuit body digest=".as_slice(),
+            generated_body_digest_hex.as_bytes(),
+        ]
+        .concat();
+        let canonical_digest_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&canonical_digest_body);
+        assert!(
+            bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+                &canonical_digest_fields,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES,
+                &[generated_body_digest_hex.as_bytes()],
+            ),
+            "canonical spaced generated-body digest label must remain accepted",
+        );
+
+        let drifted_digest_body = [
+            b"generated_circuit_body_digest=".as_slice(),
+            generated_body_digest_hex.as_bytes(),
+            b"; generated-circuit-body-digest=".as_slice(),
+            generated_body_digest_hex.as_bytes(),
+        ]
+        .concat();
+        let drifted_digest_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&drifted_digest_body);
+        assert!(
+            !bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
+                &drifted_digest_fields,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_GENERATED_BODY_DIGEST_LABEL_ALIASES,
+                &[generated_body_digest_hex.as_bytes()],
+            ),
+            "signed digest fields must reject underscore aliases beside canonical labels",
+        );
+
+        let canonical_length_body = b"generated-circuit-body-bytes=4096".to_vec();
+        let canonical_length_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&canonical_length_body);
+        assert!(
+            bfv_full_bootstrap_release_audit_field_index_contains_exact_labelled_value_v1(
+                &canonical_length_fields,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_LENGTH_LABEL_ALIASES,
+                b"4096",
+            ),
+            "canonical generated-body length label must remain accepted",
+        );
+
+        let drifted_length_body =
+            b"Generated.Circuit.Body.Length=4096; generated-circuit-body-length=4096".to_vec();
+        let drifted_length_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&drifted_length_body);
+        assert!(
+            !bfv_full_bootstrap_release_audit_field_index_contains_exact_labelled_value_v1(
+                &drifted_length_fields,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_LENGTH_LABEL_ALIASES,
+                b"4096",
+            ),
+            "exact generated-body length fields must reject case/dot alias drift",
+        );
+
+        let generated_body = b"canonical generated body bytes";
+        let generated_body_hex = hex::encode(generated_body);
+        let canonical_hex_body = [
+            b"generated circuit body hex=".as_slice(),
+            generated_body_hex.as_bytes(),
+        ]
+        .concat();
+        let canonical_hex_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&canonical_hex_body);
+        assert_eq!(
+            bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+                &canonical_hex_fields,
+                "generated circuit body",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_HEX_LABEL_ALIASES,
+            )
+            .expect("canonical generated-body hex label is accepted"),
+            generated_body,
+        );
+
+        let drifted_hex_body = [
+            b"generated.circuit.body.hex=".as_slice(),
+            generated_body_hex.as_bytes(),
+            b"; generated-circuit-body-hex=".as_slice(),
+            generated_body_hex.as_bytes(),
+        ]
+        .concat();
+        let drifted_hex_fields = bfv_full_bootstrap_release_audit_field_index_v1(&drifted_hex_body);
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
+                &drifted_hex_fields,
+                "generated circuit body",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_HEX_LABEL_ALIASES,
+            ),
+            "only canonical generated circuit body hex labels",
+            "archive artifact hex lookups must reject dotted aliases beside canonical labels",
         );
     }
 
@@ -45287,6 +45587,17 @@ mod tests {
                 .concat(),
                 "same-field punctuation-suffixed report release-evidence values",
             ),
+            (
+                [
+                    report_prefix,
+                    b"release_evidence_digest=".as_slice(),
+                    release_evidence_digest_hex.as_bytes(),
+                    b"; release-evidence-digest=".as_slice(),
+                    release_evidence_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "separator-alias report release-evidence labels beside canonical labels",
+            ),
         ] {
             let report = [
                 BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
@@ -45350,6 +45661,16 @@ mod tests {
                 .concat(),
                 "same-field punctuation-suffixed archive artifact-bundle values",
             ),
+            (
+                [
+                    b"artifact_bundle_digest=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                    b"; artifact-bundle-digest=".as_slice(),
+                    artifact_bundle_digest_hex.as_bytes(),
+                ]
+                .concat(),
+                "separator-alias archive artifact-bundle labels beside canonical labels",
+            ),
         ] {
             assert_error_contains(
                 validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
@@ -45401,6 +45722,24 @@ mod tests {
             "release-audit generated circuit body hex labels must be canonical lowercase",
         );
 
+        let separator_alias_label_body = [
+            b"generated.circuit.body.hex=".as_slice(),
+            generated_circuit_body_hex.as_bytes(),
+            b"; generated-circuit-body-hex=".as_slice(),
+            generated_circuit_body_hex.as_bytes(),
+        ]
+        .concat();
+        let separator_alias_label_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&separator_alias_label_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
+                &separator_alias_label_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "only canonical generated circuit body hex labels",
+            "release-audit generated circuit body hex labels must reject separator aliases beside canonical labels",
+        );
+
         let uppercase_generated_body_hex = generated_circuit_body_hex.to_ascii_uppercase();
         assert_ne!(
             uppercase_generated_body_hex, generated_circuit_body_hex,
@@ -45434,6 +45773,96 @@ mod tests {
             ),
             "generated circuit body hex",
             "release-audit generated circuit body hex fields must reject raw generated body bytes",
+        );
+    }
+
+    #[test]
+    fn release_audit_archive_generated_circuit_body_length_requires_exact_decimal() {
+        let generated_circuit_body =
+            bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
+                .expect("canonical generated circuit body");
+        let generated_circuit_body_len = generated_circuit_body.len().to_string();
+        let canonical_label =
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_GENERATED_BODY_LENGTH_LABEL_ALIASES
+                .first()
+                .copied()
+                .expect("generated circuit body length label alias");
+        let canonical_body =
+            [canonical_label, b"=", generated_circuit_body_len.as_bytes()].concat();
+        let canonical_fields = bfv_full_bootstrap_release_audit_field_index_v1(&canonical_body);
+        validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
+            &canonical_fields,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("canonical release-audit generated circuit body byte length validates");
+
+        let whitespace_padded_body = [
+            canonical_label,
+            b"=  ",
+            generated_circuit_body_len.as_bytes(),
+            b" \t",
+        ]
+        .concat();
+        let whitespace_padded_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&whitespace_padded_body);
+        validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
+            &whitespace_padded_fields,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("release-audit generated circuit body byte length allows edge whitespace");
+
+        let separator_alias_label_body = [
+            b"Generated.Circuit.Body.Length=".as_slice(),
+            generated_circuit_body_len.as_bytes(),
+            b"; generated-circuit-body-length=".as_slice(),
+            generated_circuit_body_len.as_bytes(),
+        ]
+        .concat();
+        let separator_alias_label_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&separator_alias_label_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
+                &separator_alias_label_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "generated circuit body byte length",
+            "release-audit generated circuit body byte length must reject separator aliases beside canonical labels",
+        );
+
+        let prefixed_wrong_len_body = [
+            canonical_label,
+            b"=",
+            generated_circuit_body_len.as_bytes(),
+            b"0",
+        ]
+        .concat();
+        let prefixed_wrong_len_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&prefixed_wrong_len_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
+                &prefixed_wrong_len_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "generated circuit body byte length",
+            "release-audit generated circuit body byte length must reject decimal prefix aliases",
+        );
+
+        let prose_suffixed_len_body = [
+            canonical_label,
+            b"=",
+            generated_circuit_body_len.as_bytes(),
+            b" bytes",
+        ]
+        .concat();
+        let prose_suffixed_len_fields =
+            bfv_full_bootstrap_release_audit_field_index_v1(&prose_suffixed_len_body);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
+                &prose_suffixed_len_fields,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            ),
+            "generated circuit body byte length",
+            "release-audit generated circuit body byte length must reject prose-suffixed scalar values",
         );
     }
 
@@ -52875,6 +53304,14 @@ mod tests {
             "canonical v1 bytes",
             "native prover payload validation must reject noncanonical compressed Norito framing",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                "iroha_bfv_full_bootstrap_material_proof_circuit_v1",
+                &compressed_prover_payload,
+            ),
+            "canonical",
+            "native prover payload validation must reject noncanonical expected circuit ids before payload framing",
+        );
         let compressed_verifier_payload = norito::to_compressed_bytes(
             &decoded_verifier_payload,
             Some(norito::CompressionConfig::default()),
@@ -52894,6 +53331,14 @@ mod tests {
             ),
             "canonical v1 bytes",
             "native verifier payload validation must reject noncanonical compressed Norito framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+                "iroha_bfv_full_bootstrap_material_proof_circuit_v1",
+                &compressed_verifier_payload,
+            ),
+            "canonical",
+            "native verifier payload validation must reject noncanonical expected circuit ids before payload framing",
         );
         assert_eq!(
             decoded_prover_payload.centered_scale_round_source_chain_digest,
@@ -59159,6 +59604,47 @@ mod tests {
             "canonical v1 bytes",
             "bounded public-key statement byte decode-and-digest must reject compressed Norito framing",
         );
+        let insufficient_statement_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient_statement_params
+            .validate()
+            .expect("insufficient public-key statement profile is structurally valid");
+        assert_error_contains(
+            bfv_public_key_proof_statement_digest_from_public_key_bytes_v1(
+                &insufficient_statement_params,
+                &compressed_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key statement byte hashing must reject insufficient residual capacity before public-key framing",
+        );
+        assert_error_contains(
+            bfv_public_key_proof_statement_and_digest_from_public_key_bytes_v1(
+                &insufficient_statement_params,
+                &compressed_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key statement byte decode-and-digest must reject insufficient residual capacity before public-key framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_statement_digest_from_public_key_bytes_v1(
+                &insufficient_statement_params,
+                &compressed_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key statement byte hashing must reject insufficient noise capacity before public-key framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_statement_and_digest_from_public_key_bytes_v1(
+                &insufficient_statement_params,
+                &compressed_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key statement byte decode-and-digest must reject insufficient noise capacity before public-key framing",
+        );
         assert_error_contains(
             bfv_public_key_proof_statement_digest_from_public_key_bytes_v1(
                 &params,
@@ -59583,6 +60069,95 @@ mod tests {
             ),
             "caller-declared bound",
             "bounded ciphertext statement byte decode-and-digest must validate the declared bound before ciphertext bytes",
+        );
+        assert_error_contains(
+            bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "exact ciphertext statement byte hashing must validate the declared bound before public-key bytes",
+        );
+        assert_error_contains(
+            bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "exact ciphertext statement byte decode-and-digest must validate the declared bound before public-key bytes",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_statement_digest_from_bytes_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext statement byte hashing must validate the declared bound before public-key bytes",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                u128::MAX,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext statement byte decode-and-digest must validate the declared bound before public-key bytes",
+        );
+        let insufficient_ciphertext_statement_params = BfvParameters {
+            polynomial_degree: 2,
+            ciphertext_modulus: 45,
+            plaintext_modulus: 5,
+            decomposition_base_log: 4,
+        };
+        insufficient_ciphertext_statement_params
+            .validate()
+            .expect("insufficient ciphertext statement profile is structurally valid");
+        assert_error_contains(
+            bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
+                &insufficient_ciphertext_statement_params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                0,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext statement byte hashing must reject insufficient residual capacity before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
+                &insufficient_ciphertext_statement_params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                0,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext statement byte decode-and-digest must reject insufficient residual capacity before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_statement_digest_from_bytes_v1(
+                &insufficient_ciphertext_statement_params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                0,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext statement byte hashing must reject insufficient noise capacity before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
+                &insufficient_ciphertext_statement_params,
+                &compressed_public_key_bytes,
+                &compressed_ciphertext_bytes,
+                0,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext statement byte decode-and-digest must reject insufficient noise capacity before public-key or ciphertext framing",
         );
         assert_error_contains(
             bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
@@ -60696,6 +61271,37 @@ mod tests {
             "canonical v1 bytes",
             "caller-bound exact public-key proof input byte digest helper must reject compressed framing",
         );
+        let malformed_exact_public_key = BfvPublicKey {
+            b: vec![1],
+            a: exact_public_key.a.clone(),
+        };
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_public_key_v1(
+                &params,
+                &malformed_exact_public_key,
+                &compressed_exact_public_key_bytes,
+            ),
+            "public key b",
+            "caller-bound exact public-key proof input admission must reject malformed caller keys before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_for_public_key_v1(
+                &params,
+                &malformed_exact_public_key,
+                &compressed_exact_public_key_bytes,
+            ),
+            "public key b",
+            "caller-bound exact public-key proof input byte digesting must reject malformed caller keys before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
+                &params,
+                &malformed_exact_public_key,
+                &compressed_exact_public_key_bytes,
+            ),
+            "public key b",
+            "caller-bound exact public-key proof input byte digest helper must reject malformed caller keys before proof-input framing",
+        );
         let binary_split_exact_public_key_placeholder =
             b"t\xffo\xffd\xffo pending exact BFV public-key proof input material bytes".to_vec();
         assert_error_contains(
@@ -60827,6 +61433,33 @@ mod tests {
         let insufficient_exact_public_key_bytes = norito::to_bytes(&insufficient_exact_public_key)
             .expect("encode insufficient exact public key");
         assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_public_key_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &insufficient_exact_public_key,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "caller-bound exact public-key proof input admission must reject insufficient residual capacity before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_for_public_key_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &insufficient_exact_public_key,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "caller-bound exact public-key proof input byte digesting must reject insufficient residual capacity before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &insufficient_exact_public_key,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "caller-bound exact public-key proof input byte digest helper must reject insufficient residual capacity before proof-input framing",
+        );
+        assert_error_contains(
             validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_public_key_bytes_v1(
                 &insufficient_exact_public_key_proof_input_params,
                 &insufficient_exact_public_key_bytes,
@@ -60852,6 +61485,33 @@ mod tests {
             ),
             "seeded BFV encryption residual bound",
             "exact public-key/proof-input byte all-digest admission must reject insufficient residual capacity before proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_public_key_bytes_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key/proof-input byte admission must reject insufficient residual capacity before public-key or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_digest_for_public_key_bytes_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key/proof-input byte digest admission must reject insufficient residual capacity before public-key or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_digests_for_public_key_bytes_v1(
+                &insufficient_exact_public_key_proof_input_params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_public_key_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact public-key/proof-input byte all-digest admission must reject insufficient residual capacity before public-key or proof-input framing",
         );
 
         let bounded_public_key_digest =
@@ -60991,6 +61651,37 @@ mod tests {
             "canonical v1 bytes",
             "caller-bound bounded public-key proof input byte digest helper must reject compressed framing",
         );
+        let malformed_bounded_public_key = BfvPublicKey {
+            b: vec![1],
+            a: bounded_public_key.a.clone(),
+        };
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_v1(
+                &params,
+                &malformed_bounded_public_key,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "public key b",
+            "caller-bound bounded public-key proof input admission must reject malformed caller keys before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_for_public_key_v1(
+                &params,
+                &malformed_bounded_public_key,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "public key b",
+            "caller-bound bounded public-key proof input byte digesting must reject malformed caller keys before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
+                &params,
+                &malformed_bounded_public_key,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "public key b",
+            "caller-bound bounded public-key proof input byte digest helper must reject malformed caller keys before proof-input framing",
+        );
         let binary_split_bounded_public_key_placeholder =
             b"t\xffo\xffd\xffo pending bounded BFV public-key proof input material bytes".to_vec();
         assert_error_contains(
@@ -61096,6 +61787,33 @@ mod tests {
             norito::to_bytes(&insufficient_bounded_public_key)
                 .expect("encode insufficient bounded public key");
         assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &insufficient_bounded_public_key,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "caller-bound bounded public-key proof input admission must reject insufficient noise capacity before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_for_public_key_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &insufficient_bounded_public_key,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "caller-bound bounded public-key proof input byte digesting must reject insufficient noise capacity before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &insufficient_bounded_public_key,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "caller-bound bounded public-key proof input byte digest helper must reject insufficient noise capacity before proof-input framing",
+        );
+        assert_error_contains(
             validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_bytes_v1(
                 &insufficient_bounded_public_key_proof_input_params,
                 &insufficient_bounded_public_key_bytes,
@@ -61121,6 +61839,33 @@ mod tests {
             ),
             "fresh encryption noise bound",
             "bounded public-key/proof-input byte all-digest admission must reject insufficient noise capacity before proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_bytes_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key/proof-input byte admission must reject insufficient noise capacity before public-key or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_digest_for_public_key_bytes_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key/proof-input byte digest admission must reject insufficient noise capacity before public-key or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_digests_for_public_key_bytes_v1(
+                &insufficient_bounded_public_key_proof_input_params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_public_key_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded public-key/proof-input byte all-digest admission must reject insufficient noise capacity before public-key or proof-input framing",
         );
         assert_error_contains(
             validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_public_key_v1(
@@ -61430,11 +62175,114 @@ mod tests {
             "caller-declared bound",
             "exact ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before ciphertext framing",
         );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                u128::MAX,
+                &exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "exact ciphertext/proof-input byte admission must reject oversized declared bounds before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                u128::MAX,
+                &exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "exact ciphertext/proof-input byte digest admission must reject oversized declared bounds before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                u128::MAX,
+                &exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "exact ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before public-key or ciphertext framing",
+        );
         let compressed_exact_ciphertext_material_bytes = norito::to_compressed_bytes(
             &exact_ciphertext_material,
             Some(norito::CompressionConfig::default()),
         )
         .expect("encode compressed exact ciphertext proof input material");
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_v1(
+                &params,
+                &exact_public_key,
+                &exact_ciphertext,
+                u128::MAX,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "caller-bound exact ciphertext proof input admission must reject oversized declared bounds before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &exact_public_key,
+                &exact_ciphertext,
+                u128::MAX,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "caller-bound exact ciphertext proof input byte digesting must reject oversized declared bounds before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &exact_public_key,
+                &exact_ciphertext,
+                u128::MAX,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "caller-bound exact ciphertext proof input byte digest helper must reject oversized declared bounds before proof-input framing",
+        );
+        let malformed_exact_ciphertext = BfvCiphertext {
+            c0: vec![1],
+            c1: exact_ciphertext.c1.clone(),
+        };
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_v1(
+                &params,
+                &exact_public_key,
+                &malformed_exact_ciphertext,
+                exact_bound,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "ciphertext c0",
+            "caller-bound exact ciphertext proof input admission must reject malformed caller ciphertexts before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &exact_public_key,
+                &malformed_exact_ciphertext,
+                exact_bound,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "ciphertext c0",
+            "caller-bound exact ciphertext proof input byte digesting must reject malformed caller ciphertexts before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &exact_public_key,
+                &malformed_exact_ciphertext,
+                exact_bound,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "ciphertext c0",
+            "caller-bound exact ciphertext proof input byte digest helper must reject malformed caller ciphertexts before proof-input framing",
+        );
         assert_error_contains(
             validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
                 &params,
@@ -61490,8 +62338,7 @@ mod tests {
             "canonical v1 bytes",
             "exact ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing",
         );
-        let compressed_exact_ciphertext_proof_input_error =
-            "exact-residual BFV ciphertext proof input material bytes must use canonical v1 bytes";
+        let compressed_exact_ciphertext_error = "BFV ciphertext bytes must use canonical v1 bytes";
         assert_error_contains(
             validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
                 &params,
@@ -61500,8 +62347,8 @@ mod tests {
                 exact_bound,
                 &compressed_exact_ciphertext_material_bytes,
             ),
-            compressed_exact_ciphertext_proof_input_error,
-            "exact ciphertext/proof-input byte admission must reject compressed proof-input framing before ciphertext framing",
+            compressed_exact_ciphertext_error,
+            "exact ciphertext/proof-input byte admission must reject compressed ciphertext framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
@@ -61511,8 +62358,8 @@ mod tests {
                 exact_bound,
                 &compressed_exact_ciphertext_material_bytes,
             ),
-            compressed_exact_ciphertext_proof_input_error,
-            "exact ciphertext/proof-input byte digest admission must reject compressed proof-input framing before ciphertext framing",
+            compressed_exact_ciphertext_error,
+            "exact ciphertext/proof-input byte digest admission must reject compressed ciphertext framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
@@ -61522,8 +62369,8 @@ mod tests {
                 exact_bound,
                 &compressed_exact_ciphertext_material_bytes,
             ),
-            compressed_exact_ciphertext_proof_input_error,
-            "exact ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing before ciphertext framing",
+            compressed_exact_ciphertext_error,
+            "exact ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing before compressed proof-input framing",
         );
         let insufficient_exact_proof_input_params = BfvParameters {
             polynomial_degree: 2,
@@ -61573,6 +62420,39 @@ mod tests {
             ),
             "seeded BFV encryption residual bound",
             "exact ciphertext/proof-input byte all-digest admission must reject insufficient residual capacity before proof-input or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &insufficient_exact_proof_input_params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                0,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext/proof-input byte admission must reject insufficient residual capacity before public-key, ciphertext, or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &insufficient_exact_proof_input_params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                0,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext/proof-input byte digest admission must reject insufficient residual capacity before public-key, ciphertext, or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &insufficient_exact_proof_input_params,
+                &compressed_exact_public_key_object_bytes,
+                &compressed_exact_ciphertext_object_bytes,
+                0,
+                &compressed_exact_ciphertext_material_bytes,
+            ),
+            "seeded BFV encryption residual bound",
+            "exact ciphertext/proof-input byte all-digest admission must reject insufficient residual capacity before public-key, ciphertext, or proof-input framing",
         );
         let binary_split_exact_ciphertext_placeholder =
             b"t\xffo\xffd\xffo pending exact BFV ciphertext proof input material bytes".to_vec();
@@ -61794,11 +62674,114 @@ mod tests {
             "caller-declared bound",
             "bounded ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before ciphertext framing",
         );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                u128::MAX,
+                &bounded_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext/proof-input byte admission must reject oversized declared bounds before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                u128::MAX,
+                &bounded_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext/proof-input byte digest admission must reject oversized declared bounds before public-key or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                u128::MAX,
+                &bounded_ciphertext_material_bytes,
+            ),
+            "caller-declared bound",
+            "bounded ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before public-key or ciphertext framing",
+        );
         let compressed_bounded_ciphertext_bytes = norito::to_compressed_bytes(
             &bounded_ciphertext_material,
             Some(norito::CompressionConfig::default()),
         )
         .expect("encode compressed bounded ciphertext proof input material");
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_v1(
+                &params,
+                &bounded_public_key,
+                &bounded_ciphertext,
+                u128::MAX,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "caller-declared bound",
+            "caller-bound bounded ciphertext proof input admission must reject oversized declared bounds before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &bounded_public_key,
+                &bounded_ciphertext,
+                u128::MAX,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "caller-declared bound",
+            "caller-bound bounded ciphertext proof input byte digesting must reject oversized declared bounds before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &bounded_public_key,
+                &bounded_ciphertext,
+                u128::MAX,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "caller-declared bound",
+            "caller-bound bounded ciphertext proof input byte digest helper must reject oversized declared bounds before proof-input framing",
+        );
+        let malformed_bounded_ciphertext = BfvCiphertext {
+            c0: vec![1],
+            c1: bounded_ciphertext.c1.clone(),
+        };
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_v1(
+                &params,
+                &bounded_public_key,
+                &malformed_bounded_ciphertext,
+                bounded_bound,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "ciphertext c0",
+            "caller-bound bounded ciphertext proof input admission must reject malformed caller ciphertexts before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &bounded_public_key,
+                &malformed_bounded_ciphertext,
+                bounded_bound,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "ciphertext c0",
+            "caller-bound bounded ciphertext proof input byte digesting must reject malformed caller ciphertexts before proof-input framing",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
+                &params,
+                &bounded_public_key,
+                &malformed_bounded_ciphertext,
+                bounded_bound,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "ciphertext c0",
+            "caller-bound bounded ciphertext proof input byte digest helper must reject malformed caller ciphertexts before proof-input framing",
+        );
         assert_error_contains(
             validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_v1(
                 &params,
@@ -61865,8 +62848,8 @@ mod tests {
             "canonical v1 bytes",
             "bounded ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing",
         );
-        let compressed_bounded_ciphertext_proof_input_error =
-            "bounded-noise BFV ciphertext proof input material bytes must use canonical v1 bytes";
+        let compressed_bounded_ciphertext_error =
+            "BFV ciphertext bytes must use canonical v1 bytes";
         assert_error_contains(
             validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
                 &params,
@@ -61875,8 +62858,8 @@ mod tests {
                 bounded_bound,
                 &compressed_bounded_ciphertext_bytes,
             ),
-            compressed_bounded_ciphertext_proof_input_error,
-            "bounded ciphertext/proof-input byte admission must reject compressed proof-input framing before ciphertext framing",
+            compressed_bounded_ciphertext_error,
+            "bounded ciphertext/proof-input byte admission must reject compressed ciphertext framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
@@ -61886,8 +62869,8 @@ mod tests {
                 bounded_bound,
                 &compressed_bounded_ciphertext_bytes,
             ),
-            compressed_bounded_ciphertext_proof_input_error,
-            "bounded ciphertext/proof-input byte digest admission must reject compressed proof-input framing before ciphertext framing",
+            compressed_bounded_ciphertext_error,
+            "bounded ciphertext/proof-input byte digest admission must reject compressed ciphertext framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
@@ -61897,8 +62880,8 @@ mod tests {
                 bounded_bound,
                 &compressed_bounded_ciphertext_bytes,
             ),
-            compressed_bounded_ciphertext_proof_input_error,
-            "bounded ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing before ciphertext framing",
+            compressed_bounded_ciphertext_error,
+            "bounded ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing before compressed proof-input framing",
         );
         let insufficient_bounded_proof_input_params = BfvParameters {
             polynomial_degree: 2,
@@ -61948,6 +62931,39 @@ mod tests {
             ),
             "fresh encryption noise bound",
             "bounded ciphertext/proof-input byte all-digest admission must reject insufficient noise capacity before proof-input or ciphertext framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_bytes_v1(
+                &insufficient_bounded_proof_input_params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                0,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext/proof-input byte admission must reject insufficient noise capacity before public-key, ciphertext, or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digest_for_ciphertext_bytes_v1(
+                &insufficient_bounded_proof_input_params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                0,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext/proof-input byte digest admission must reject insufficient noise capacity before public-key, ciphertext, or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_digests_for_ciphertext_bytes_v1(
+                &insufficient_bounded_proof_input_params,
+                &compressed_bounded_public_key_object_bytes,
+                &compressed_bounded_ciphertext_object_bytes,
+                0,
+                &compressed_bounded_ciphertext_bytes,
+            ),
+            "fresh encryption noise bound",
+            "bounded ciphertext/proof-input byte all-digest admission must reject insufficient noise capacity before public-key, ciphertext, or proof-input framing",
         );
         let binary_split_bounded_ciphertext_placeholder =
             b"t\xffo\xffd\xffo pending bounded BFV ciphertext proof input material bytes".to_vec();
@@ -64426,6 +65442,17 @@ mod tests {
 
     #[test]
     fn full_bootstrap_release_audit_evidence_binds_generated_artifacts() {
+        let handle = std::thread::Builder::new()
+            .name("bfv-release-audit-generated-artifacts".to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(full_bootstrap_release_audit_evidence_binds_generated_artifacts_body)
+            .expect("spawn BFV release-audit generated-artifacts validation thread");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_body() {
         let params = ram_lfe_bfv_parameters_v1();
         let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
         let material = sample_full_bootstrap_circuit_material_for_artifacts(&params, &artifacts);
@@ -87725,6 +88752,38 @@ mod tests {
             "canonical v1 bytes",
             "witness-bound Galois key-set byte admission must reject compressed Norito framing",
         );
+        let mut version_drifted_witness_material = witness_material.clone();
+        version_drifted_witness_material.version = version_drifted_witness_material
+            .version
+            .checked_add(1)
+            .expect("sample witness material version can be incremented");
+        assert_error_contains(
+            bfv_full_bootstrap_galois_key_set_digest_from_bytes_for_witness_material_v1(
+                &params,
+                &version_drifted_witness_material,
+                &compressed_galois_key_set_bytes,
+            ),
+            "execution witness material version",
+            "witness-bound Galois key-set byte digesting must reject witness material metadata before key-set framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_for_witness_material_v1(
+                &params,
+                &version_drifted_witness_material,
+                &compressed_galois_key_set_bytes,
+            ),
+            "execution witness material version",
+            "witness-bound Galois key-set byte digest helper must reject witness material metadata before key-set framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_galois_key_set_bytes_for_witness_material_v1(
+                &params,
+                &version_drifted_witness_material,
+                &compressed_galois_key_set_bytes,
+            ),
+            "execution witness material version",
+            "witness-bound Galois key-set byte admission must reject witness material metadata before key-set framing",
+        );
         let binary_split_placeholder_galois_key_set_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap Galois key set bytes".to_vec();
         assert_error_contains(
@@ -87988,6 +89047,30 @@ mod tests {
         let mut missing_material_bootstrap_key = bootstrap_key.clone();
         missing_material_bootstrap_key.full_bootstrap_material = None;
         let missing_full_bootstrap_material_error = "bootstrapping circuit material";
+        let mut malformed_witness_material = witness_material.clone();
+        malformed_witness_material.version = malformed_witness_material.version.saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_witness_material,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-aware typed witness validation must reject missing caller full-bootstrap material before witness material headers",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_witness_material,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-aware typed witness digesting must reject missing caller full-bootstrap material before witness material headers",
+        );
         assert_error_contains(
             bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1(
                 &params,
@@ -89382,6 +90465,30 @@ mod tests {
             "canonical v1 bytes",
             "caller-bound proof input byte admission must reject compressed Norito framing",
         );
+        let mut malformed_proof_input = proof_input.clone();
+        malformed_proof_input.version = malformed_proof_input.version.saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_proof_input,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-aware typed proof input validation must reject missing caller full-bootstrap material before proof-input headers",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_proof_input,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-aware typed proof input digesting must reject missing caller full-bootstrap material before proof-input headers",
+        );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_artifacts_v1(
                 &params,
@@ -89451,8 +90558,10 @@ mod tests {
             missing_full_bootstrap_material_error,
             "caller-bound proof input byte admission must reject missing caller full-bootstrap material before compressed proof-input bytes",
         );
-        let compressed_proof_input_error =
-            "BFV full-bootstrap execution proof input material bytes must use canonical v1 bytes";
+        let compressed_artifact_bundle_error =
+            "BFV full-bootstrap circuit artifact bundle bytes must use canonical v1 bytes";
+        let compressed_galois_key_set_error =
+            "BFV full-bootstrap Galois key set bytes must use canonical v1 bytes";
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_governance_bytes_v1(
                 &params,
@@ -89462,8 +90571,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "execution governance byte admission must reject compressed proof-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "execution governance byte admission must reject compressed artifact-bundle framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
@@ -89474,8 +90583,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "execution governance byte digest admission must reject compressed proof-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "execution governance byte digest admission must reject compressed artifact-bundle framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
@@ -89486,8 +90595,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "execution governance byte digests admission must reject compressed proof-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "execution governance byte digests admission must reject compressed artifact-bundle framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_governance_bytes_v1(
@@ -89498,8 +90607,8 @@ mod tests {
                 &compressed_galois_key_set_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "execution governance byte admission must reject compressed proof-input framing before Galois key-set framing",
+            compressed_galois_key_set_error,
+            "execution governance byte admission must reject compressed Galois key-set framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
@@ -89510,8 +90619,8 @@ mod tests {
                 &compressed_galois_key_set_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "execution governance byte digest admission must reject compressed proof-input framing before Galois key-set framing",
+            compressed_galois_key_set_error,
+            "execution governance byte digest admission must reject compressed Galois key-set framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
@@ -89522,8 +90631,8 @@ mod tests {
                 &compressed_galois_key_set_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "execution governance byte digests admission must reject compressed proof-input framing before Galois key-set framing",
+            compressed_galois_key_set_error,
+            "execution governance byte digests admission must reject compressed Galois key-set framing before compressed proof-input framing",
         );
         let compressed_public_key_bytes =
             norito::to_compressed_bytes(&public_key, Some(norito::CompressionConfig::default()))
@@ -89551,6 +90660,42 @@ mod tests {
             ),
             "canonical v1 bytes",
             "public-key/proof-input byte digest admission must reject compressed public-key framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "public-key/proof-input byte admission must reject missing caller full-bootstrap material before public-key or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "public-key/proof-input byte digest admission must reject missing caller full-bootstrap material before public-key or proof-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_public_key_bytes_and_artifacts_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_proof_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "public-key/proof-input byte all-digest admission must reject missing caller full-bootstrap material before public-key or proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_governance_bytes_v1(
@@ -92138,8 +93283,8 @@ mod tests {
                 &galois_keys,
                 &witness_material,
             ),
-            "parameter set mismatch",
-            "artifact-aware witness validation must reject BFV parameter-profile retargeting",
+            "not registered",
+            "artifact-aware witness validation must reject BFV parameter-profile retargeting before witness material comparison",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
@@ -92149,8 +93294,8 @@ mod tests {
                 &galois_keys,
                 &proof_input,
             ),
-            "parameter set mismatch",
-            "artifact-aware proof input validation must reject BFV parameter-profile retargeting",
+            "not registered",
+            "artifact-aware proof input validation must reject BFV parameter-profile retargeting before proof-input material comparison",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
@@ -92160,8 +93305,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "parameter set mismatch",
-            "artifact-aware prover input validation must reject BFV parameter-profile retargeting",
+            "not registered",
+            "artifact-aware prover input validation must reject BFV parameter-profile retargeting before prover-input material comparison",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
@@ -92171,8 +93316,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "parameter set mismatch",
-            "artifact-aware prover input digesting must reject BFV parameter-profile retargeting",
+            "not registered",
+            "artifact-aware prover input digesting must reject BFV parameter-profile retargeting before prover-input material comparison",
         );
         let role_spliced_prover_input_material =
             bfv_full_bootstrap_execution_prover_input_material_v1(
@@ -92220,8 +93365,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "prover-key",
-            "artifact-aware prover input validation must reject role-swapped proof-key artifacts",
+            "artifact bundle digest mismatch",
+            "artifact-aware prover input validation must reject role-swapped proof-key artifacts before proof-key material comparison",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
@@ -92231,8 +93376,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "prover-key",
-            "artifact-aware prover input digesting must reject role-swapped proof-key artifacts",
+            "artifact bundle digest mismatch",
+            "artifact-aware prover input digesting must reject role-swapped proof-key artifacts before proof-key material comparison",
         );
         let evaluator_artifact_set_digest =
             bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(
@@ -92281,8 +93426,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "prover-key",
-            "artifact-aware prover input validation must reject stale same-role prover-key artifacts",
+            "artifact bundle digest mismatch",
+            "artifact-aware prover input validation must reject stale same-role prover-key artifacts before proof-key material comparison",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
@@ -92292,8 +93437,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "prover-key",
-            "artifact-aware prover input digesting must reject stale same-role prover-key artifacts",
+            "artifact bundle digest mismatch",
+            "artifact-aware prover input digesting must reject stale same-role prover-key artifacts before proof-key material comparison",
         );
         let mut stale_verifier_key_artifacts = artifacts.clone();
         stale_verifier_key_artifacts.verifier_key =
@@ -92312,8 +93457,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "verifier-key",
-            "artifact-aware prover input validation must reject stale same-role verifier-key artifacts",
+            "artifact bundle digest mismatch",
+            "artifact-aware prover input validation must reject stale same-role verifier-key artifacts before proof-key material comparison",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
@@ -92323,8 +93468,8 @@ mod tests {
                 &galois_keys,
                 &prover_input_material,
             ),
-            "verifier-key",
-            "artifact-aware prover input digesting must reject stale same-role verifier-key artifacts",
+            "artifact bundle digest mismatch",
+            "artifact-aware prover input digesting must reject stale same-role verifier-key artifacts before proof-key material comparison",
         );
         let role_swapped_prover_input_material = BfvFullBootstrapExecutionProverInputMaterialV1 {
             prover_key: verifier_key.clone(),
@@ -93180,6 +94325,30 @@ mod tests {
             "canonical v1 bytes",
             "caller-bound prover input byte admission must reject compressed Norito framing",
         );
+        let mut malformed_prover_input = prover_input_material.clone();
+        malformed_prover_input.version = malformed_prover_input.version.saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_prover_input,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-aware typed prover input validation must reject missing caller full-bootstrap material before prover-input headers",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &malformed_prover_input,
+            ),
+            missing_full_bootstrap_material_error,
+            "artifact-aware typed prover input digesting must reject missing caller full-bootstrap material before prover-input headers",
+        );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_artifacts_v1(
                 &params,
@@ -93249,8 +94418,10 @@ mod tests {
             missing_full_bootstrap_material_error,
             "caller-bound prover input byte admission must reject missing caller full-bootstrap material before compressed prover-input bytes",
         );
-        let compressed_prover_input_error =
-            "BFV full-bootstrap execution prover input material bytes must use canonical v1 bytes";
+        let compressed_artifact_bundle_error =
+            "BFV full-bootstrap circuit artifact bundle bytes must use canonical v1 bytes";
+        let compressed_galois_key_set_error =
+            "BFV full-bootstrap Galois key set bytes must use canonical v1 bytes";
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
                 &params,
@@ -93260,8 +94431,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &compressed_prover_input_material_bytes,
             ),
-            compressed_prover_input_error,
-            "prover governance byte admission must reject compressed prover-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "prover governance byte admission must reject compressed artifact-bundle framing before compressed prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
@@ -93272,8 +94443,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &compressed_prover_input_material_bytes,
             ),
-            compressed_prover_input_error,
-            "prover governance byte digest admission must reject compressed prover-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "prover governance byte digest admission must reject compressed artifact-bundle framing before compressed prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
@@ -93284,8 +94455,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &compressed_prover_input_material_bytes,
             ),
-            compressed_prover_input_error,
-            "prover governance byte digests admission must reject compressed prover-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "prover governance byte digests admission must reject compressed artifact-bundle framing before compressed prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
@@ -93296,8 +94467,8 @@ mod tests {
                 &compressed_galois_key_set_bytes,
                 &compressed_prover_input_material_bytes,
             ),
-            compressed_prover_input_error,
-            "prover governance byte admission must reject compressed prover-input framing before Galois key-set framing",
+            compressed_galois_key_set_error,
+            "prover governance byte admission must reject compressed Galois key-set framing before compressed prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
@@ -93308,8 +94479,8 @@ mod tests {
                 &compressed_galois_key_set_bytes,
                 &compressed_prover_input_material_bytes,
             ),
-            compressed_prover_input_error,
-            "prover governance byte digest admission must reject compressed prover-input framing before Galois key-set framing",
+            compressed_galois_key_set_error,
+            "prover governance byte digest admission must reject compressed Galois key-set framing before compressed prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
@@ -93320,8 +94491,8 @@ mod tests {
                 &compressed_galois_key_set_bytes,
                 &compressed_prover_input_material_bytes,
             ),
-            compressed_prover_input_error,
-            "prover governance byte digests admission must reject compressed prover-input framing before Galois key-set framing",
+            compressed_galois_key_set_error,
+            "prover governance byte digests admission must reject compressed Galois key-set framing before compressed prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
@@ -93346,6 +94517,42 @@ mod tests {
             ),
             "canonical v1 bytes",
             "public-key/prover-input byte digest admission must reject compressed public-key framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "public-key/prover-input byte admission must reject missing caller full-bootstrap material before public-key or prover-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_public_key_bytes_and_artifacts_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "public-key/prover-input byte digest admission must reject missing caller full-bootstrap material before public-key or prover-input framing",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_public_key_bytes_and_artifacts_v1(
+                &params,
+                &compressed_public_key_bytes,
+                &missing_material_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &compressed_prover_input_material_bytes,
+            ),
+            missing_full_bootstrap_material_error,
+            "public-key/prover-input byte all-digest admission must reject missing caller full-bootstrap material before public-key or prover-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
@@ -98653,6 +99860,38 @@ mod tests {
             caller_bound_proof_input_material_digest, proof_input_material_digest,
             "canonical material proof input digest must match after caller-owned artifact replay"
         );
+        let missing_governed_material_bundle = BfvEvaluationKeyBundle {
+            relinearization_key: relinearization_key.clone(),
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        let mut stale_header_proof_input = proof_input.clone();
+        stale_header_proof_input.version = stale_header_proof_input.version.saturating_add(1);
+        let missing_governed_material_expected =
+            "BFV full-bootstrap material proof input requires governed FullBootstrapV1 material";
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_governed_material_bundle,
+                &artifacts,
+                &stale_header_proof_input,
+            ),
+            missing_governed_material_expected,
+            "caller-bound typed material proof input validation must reject missing governed material before proof-input headers",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &public_key,
+                &missing_governed_material_bundle,
+                &artifacts,
+                &stale_header_proof_input,
+            ),
+            missing_governed_material_expected,
+            "caller-bound typed material proof input digesting must reject missing governed material before proof-input headers",
+        );
         assert_eq!(
             proof_input_material_digest,
             bfv_full_bootstrap_material_proof_input_material_digest_v1(&proof_input)
@@ -99182,8 +100421,8 @@ mod tests {
             "canonical v1 bytes",
             "governance byte digests admission must reject compressed proof-input framing",
         );
-        let compressed_proof_input_error =
-            "BFV full-bootstrap material proof input material bytes must use canonical v1 bytes";
+        let compressed_artifact_bundle_error =
+            "BFV full-bootstrap circuit artifact bundle bytes must use canonical v1 bytes";
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_governance_bytes_v1(
                 &params,
@@ -99192,8 +100431,8 @@ mod tests {
                 &compressed_artifact_bundle_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "material governance byte admission must reject compressed proof-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "material governance byte admission must reject compressed artifact-bundle framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
@@ -99203,8 +100442,8 @@ mod tests {
                 &compressed_artifact_bundle_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "material governance byte digest admission must reject compressed proof-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "material governance byte digest admission must reject compressed artifact-bundle framing before compressed proof-input framing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
@@ -99214,8 +100453,8 @@ mod tests {
                 &compressed_artifact_bundle_bytes,
                 &compressed_proof_input_material_bytes,
             ),
-            compressed_proof_input_error,
-            "material governance byte digests admission must reject compressed proof-input framing before artifact-bundle framing",
+            compressed_artifact_bundle_error,
+            "material governance byte digests admission must reject compressed artifact-bundle framing before compressed proof-input framing",
         );
         let binary_split_placeholder_proof_input_material_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap material proof input bytes".to_vec();
@@ -99789,6 +101028,28 @@ mod tests {
             validate_bfv_full_bootstrap_material_proof_input_material_v1(&stale_artifact_input),
             "artifact bundle failed validation",
             "material proof input material must reject artifact bytes that do not match governed material",
+        );
+
+        let mut duplicate_artifact_digest_input = proof_input.clone();
+        duplicate_artifact_digest_input
+            .artifact_bundle
+            .slot_to_coefficient_key = duplicate_artifact_digest_input
+            .artifact_bundle
+            .coefficient_to_slot_key
+            .clone();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_v1(
+                &duplicate_artifact_digest_input,
+            ),
+            "must be distinct",
+            "material proof input material must reject duplicate artifact-role digests before artifact bundle mismatch",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_v1(
+                &duplicate_artifact_digest_input,
+            ),
+            "must be distinct",
+            "material proof input material digesting must reject duplicate artifact-role digests before hashing",
         );
 
         let mut role_spliced_artifact_input = proof_input.clone();
@@ -107232,6 +108493,70 @@ mod tests {
                 target_limb.as_slice(),
                 [modulus - 1, modulus - 2],
                 "centered target-limb conversion must preserve -1/-2 residues"
+            );
+        }
+    }
+
+    #[test]
+    fn rns_centered_target_limb_basis_extension_pins_half_product_boundary() {
+        let params = rns_exact_params();
+        let source_chain = rns_exact_chain();
+        let target_chain = BfvRnsModulusChain {
+            moduli: vec![101, 113],
+        };
+        let source_product = source_chain.product().expect("source product");
+        assert_eq!(
+            source_product % 2,
+            1,
+            "regression fixture expects an odd source product"
+        );
+        let half = source_product / 2;
+        let source_coefficients = [half, half + 1];
+        let source_rns = BfvRnsPolynomial {
+            residues_by_limb: source_chain
+                .moduli
+                .iter()
+                .map(|&modulus| {
+                    source_coefficients
+                        .iter()
+                        .map(|&coefficient| {
+                            u64::try_from(coefficient % u128::from(modulus))
+                                .expect("residue fits u64")
+                        })
+                        .collect()
+                })
+                .collect(),
+        };
+
+        let canonical_extended = source_chain
+            .basis_extend_polynomial_target_limbs(&params, &source_rns, &target_chain)
+            .expect("canonical target-limb basis extension");
+        let centered_extended = source_chain
+            .basis_extend_centered_polynomial_target_limbs(&params, &source_rns, &target_chain)
+            .expect("centered target-limb basis extension");
+        validate_rns_polynomial(&params, &target_chain, &centered_extended)
+            .expect("centered half-boundary output validates against the target chain");
+
+        assert_ne!(
+            canonical_extended, centered_extended,
+            "centered conversion must diverge immediately above the half-product boundary"
+        );
+        for (target_limb, &modulus) in centered_extended
+            .residues_by_limb
+            .iter()
+            .zip(&target_chain.moduli)
+        {
+            let positive_half =
+                reduce_u128_to_u64_mod(half, modulus).expect("positive half residue fits");
+            let negative_half = if positive_half == 0 {
+                0
+            } else {
+                modulus - positive_half
+            };
+            assert_eq!(
+                target_limb.as_slice(),
+                [positive_half, negative_half],
+                "centered target-limb conversion must pin the half-product tie and first negative residue"
             );
         }
     }

@@ -1301,25 +1301,29 @@ def _collect_route_canary_transaction_evidence(
         opener=opener,
         timeout=timeout,
     )
-    finalized_block = (
-        _route_canary_finalized_block_summary(
+    expected_source_domain = destination.get("source_domain")
+    expected_target_domain = destination.get("target_domain")
+    if type(expected_source_domain) is not int or type(expected_target_domain) is not int:
+        raise RuntimeError("destination bridge domains must be integers")
+    if block_tag == "finalized":
+        finalized_block = _route_canary_finalized_block_summary(
             rpc_url,
             receipt_block,
             opener=opener,
             timeout=timeout,
         )
-        if block_tag == "finalized"
-        else {"receipt_block_finalized": False}
-    )
+    elif expected_target_domain == evidence.SCCP_DOMAIN_BSC and block_tag == "latest":
+        finalized_block = {
+            "receipt_block_finalized": True,
+            "finality_policy": "bsc_latest",
+        }
+    else:
+        finalized_block = {"receipt_block_finalized": False}
     bridge_address = _parse_hex_bytes(
         str(destination["bridge_address"]),
         label="destination bridge address",
         byte_length=20,
     )
-    expected_source_domain = destination.get("source_domain")
-    expected_target_domain = destination.get("target_domain")
-    if type(expected_source_domain) is not int or type(expected_target_domain) is not int:
-        raise RuntimeError("destination bridge domains must be integers")
     expected_destination_binding_hash = _parse_hex32(
         str(destination["destination_binding_hash"]),
         label="destination binding hash",

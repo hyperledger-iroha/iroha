@@ -3677,12 +3677,32 @@ fn sign_app_api_scaffold_transaction(
         .map(|tx| tx.with_authority(authority))
 }
 
+#[cfg(feature = "app_api")]
+fn decode_app_api_detached_signature(signature_b64: &str) -> Result<Signature> {
+    use base64::Engine as _;
+
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+    Signature::try_from_bytes(&signature_bytes)
+        .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))
+}
+
 #[cfg(all(feature = "app_api", test))]
 mod app_api_transaction_signing_tests {
     use super::*;
 
     fn checked_app_api_fixture_keypair(seed: Vec<u8>, context: &'static str) -> KeyPair {
         KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect(context)
+    }
+
+    fn expect_conversion(err: Error) -> String {
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("expected conversion error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3747,6 +3767,17 @@ mod app_api_transaction_signing_tests {
         assert_eq!(tx.authority(), &requested_authority);
         tx.verify_signature()
             .expect_err("scaffold signature is not meant to verify after restoring authority");
+    }
+
+    #[test]
+    fn app_api_detached_signature_rejects_all_zero_payload() {
+        use base64::Engine as _;
+
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode([0_u8; 64]);
+        let err = decode_app_api_detached_signature(&signature_b64)
+            .expect_err("all-zero detached signatures must fail at admission");
+
+        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
     }
 }
 
@@ -13653,6 +13684,52 @@ fn verified_sccp_message_bundle_from_proof_registry(
     Ok(None)
 }
 
+fn sccp_message_bundle_from_recorded_messages(
+    state: &CoreState,
+    height: u64,
+    messages: &[iroha_core::bridge::RecordedSccpMessage],
+    index: usize,
+) -> Result<NexusSccpMessageProofV1> {
+    let message = messages.get(index).ok_or_else(|| {
+        sccp_internal_error(format!(
+            "SCCP message index {index} is out of bounds for block {height}"
+        ))
+    })?;
+    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(messages)
+    else {
+        return Err(sccp_internal_error(format!(
+            "failed to reconstruct SCCP commitment root for block {height}"
+        )));
+    };
+    let commitments: Vec<_> = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect();
+    let merkle_proof =
+        iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
+            sccp_internal_error(format!(
+                "failed to derive SCCP Merkle proof for message {} in block {height}",
+                hex::encode(message.commitment.message_id)
+            ))
+        })?;
+    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+
+    Ok(NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment: message.commitment.clone(),
+        merkle_proof,
+        payload: message.payload.clone(),
+        finality_proof: build_sccp_message_finality_proof_bytes(
+            &finality_proof,
+            &message.commitment,
+            &message.payload,
+            commitment_root,
+        )?,
+    })
+}
+
 fn reconstruct_sccp_message_bundle_from_block(
     state: &CoreState,
     height: u64,
@@ -13685,33 +13762,9 @@ fn reconstruct_sccp_message_bundle_from_block(
         )));
     }
 
-    let commitments: Vec<_> = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect();
-    let merkle_proof =
-        iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
-            sccp_internal_error(format!(
-                "failed to derive SCCP Merkle proof for message {} in block {height}",
-                hex::encode(message_id)
-            ))
-        })?;
-    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
-        .map_err(map_bridge_finality_error)?;
-
-    Ok(Some(NexusSccpMessageProofV1 {
-        version: 1,
-        commitment_root,
-        commitment: messages[index].commitment.clone(),
-        merkle_proof,
-        payload: messages[index].payload.clone(),
-        finality_proof: build_sccp_message_finality_proof_bytes(
-            &finality_proof,
-            &messages[index].commitment,
-            &messages[index].payload,
-            commitment_root,
-        )?,
-    }))
+    Ok(Some(sccp_message_bundle_from_recorded_messages(
+        state, height, &messages, index,
+    )?))
 }
 
 fn reconstruct_sccp_message_bundle_from_committed_blocks(
@@ -13750,20 +13803,41 @@ fn cached_sccp_message_bundle(message_id: [u8; 32]) -> Option<NexusSccpMessagePr
         .cloned()
 }
 
-fn cached_sora_sccp_message_bundle(message_id: [u8; 32]) -> Option<NexusSccpMessageProofV1> {
-    let bundle = cached_sccp_message_bundle(message_id)?;
-    (sccp_message_source_domain(&bundle.payload) == iroha_sccp::SCCP_DOMAIN_SORA
-        && verify_message_bundle_structure(&bundle))
-    .then_some(bundle)
+fn cached_verified_non_sora_sccp_message_bundle(
+    state: &CoreState,
+    message_id: [u8; 32],
+) -> Result<Option<NexusSccpMessageProofV1>> {
+    let Some(bundle) = cached_sccp_message_bundle(message_id) else {
+        return Ok(None);
+    };
+    if sccp_message_source_domain(&bundle.payload) == iroha_sccp::SCCP_DOMAIN_SORA {
+        return Ok(None);
+    }
+
+    let configured_source_lane = sccp_configured_source_lane_for_bundle(state, &bundle)?;
+    let valid = if let Some(configured_source_lane) = configured_source_lane {
+        verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+            &bundle,
+            &configured_source_lane.material,
+            &configured_source_lane.deployment,
+        ) && verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+            &bundle,
+            &configured_source_lane.material,
+            &configured_source_lane.deployment,
+        )
+        .is_some()
+    } else {
+        verify_message_bundle_structure(&bundle)
+            && iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production(&bundle)
+                .is_some()
+    };
+    Ok(valid.then_some(bundle))
 }
 
 fn sccp_message_bundle_for_request(
     state: &CoreState,
     message_id: [u8; 32],
 ) -> Result<Option<NexusSccpMessageProofV1>> {
-    if let Some(bundle) = cached_sora_sccp_message_bundle(message_id) {
-        return Ok(Some(bundle));
-    }
     if let Some(bundle) = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
     {
         return Ok(Some(bundle));
@@ -13771,7 +13845,7 @@ fn sccp_message_bundle_for_request(
     if let Some(bundle) = verified_sccp_message_bundle_from_proof_registry(state, message_id)? {
         return Ok(Some(bundle));
     }
-    Ok(cached_sccp_message_bundle(message_id))
+    cached_verified_non_sora_sccp_message_bundle(state, message_id)
 }
 
 fn projection_text_value(value: &SccpNormalizedCodecValueV1) -> Option<String> {
@@ -13936,7 +14010,7 @@ fn collect_recent_sccp_messages(
             continue;
         }
         let height_u64 = u64::try_from(height).unwrap_or(u64::MAX);
-        for message in messages.iter().rev() {
+        for (message_index, message) in messages.iter().enumerate().rev() {
             if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
                 if let Some(bundle) = verified_sccp_message_bundle_from_proof_registry(
                     state,
@@ -13949,27 +14023,12 @@ fn collect_recent_sccp_messages(
                 }
                 continue;
             }
-            let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-                .ok_or_else(|| {
-                    sccp_internal_error(format!(
-                        "failed to reconstruct SCCP commitment root for block {height_u64}"
-                    ))
-                })?;
-            let finality_proof = iroha_core::bridge::build_finality_proof(state, height_u64)
-                .map_err(map_bridge_finality_error)?;
-            let bundle = NexusSccpMessageProofV1 {
-                version: 1,
-                commitment_root,
-                commitment: message.commitment.clone(),
-                merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-                payload: message.payload.clone(),
-                finality_proof: build_sccp_message_finality_proof_bytes(
-                    &finality_proof,
-                    &message.commitment,
-                    &message.payload,
-                    commitment_root,
-                )?,
-            };
+            let bundle = sccp_message_bundle_from_recorded_messages(
+                state,
+                height_u64,
+                &messages,
+                message_index,
+            )?;
             items.push(recent_message_entry_from_bundle(height_u64, &bundle)?);
             if items.len() >= limit {
                 return Ok(SccpRecentMessagesDto { items });
@@ -14016,7 +14075,8 @@ pub fn publish_sccp_burn_bundle(
     Ok(bundle)
 }
 
-pub fn publish_sccp_message_bundle(
+#[cfg(test)]
+pub(crate) fn publish_sccp_message_bundle(
     state: &CoreState,
     height: u64,
     payload: SccpPayloadV1,
@@ -20444,15 +20504,12 @@ async fn submit_contract_call_request(
                 "public_key_hex does not match authority".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             authority.clone().into(),
             "contract call detached signature",
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -20519,7 +20576,7 @@ async fn submit_contract_call_request(
         transaction_ttl_ms,
         tx_hash_hex: None,
         pipeline_status: None,
-        entrypoint_hash_hex: Some(entrypoint_hash_hex),
+        entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
@@ -20952,15 +21009,12 @@ pub async fn handle_post_bridge_proof_submit(
                 "public_key_hex does not match authority".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             authority.clone().into(),
             "bridge proof detached signature",
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -21209,15 +21263,12 @@ pub async fn handle_post_bridge_message_submit(
                 "public_key_hex does not match authority".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             authority.clone().into(),
             "bridge message detached signature",
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -27973,11 +28024,8 @@ seiyaku BlobPayloadNormalizeTest {
             }),
         )
         .await
-        .expect_err("forged detached signature must be rejected");
-        assert!(
-            expect_conversion(err)
-                .contains("multisig propose detached signature verification failed")
-        );
+        .expect_err("all-zero detached signature must be rejected");
+        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
     }
 
     #[tokio::test]
@@ -28571,15 +28619,12 @@ pub async fn handle_post_contract_call_multisig_propose(
                 "public_key_hex does not match signer_account_id".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             signer_account_id.clone().into(),
             ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -28751,15 +28796,12 @@ pub async fn handle_post_contract_call_multisig_approve(
                     "public_key_hex does not match signer_account_id".to_owned(),
                 ));
             }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let signature = decode_app_api_detached_signature(signature_b64)?;
             let mut tx = sign_app_api_scaffold_transaction(
                 builder,
                 signer_account_id.clone().into(),
                 ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
             )?;
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
@@ -28932,15 +28974,12 @@ pub async fn handle_post_multisig_cancel(
                 "public_key_hex does not match signer_account_id".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             signer_account_id.clone().into(),
             ENDPOINT_MULTISIG_CANCEL,
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -29130,15 +29169,12 @@ pub async fn handle_post_multisig_propose(
                     "public_key_hex does not match signer_account_id".to_owned(),
                 ));
             }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let signature = decode_app_api_detached_signature(signature_b64)?;
             let mut tx = sign_app_api_scaffold_transaction(
                 builder,
                 signer_account_id.clone().into(),
                 ENDPOINT_MULTISIG_PROPOSE,
             )?;
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
@@ -29299,15 +29335,12 @@ pub async fn handle_post_multisig_approve(
                     "public_key_hex does not match signer_account_id".to_owned(),
                 ));
             }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let signature = decode_app_api_detached_signature(signature_b64)?;
             let mut tx = sign_app_api_scaffold_transaction(
                 builder,
                 signer_account_id.clone().into(),
                 ENDPOINT_MULTISIG_APPROVE,
             )?;
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
@@ -34681,7 +34714,6 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
 }
 
 #[cfg(feature = "app_api")]
-#[cfg(feature = "app_api")]
 fn deploy_operation_receipt(
     contract: &DeployContractBundleContractReceiptDto,
 ) -> OperationReceiptDto {
@@ -35074,7 +35106,7 @@ mod contract_bundle_tests {
     }
 
     #[test]
-    fn single_contract_deploy_receipt_keeps_top_level_fields() {
+    fn single_contract_deploy_receipt_keeps_canonical_bundle_shape() {
         let address = sample_address(0);
         let receipt = DeployContractBundleReceiptDto {
             ok: true,
@@ -35105,31 +35137,27 @@ mod contract_bundle_tests {
         let value = single_contract_deploy_receipt_json(&receipt).expect("receipt json");
         let address_literal = address.to_string();
 
+        assert!(value.get("contract_address").is_none());
+        assert!(value.get("code_hash_hex").is_none());
+        assert!(value.get("tx_hash_hex").is_none());
+        assert!(value.get("pipeline_status").is_none());
         assert_eq!(
             value
-                .get("contract_address")
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("contract_address"))
                 .and_then(norito::json::Value::as_str),
             Some(address_literal.as_str())
         );
         assert_eq!(
             value
-                .get("code_hash_hex")
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("code_hash_hex"))
                 .and_then(norito::json::Value::as_str),
             Some("code")
-        );
-        assert_eq!(
-            value
-                .get("tx_hash_hex")
-                .and_then(norito::json::Value::as_str),
-            Some("tx")
-        );
-        assert_eq!(
-            value
-                .get("pipeline_status")
-                .and_then(|pipeline_status| pipeline_status.get("status"))
-                .and_then(|status| status.get("kind"))
-                .and_then(norito::json::Value::as_str),
-            Some("Queued")
         );
         assert_eq!(
             value
@@ -35141,6 +35169,20 @@ mod contract_bundle_tests {
                 .and_then(|status| status.get("kind"))
                 .and_then(norito::json::Value::as_str),
             Some("Queued")
+        );
+        assert_eq!(
+            value
+                .get("operation_receipt")
+                .and_then(|receipt| receipt.get("operation_kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("contract_deploy")
+        );
+        assert_eq!(
+            value
+                .get("operation_receipt")
+                .and_then(|receipt| receipt.get("contract_address"))
+                .and_then(norito::json::Value::as_str),
+            Some(address_literal.as_str())
         );
         assert!(
             value

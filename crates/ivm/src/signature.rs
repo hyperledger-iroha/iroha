@@ -53,6 +53,12 @@ pub enum SignatureScheme {
     Secp256k1,
 }
 
+/// Returns true when the supplied signature payload is an inert all-zero buffer.
+#[must_use]
+pub(crate) fn signature_bytes_are_all_zero(signature: &[u8]) -> bool {
+    signature.iter().all(|byte| *byte == 0)
+}
+
 /// Ed25519 batch verification input.
 #[derive(Clone, Debug)]
 pub struct Ed25519BatchItem<'a> {
@@ -104,6 +110,9 @@ pub fn verify_signature(
                 Ok(pk) => pk,
                 Err(_) => return false,
             };
+            if signature_bytes_are_all_zero(signature) {
+                return false;
+            }
             let sig = match Ed25519Signature::from_slice(signature) {
                 Ok(s) => s,
                 Err(_) => return false,
@@ -114,6 +123,9 @@ pub fn verify_signature(
             if public_key.len() != dilithium::public_key_bytes()
                 || signature.len() != dilithium::signature_bytes()
             {
+                return false;
+            }
+            if signature_bytes_are_all_zero(signature) {
                 return false;
             }
             let pk = match dilithium::PublicKey::from_bytes(public_key) {
@@ -154,6 +166,14 @@ pub fn verify_ed25519_batch(
             actual: request.entries.len(),
         });
     }
+    for (index, entry) in request.entries.iter().enumerate() {
+        if entry.signature.len() != 64 || entry.public_key.len() != 32 {
+            return Err(Ed25519BatchError::InvalidEntry { index });
+        }
+        if signature_bytes_are_all_zero(&entry.signature) {
+            return Err(Ed25519BatchError::SignatureFailed { index });
+        }
+    }
 
     let messages: Vec<&[u8]> = request
         .entries
@@ -175,6 +195,9 @@ pub fn verify_ed25519_batch(
         Ok(()) => Ok(()),
         Err(_) => {
             for (index, entry) in request.entries.iter().enumerate() {
+                if signature_bytes_are_all_zero(&entry.signature) {
+                    return Err(Ed25519BatchError::SignatureFailed { index });
+                }
                 let sig = match Ed25519Signature::from_slice(entry.signature.as_slice()) {
                     Ok(sig) => sig,
                     Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
@@ -223,6 +246,10 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     };
 
     for item in items {
+        if signature_bytes_are_all_zero(&item.signature) {
+            parsed.push(None);
+            continue;
+        }
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;

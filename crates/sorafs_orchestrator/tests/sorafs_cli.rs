@@ -862,6 +862,24 @@ fn manifest_sign_emits_bundle_and_signature() {
             .and_then(Value::as_str),
         Some("ok")
     );
+
+    let zero_signature_path = tempdir.path().join("manifest.zero.sig");
+    fs::write(&zero_signature_path, "00".repeat(64)).expect("write all-zero signature");
+    let zero_signature_assert = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("verify-signature")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--signature={}", zero_signature_path.display()))
+        .arg(format!("--public-key-hex={public_key_hex}"))
+        .assert()
+        .failure();
+    let zero_signature_stderr =
+        String::from_utf8(zero_signature_assert.get_output().stderr.clone())
+            .expect("zero signature stderr");
+    assert!(
+        zero_signature_stderr.contains("signature material must not be all zero"),
+        "all-zero signature must fail before backend verification: {zero_signature_stderr}"
+    );
 }
 
 #[test]

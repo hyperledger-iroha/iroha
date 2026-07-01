@@ -1597,7 +1597,10 @@ pub fn crypto_verify(
     let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
     let public_key =
         PublicKey::from_bytes(algorithm, public_key.as_ref()).map_err(norito_to_napi)?;
-    let signature = Signature::from_bytes(signature.as_ref());
+    let signature = match Signature::try_from_bytes(signature.as_ref()) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message.as_ref()).is_ok())
 }
 
@@ -18831,6 +18834,29 @@ mod tests {
     }
 
     #[test]
+    fn crypto_verify_rejects_all_zero_signature_material() {
+        let seed = vec![0x33; 32];
+        let message = b"js-host-crypto-sign";
+        let keypair =
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("checked seed keypair");
+        let (_, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+        let signature = vec![0_u8; 64];
+
+        let verified = crypto_verify(
+            "ed25519".to_owned(),
+            Uint8Array::from(public_key.to_vec()),
+            Uint8Array::from(message.to_vec()),
+            Uint8Array::from(signature),
+        )
+        .expect("crypto verify");
+
+        assert!(!verified);
+    }
+
+    #[test]
     fn crypto_multihash_helpers_use_checked_formatters() {
         let seed = vec![0x5A; 32];
         let keypair =
@@ -22023,6 +22049,7 @@ mod tests {
             change_output: None,
             lineage_verifier_record: None,
             block_height: None,
+            lineage_verifier_records: Vec::new(),
         }
     }
 
@@ -25226,6 +25253,7 @@ mod tests {
             Some(5_000),
             Some(42),
             Uint8Array::from(secret_bytes.to_vec()),
+            None,
         )
         .expect("transaction built");
 
@@ -25313,6 +25341,7 @@ mod tests {
             None,
             None,
             Uint8Array::from(secret_bytes.to_vec()),
+            None,
         )
         .expect("transaction built");
 

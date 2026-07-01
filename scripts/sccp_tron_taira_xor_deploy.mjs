@@ -278,6 +278,20 @@ function normalizeNonEmptyText(value, label) {
   return value;
 }
 
+function ownDataPropertyDescriptor(record, key) {
+  if (!record || typeof record !== "object") return null;
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor && Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ? descriptor
+    : null;
+}
+
+function ownDataValue(record, key) {
+  const descriptor = ownDataPropertyDescriptor(record, key);
+  return descriptor ? descriptor.value : undefined;
+}
+
 function readOptionalCanonicalManifestText(
   record,
   keys,
@@ -287,10 +301,11 @@ function readOptionalCanonicalManifestText(
   let selected;
   let selectedKey = "";
   for (const key of keys) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    const descriptor = ownDataPropertyDescriptor(record, key);
+    if (!descriptor) {
       continue;
     }
-    const value = record[key];
+    const value = descriptor.value;
     if (value === undefined) {
       continue;
     }
@@ -341,19 +356,31 @@ function assertNoSecretLikeDeploymentArtifactFields(
   if (Array.isArray(value)) {
     if (seen.has(value)) return;
     seen.add(value);
-    value.forEach((entry, index) => {
-      assertNoSecretLikeDeploymentArtifactFields(entry, `${path}[${index}]`, seen);
-    });
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = ownDataPropertyDescriptor(value, String(index));
+      if (!descriptor) continue;
+      assertNoSecretLikeDeploymentArtifactFields(
+        descriptor.value,
+        `${path}[${index}]`,
+        seen,
+      );
+    }
     return;
   }
   if (!value || typeof value !== "object") return;
   if (seen.has(value)) return;
   seen.add(value);
-  for (const [key, child] of Object.entries(value)) {
+  for (const key of Object.keys(value)) {
     if (DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN.test(key)) {
       throw new Error(`${path}.${key} must not be present in deployment artifacts`);
     }
-    assertNoSecretLikeDeploymentArtifactFields(child, `${path}.${key}`, seen);
+    const descriptor = ownDataPropertyDescriptor(value, key);
+    if (!descriptor) continue;
+    assertNoSecretLikeDeploymentArtifactFields(
+      descriptor.value,
+      `${path}.${key}`,
+      seen,
+    );
   }
 }
 
@@ -2825,7 +2852,11 @@ function normalizeOptionalStringList(value, label) {
     throw new Error(`${label} must be a list of non-empty strings`);
   }
   const seenBlockers = new Set();
-  return value.map((entry, index) => {
+  const blockers = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = ownDataPropertyDescriptor(value, String(index));
+    if (!descriptor) continue;
+    const entry = descriptor.value;
     const normalized = normalizeNonEmptyText(entry, `${label}[${index}]`);
     if (/[\u0000-\u001f\u007f]/u.test(normalized)) {
       throw new Error(`${label}[${index}] contains control character`);
@@ -2845,8 +2876,9 @@ function normalizeOptionalStringList(value, label) {
       throw new Error(`${label} must not contain duplicate strings`);
     }
     seenBlockers.add(blockerKey);
-    return normalized;
-  });
+    blockers.push(normalized);
+  }
+  return blockers;
 }
 
 function decodedPublicBlockerText(value) {
@@ -2916,11 +2948,12 @@ function postDeployLiveEvidenceProductionBlockers(record) {
   }
   const blockers = [];
   for (const key of POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS) {
-    if (!Object.hasOwn(record, key)) {
+    const descriptor = ownDataPropertyDescriptor(record, key);
+    if (!descriptor) {
       continue;
     }
     for (const blocker of normalizeOptionalStringList(
-      record[key],
+      descriptor.value,
       `route manifest postDeployLiveEvidence.${key}`,
     )) {
       blockers.push(`${key}: ${blocker}`);
@@ -2960,8 +2993,10 @@ function productionHandoffPlaceholderReason(value, path = "route manifest", seen
     if (seen.has(value)) return null;
     seen.add(value);
     for (let index = 0; index < value.length; index += 1) {
+      const descriptor = ownDataPropertyDescriptor(value, String(index));
+      if (!descriptor) continue;
       const reason = productionHandoffPlaceholderReason(
-        value[index],
+        descriptor.value,
         `${path}[${index}]`,
         seen,
       );
@@ -2972,12 +3007,14 @@ function productionHandoffPlaceholderReason(value, path = "route manifest", seen
   if (!value || typeof value !== "object") return null;
   if (seen.has(value)) return null;
   seen.add(value);
-  for (const [key, child] of Object.entries(value)) {
+  for (const key of Object.keys(value)) {
     if (PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(key)) {
       return `${path}.${key}`;
     }
+    const descriptor = ownDataPropertyDescriptor(value, key);
+    if (!descriptor) continue;
     const reason = productionHandoffPlaceholderReason(
-      child,
+      descriptor.value,
       `${path}.${key}`,
       seen,
     );
@@ -3572,7 +3609,10 @@ function routeConfigRequiredRecord(value, label) {
 }
 
 function routeManifestValue(record, keys, label, { required = true } = {}) {
-  const present = keys.filter((key) => Object.prototype.hasOwnProperty.call(record, key));
+  const present = keys.filter((key) => {
+    const descriptor = ownDataPropertyDescriptor(record, key);
+    return descriptor && descriptor.value !== undefined;
+  });
   if (present.length > 1) {
     throw new Error(`${label} must not use multiple aliases: ${present.join(", ")}`);
   }
@@ -3582,7 +3622,7 @@ function routeManifestValue(record, keys, label, { required = true } = {}) {
     }
     return undefined;
   }
-  return record[present[0]];
+  return ownDataValue(record, present[0]);
 }
 
 function routeManifestRecord(record, keys, label, parentLabel) {
@@ -3594,7 +3634,8 @@ function routeManifestRecord(record, keys, label, parentLabel) {
 
 function normalizeRouteManifestForConfig(manifest) {
   const record = routeConfigRequiredRecord(manifest, "route manifest");
-  if (record.schema !== ROUTE_MANIFEST_SCHEMA) {
+  const schema = routeManifestValue(record, ["schema"], "route manifest schema");
+  if (schema !== ROUTE_MANIFEST_SCHEMA) {
     throw new Error(`route manifest schema must be ${ROUTE_MANIFEST_SCHEMA}`);
   }
   assertNoSecretLikeDeploymentArtifactFields(record);
@@ -3616,7 +3657,12 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest tairaXorBurnRecord.vkRef",
     "route manifest tairaXorBurnRecord",
   );
-  const settlement = routeConfigRequiredRecord(record.settlement, "route manifest settlement");
+  const settlement = routeManifestRecord(
+    record,
+    ["settlement"],
+    "route manifest settlement",
+    "route manifest",
+  );
   const destinationBinding = routeManifestRecord(
     record,
     ["destinationBinding", "destination_binding"],
@@ -3708,7 +3754,10 @@ function normalizeRouteManifestForConfig(manifest) {
   if (productionReady && tronProfile.key !== "mainnet") {
     throw new Error("route manifest productionReady requires tronNetwork mainnet");
   }
-  const chain = normalizeNonEmptyText(record.chain, "route manifest chain");
+  const chain = normalizeNonEmptyText(
+    routeManifestValue(record, ["chain"], "route manifest chain"),
+    "route manifest chain",
+  );
   if (chain !== chain.toLowerCase()) {
     throw new Error("route manifest chain must be canonical lowercase text");
   }
@@ -3817,7 +3866,12 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest productionReady requires postDeployLiveEvidence.offlineFullTomlSha256",
     );
   }
-  const version = normalizeUint32(record.version ?? 1, "route manifest version");
+  const version = normalizeUint32(
+    routeManifestValue(record, ["version"], "route manifest version", {
+      required: false,
+    }) ?? 1,
+    "route manifest version",
+  );
   if (version !== 1) {
     throw new Error("route manifest version must be 1");
   }
@@ -3921,7 +3975,12 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest destinationRollout.verifierKeyHash",
   );
   const destinationRolloutVersion = normalizeUint32(
-    destinationRollout.version ?? 1,
+    routeManifestValue(
+      destinationRollout,
+      ["version"],
+      "route manifest destinationRollout.version",
+      { required: false },
+    ) ?? 1,
     "route manifest destinationRollout.version",
   );
   if (destinationRolloutVersion !== 1) {
@@ -3980,7 +4039,12 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest destinationBinding.sourceDomain",
   );
   const destinationBindingVersion = normalizeUint32(
-    destinationBinding.version ?? 1,
+    routeManifestValue(
+      destinationBinding,
+      ["version"],
+      "route manifest destinationBinding.version",
+      { required: false },
+    ) ?? 1,
     "route manifest destinationBinding.version",
   );
   if (destinationBindingVersion !== 1) {
@@ -4137,7 +4201,7 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest settlement.submitPath must be /v1/bridge/messages");
   }
   const settlementMode = normalizeNonEmptyText(
-    settlement.mode,
+    routeManifestValue(settlement, ["mode"], "route manifest settlement.mode"),
     "route manifest settlement.mode",
   );
   if (settlementMode !== "finalize_inbound") {
@@ -4183,11 +4247,19 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest tairaXorBurnRecord.codeHash",
     ),
     vkBackend: normalizeVerifierKeyRefText(
-      vkRef.backend,
+      routeManifestValue(
+        vkRef,
+        ["backend"],
+        "route manifest tairaXorBurnRecord.vkRef.backend",
+      ),
       "route manifest tairaXorBurnRecord.vkRef.backend",
     ),
     vkName: normalizeVerifierKeyRefText(
-      vkRef.name,
+      routeManifestValue(
+        vkRef,
+        ["name"],
+        "route manifest tairaXorBurnRecord.vkRef.name",
+      ),
       "route manifest tairaXorBurnRecord.vkRef.name",
     ),
     gasLimit,

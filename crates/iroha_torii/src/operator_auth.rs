@@ -1697,6 +1697,9 @@ fn verify_signature(
             let sig: [u8; 64] = signature
                 .try_into()
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
+            if sig.iter().all(|byte| *byte == 0) {
+                return Err(OperatorAuthError::signature_invalid());
+            }
             let verifying_key =
                 Ed25519Key::from_bytes(&pk).map_err(|_| OperatorAuthError::signature_invalid())?;
             let signature = Ed25519Signature::from_bytes(&sig);
@@ -2525,6 +2528,25 @@ mod tests {
             &signature,
         )
         .expect("signature ok");
+    }
+
+    #[test]
+    fn ed25519_signature_verify_rejects_all_zero_signature_material() {
+        let mut rng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let public_key = signing_key.verifying_key().to_bytes();
+        let signature = [0u8; 64];
+
+        let err = verify_signature(
+            OperatorWebAuthnAlgorithm::Ed25519,
+            &public_key,
+            b"operator-auth-test",
+            &signature,
+        )
+        .expect_err("all-zero signature material must be rejected");
+
+        assert_eq!(err.code, "operator_webauthn_signature_invalid");
+        assert_eq!(err.metric_label, "signature_invalid");
     }
 
     #[tokio::test]

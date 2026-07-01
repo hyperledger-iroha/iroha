@@ -100,7 +100,12 @@ impl PotrSignatureV1 {
                 reason: "invalid public key",
             }
         })?;
-        let signature = Signature::from_bytes(&self.signature);
+        let signature = Signature::try_from_bytes(&self.signature).map_err(|_| {
+            PotrReceiptValidationError::InvalidSignature {
+                context,
+                reason: "invalid signature material",
+            }
+        })?;
         signature.verify(&public_key, payload).map_err(|_| {
             PotrReceiptValidationError::InvalidSignature {
                 context,
@@ -406,6 +411,22 @@ mod tests {
             Err(PotrReceiptValidationError::InvalidSignature {
                 context: "gateway",
                 ..
+            })
+        ));
+    }
+
+    #[test]
+    fn gateway_signature_rejects_all_zero_signature_material() {
+        let mut receipt = base_receipt();
+        let signing_key = SigningKey::from_bytes(&[0x22; 32]);
+        let mut signature = sign_receipt(&receipt, &signing_key);
+        signature.signature.fill(0);
+        receipt.gateway_signature = Some(signature);
+        assert!(matches!(
+            receipt.validate(),
+            Err(PotrReceiptValidationError::InvalidSignature {
+                context: "gateway",
+                reason: "invalid signature material",
             })
         ));
     }

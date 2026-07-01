@@ -827,6 +827,17 @@ fn derive_defi_attestation_hash(attestation: &DefiOracleAttestation) -> u64 {
     value.max(1)
 }
 
+fn verify_defi_oracle_signature(
+    public_key: &PublicKey,
+    attestation: &DefiOracleAttestation,
+) -> Result<(), Error> {
+    let signature = Signature::try_from_bytes(&attestation.oracle_signature)
+        .map_err(|err| signature_err(format!("invalid DeFi oracle signature material: {err}")))?;
+    signature
+        .verify(public_key, &attestation.oracle_payload)
+        .map_err(|err| signature_err(format!("invalid DeFi oracle signature: {err}")))
+}
+
 fn validate_defi_payload_shape(
     attestation: &DefiOracleAttestation,
 ) -> Result<norito::json::Map, Error> {
@@ -963,9 +974,15 @@ fn validate_defi_sources(
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::{DefiOracleAttestationKey, kits};
 
     use super::*;
+
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("DeFi oracle fixture key generation should succeed")
+    }
 
     fn provider() -> AccountId {
         kits::price_xor_usd()
@@ -1006,6 +1023,23 @@ mod tests {
         let err = validate_defi_payload_shape(&direct_defi_attestation(0))
             .expect_err("zero compatibility hash must reject");
         assert!(format!("{err:?}").contains("attestation_hash must be non-zero"));
+    }
+
+    #[test]
+    fn defi_oracle_signature_rejects_all_zero_signature_material() {
+        let keypair = checked_ed25519_keypair();
+        let mut attestation = direct_defi_attestation(17);
+        attestation.oracle_signature = vec![0; 64];
+
+        let err = verify_defi_oracle_signature(keypair.public_key(), &attestation)
+            .expect_err("all-zero signature material must reject before verification");
+        let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(
+            message.contains("signature payload must not be all zero"),
+            "unexpected error message: {message}"
+        );
     }
 
     #[test]
@@ -1184,9 +1218,7 @@ impl Execute for SubmitDefiOracleAttestation {
                 "DeFi oracle signer must match provider account controller",
             ));
         }
-        Signature::from_bytes(&attestation.oracle_signature)
-            .verify(&public_key, &attestation.oracle_payload)
-            .map_err(|err| signature_err(format!("invalid DeFi oracle signature: {err}")))?;
+        verify_defi_oracle_signature(&public_key, &attestation)?;
 
         let payload = validate_defi_payload_shape(&attestation)?;
         validate_defi_sources(&state_transaction.world, &attestation, &payload, provider)?;

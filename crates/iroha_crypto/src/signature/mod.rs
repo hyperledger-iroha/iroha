@@ -295,6 +295,27 @@ impl Signature {
         }
     }
 
+    /// Fallibly create a signature from raw bytes received from an external boundary.
+    ///
+    /// This preserves [`Signature::from_bytes`] for tests and compatibility code that intentionally
+    /// reproduce opaque bytes, while giving protocol adapters a checked constructor for admitting
+    /// externally supplied signatures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if `payload` is empty or contains only zero bytes.
+    pub fn try_from_bytes(payload: &[u8]) -> Result<Self, ParseError> {
+        if payload.is_empty() {
+            return Err(ParseError("signature payload must not be empty".to_owned()));
+        }
+        if signature_payload_is_all_zero(payload) {
+            return Err(ParseError(
+                "signature payload must not be all zero".to_owned(),
+            ));
+        }
+        Ok(Self::from_bytes(payload))
+    }
+
     /// A shorthand for [`Self::from_bytes`] accepting payload as hex.
     ///
     /// # Errors
@@ -862,6 +883,35 @@ mod tests {
             .expect_err("all-zero signature payload must fail closed");
 
         assert!(matches!(err, Error::BadSignature));
+    }
+
+    #[test]
+    fn signature_try_from_bytes_rejects_empty_payload() {
+        let err = Signature::try_from_bytes(&[]).expect_err("empty signature must fail closed");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_try_from_bytes_rejects_all_zero_payload() {
+        let err =
+            Signature::try_from_bytes(&[0u8; 64]).expect_err("all-zero signature must fail closed");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_try_from_bytes_accepts_nonzero_payload() {
+        let signature =
+            Signature::try_from_bytes(&[0x11u8; 64]).expect("nonzero signature payload");
+
+        assert_eq!(signature.payload(), &[0x11u8; 64]);
     }
 
     #[test]

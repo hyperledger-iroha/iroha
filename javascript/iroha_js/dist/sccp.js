@@ -131,6 +131,16 @@ export const SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID =
 export const SCCP_SOLANA_BORSH_INSTRUCTION_V1 = "borsh_instruction_v1";
 export const SCCP_ZERO_HASH_V1 =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
+const SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = [
+  `0x${"b7".repeat(32)}`,
+  `0x${"c8".repeat(32)}`,
+  `0x${"d9".repeat(32)}`,
+];
+const SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = [
+  `0x${"26".repeat(32)}`,
+  `0x${"27".repeat(32)}`,
+  `0x${"28".repeat(32)}`,
+];
 export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1 = "ton-contract-v1";
 export const SCCP_TON_MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1";
 export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1 =
@@ -44911,6 +44921,43 @@ function requireTonFullLightClientAuditRoleSeparation(deployment, auditHashes) {
   });
 }
 
+function requireGovernedSourceAdapterDeploymentAuditForBinding(deployment) {
+  if (deployment.sourceDomain === SCCP_DOMAIN_SOL) {
+    const auditHashes = [
+      deployment.solanaTowerReplayVerifierHash,
+      deployment.solanaFullAccountsdbLatticeVerifierHash,
+      deployment.solanaBankForkChoiceVerifierHash,
+    ];
+    if (
+      !auditHashes.every(
+        (hash, index) =>
+          hash === SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1[index],
+      )
+    ) {
+      throw new TypeError(
+        "sourceAdapterDeployment requires governed Solana full-light-client audit verifier hashes",
+      );
+    }
+  }
+  if (deployment.sourceDomain === SCCP_DOMAIN_TON) {
+    const auditHashes = [
+      deployment.tonMasterchainConfigVerifierHash,
+      deployment.tonValidatorSetTransitionVerifierHash,
+      deployment.tonShardAccountsDictionaryVerifierHash,
+    ];
+    if (
+      !auditHashes.every(
+        (hash, index) =>
+          hash === SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1[index],
+      )
+    ) {
+      throw new TypeError(
+        "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
+      );
+    }
+  }
+}
+
 function appendSccpSourceAdapterDeploymentTonAuditBytes(out, deployment) {
   const auditHashes = [
     deployment.tonMasterchainConfigVerifierHash,
@@ -45326,6 +45373,7 @@ export function sccpSourceAdapterDeploymentBindingHash(input) {
 
 export function sccpSourceAdapterDeploymentBindingFromDeployment(input) {
   const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  requireGovernedSourceAdapterDeploymentAuditForBinding(deployment);
   return normalizeSccpSourceAdapterDeploymentBinding({
     sourceDomain: deployment.sourceDomain,
     targetDomain: deployment.targetDomain,

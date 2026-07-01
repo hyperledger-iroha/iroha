@@ -44,6 +44,7 @@ use iroha_data_model::{
         consensus::{EvidenceRecord, NexusFeeReceipt},
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
+    bridge::{SccpOutboundMessageKey, SccpOutboundMessageRecord},
     confidential::ConfidentialFeatureDigest,
     consensus::{
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
@@ -489,6 +490,7 @@ macro_rules! build_world_block {
             space_directory_manifests: $state.space_directory_manifests.$method(),
             axt_policies: $state.axt_policies.$method(),
             axt_replay_ledger: $state.axt_replay_ledger.$method(),
+            sccp_outbound_messages: $state.sccp_outbound_messages.$method(),
             tx_sequences: $state.tx_sequences.$method(),
             triggers: $state.triggers.$method(),
             executor: $state.executor.$method(),
@@ -695,6 +697,7 @@ macro_rules! build_world_transaction {
             space_directory_manifests: $state.space_directory_manifests.transaction(),
             axt_policies: $state.axt_policies.transaction(),
             axt_replay_ledger: $state.axt_replay_ledger.transaction(),
+            sccp_outbound_messages: $state.sccp_outbound_messages.transaction(),
             tx_sequences: $state.tx_sequences.transaction(),
             triggers: $state.triggers.transaction(),
             executor: $state.executor.transaction(),
@@ -2072,6 +2075,8 @@ pub struct World {
     /// Bounded replay ledger for AXT handles.
     #[norito(skip)]
     pub(crate) axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord>,
+    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    pub(crate) sccp_outbound_messages: Storage<SccpOutboundMessageKey, SccpOutboundMessageRecord>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: Storage<AccountId, u64>,
     /// Triggers
@@ -2542,6 +2547,9 @@ pub struct WorldBlock<'world> {
     pub(crate) axt_policies: StorageBlock<'world, DataSpaceId, AxtPolicyEntry>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger: StorageBlock<'world, AxtHandleReplayKey, AxtReplayRecord>,
+    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    pub(crate) sccp_outbound_messages:
+        StorageBlock<'world, SccpOutboundMessageKey, SccpOutboundMessageRecord>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: StorageBlock<'world, AccountId, u64>,
     /// Triggers
@@ -2880,6 +2888,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.roles, Role);
         collect_reverts!(self.account_permissions, AccountPermission);
         collect_reverts!(self.account_roles, AccountRole);
+        collect_reverts!(self.sccp_outbound_messages, SccpOutboundMessage);
         collect_reverts!(self.tx_sequences, TxSequence);
         collect_reverts!(self.verifying_keys, VerifyingKey);
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
@@ -2930,6 +2939,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.roles, Role);
         collect_payload!(self.account_permissions, AccountPermission);
         collect_payload!(self.account_roles, AccountRole);
+        collect_payload!(self.sccp_outbound_messages, SccpOutboundMessage);
         collect_payload!(self.tx_sequences, TxSequence);
         collect_payload!(self.verifying_keys, VerifyingKey);
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
@@ -3173,6 +3183,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger:
         StorageTransaction<'block, 'world, AxtHandleReplayKey, AxtReplayRecord>,
+    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    pub(crate) sccp_outbound_messages:
+        StorageTransaction<'block, 'world, SccpOutboundMessageKey, SccpOutboundMessageRecord>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: StorageTransaction<'block, 'world, AccountId, u64>,
     /// Triggers
@@ -4614,6 +4627,9 @@ pub struct WorldView<'world> {
     pub(crate) axt_policies: StorageView<'world, DataSpaceId, AxtPolicyEntry>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger: StorageView<'world, AxtHandleReplayKey, AxtReplayRecord>,
+    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    pub(crate) sccp_outbound_messages:
+        StorageView<'world, SccpOutboundMessageKey, SccpOutboundMessageRecord>,
     /// Latest committed transaction sequence per account.
     pub(crate) tx_sequences: StorageView<'world, AccountId, u64>,
     /// Triggers
@@ -15025,6 +15041,7 @@ impl World {
             space_directory_manifests: self.space_directory_manifests.view(),
             axt_policies: self.axt_policies.view(),
             axt_replay_ledger: self.axt_replay_ledger.view(),
+            sccp_outbound_messages: self.sccp_outbound_messages.view(),
             tx_sequences: self.tx_sequences.view(),
             triggers: self.triggers.view(),
             executor: self.executor.view(),
@@ -15453,6 +15470,10 @@ pub trait WorldReadOnly {
     fn axt_policies(&self) -> &impl StorageReadOnly<DataSpaceId, AxtPolicyEntry>;
     /// Bounded replay ledger keyed by handle fingerprint.
     fn axt_replay_ledger(&self) -> &impl StorageReadOnly<AxtHandleReplayKey, AxtReplayRecord>;
+    /// Outbound SCCP message registry keyed by source/target/message id.
+    fn sccp_outbound_messages(
+        &self,
+    ) -> &impl StorageReadOnly<SccpOutboundMessageKey, SccpOutboundMessageRecord>;
     /// Derive a snapshot of AXT policies (per dataspace).
     fn axt_policy_snapshot(&self) -> AxtPolicySnapshot {
         let mut entries: Vec<AxtPolicyBinding> = self
@@ -16835,6 +16856,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AxtHandleReplayKey, AxtReplayRecord> {
                 &self.axt_replay_ledger
             }
+            fn sccp_outbound_messages(
+                &self,
+            ) -> &impl StorageReadOnly<SccpOutboundMessageKey, SccpOutboundMessageRecord> {
+                &self.sccp_outbound_messages
+            }
             fn tx_sequences(&self) -> &impl StorageReadOnly<AccountId, u64> {
                 &self.tx_sequences
             }
@@ -17482,6 +17508,7 @@ impl<'world> WorldBlock<'world> {
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
+            sccp_outbound_messages,
             space_directory_manifests,
             tx_sequences,
             triggers,
@@ -17725,6 +17752,7 @@ impl<'world> WorldBlock<'world> {
         uaid_dataspaces.commit();
         axt_policies.commit();
         axt_replay_ledger.commit();
+        sccp_outbound_messages.commit();
         space_directory_manifests.commit();
         account_permissions.commit();
         tx_sequences.commit();
@@ -18761,6 +18789,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
+            sccp_outbound_messages,
             space_directory_manifests,
             tx_sequences,
             triggers,
@@ -18984,6 +19013,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         uaid_dataspaces.apply();
         axt_policies.apply();
         axt_replay_ledger.apply();
+        sccp_outbound_messages.apply();
         space_directory_manifests.apply();
         account_permissions.apply();
         roles.apply();
@@ -32328,11 +32358,18 @@ impl<'state> StateBlock<'state> {
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
 
-        for (idx, tx) in block.external_transactions().enumerate() {
-            if block.error(idx).is_none() {
+        for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
+            let tx = match entrypoint {
+                TransactionEntrypoint::External(tx) => tx,
+                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => continue,
+            };
+            if block.error(entrypoint_index).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
-                Self::seed_committed_transaction_context(&mut transaction, tx, idx);
+                Self::seed_committed_transaction_context(&mut transaction, &tx, entrypoint_index);
                 if matches!(tx.instructions(), Executable::ContractCall(_)) {
                     let executor = transaction.world.executor.clone();
                     let ivm_cache = transaction.ivm_cache;
@@ -34665,18 +34702,31 @@ pub fn replay_blocks_from_kura_range(
                 });
             }
         }
-        let tx_count = committed_block.as_ref().external_transactions().count();
+        let signed_entrypoints = committed_block
+            .as_ref()
+            .external_entrypoints_cloned()
+            .enumerate()
+            .filter_map(|(idx, entrypoint)| match entrypoint {
+                TransactionEntrypoint::External(tx) => Some((idx, tx)),
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    Some((idx, reveal.signed_transaction().clone()))
+                }
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let tx_count = signed_entrypoints.len();
         let mut rejected = Vec::new();
-        for idx in 0..tx_count {
-            if let Some(err) = committed_block.as_ref().error(idx) {
-                rejected.push((idx, err.clone()));
+        for (idx, _tx) in &signed_entrypoints {
+            if let Some(err) = committed_block.as_ref().error(*idx) {
+                rejected.push((*idx, err.clone()));
             }
         }
         if tx_count > 0 {
-            let tx_hashes: Vec<_> = committed_block
-                .as_ref()
-                .external_transactions()
-                .map(|tx| (tx.hash_as_entrypoint(), tx.authority().clone()))
+            let tx_hashes: Vec<_> = signed_entrypoints
+                .iter()
+                .map(|(_idx, tx)| (tx.hash_as_entrypoint(), tx.authority().clone()))
                 .collect();
             iroha_logger::info!(
                 height,
@@ -40457,6 +40507,7 @@ pub(crate) mod deserialize {
         let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
         let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
         let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+        let sccp_outbound_messages = take_optional_default(&mut map, "sccp_outbound_messages")?;
         let tx_sequences: Storage<AccountId, u64> =
             take_optional_default(&mut map, "tx_sequences")?;
         let triggers = match map.remove("triggers") {
@@ -40653,6 +40704,7 @@ pub(crate) mod deserialize {
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),
             axt_replay_ledger: Storage::default(),
+            sccp_outbound_messages,
             tx_sequences,
             triggers,
             executor,
@@ -43726,6 +43778,91 @@ mod tests {
         assert_eq!(
             state.committed_transaction_height(&indexed_hash),
             Some(nonzero!(1_usize))
+        );
+    }
+
+    #[test]
+    fn committed_replay_skips_failed_external_after_sealed_commitment() {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .sign(keypair.private_key());
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                &chain_id, &inner_tx, [0x58; 32], 5,
+            );
+        let sealed_payload =
+            iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+                chain_id: chain_id.clone(),
+                authority: authority.clone(),
+                commitment,
+                reveal_after_height: 2,
+                reveal_deadline_height: 5,
+                nonce: None,
+            };
+        let sealed_entrypoint = TransactionEntrypoint::SealedCommitment(
+            iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                sealed_payload,
+                keypair.private_key(),
+            ),
+        );
+        let sealed_hash = sealed_entrypoint.hash();
+        let rejected_domain_id =
+            DomainId::try_new("rejectedreplay", "universal").expect("domain id");
+        let rejected_tx = TransactionBuilder::new(chain_id, authority.clone())
+            .with_instructions([Register::domain(Domain::new(rejected_domain_id.clone()))])
+            .sign(keypair.private_key());
+        let rejected_hash = rejected_tx.hash_as_entrypoint();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![rejected_tx.clone()]);
+        block.set_external_entrypoints(vec![
+            sealed_entrypoint,
+            TransactionEntrypoint::External(rejected_tx),
+        ]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[sealed_hash, rejected_hash],
+                vec![
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                    TransactionResultInner::Err(
+                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted(
+                                "failed replay fixture".to_owned(),
+                            ),
+                        ),
+                    ),
+                ],
+            )
+            .expect("test block entrypoint hashes should match payload");
+        let committed = crate::block::ValidBlock::new_unverified_for_tests(block)
+            .commit_unchecked()
+            .unpack(|_| {});
+
+        let mut state_block = state.block(committed.as_ref().header());
+        let _ = state_block.apply(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("failed replay fixture block should commit");
+
+        let view = state.view();
+        assert!(
+            view.world().domains().get(&rejected_domain_id).is_none(),
+            "failed external transaction after sealed entrypoint must not be replay-applied"
         );
     }
 

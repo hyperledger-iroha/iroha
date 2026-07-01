@@ -57,7 +57,7 @@ seiyaku TransferDemo {
 ```
 
 မြေပုံဆွဲခြင်း (pointer-ABI)-
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`၊ ထို့နောက် `SCALL 0x24`
+- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`၊ ထို့နောက် `SCALL 0x2C`
 
 ## NFT ဖန်တီး + လွှဲပြောင်း
 

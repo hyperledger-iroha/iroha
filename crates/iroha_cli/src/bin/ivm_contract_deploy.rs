@@ -1036,7 +1036,11 @@ fn main() -> Result<()> {
 
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let payload_digest_hex = hex::encode(blake3::hash(&code).as_bytes());
-    let operation_status = if args.emit_only { "prepared" } else { "committed" };
+    let operation_status = if args.emit_only {
+        "prepared"
+    } else {
+        "committed"
+    };
     let result = norito::json!({
         "ok": true,
         "submitted": (!args.emit_only),

@@ -1399,8 +1399,12 @@ def phase_command_lines(fragments) -> list[str]:
                 ),
                 None,
             )
+            test_command += (
+                " --artifacts-path target/sccp-production-corridor/dotnet-artifacts"
+            )
             if filter_fragment is not None:
                 test_command += " --filter " + filter_fragment
+            test_command += " -p:ProduceReferenceAssembly=false"
             test_command += " --nologo"
             if "sccp-dotnet-sdk.trx" in fragments:
                 test_command += " --logger trx;LogFileName=sccp-dotnet-sdk.trx"
@@ -2194,9 +2198,12 @@ def test_release_readiness_report_boolean_domain_does_not_alias_eth_policy() -> 
         lane,
         record_labels,
     )
+    expected_domain_label = report._sccp_domain_constant_label(
+        report.ACTIVE_LAUNCH_DOMAIN
+    )
     assert (
-        f"active launch: active launch lane domain must be "
-        f"{report.ACTIVE_LAUNCH_DOMAIN}"
+        f"active launch: active {report.ACTIVE_LAUNCH_DISPLAY} launch lane "
+        f"domain must be {expected_domain_label}"
     ) in active_blockers
 
     crypto_row = report._cryptographic_evidence(evidence)[0]
@@ -2415,10 +2422,16 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
 
     report = load_report_module()
 
-    assert report.ACTIVE_LAUNCH_DOMAIN == 1
+    assert report.ACTIVE_LAUNCH_DOMAIN == report.SCCP_DOMAIN_ETH
     assert report.ACTIVE_LAUNCH_CHAIN == "eth"
     assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
     assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
+    assert (
+        report._sccp_domain_constant_label(report.SCCP_DOMAIN_ETH)
+        == "SCCP_DOMAIN_ETH (1)"
+    )
+    assert report._sccp_domain_constant_label(True) == "non-integer domain"
+    assert "SCCP_DOMAIN_ETH" not in report._sccp_domain_constant_label(True)
     assert (
         report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE
         == "evm_message_proof_accepted_transaction"
@@ -8501,6 +8514,28 @@ def test_release_readiness_report_guards_release_public_crypto_evidence_binding_
         assert checked_markers > 0
 
 
+def test_release_readiness_report_public_crypto_source_gate_maps_use_domain_constants() -> None:
+    """Public crypto source-gate policies must not rely on literal lane ids."""
+
+    report = load_report_module()
+    source_text = SCRIPT.read_text(encoding="utf-8")
+
+    assert report.ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN[
+        report.SCCP_DOMAIN_BSC
+    ] == frozenset(("evm_source_gate_hash",))
+    assert (
+        report.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+            report.SCCP_DOMAIN_BSC
+        ]
+        == "evm_source_gate_hash"
+    )
+    # Source-inventory marker: readiness public crypto BSC source-gate policy maps must use SCCP_DOMAIN_BSC instead of a literal integer.
+    assert 'SCCP_DOMAIN_BSC: frozenset(("evm_source_gate_hash",)),' in source_text
+    assert 'SCCP_DOMAIN_BSC: "evm_source_gate_hash",' in source_text
+    assert '    2: frozenset(("evm_source_gate_hash",)),' not in source_text
+    assert '    2: "evm_source_gate_hash",' not in source_text
+
+
 def test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -9502,7 +9537,8 @@ def test_release_readiness_report_blocks_missing_launch_scope_source_gate(
     report = load_report_module()
     blocker = (
         "SCCP launch-scope constants source inventory "
-        "sccp_release_readiness_report.py missing marker: ACTIVE_LAUNCH_DOMAIN = 1"
+        "sccp_release_readiness_report.py missing marker: "
+        "ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH"
     )
     monkeypatch.setattr(
         report,
@@ -13394,6 +13430,8 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
             "test_live_evm_full_toml_revalidates_imported_summary_metadata",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
+            "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
+            "finality_policy",
             "route_canary_call_data_mutator",
             "proofBytes offset must be 256 bytes",
             "publicInputs[0] must match event messageId",
@@ -13466,7 +13504,8 @@ def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> 
             "receipt_block_finalized=False",
             "transaction to does not match destination bridge",
             'block_tag="finalized" if finality_expected else "latest"',
-            "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
+            "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
+            "finality_policy",
             "receipt block is newer than the finalized execution block",
             "receipt block hash does not match the finalized execution block",
         ),
@@ -14734,6 +14773,10 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
 
     markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
 
+    assert "that strict `dotnet test` command carrying" in markdown
+    assert "`--artifacts-path <bridge-target>/dotnet-artifacts`" in markdown
+    assert "`-p:ProduceReferenceAssembly=false`" in markdown
+    assert "`--nologo`" in markdown
     assert (
         "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` "
         "marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker "
@@ -15067,6 +15110,9 @@ def test_release_readiness_report_required_evidence_items_are_unique(
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
     assert "must not contain empty path-list segments" in required_evidence
+    assert "`--artifacts-path <bridge-target>/dotnet-artifacts`" in required_evidence
+    assert "`-p:ProduceReferenceAssembly=false`" in required_evidence
+    assert "`--nologo`" in required_evidence
     assert (
         "contains exactly the VSTest passed-test count of `UnitTestResult` rows"
         in required_evidence
@@ -17098,6 +17144,24 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    active_source_gate_required_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_hash_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_audit_hashes_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
     expected_destination_match_flag_exactness_cases = (
         (
             "destination_binding.expected_destination_binding_hash_matches",
@@ -17248,12 +17312,12 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
         (
             "source_adapter_gate.required",
             False,
-            "active EVM source adapter gate summary must be required",
+            active_source_gate_required_blocker,
         ),
         (
             "source_adapter_gate.gate_hash",
             "",
-            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
+            active_source_gate_hash_blocker,
         ),
         (
             "source_adapter_gate.hash_reuse_source_verifier",
@@ -17273,7 +17337,7 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
         (
             "source_adapter_gate.audit_hashes",
             {"unexpected_gate_hash": fixed_hex32(0x54)},
-            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
+            active_source_gate_audit_hashes_blocker,
         ),
     )
 
@@ -17380,12 +17444,18 @@ def test_release_readiness_report_recomputes_active_checklist_rejects_malformed_
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    active_live_metadata_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
     cases = (
         (
             "evm_live_metadata",
             "operator secret-token live metadata root",
             "governed_deployment_evidence",
-            "active EVM live metadata summary is malformed",
+            active_live_metadata_blocker,
         ),
         (
             "source_record_hashes",
@@ -19786,6 +19856,67 @@ def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_duplicate_corridor_evidence_artifacts_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must suppress duplicate copied corridor artifact paths."""
+
+    report = load_report_module()
+    phases = report._corridor_phases()
+    first_phase, second_phase, third_phase = phases[:3]
+    artifact = {
+        "path": "evidence/00-complete.toml",
+        "bytes": 5,
+        "sha256": "1" * 64,
+    }
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "corridor": {
+                "production_ready": False,
+                "phases": {phase: "skipped" for phase in phases},
+                "evidence_artifacts": {
+                    first_phase: artifact,
+                    second_phase: dict(artifact),
+                    third_phase: {
+                        "path": "operator secret-token-corridor-artifact",
+                        "bytes": 5,
+                        "sha256": "1" * 64,
+                    },
+                },
+                "require_phase_evidence": True,
+                "blockers": [],
+            },
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "corridor" not in payload
+    assert (
+        "readiness report corridor evidence_artifacts contains duplicate path #1"
+        in blockers
+    )
+    assert (
+        f"readiness report corridor evidence_artifacts.{third_phase} path must "
+        "be a canonical public path"
+    ) in blockers
+    assert "readiness report corridor is invalid" in blockers
+    assert "evidence/00-complete.toml" not in captured.out
+    assert "operator secret-token-corridor-artifact" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_empty_embedded_evidence_without_leaking(
     monkeypatch,
     capsys,
@@ -20159,6 +20290,104 @@ def test_release_readiness_report_cli_rejects_duplicate_input_provenance_without
     assert "readiness report inputs contains duplicate path" in blockers
     assert "readiness report input_artifacts contains duplicate path" in blockers
     assert "evidence/00-complete.toml" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_inputs_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed copied inputs must still report duplicate safe paths."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "inputs": [
+                "evidence/00-complete.toml",
+                "operator secret-token-input",
+                {"path": "operator secret-token-input-object"},
+                "evidence/00-complete.toml",
+            ],
+            "input_artifacts": [
+                {
+                    "path": "evidence/00-complete.toml",
+                    "bytes": 5,
+                    "sha256": "1" * 64,
+                },
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "inputs" not in payload
+    assert "readiness report inputs contains duplicate path" in blockers
+    assert (
+        "readiness report inputs must be a list of canonical strings"
+        in blockers
+    )
+    assert "operator secret-token-input" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_input_artifacts_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed input artifacts must still report safe duplicate paths."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "inputs": ["evidence/00-complete.toml"],
+            "input_artifacts": [
+                {
+                    "path": "evidence/00-complete.toml",
+                    "bytes": 5,
+                    "sha256": "1" * 64,
+                },
+                "operator secret-token-input-artifact",
+                {
+                    "path": "evidence/00-complete.toml",
+                    "bytes": 5,
+                    "sha256": "1" * 64,
+                },
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "input_artifacts" not in payload
+    assert (
+        "readiness report input_artifacts contains duplicate path #1"
+        in blockers
+    )
+    assert (
+        "readiness report input_artifacts must be a list of objects"
+        in blockers
+    )
+    assert "operator secret-token-input-artifact" not in captured.out
+    assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -20646,6 +20875,50 @@ def test_release_readiness_report_cli_rejects_malformed_user_prover_surfaces_wit
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_user_prover_surfaces_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed user-prover rows must still report duplicate lanes."""
+
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in report._corridor_phases()}
+    valid_surfaces = report._submission_surfaces(phase_status)
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "user_prover_submission_surfaces": [
+                valid_surfaces[0],
+                "operator secret-token-user-surface",
+                dict(valid_surfaces[0]),
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "user_prover_submission_surfaces" not in payload
+    assert (
+        "readiness report user_prover_submission_surfaces[2] lanes is duplicated"
+        in blockers
+    )
+    assert (
+        "readiness report user_prover_submission_surfaces must be a list of objects"
+        in blockers
+    )
+    assert "operator secret-token-user-surface" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_empty_cryptographic_evidence_without_leaking(
     monkeypatch,
     capsys,
@@ -20677,6 +20950,52 @@ def test_release_readiness_report_cli_rejects_empty_cryptographic_evidence_witho
             in blockers
         )
     assert "readiness report cryptographic_evidence is invalid" in blockers
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_cryptographic_evidence_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed crypto rows must still report duplicate domains."""
+
+    report = load_report_module()
+    crypto_row = {
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+    }
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "cryptographic_evidence": [
+                crypto_row,
+                "operator secret-token-crypto-row",
+                dict(crypto_row),
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "cryptographic_evidence" not in payload
+    assert (
+        "readiness report cryptographic_evidence contains duplicate "
+        f"domain: {report.ACTIVE_LAUNCH_DOMAIN}"
+    ) in blockers
+    assert (
+        "readiness report cryptographic_evidence must be a list of objects"
+        in blockers
+    )
+    assert "operator secret-token-crypto-row" not in captured.out
     assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
 
@@ -21545,7 +21864,9 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
     report = load_report_module()
     rows = public_crypto_rows_for_all_domains(report)
     tron_index, tron_row = next(
-        (index, row) for index, row in enumerate(rows) if row["domain"] == 5
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.SCCP_DOMAIN_TRON
     )
     tron_row.update(
         {
@@ -21559,7 +21880,7 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
             "route_canary_signature_sha256": fixed_hex32(0xF8),
             "route_canary_signature_recovered_address": fixed_tron_address(0xF7),
             "route_canary_log_index": 0,
-            "route_canary_target_domain": 5,
+            "route_canary_target_domain": report.SCCP_DOMAIN_TRON,
             "route_canary_proof_version": 1,
             "route_canary_proof_source_domain": report.SCCP_DOMAIN_SORA,
             "route_canary_call_data_sha256": fixed_hex32(0xF9),
@@ -21588,7 +21909,7 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
 
     # Source-inventory marker: public crypto TRON owner/signature null policy covers every non-TRON launch domain
     for domain, chain in report.ALL_LANES_CHAIN_BY_DOMAIN.items():
-        if domain == 5:
+        if domain == report.SCCP_DOMAIN_TRON:
             continue
         rows = public_crypto_rows_for_all_domains(report)
         target_index, target_row = next(
@@ -21781,7 +22102,7 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
                 "route_canary_proof_source_domain": report.SCCP_DOMAIN_SORA,
             }
         )
-        if domain == 5:
+        if domain == report.SCCP_DOMAIN_TRON:
             target_row["route_canary_raw_data_owner_matches_transaction"] = True
             target_row["route_canary_signature_recovers_to_owner"] = True
         for field in transcript_fields:
@@ -21859,7 +22180,7 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_scalar_drif
         )
         for offset, field in enumerate(transcript_fields):
             target_row[field] = fixed_hex32(0xE0 + domain * 10 + offset)
-        if domain == 5:
+        if domain == report.SCCP_DOMAIN_TRON:
             target_row["route_canary_raw_data_owner_matches_transaction"] = True
             target_row["route_canary_signature_recovers_to_owner"] = True
 
@@ -23606,6 +23927,69 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_dr
     assert payload["release_checklist"]["ready"] is False
 
 
+def test_release_readiness_report_numbers_repeated_sensitive_native_evm_sdk_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Repeated sensitive SDK names must stay distinct without leaking names."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    secret_unknown_sdk = "secret-token-sdk"
+    private_unknown_sdk = "private-key-sdk"
+    missing_sdks = [
+        payload["native_sdk_artifacts"][0]["sdk"],
+        payload["native_sdk_artifacts"][1]["sdk"],
+    ]
+    payload["native_sdk_artifacts"][0]["sdk"] = secret_unknown_sdk
+    payload["native_sdk_artifacts"][1]["sdk"] = private_unknown_sdk
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native_sdk_artifacts contains unknown sdk with sensitive name #1"
+        in blockers
+    )
+    assert (
+        "native_sdk_artifacts contains unknown sdk with sensitive name #2"
+        in blockers
+    )
+    assert (
+        "native_sdk_artifacts contains unknown sdk with sensitive name"
+        not in blockers
+    )
+    for sdk in missing_sdks:
+        assert f"native_sdk_artifacts missing sdk: {sdk}" in blockers
+    assert secret_unknown_sdk not in completed.stdout
+    assert secret_unknown_sdk not in completed.stderr
+    assert private_unknown_sdk not in completed.stdout
+    assert private_unknown_sdk not in completed.stderr
+    assert payload["release_checklist"]["ready"] is False
+
+
 def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift(
     tmp_path: Path,
 ) -> None:
@@ -24631,12 +25015,14 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     rogue_sdk = "rogue-sdk"
     secret_sdk = "secret-token-sdk"
+    private_sdk = "private-key-sdk"
 
     parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
     parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
     parity_result = next(iter(parity_payload["sdk_results"].values()))
     parity_payload["sdk_results"][rogue_sdk] = dict(parity_result)
     parity_payload["sdk_results"][secret_sdk] = dict(parity_result)
+    parity_payload["sdk_results"][private_sdk] = dict(parity_result)
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -24650,6 +25036,7 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     self_test_result = next(iter(self_test_payload["sdk_results"].values()))
     self_test_payload["sdk_results"][rogue_sdk] = dict(self_test_result)
     self_test_payload["sdk_results"][secret_sdk] = dict(self_test_result)
+    self_test_payload["sdk_results"][private_sdk] = dict(self_test_result)
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -24690,7 +25077,11 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
-        "sdk_results contains unknown sdk with sensitive name"
+        "sdk_results contains unknown sdk with sensitive name #1"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sdk_results contains unknown sdk with sensitive name #2"
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
@@ -24698,11 +25089,28 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
-        "sdk_results contains unknown sdk with sensitive name"
+        "sdk_results contains unknown sdk with sensitive name #1"
     ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "sdk_results contains unknown sdk with sensitive name #2"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sdk_results contains unknown sdk with sensitive name"
+        not in blockers
+    )
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "sdk_results contains unknown sdk with sensitive name"
+        not in blockers
+    )
     assert secret_sdk not in "\n".join(blockers)
     assert secret_sdk not in completed.stdout
     assert secret_sdk not in completed.stderr
+    assert private_sdk not in "\n".join(blockers)
+    assert private_sdk not in completed.stdout
+    assert private_sdk not in completed.stderr
     assert payload["release_checklist"]["ready"] is False
 
 

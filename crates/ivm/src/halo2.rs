@@ -1145,6 +1145,9 @@ impl<'a> Ed25519VerifyCircuit<'a> {
         use ed25519_dalek::{Signature, VerifyingKey};
         let pk = VerifyingKey::from_bytes(&self.public_key)
             .map_err(|_| "Ed25519 verifying key decode failed")?;
+        if crate::signature::signature_bytes_are_all_zero(&self.signature) {
+            return ensure_equal_bool(false, self.result);
+        }
         let sig = Signature::from_slice(&self.signature)
             .map_err(|_| "Ed25519 signature decode failed")?;
         let valid = pk.verify_strict(self.message, &sig).is_ok();
@@ -1195,9 +1198,13 @@ impl<'a> DilithiumVerifyCircuit<'a> {
                 }
                 let pk = dilithium2::PublicKey::from_bytes(self.public_key)
                     .map_err(|_| "Dilithium level2 public key decode failed")?;
-                let sig = dilithium2::DetachedSignature::from_bytes(self.signature)
-                    .map_err(|_| "Dilithium level2 signature decode failed")?;
-                dilithium2::verify_detached_signature(&sig, self.message, &pk).is_ok()
+                if crate::signature::signature_bytes_are_all_zero(self.signature) {
+                    false
+                } else {
+                    let sig = dilithium2::DetachedSignature::from_bytes(self.signature)
+                        .map_err(|_| "Dilithium level2 signature decode failed")?;
+                    dilithium2::verify_detached_signature(&sig, self.message, &pk).is_ok()
+                }
             }
             DilithiumLevel::Level3 => {
                 if self.public_key.len() != dilithium3::public_key_bytes() {
@@ -1208,9 +1215,13 @@ impl<'a> DilithiumVerifyCircuit<'a> {
                 }
                 let pk = dilithium3::PublicKey::from_bytes(self.public_key)
                     .map_err(|_| "Dilithium level3 public key decode failed")?;
-                let sig = dilithium3::DetachedSignature::from_bytes(self.signature)
-                    .map_err(|_| "Dilithium level3 signature decode failed")?;
-                dilithium3::verify_detached_signature(&sig, self.message, &pk).is_ok()
+                if crate::signature::signature_bytes_are_all_zero(self.signature) {
+                    false
+                } else {
+                    let sig = dilithium3::DetachedSignature::from_bytes(self.signature)
+                        .map_err(|_| "Dilithium level3 signature decode failed")?;
+                    dilithium3::verify_detached_signature(&sig, self.message, &pk).is_ok()
+                }
             }
             DilithiumLevel::Level5 => {
                 if self.public_key.len() != dilithium5::public_key_bytes() {
@@ -1221,9 +1232,13 @@ impl<'a> DilithiumVerifyCircuit<'a> {
                 }
                 let pk = dilithium5::PublicKey::from_bytes(self.public_key)
                     .map_err(|_| "Dilithium level5 public key decode failed")?;
-                let sig = dilithium5::DetachedSignature::from_bytes(self.signature)
-                    .map_err(|_| "Dilithium level5 signature decode failed")?;
-                dilithium5::verify_detached_signature(&sig, self.message, &pk).is_ok()
+                if crate::signature::signature_bytes_are_all_zero(self.signature) {
+                    false
+                } else {
+                    let sig = dilithium5::DetachedSignature::from_bytes(self.signature)
+                        .map_err(|_| "Dilithium level5 signature decode failed")?;
+                    dilithium5::verify_detached_signature(&sig, self.message, &pk).is_ok()
+                }
             }
         };
 

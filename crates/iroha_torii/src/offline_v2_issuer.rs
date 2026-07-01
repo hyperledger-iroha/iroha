@@ -2309,7 +2309,7 @@ fn decode_signature_base64(
     if bytes.len() != 64 {
         return Err(validation(code, message));
     }
-    Ok(Signature::from_bytes(&bytes))
+    Signature::try_from_bytes(&bytes).map_err(|_| validation(code, message))
 }
 
 fn build_settlement(
@@ -4651,6 +4651,33 @@ mod tests {
             &mut receipt,
             "signature_base64",
             string_value(BASE64_STANDARD.encode([0_u8; 63])),
+        );
+        replace_attestation_receipt(&mut request, receipt);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_all_zero_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(
+            &mut receipt,
+            "signature_base64",
+            string_value(BASE64_STANDARD.encode([0_u8; 64])),
         );
         replace_attestation_receipt(&mut request, receipt);
 

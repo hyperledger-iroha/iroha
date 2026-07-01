@@ -220,7 +220,7 @@ register_trigger wake {
 ### ホスト／システムコール系ビルトイン（SCALL へマッピング。番号は `ivm.md` 参照）
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `nft_mint_asset(NftId*, AccountId*)`
 - `nft_transfer_asset(AccountId*, NftId*, AccountId*)`

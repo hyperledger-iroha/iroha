@@ -1809,7 +1809,9 @@ fn verify_json_signature(
     let signature_bytes = BASE64_STANDARD
         .decode(signature_base64)
         .map_err(|_| validation(code, message))?;
-    Signature::from_bytes(&signature_bytes)
+    let signature =
+        Signature::try_from_bytes(&signature_bytes).map_err(|_| validation(code, message))?;
+    signature
         .verify(public_key, &bytes)
         .map_err(|_| validation(code, message))
 }
@@ -2414,6 +2416,26 @@ mod tests {
         let (issuer, _verifier) = sample_issuer();
         let wrong_verifier = checked_seed_keypair(0x23);
         let request = sample_request(&wrong_verifier, [0xA5; 32], vec![0xB6; 65]);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_ATTESTATION_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_all_zero_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let receipt = request
+            .device_binding
+            .get_mut("attestation_receipt")
+            .expect("attestation receipt");
+        insert_field(
+            receipt,
+            "signature_base64",
+            string_value(BASE64_STANDARD.encode([0_u8; 64])),
+        );
 
         assert_eq!(
             validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),

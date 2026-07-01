@@ -3261,7 +3261,7 @@ public final class TonSccpProverTests {
         : "descriptor binding source domain must be TON";
     assert derivedBinding.targetDomain() == SolanaSccpProver.DOMAIN_SORA
         : "descriptor binding target domain must be SORA";
-    assert "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
+    assert "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3"
         .equals(derivedBinding.sourceAdapterDeploymentHash())
         : "descriptor binding must derive the deployment hash";
     assert ("0x" + repeat("aa", 32)).equals(derivedBinding.sourceAdapterDeploymentReceiptHash())
@@ -3311,6 +3311,32 @@ public final class TonSccpProverTests {
       partialAuditThrew = ex.getMessage().contains("TON audit verifier hashes");
     }
     assert partialAuditThrew : "descriptor binding must reject partial TON audit hashes";
+    boolean nonGovernedAuditThrew = false;
+    try {
+      TonSccpProver.sourceAdapterDeploymentBindingFromDeployment(
+          new TonSccpProver.SourceAdapterDeploymentInput(
+              auditedTonDeployment.sourceDomain(),
+              auditedTonDeployment.targetDomain(),
+              auditedTonDeployment.sourceTrustAnchorHash(),
+              auditedTonDeployment.consensusVerifierHash(),
+              auditedTonDeployment.messageInclusionVerifierHash(),
+              auditedTonDeployment.finalityPolicyHash(),
+              auditedTonDeployment.sourceStateVerifierHash(),
+              auditedTonDeployment.deploymentReceiptHash(),
+              auditedTonDeployment.adapterVerifierVkHash(),
+              auditedTonDeployment.bridgeAddress(),
+              auditedTonDeployment.sourceBridgeEmitterCodeHash(),
+              auditedTonDeployment.networkId(),
+              auditedTonDeployment.ownerAddress(),
+              auditedTonDeployment.configHash(),
+              "0x" + repeat("2a", 32),
+              auditedTonDeployment.tonValidatorSetTransitionVerifierHash(),
+              auditedTonDeployment.tonShardAccountsDictionaryVerifierHash()));
+    } catch (final IllegalArgumentException ex) {
+      nonGovernedAuditThrew =
+          ex.getMessage().contains("governed TON full-light-client audit");
+    }
+    assert nonGovernedAuditThrew : "descriptor binding must reject non-governed TON audit hashes";
     boolean receiptVkReplayThrew = false;
     try {
       TonSccpProver.sourceAdapterDeploymentBindingFromDeployment(
@@ -4362,9 +4388,9 @@ public final class TonSccpProverTests {
         null,
         null,
         null,
-        "0x" + repeat("bb", 32),
-        "0x" + repeat("cc", 32),
-        "0x" + repeat("dd", 32));
+        "0x" + repeat("26", 32),
+        "0x" + repeat("27", 32),
+        "0x" + repeat("28", 32));
   }
 
   private static TonSccpProver.PublicInputsInput samplePublicInputs() {

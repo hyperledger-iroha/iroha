@@ -420,7 +420,12 @@ pub fn verify_alias_proof_bundle(
                     reason: format!("signer {signer_hex}: {err}"),
                 }
             })?;
-        let sig = Signature::from_bytes(&signature.signature);
+        let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+            AliasProofVerificationError::SignatureVerificationFailed {
+                index,
+                reason: format!("signer {signer_hex}: invalid signature material: {err}"),
+            }
+        })?;
         sig.verify(&public_key, message.as_ref()).map_err(|err| {
             AliasProofVerificationError::SignatureVerificationFailed {
                 index,
@@ -866,6 +871,17 @@ mod tests {
     fn alias_proof_bundle_verification_rejects_bad_signature() {
         let (mut bundle, _) = signed_alias_proof_bundle();
         bundle.council_signatures[0].signature[0] ^= 0xFF;
+        let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+        assert!(matches!(
+            err,
+            AliasProofVerificationError::SignatureVerificationFailed { .. }
+        ));
+    }
+
+    #[test]
+    fn alias_proof_bundle_verification_rejects_all_zero_signature_material() {
+        let (mut bundle, _) = signed_alias_proof_bundle();
+        bundle.council_signatures[0].signature.fill(0);
         let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
         assert!(matches!(
             err,
