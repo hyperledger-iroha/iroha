@@ -11,6 +11,14 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
+- Keep the first-release IVM/Kotodama contract settlement surface scoped and
+  evidence-forward: `transfer_asset` must use the five-argument dataspace form
+  for balance movement, the ledger host must queue scoped private-IS transfers,
+  and Torii/CLI contract operations must emit normalized public
+  `operation_receipt` objects without private keys or raw payloads. Before
+  release, finish focused ABI hash/syscall golden, host, Torii, CLI, and
+  Kotodama compiler validation for this surface.
+
 - Keep mobile Kagemusha offline payload and issuer-refill entrypoints
   fail-closed for first release: Swift external certificate JSON and
   Kotlin/JVM plus Java Android Torii issuer refill certificates must resolve to

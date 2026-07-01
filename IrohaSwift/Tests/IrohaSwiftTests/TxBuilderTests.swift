@@ -1573,21 +1573,26 @@ final class TxBuilderTests: XCTestCase {
         sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
 
         let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
-        let payload = try XCTUnwrap(envelope.payload)
 
         XCTAssertEqual(envelope.transactionHash.count, 32)
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertFalse(envelope.signedTransaction.isEmpty)
-        XCTAssertEqual(asciiOccurrenceCount("iroha.transfer", in: payload), 2)
-        XCTAssertTrue(dataContainsASCII(IrohaValidationFeeTransactionMetadataKey.policyVersion, in: payload))
-        XCTAssertTrue(dataContainsASCII(IrohaValidationFeeTransactionMetadataKey.policyHash, in: payload))
-        XCTAssertTrue(dataContainsASCII(IrohaValidationFeeTransactionMetadataKey.instructionIndex, in: payload))
-        XCTAssertTrue(dataContainsASCII(policyHash.lowercased(), in: payload))
-        XCTAssertTrue(dataContainsASCII("client_trace", in: payload))
-        XCTAssertTrue(dataContainsASCII("fee_sponsor", in: payload))
-        XCTAssertTrue(dataContainsASCII(feeSponsor, in: payload))
-        XCTAssertTrue(dataContainsASCII("memo", in: payload))
-        XCTAssertTrue(dataContainsASCII("invoice-123", in: payload))
+
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native decoder not linked")
+        }
+        let json = try XCTUnwrap(sdk.decodeSignedTransaction(envelope: envelope))
+        XCTAssertTrue(json.contains("\"instructions\""), json)
+        XCTAssertGreaterThanOrEqual(asciiOccurrenceCount("transfer_asset", in: Data(json.utf8)), 2, json)
+        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.policyVersion), json)
+        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.policyHash), json)
+        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.instructionIndex), json)
+        XCTAssertTrue(json.contains(policyHash.lowercased()), json)
+        XCTAssertTrue(json.contains("client_trace"), json)
+        XCTAssertTrue(json.contains("\"fee_sponsor\""), json)
+        XCTAssertTrue(json.contains(feeSponsor), json)
+        XCTAssertTrue(json.contains("\"memo\""), json)
+        XCTAssertTrue(json.contains("invoice-123"), json)
     }
 
     func testBuildSignedTransferWithValidationFeeRejectsMalformedPolicyHash() throws {

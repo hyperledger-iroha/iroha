@@ -19999,9 +19999,9 @@ mod tests {
             &mut binary_fragmented,
             &envelope,
         );
-        binary_fragmented.validate().expect(
-            "full-bootstrap execution proof must accept binary native envelope fragments",
-        );
+        binary_fragmented
+            .validate()
+            .expect("full-bootstrap execution proof must accept binary native envelope fragments");
 
         let mut marker_split = sample_fhe_full_bootstrap_execution_proof();
         let envelope = open_verify_envelope_with_native_envelope_bytes(

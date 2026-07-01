@@ -1,10 +1,26 @@
 import { Buffer } from "buffer";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
+import {
+  entropyToMnemonic,
+  generateMnemonic,
+  mnemonicToEntropy,
+  validateMnemonic,
+} from "@scure/bip39";
+import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
 const ED25519_PRIVATE_KEY_LENGTH = 64;
+const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 24]);
+const RECOVERY_PHRASE_STRENGTH_BITS = new Map([
+  [12, 128],
+  [24, 256],
+]);
+const RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT = new Map([
+  [16, 12],
+  [32, 24],
+]);
 
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
@@ -258,6 +274,64 @@ export function verifyEd25519(message, signature, publicKey) {
   const signatureBuffer = toBuffer(signature, "signature");
   const publicKeyBuffer = normalizePublicKey(publicKey);
   return ed25519.verify(signatureBuffer, messageBuffer, publicKeyBuffer);
+}
+
+function recoveryPhraseWords(phrase) {
+  if (typeof phrase !== "string") {
+    throw new TypeError("recovery phrase must be a string");
+  }
+  return phrase.normalize("NFKD").trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+export function normalizeRecoveryPhrase(phrase) {
+  const words = recoveryPhraseWords(phrase);
+  const wordCount = words.length;
+  if (!RECOVERY_PHRASE_WORD_COUNTS.has(wordCount)) {
+    throw new Error("recovery phrase must contain 12 or 24 words");
+  }
+  const normalizedPhrase = words.join(" ");
+  if (!validateMnemonic(normalizedPhrase, englishWordlist)) {
+    throw new Error("recovery phrase checksum or word list is invalid");
+  }
+  return { phrase: normalizedPhrase, words, wordCount };
+}
+
+export function validateRecoveryPhrase(phrase) {
+  try {
+    normalizeRecoveryPhrase(phrase);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function generateRecoveryPhrase(wordCount = 24) {
+  const strength = RECOVERY_PHRASE_STRENGTH_BITS.get(wordCount);
+  if (!strength) {
+    throw new Error("recovery phrase word count must be 12 or 24");
+  }
+  return normalizeRecoveryPhrase(generateMnemonic(englishWordlist, strength));
+}
+
+export function entropyToRecoveryPhrase(entropy) {
+  const buffer = toBuffer(entropy, "entropy");
+  if (!RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT.has(buffer.length)) {
+    throw new Error("recovery phrase entropy must be 16 or 32 bytes");
+  }
+  return normalizeRecoveryPhrase(entropyToMnemonic(buffer, englishWordlist));
+}
+
+export function recoveryPhraseToEntropy(phrase) {
+  const recovery = normalizeRecoveryPhrase(phrase);
+  return Buffer.from(mnemonicToEntropy(recovery.phrase, englishWordlist));
+}
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
+  return normalizeSeed(recoveryPhraseToEntropy(phrase));
+}
+
+export function ed25519SeedToRecoveryPhrase(privateKey) {
+  return entropyToRecoveryPhrase(extractSeed(privateKey));
 }
 
 export function sign(message, privateKey, options = {}) {

@@ -3140,22 +3140,16 @@ fn parse_transfer_asset_builtin() {
 #[test]
 fn parse_transfer_batch_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int){ transfer_batch((a,b,c,d), (b,a,c,d)); }";
+    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int, e: DataSpaceId){ transfer_batch((a,b,c,d,e), (b,a,c,d,e)); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
-    let begin_idx = instrs
-        .iter()
-        .position(|i| matches!(i, Instr::TransferBatchBegin))
-        .expect("begin not emitted");
-    let end_idx = instrs
-        .iter()
-        .position(|i| matches!(i, Instr::TransferBatchEnd))
-        .expect("end not emitted");
     assert!(
-        begin_idx < end_idx,
-        "batch begin must precede batch end (begin={begin_idx}, end={end_idx})"
+        !instrs
+            .iter()
+            .any(|i| matches!(i, Instr::TransferBatchBegin | Instr::TransferBatchEnd)),
+        "high-level transfer_batch must not emit batch boundary syscalls"
     );
     let transfer_count = instrs
         .iter()

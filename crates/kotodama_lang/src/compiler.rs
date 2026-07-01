@@ -773,7 +773,7 @@ impl Default for CompilerOptions {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId};
+    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId, prelude::AssetBalanceScope};
 
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
@@ -3148,8 +3148,9 @@ fn main() {
         let src = r#"
 fn main() {
   let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-  transfer_batch((authority(), authority(), asset, 5));
-  call transfer_batch((authority(), authority(), asset, 7));
+  let space = dataspace_id("0");
+  transfer_batch((authority(), authority(), asset, 5, space));
+  call transfer_batch((authority(), authority(), asset, 7, space));
 }
 "#;
         let parsed = parse(src).expect("parse transfer_batch source");
@@ -3173,9 +3174,9 @@ fn main() {
             }
         }
 
-        assert_eq!(begins, 2, "expected direct and call-sugar batch begin");
+        assert_eq!(begins, 0, "high-level transfer_batch must not emit begin");
         assert_eq!(transfers, 2, "expected one transfer per batch entry");
-        assert_eq!(ends, 2, "expected direct and call-sugar batch end");
+        assert_eq!(ends, 0, "high-level transfer_batch must not emit end");
     }
 
     #[test]

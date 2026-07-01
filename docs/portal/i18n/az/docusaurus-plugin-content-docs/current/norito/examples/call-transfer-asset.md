@@ -38,10 +38,11 @@ Kotodama giriş nöqtəsinin daxili metadata yoxlaması ilə `transfer_asset` t�
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<i105-account-id>"),
-      account!("<i105-account-id>"),
+      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10
+      10,
+      dataspace_id("0")
     );
   }
 }

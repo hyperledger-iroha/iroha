@@ -228,6 +228,14 @@ export interface CryptoKeyPair {
   distid?: string | null;
 }
 
+export type RecoveryPhraseWordCount = 12 | 24;
+
+export interface RecoveryPhrase {
+  readonly phrase: string;
+  readonly words: readonly string[];
+  readonly wordCount: RecoveryPhraseWordCount;
+}
+
 export interface KeyPair extends CryptoKeyPair {
   algorithm: "ed25519";
 }
@@ -19249,6 +19257,26 @@ export function verifyEd25519(
   signature: ArrayBufferView | ArrayBuffer | Buffer,
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): boolean;
+
+export function normalizeRecoveryPhrase(phrase: string): RecoveryPhrase;
+
+export function validateRecoveryPhrase(phrase: string): boolean;
+
+export function generateRecoveryPhrase(
+  wordCount?: RecoveryPhraseWordCount,
+): RecoveryPhrase;
+
+export function entropyToRecoveryPhrase(
+  entropy: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
+
+export function recoveryPhraseToEntropy(phrase: string): Buffer;
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase: string): Buffer;
+
+export function ed25519SeedToRecoveryPhrase(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
 
 export function canonicalQueryString(
   query?: string | URLSearchParams | null,

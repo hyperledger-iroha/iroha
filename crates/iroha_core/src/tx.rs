@@ -5096,7 +5096,9 @@ fn enforce_lane_policies(
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
-            let governance_sensitive = tx_requires_manifest_validator_gating(rules, tx);
+            let governance_manifest = status.governance.is_some();
+            let governance_sensitive =
+                governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
             if governance_sensitive {
                 if !rules.validators.is_empty()
                     && !allows_multisig_envelope_authority
@@ -5119,14 +5121,16 @@ fn enforce_lane_policies(
                 }
             }
 
-            enforce_manifest_protected_namespaces(
-                &lane_alias,
-                rules,
-                tx,
-                &state_transaction.world,
-            )?;
+            if governance_manifest {
+                enforce_manifest_protected_namespaces(
+                    &lane_alias,
+                    rules,
+                    tx,
+                    &state_transaction.world,
+                )?;
 
-            runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+                runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+            }
         }
     }
 
@@ -11364,6 +11368,73 @@ pub mod tests {
             }
             other => panic!("expected compliance rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn non_governed_manifest_validators_do_not_gate_state_policy_for_ivm_contract_metadata() {
+        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
+
+        let chain: ChainId = "non-governed-manifest-ivm-contract".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let (validator, _) = gen_account_in("wonderland");
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let mut rules = GovernanceRules {
+            validators: vec![validator],
+            quorum: Some(1),
+            ..GovernanceRules::default()
+        };
+        rules
+            .protected_namespaces
+            .insert(Name::from_str("is").expect("namespace"));
+
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "is".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: None,
+                manifest_path: Some(PathBuf::from("/tmp/is.manifest.json")),
+                governance_rules: Some(rules),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&manifests);
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            TestDataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0xCA])))
+            .sign(keypair.private_key());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
+
+        let result = super::enforce_lane_policies(&tx, &stx, &assignment);
+        assert!(
+            result.is_ok(),
+            "non-governed manifest validators must not reject contract metadata: {result:?}"
+        );
     }
 
     #[test]

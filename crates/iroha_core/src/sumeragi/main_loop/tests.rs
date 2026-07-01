@@ -144633,6 +144633,117 @@ async fn pacemaker_rotates_stale_proposal_seen_without_materialized_owner() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_rotates_stale_exact_slot_proposal_evidence_after_no_progress() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        tracked_height,
+        view,
+        Some(committed_block.hash()),
+    );
+    let block_hash = insert_validated_pending(actor, block);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending block exists")
+        .note_local_commit_vote_emitted();
+    assert!(
+        actor.slot_has_proposal_evidence(tracked_height, view),
+        "test setup requires exact-view proposal evidence with local payload"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending block exists")
+            .commit_qc_observed(),
+        "test setup must model evidence that has not reached commit QC"
+    );
+
+    let now = Instant::now();
+    let stale_window = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    let stale_start = now
+        .checked_sub(stale_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, stale_start);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        stale_start,
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "stale exact-slot proposal evidence should rotate the recovery view instead of pinning it"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(view.saturating_add(1)),
+        "stale exact-slot evidence should advance the frontier view"
+    );
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(tracked_height, view)),
+        "rotation should clear the stale proposal-seen marker for the exhausted view"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "rotation should preserve the pending body for ordinary recovery paths"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_allows_committed_qc_fallback_while_compatible_partial_new_view_support_converges()
  {
     use std::borrow::Cow;

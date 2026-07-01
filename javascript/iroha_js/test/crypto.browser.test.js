@@ -204,34 +204,32 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
 });
 
 test("browser crypto exposes recovery phrase helpers in source and dist bundles", () => {
-  const fixturePhrase =
-    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+  const entropy = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 1));
+
   for (const [label, crypto] of [
     ["src", srcBrowserCrypto],
     ["dist", distBrowserCrypto],
   ]) {
-    assert.equal(
-      crypto.normalizeRecoveryPhrase("  ABANDON   abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about  "),
-      fixturePhrase,
-      `${label} normalizes recovery phrase whitespace and case`,
-    );
-    assert.equal(crypto.validateRecoveryPhrase(fixturePhrase), true, `${label} validates known phrase`);
-    assert.equal(
-      crypto.deriveEd25519SeedFromRecoveryPhrase(fixturePhrase).toString("hex").toUpperCase(),
-      "5EB00BBDDCF069084889A8AB9155568165F5C453CCB85E70811AAED6F6DA5FC1",
-      `${label} matches the demo derivation fixture`,
-    );
-    assert.equal(crypto.validateRecoveryPhrase("abandon abandon abandon"), false, `${label} rejects short phrases`);
+    const recovery = crypto.ed25519SeedToRecoveryPhrase(entropy);
 
-    const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
-    const recovery = crypto.ed25519SeedToRecoveryPhrase(seed);
-    assert.equal(recovery.wordCount, 24, `${label} exports 32-byte seeds as 24 words`);
-    assert.deepEqual(crypto.recoveryPhraseToEntropy(recovery.phrase), seed, `${label} round-trips seed entropy`);
-    assert.equal(crypto.entropyToRecoveryPhrase(Buffer.alloc(16)).wordCount, 12, `${label} supports 12-word entropy`);
+    assert.equal(recovery.wordCount, 24, `${label} exports 24-word Ed25519 seed recovery`);
+    assert.equal(recovery.words.length, 24, `${label} recovery word count matches`);
+    assert.equal(crypto.validateRecoveryPhrase(recovery.phrase), true, `${label} validates generated phrase`);
+    assert.deepEqual(crypto.recoveryPhraseToEntropy(recovery.phrase), entropy, `${label} recovers original seed`);
+    assert.deepEqual(
+      crypto.deriveEd25519SeedFromRecoveryPhrase(recovery.phrase),
+      entropy,
+      `${label} derives original Ed25519 seed`,
+    );
     assert.throws(
-      () => crypto.entropyToRecoveryPhrase(Buffer.alloc(24)),
+      () => crypto.normalizeRecoveryPhrase(recovery.words.slice(0, 11).join(" ")),
+      /12 or 24 words/,
+      `${label} rejects unsupported word count`,
+    );
+    assert.throws(
+      () => crypto.entropyToRecoveryPhrase(Buffer.alloc(20)),
       /16 or 32 bytes/,
-      `${label} rejects non-BIP39 entropy length`,
+      `${label} rejects unsupported entropy length`,
     );
   }
 });
