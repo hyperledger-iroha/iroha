@@ -102,8 +102,21 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
         try OfflineNoteValidation.validateRandomBytes(noteSecret, field: "note_secret")
         self.chainId = checkedChainId
         self.accountId = checkedAccountId
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId: String
+        do {
+            canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        } catch {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        guard amount == canonicalAmount else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
         self.keyCertificate = keyCertificate
         self.noteCommitment = noteCommitment
         self.noteSecret = noteSecret
@@ -526,8 +539,21 @@ public struct OfflineNoteReceiveRequest: Equatable, Sendable {
         self.paymentRequestId = paymentRequestId
         self.accountId = accountId
         self.assetDefinitionId = assetDefinitionId
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId: String
+        do {
+            canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        } catch {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        let canonicalAmount = try Self.canonicalPositiveAmountString(amount)
+        guard amount == canonicalAmount else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
         self.keyCertificate = keyCertificate
         self.outputCommitment = outputCommitment
         _ = try OfflineNoteAuditOutputClaim(
@@ -540,6 +566,14 @@ public struct OfflineNoteReceiveRequest: Equatable, Sendable {
 
     public var outputCommitmentHex: String {
         outputCommitment.hexLowercased()
+    }
+
+    private static func canonicalPositiveAmountString(_ amount: String) throws -> String {
+        let parsed = try OfflineNorito.parseCanonicalNumeric(amount)
+        guard !parsed.isNegative && parsed.digits != "0" else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        return parsed.canonicalString
     }
 }
 
@@ -1635,7 +1669,7 @@ public final class OfflineNoteWallet {
         guard let issuerClient else {
             throw OfflineNoteWalletError.missingIssuerClient
         }
-        _ = try requirePositivePaymentAmount(amount)
+        let canonicalAmount = try canonicalPositivePaymentAmountString(amount)
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
         // Pass the full `name#domain` assetDefinitionId to Torii — the
         // internal `assetId` is the SDK's 2-part `name#account` form
@@ -1647,7 +1681,7 @@ public final class OfflineNoteWallet {
             chainId: chainId,
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
-            amount: amount
+            amount: canonicalAmount
         )
         try requireTrustedIssuerCertificate(context.keyCertificate, expectedAccountId: accountId)
         let noteSecret = try random32()
@@ -1659,7 +1693,7 @@ public final class OfflineNoteWallet {
         let commitment = try deriveNoteCommitment(
             keyCertificate: context.keyCertificate,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             noteSecret: noteSecret,
             origin: origin
         )
@@ -1668,7 +1702,7 @@ public final class OfflineNoteWallet {
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             loadContext: context,
             noteCommitment: commitment
         )
@@ -1683,7 +1717,7 @@ public final class OfflineNoteWallet {
             chainId: chainId,
             accountId: accountId,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             keyCertificate: issuedCertificate,
             noteCommitment: commitment,
             noteSecret: noteSecret,
@@ -1697,7 +1731,7 @@ public final class OfflineNoteWallet {
     }
 
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteReceiveRequest {
-        _ = try requirePositivePaymentAmount(amount)
+        let canonicalAmount = try canonicalPositivePaymentAmountString(amount)
         let paymentRequestId = idGenerator.nextId(prefix: "payment-request")
         // Receive output certs must be owner-self-signed (chain #5589); mint a fresh
         // one on demand rather than reusing the issuer-attested attestation cert.
@@ -1712,7 +1746,7 @@ public final class OfflineNoteWallet {
         let commitment = try deriveNoteCommitment(
             keyCertificate: keyCertificate,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             noteSecret: noteSecret,
             origin: origin
         )
@@ -1721,7 +1755,7 @@ public final class OfflineNoteWallet {
             chainId: chainId,
             accountId: accountId,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             keyCertificate: keyCertificate,
             noteCommitment: commitment,
             noteSecret: noteSecret,
@@ -1740,7 +1774,7 @@ public final class OfflineNoteWallet {
             // `name#account` form and would drop the domain otherwise.
             assetDefinitionId: assetDefinitionId,
             assetId: assetId,
-            amount: note.amount,
+            amount: canonicalAmount,
             keyCertificate: keyCertificate,
             outputCommitment: commitment
         )
@@ -2300,6 +2334,10 @@ public final class OfflineNoteWallet {
             throw OfflineNoteWalletError.invalidField("amount")
         }
         return parsed
+    }
+
+    private func canonicalPositivePaymentAmountString(_ amount: String) throws -> String {
+        try requirePositivePaymentAmount(amount).canonicalString
     }
 }
 

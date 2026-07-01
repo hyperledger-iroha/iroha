@@ -750,9 +750,15 @@ def _require_eth_sora_lane(args: argparse.Namespace) -> None:
     source_domain = _require_exact_u32(args.source_domain, "source_domain")
     target_domain = _require_exact_u32(args.target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_ETH:
-        raise ValueError("ETH production source evidence requires source_domain = 1")
+        raise ValueError(
+            "ETH production source evidence requires source_domain = "
+            f"SCCP_DOMAIN_ETH ({SCCP_DOMAIN_ETH})"
+        )
     if target_domain != SCCP_DOMAIN_SORA:
-        raise ValueError("ETH production source evidence requires target_domain = 0")
+        raise ValueError(
+            "ETH production source evidence requires target_domain = "
+            f"SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})"
+        )
 
 
 def _template_component_hashes() -> dict[str, bytes]:

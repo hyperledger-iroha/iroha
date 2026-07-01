@@ -34,6 +34,11 @@ def _default_program_id(module):
     return module._encode_solana_base58(bytes.fromhex("33" * 32))
 
 
+class HostileImportedScalar:
+    def __str__(self):
+        raise AssertionError("secret-token imported Solana metadata was stringified")
+
+
 def load_live_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_solana_live_evidence.py"
@@ -827,6 +832,55 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
         assert "program owner" in str(exc)
     else:
         raise AssertionError("Solana live TOML accepted forged owner metadata")
+
+
+def test_live_solana_evidence_rejects_non_string_imported_metadata_without_stringifying():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+
+    cases = (
+        ("verifier_program_id", "Solana live verifier program id metadata is invalid"),
+        ("programdata_address", "Solana live ProgramData address metadata is invalid"),
+        ("verifier_code_hash", "Solana live verifier code hash metadata is invalid"),
+        (
+            "program_account_data_base64",
+            "Solana Program account data base64 metadata must be present",
+        ),
+        (
+            "programdata_metadata_blake2b256",
+            "programdata_metadata_blake2b256 must be an exact non-empty string",
+        ),
+        (
+            "programdata_metadata_base64",
+            "Solana ProgramData metadata base64 metadata must be present",
+        ),
+        (
+            "programdata_executable_base64",
+            "Solana ProgramData executable base64 metadata must be present",
+        ),
+    )
+    for field, expected_error in cases:
+        live = _live_record(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            program_bytes=program_bytes,
+        )
+        live[field] = HostileImportedScalar()
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"non-string Solana live {field} metadata was accepted")
 
 
 def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):

@@ -365,6 +365,21 @@ fn main() -> Result<()> {
     let entrypoint_hash = tx.hash_as_entrypoint();
     client.submit_transaction_blocking(&tx)?;
 
+    let operation_receipt = norito::json!({
+        "operation_kind": ("contract_call"),
+        "status": ("committed"),
+        "transport": ("ivm-contract-call-helper"),
+        "dataspace": (""),
+        "contract_alias": (contract_alias.as_ref().map(ToString::to_string)),
+        "contract_address": (contract_address.to_string()),
+        "tx_hash_hex": (tx_hash.to_string()),
+        "entrypoint": (args.entrypoint.clone()),
+        "entrypoint_hash_hex": (entrypoint_hash.to_string()),
+        "gas_limit": (args.gas_limit),
+        "gas_asset_id": (args.gas_asset_id),
+        "fee_sponsor": (args.fee_sponsor),
+        "payload_digest_hex": (payload_digest_hex),
+    });
     let result = norito::json!({
         "ok": true,
         "submitted": true,
@@ -376,26 +391,12 @@ fn main() -> Result<()> {
         "entrypoint": (args.entrypoint.clone()),
         "tx_hash_hex": (tx_hash),
         "entrypoint_hash_hex": (entrypoint_hash),
-        "operation_receipt": {
-            "operation_kind": "contract_call",
-            "status": "committed",
-            "transport": "ivm-contract-call-helper",
-            "dataspace": "",
-            "contract_alias": (contract_alias.as_ref().map(ToString::to_string)),
-            "contract_address": (contract_address.to_string()),
-            "tx_hash_hex": (tx_hash.to_string()),
-            "entrypoint": (args.entrypoint.clone()),
-            "entrypoint_hash_hex": (entrypoint_hash.to_string()),
-            "gas_limit": (args.gas_limit),
-            "gas_asset_id": (args.gas_asset_id),
-            "fee_sponsor": (args.fee_sponsor),
-            "payload_digest_hex": (payload_digest_hex),
-        },
-        "terminal_kind": "Committed",
-        "final": {
-            "kind": "Committed",
+        "operation_receipt": (operation_receipt),
+        "terminal_kind": ("Committed"),
+        "final": (norito::json!({
+            "kind": ("Committed"),
             "hash": (tx_hash),
-        },
+        })),
     });
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())

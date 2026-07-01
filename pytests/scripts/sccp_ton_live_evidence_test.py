@@ -109,6 +109,11 @@ class OversizedErrorBody:
         return None
 
 
+class HostileImportedScalar:
+    def __str__(self):
+        raise AssertionError("secret-token imported TON metadata was stringified")
+
+
 def fake_ton_opener(
     module,
     *,
@@ -1229,6 +1234,45 @@ def test_live_ton_evidence_redacts_imported_parser_failures(monkeypatch):
                 raise AssertionError(
                     f"TON live summary leaked LT {exception_type.__name__}"
                 )
+
+
+def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringifying():
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+
+    cases = (
+        ("verifier_contract_address", "TON live verifier address metadata is invalid"),
+        ("account_address", "TON live account address metadata is invalid"),
+        ("account_state_hash", "account_state_hash must be an exact non-empty string"),
+        ("last_transaction_hash", "last_transaction_hash must be an exact non-empty string"),
+        ("verifier_code_hash", "verifier_code_hash must be an exact non-empty string"),
+        ("code_boc_root_hash", "code_boc_root_hash must be an exact non-empty string"),
+        ("code_boc_base64", "code_boc_base64 must be an exact non-empty string"),
+    )
+    for field, expected_error in cases:
+        forged = dict(live)
+        forged[field] = HostileImportedScalar()
+        try:
+            module._summary(args, forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"non-string TON live {field} metadata was accepted")
 
 
 def test_live_ton_evidence_rejects_code_hash_drift():

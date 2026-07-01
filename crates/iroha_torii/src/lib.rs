@@ -52973,6 +52973,22 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         payload: iroha_sccp::SccpPayloadV1,
     ) -> (SharedAppState, [u8; 32]) {
+        let (app, mut message_ids) =
+            app_with_recorded_sccp_messages_for_test(height, vec![payload]);
+        let message_id = message_ids
+            .pop()
+            .expect("single recorded SCCP message id should be returned");
+        (app, message_id)
+    }
+
+    fn app_with_recorded_sccp_messages_for_test(
+        height: u64,
+        payloads: Vec<iroha_sccp::SccpPayloadV1>,
+    ) -> (SharedAppState, Vec<[u8; 32]>) {
+        assert!(
+            !payloads.is_empty(),
+            "recorded SCCP fixture requires at least one payload"
+        );
         let keypair = checked_torii_test_ed25519_keypair(
             0x31,
             "derive Torii recorded SCCP-message fixture key",
@@ -52982,25 +52998,30 @@ pub(crate) mod tests_runtime_handlers {
             .expect("SCCP Nexus finality chain id");
         let app = mk_app_state_for_tests_with_chain_id(chain.clone());
         let authority = AccountId::new(keypair.public_key().clone());
-        let overlay = vec![
-            iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                iroha_sccp::canonical_sccp_payload_bytes(&payload),
-            )
-            .into(),
-        ];
-        let tx = checked_torii_test_transaction(
-            TransactionBuilder::new(chain, authority).with_executable(Executable::IvmProved(
-                IvmProved {
-                    bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
-                    overlay: overlay.into(),
-                    events_commitment: Hash::new(b"events"),
-                    gas_policy_commitment: Hash::new(b"gas"),
-                },
-            )),
-            &keypair,
-            "sign Torii SCCP-message fixture transaction",
-        );
-        let entry_hash = tx.hash_as_entrypoint();
+        let mut txs = Vec::with_capacity(payloads.len());
+        let mut entry_hashes = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            let overlay = vec![
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    iroha_sccp::canonical_sccp_payload_bytes(&payload),
+                )
+                .into(),
+            ];
+            let tx = checked_torii_test_transaction(
+                TransactionBuilder::new(chain.clone(), authority.clone()).with_executable(
+                    Executable::IvmProved(IvmProved {
+                        bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                        overlay: overlay.into(),
+                        events_commitment: Hash::new(b"events"),
+                        gas_policy_commitment: Hash::new(b"gas"),
+                    }),
+                ),
+                &keypair,
+                "sign Torii SCCP-message fixture transaction",
+            );
+            entry_hashes.push(tx.hash_as_entrypoint());
+            txs.push(tx);
+        }
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(height).expect("non-zero height"),
             None,
@@ -53015,13 +53036,13 @@ pub(crate) mod tests_runtime_handlers {
             &header,
             "sign Torii SCCP-message fixture block",
         );
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        let mut block = SignedBlock::presigned(signature, header, txs);
+        let transaction_results = entry_hashes
+            .iter()
+            .map(|_| TransactionResultInner::Ok(DataTriggerSequence::default()))
+            .collect::<Vec<_>>();
         block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
+            .set_transaction_results(Vec::new(), &entry_hashes, transaction_results)
             .expect("test block entrypoint hash should match payload");
         let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
         let commitment_root =
@@ -53034,10 +53055,9 @@ pub(crate) mod tests_runtime_handlers {
             .expect("result root");
         let block_hash = block.hash();
         let message_id = messages
-            .first()
-            .expect("recorded message")
-            .commitment
-            .message_id;
+            .iter()
+            .map(|message| message.commitment.message_id)
+            .collect::<Vec<_>>();
         store_block(&app, block);
 
         let (qc, validator_pop) = sample_commit_qc(
@@ -53215,22 +53235,11 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 9,
             sora_asset_id: [0x44; 32],
         });
-        let commitment = iroha_sccp::SccpHubCommitmentV1 {
-            version: 1,
-            kind: iroha_sccp::SccpHubMessageKind::TokenPause,
-            target_domain: iroha_sccp::sccp_message_target_domain(&payload),
-            message_id: iroha_sccp::sccp_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
-                &payload,
-            )),
-        };
-        let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
-        let bundle = routing::publish_sccp_message_bundle(app.state.as_ref(), 1, payload.clone())
-            .expect("publish");
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload.clone());
 
         let response = routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
-            hex::encode(bundle.commitment.message_id),
+            hex::encode(message_id),
             None,
         )
         .await
@@ -53247,7 +53256,54 @@ pub(crate) mod tests_runtime_handlers {
             .expect("json body");
         let decoded: iroha_sccp::NexusSccpMessageProofV1 =
             norito::json::from_slice(&bytes).expect("decode json bundle");
-        assert_eq!(decoded, bundle);
+        assert_eq!(decoded.payload, payload);
+        assert_eq!(decoded.commitment.message_id, message_id);
+        assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_bundle_endpoint_rejects_cache_only_sora_origin_bundle() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 13,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
+        let bundle = routing::publish_sccp_message_bundle(app.state.as_ref(), 1, payload)
+            .expect("cache-only publish should still build the legacy test bundle");
+
+        let err = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(bundle.commitment.message_id),
+            None,
+        )
+        .await
+        .expect_err("SORA-origin SCCP message bundles must be reconstructed from committed blocks");
+        assert!(
+            matches!(
+                err,
+                Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound
+                ))
+            ),
+            "unexpected error: {err:?}"
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -53323,6 +53379,146 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(decoded.payload, payload);
         assert_eq!(decoded.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_bundle_endpoint_builds_merkle_proof_for_second_message_in_block() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
+        routing::clear_sccp_bundles_for_tests();
+        let first_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 14,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let second_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 15,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 88,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x2222222222222222222222222222222222222222".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (app, message_ids) = app_with_recorded_sccp_messages_for_test(
+            1,
+            vec![first_payload, second_payload.clone()],
+        );
+        let second_message_id = message_ids.get(1).copied().expect("second SCCP message id");
+
+        let response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(second_message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpMessageProofV1 =
+            norito::json::from_slice(&bytes).expect("decode json bundle");
+
+        assert_eq!(decoded.payload, second_payload);
+        assert_eq!(decoded.commitment.message_id, second_message_id);
+        assert!(
+            !decoded.merkle_proof.steps.is_empty(),
+            "second message in a multi-message block must carry a Merkle branch"
+        );
+        assert_eq!(
+            iroha_sccp::merkle_root_from_commitment(&decoded.commitment, &decoded.merkle_proof),
+            decoded.commitment_root
+        );
+        assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_recent_messages_lists_multi_message_block_newest_first() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
+        routing::clear_sccp_bundles_for_tests();
+        let first_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 16,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let second_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 17,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 88,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x2222222222222222222222222222222222222222".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (app, message_ids) =
+            app_with_recorded_sccp_messages_for_test(1, vec![first_payload, second_payload]);
+
+        let response = routing::handle_v1_sccp_messages_recent(
+            app.state.as_ref(),
+            crate::NoritoQuery(routing::HistoryWindowQuery {
+                from: Some(1),
+                limit: Some(2),
+            }),
+            None,
+        )
+        .await
+        .expect("recent messages response");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let value: Value = norito::json::from_slice(&bytes).expect("decode recent JSON");
+        let items = value["items"].as_array().expect("items array");
+        let second_message_id_hex = hex::encode(message_ids[1]);
+        let first_message_id_hex = hex::encode(message_ids[0]);
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["message_id_hex"].as_str(),
+            Some(second_message_id_hex.as_str())
+        );
+        assert_eq!(
+            items[1]["message_id_hex"].as_str(),
+            Some(first_message_id_hex.as_str())
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }

@@ -16592,11 +16592,11 @@ impl Autoscale {
         }
 
         if let (Some(min), Some(max)) = (min_lanes, max_lanes) {
-            if min > max {
+            if min >= max {
                 invalid = true;
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.autoscale.min_lanes must be <= max_lanes"),
+                        .attach("nexus.autoscale.min_lanes must be < max_lanes"),
                 );
             }
             if max.get() > defaults::nexus::autoscale::MAX_LANES {
@@ -17346,10 +17346,10 @@ impl Nexus {
             let max_lanes = autoscale.max_lanes.get();
             let mut reserved_range_error = false;
             let default_lane = routing_policy.default_lane.as_u32();
-            if default_lane >= min_lanes && default_lane < max_lanes {
+            if default_lane >= min_lanes {
                 reserved_range_error = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.routing_policy.default_lane {} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes}); choose a base default lane outside the autoscale range",
+                    "nexus.routing_policy.default_lane {} must be below nexus.autoscale.min_lanes {min_lanes} when autoscale is enabled",
                     routing_policy.default_lane
                 )));
             }
@@ -24682,10 +24682,35 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         nexus.insert("routing_policy".into(), routing_policy_table(1));
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("default lane must stay outside the autoscale elastic range");
+            .expect_err("default lane must be below the autoscale elastic range");
         let report = format!("{error:?}");
         assert!(
-            report.contains("nexus.routing_policy.default_lane 1 is inside reserved autoscale elastic lane id range [1, 3)"),
+            report.contains("nexus.routing_policy.default_lane 1 must be below nexus.autoscale.min_lanes 1 when autoscale is enabled"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_default_lane_above_elastic_range() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                lane_descriptor(0, "default"),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+        nexus.insert("routing_policy".into(), routing_policy_table(3));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("high-side default lane must be rejected");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("nexus.routing_policy.default_lane 3 must be below nexus.autoscale.min_lanes 1 when autoscale is enabled"),
             "{report}"
         );
     }

@@ -209,6 +209,222 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "gateway-reload.json" not in diagnostics
 
 
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\ngateway-compliance"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["required_kinds"] = [
+        "feed_promotion",
+        "feed_promotion",
+        "unknown_kind",
+        "bad\nkind",
+    ]
+    rendered["thresholds"] = {
+        "max_evidence_age_secs": -1,
+        "max_route_latency_ms": 0,
+        "max_reload_latency_ms": False,
+        "min_gateways": "soon",
+        "min_denylist_entries": 0,
+        "min_honey_probes": 0,
+        "now_unix": 0,
+        "bad\nfield": 1,
+        "private_key": 2,
+    }
+    rendered["external_evidence"] = {
+        "feed_promotion": [],
+        "unknown_kind": ["unknown.json"],
+        "controller_runtime": "controller-runtime.json",
+        "bad\nkind": ["feed-promotion.json"],
+        "observability": ["bad\npath"],
+    }
+    rendered["evidence_contract"] = {
+        "feed_promotion": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.gateway_compliance.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "controller_runtime": "contract-shaped-entry",
+        "bad\nkind": {
+            "schema": MODULE.KIND_BY_NAME["feed_promotion"].schema,
+            "required_payload_fields": ["schema"],
+        },
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "gateway compliance rollout runner plan fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan required_kinds must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan required_kinds must not contain duplicate kinds"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan required_kinds must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds must contain only configured threshold fields"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.max_evidence_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.max_route_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.max_reload_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.min_gateways must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.min_denylist_entries must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.min_honey_probes must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan external_evidence keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan external_evidence keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan external_evidence must map each kind to non-empty path lists"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan external_evidence paths must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
+    tmp_path: Path,
+) -> None:
+    payload = write_payload(tmp_path / "feed-promotion.json")
+    args = MODULE.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path / "evidence"),
+            "--require-kind",
+            "feed_promotion",
+            "--feed-promotion-evidence",
+            str(payload),
+        ]
+    )
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["external_evidence"]["controller_runtime"] = [
+        str(tmp_path / "controller-runtime.json")
+    ]
+    rendered["evidence_contract"]["controller_runtime"] = {
+        "schema": MODULE.KIND_BY_NAME["controller_runtime"].schema,
+        "required_payload_fields": list(
+            MODULE.EVIDENCE_REQUIRED_FIELDS["controller_runtime"]
+        ),
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "gateway compliance rollout runner plan external_evidence must contain only required kinds"
+        in diagnostics
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract must contain only required kinds"
+        in diagnostics
+    )
+    assert "controller_runtime" not in diagnostics
+
+
 def test_execution_rejects_plan_validation_drift_before_running(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

@@ -1078,8 +1078,6 @@ def record_consistent_deployment_context(
     fingerprint = evidence_artifact_fingerprint(artifact)
     for key in ("deployment_id", "environment"):
         value = fingerprint.get(key)
-        if value == "":
-            continue
         if not isinstance(value, str):
             error = f"{context_label}.{key} must be a string"
         else:
@@ -1114,19 +1112,19 @@ def deployment_context_summary(values: Any) -> dict[str, str]:
 
     if not isinstance(values, Mapping):
         return {}
-    summary: dict[str, str] = {}
-    for key in ("deployment_id", "environment"):
-        value = values.get(key)
-        if value is None:
-            continue
-        value_label = _require_validation_label(
-            value,
-            [],
-            label_name=f"deployment context {key}",
-        )
-        if value_label is not None:
-            summary[key] = value_label
-    return summary
+    deployment_id = _require_validation_label(
+        values.get("deployment_id"),
+        [],
+        label_name="deployment context deployment_id",
+    )
+    environment = _require_validation_label(
+        values.get("environment"),
+        [],
+        label_name="deployment context environment",
+    )
+    if deployment_id is None or environment is None:
+        return {}
+    return {"deployment_id": deployment_id, "environment": environment}
 
 
 def record_observed_evidence_value(values: set[Any], value: Any) -> None:
@@ -2923,44 +2921,86 @@ def require_string_in(
 ALLOWED_ROLLOUT_ENVIRONMENTS = {"prod", "production", "release", "staging"}
 FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS = {
     "alpha",
+    "benchmark",
     "beta",
+    "burnin",
     "canary",
     "changeme",
+    "chaos",
     "candidate",
+    "cutover",
     "demo",
     "dev",
+    "dogfood",
+    "drill",
     "example",
+    "failover",
+    "fallback",
+    "fixture",
     "local",
+    "lab",
+    "labs",
     "localnet",
     "mock",
     "placeholder",
+    "perf",
+    "performance",
     "pre",
     "preprod",
     "preview",
     "pilot",
     "qa",
+    "poc",
     "rc",
     "sample",
     "sandbox",
+    "scratch",
+    "scaletest",
+    "shadow",
+    "smoke",
+    "stg",
+    "soak",
+    "stress",
+    "stub",
+    "switchover",
+    "temp",
+    "temporary",
     "test",
     "testnet",
+    "tmp",
     "trial",
+    "training",
     "uat",
+    "wip",
     "zero",
 }
 FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
     "alpha",
+    "benchmark",
     "beta",
+    "bluegreen",
+    "burnin",
     "canary",
     "changeme",
+    "chaos",
+    "cutover",
+    "fallback",
     "development",
     "dryrun",
     "dummy",
     "example",
+    "darklaunch",
+    "dogfood",
+    "dressrehearsal",
+    "drill",
     "experiment",
     "experimental",
     "fake",
+    "failover",
+    "fixture",
+    "greenblue",
     "localnet",
+    "loadtest",
     "mock",
     "nonprod",
     "nonproduction",
@@ -2969,54 +3009,126 @@ FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
     "notprod",
     "notproductionready",
     "placeholder",
+    "perf",
+    "performance",
     "pilot",
+    "poc",
     "preprod",
     "preview",
     "prerelease",
+    "proofofconcept",
+    "prototype",
     "releasecandidate",
     "replacebeforedeploy",
     "replacebeforeproduction",
     "replacebeforeprod",
     "replacebeforerelease",
     "replaceme",
+    "rollback",
+    "rollforward",
     "sample",
     "sandbox",
+    "scratch",
+    "scaletest",
+    "gameday",
+    "rehearsal",
+    "shadow",
+    "smoke",
+    "stg",
+    "soak",
+    "stress",
+    "stub",
+    "switchover",
+    "temporary",
     "testnet",
     "testing",
     "todo",
     "trial",
+    "training",
+    "wip",
 }
 ROLLOUT_DEPLOYMENT_REVIEW_LABELS = frozenset({"prod", "production", "release"})
 FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS = frozenset(
     {
         "alpha",
+        "benchmark",
         "beta",
+        "bluegreen",
+        "burnin",
         "canary",
+        "chaos",
+        "cutover",
+        "darklaunch",
         "demo",
         "dev",
+        "dogfood",
+        "dressrehearsal",
+        "drill",
+        "failover",
+        "fallback",
+        "fixture",
+        "gameday",
+        "greenblue",
+        "lab",
+        "labs",
+        "loadtest",
         "local",
         "localnet",
         "mock",
+        "perf",
+        "performance",
         "pre",
         "preprod",
         "preview",
         "pilot",
+        "poc",
         "qa",
+        "prototype",
         "candidate",
         "rc",
         "sandbox",
+        "scratch",
+        "scaletest",
+        "rehearsal",
+        "rollback",
+        "rollforward",
+        "shadow",
+        "smoke",
         "stage",
         "staging",
+        "stg",
+        "soak",
+        "stress",
+        "stub",
+        "switchover",
+        "temp",
+        "temporary",
         "test",
         "testnet",
+        "tmp",
         "trial",
+        "training",
         "uat",
+        "wip",
         "zero",
     }
 )
 ROLLOUT_DEPLOYMENT_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
 )
+ASCII_DIGITS = "0123456789"
+
+
+def numbered_rollout_marker_token(
+    token: str,
+    markers: Collection[str],
+) -> str | None:
+    """Return the marker hidden behind numeric prefix/suffix aliases."""
+
+    stripped = token.strip(ASCII_DIGITS)
+    if stripped != token and stripped in markers:
+        return stripped
+    return None
 
 
 def _require_canonical_payload_string(
@@ -3070,8 +3182,19 @@ def require_rollout_deployment_id(
     token_forbidden = {
         token for token in tokens if token in FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS
     }
+    token_forbidden |= {
+        marker
+        for token in tokens
+        if (
+            marker := numbered_rollout_marker_token(
+                token,
+                FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS,
+            )
+        )
+        is not None
+    }
     joined_forbidden = {
-        joined
+        marker
         for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS
         for label in ROLLOUT_DEPLOYMENT_REVIEW_LABELS
         for joined in (f"{marker}{label}", f"{label}{marker}")
@@ -3081,11 +3204,21 @@ def require_rollout_deployment_id(
             for token in token_forbidden
         )
     }
+    numbered_joined_forbidden = {
+        marker
+        for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS
+        for label in ROLLOUT_DEPLOYMENT_REVIEW_LABELS
+        if re.search(
+            rf"(?:{re.escape(marker)}[0-9]+{re.escape(label)}|"
+            rf"{re.escape(label)}{re.escape(marker)}[0-9]+)",
+            compact,
+        )
+    }
     compact_forbidden = {
         marker
         for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS
         if marker in compact
-    } | joined_forbidden
+    } | joined_forbidden | numbered_joined_forbidden
     compact_forbidden = {
         marker
         for marker in compact_forbidden

@@ -27,6 +27,9 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > required kinds, and validates the schema-closed collection plan, required
 > kinds, thresholds, external evidence map, evidence contract, and command steps
 > before dry-run output or verifier execution.
+> The shared runner plan guard also rejects non-canonical nested required-kind,
+> threshold, external-evidence, evidence-contract, and command-step shapes before
+> dry-run output or verifier execution.
 > `scripts/build_sorafs_potr_canary.py` builds individual payload-free SF-14
 > canary artifacts for multi-provider probes, receipt validation, proof-stream
 > replay, reputation integration, observability, and governance approval
@@ -165,7 +168,9 @@ required-kind validity is computed, so the JSON summary matches the fail-closed
 process result. The collection planner exposes those exact required payload
 fields through `--dry-run` and validates the schema-closed collection plan,
 required kinds, thresholds, external evidence map, evidence contract, and
-command steps before contacting live PoTR services.
+command steps before contacting live PoTR services. The shared runner plan
+guard rejects non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before any live PoTR contact.
 
 The rollout evidence scripts have focused Python coverage in:
 

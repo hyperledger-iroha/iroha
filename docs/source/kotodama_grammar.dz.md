@@ -248,7 +248,7 @@ register_trigger wake {
 ཧོསིཊི་/སིསི་ཀཱལ་བགྲེནསི་ (ཨེསི་སི་ཨེལ་ཨེལ་ལུ་ས་ཁྲ་; ཨང་གྲངས་ངེས་བདེན་ ivm.md) ཨིན།
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
-- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
+- `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric, DataSpaceId*)`
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `execute_instruction(Blob[NoritoBytes])`
 - `execute_query(Blob[NoritoBytes]) -> Blob`

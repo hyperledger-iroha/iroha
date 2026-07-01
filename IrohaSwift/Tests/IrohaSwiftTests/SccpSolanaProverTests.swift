@@ -8199,7 +8199,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(derivedBinding.targetDomain, sccpDomainSora)
         XCTAssertEqual(
             derivedBinding.sourceAdapterDeploymentHash,
-            "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
+            "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3"
         )
         XCTAssertEqual(
             derivedBinding.sourceAdapterDeploymentReceiptHash,
@@ -8220,6 +8220,14 @@ final class SccpSolanaProverTests: XCTestCase {
             Self.sampleAuditedTonDeployment(tonMasterchainConfigVerifierHash: sccpZeroHashV1)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidSourceMaterial("tonAuditVerifierHash"))
+        }
+        XCTAssertThrowsError(try sccpTonSourceAdapterDeploymentBindingFromDeployment(
+            Self.sampleAuditedTonDeployment(tonMasterchainConfigVerifierHash: "0x" + String(repeating: "2a", count: 32))
+        )) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidSourceMaterial("tonGovernedFullLightClientAuditHash")
+            )
         }
         let adapterVerifierVkHash = try sccpSourceAdapterVerifierVkHash(sourceDomain: sccpDomainTon)
         XCTAssertThrowsError(try sccpTonSourceAdapterDeploymentBindingFromDeployment(
@@ -11631,6 +11639,15 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertThrowsError(try canonicalEvmReceiptRlp(removedLogReceipt)) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidRlp("receipt.logs[0]"))
         }
+        for removed in [NSNull(), 1, "secret-token-removed"] as [Any] {
+            var malformedRemovedReceipt = typedReceipt
+            malformedRemovedReceipt["logs"] = [
+                validReceiptLog.merging(["removed": removed]) { _, new in new },
+            ]
+            XCTAssertThrowsError(try canonicalEvmReceiptRlp(malformedRemovedReceipt)) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidRlp("receipt.logs[0].removed"))
+            }
+        }
         var tooManyTopicsLog = validReceiptLog
         tooManyTopicsLog["topics"] = Array(repeating: "0x" + String(repeating: "22", count: 32), count: 5)
         var tooManyTopicsReceipt = typedReceipt
@@ -12514,6 +12531,19 @@ final class SccpSolanaProverTests: XCTestCase {
                     sourceBridgeEmitterAddress: sourceBridgeAddress
                 )
             )
+        }
+        for removed in [NSNull(), 1, "secret-token-removed"] as [Any] {
+            var malformedRemovedReceipt = sourceReceipt
+            malformedRemovedReceipt["logs"] = [sourceEventLog(["removed": removed])]
+            await assertEvmError(.invalidPublicInputs("receipt.logs[0].removed")) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: malformedRemovedReceipt,
+                        block: block,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
         }
         var nonObjectLogReceipt = sourceReceipt
         nonObjectLogReceipt["logs"] = ["not-a-log"]
@@ -15055,9 +15085,9 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceStateVerifierHash: String = "0x" + String(repeating: "77", count: 32),
         deploymentReceiptHash: String = "0x" + String(repeating: "aa", count: 32),
         adapterVerifierVkHash: String? = nil,
-        tonMasterchainConfigVerifierHash: String = "0x" + String(repeating: "bb", count: 32),
-        tonValidatorSetTransitionVerifierHash: String = "0x" + String(repeating: "cc", count: 32),
-        tonShardAccountsDictionaryVerifierHash: String = "0x" + String(repeating: "dd", count: 32),
+        tonMasterchainConfigVerifierHash: String = "0x" + String(repeating: "26", count: 32),
+        tonValidatorSetTransitionVerifierHash: String = "0x" + String(repeating: "27", count: 32),
+        tonShardAccountsDictionaryVerifierHash: String = "0x" + String(repeating: "28", count: 32),
         sourceDomain: UInt32 = sccpDomainTon,
         targetDomain: UInt32 = sccpDomainSora
     ) -> TonSccpSourceAdapterDeploymentInput {

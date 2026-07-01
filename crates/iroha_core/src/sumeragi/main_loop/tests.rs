@@ -7300,6 +7300,23 @@ async fn merge_committee_accepts_remote_signature() {
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
     let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
+    let inert_merge_signature = MergeCommitteeSignature {
+        epoch_id: candidate.epoch_id,
+        view: 0,
+        signer: 1,
+        message_digest,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor
+        .on_lane_relay_message(super::LaneRelayMessage::MergeSignature(
+            inert_merge_signature,
+        ))
+        .expect("inert merge signature is handled");
+    assert!(
+        actor.state.merge_ledger().latest().is_none(),
+        "inert remote signature must not satisfy merge quorum"
+    );
+
     let signature = checked_signature(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
@@ -130574,6 +130591,35 @@ fn vote_signature_valid_rejects_invalid_bls_signature() {
 }
 
 #[test]
+fn vote_signature_valid_rejects_all_zero_signature_material() {
+    let chain: ChainId = "vote-all-zero-bls".parse().expect("chain id parses");
+    let keypair = checked_bls_keypair();
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        height: 5,
+        view: 1,
+        epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: vec![0_u8; 96],
+    };
+
+    assert_eq!(
+        super::vote_signature_check(&vote, &topology, &chain, super::PERMISSIONED_TAG),
+        Err(super::VoteSignatureError::SignatureInvalid)
+    );
+}
+
+#[test]
 fn vote_signature_valid_rejects_out_of_range_signer() {
     let chain: ChainId = "vote-invalid-signer".parse().expect("chain id parses");
     let keypair = checked_bls_keypair();
@@ -141918,6 +141964,152 @@ async fn proposal_queue_scan_budget_does_not_overfetch_single_lane_slots() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_queue_scan_budget_ignores_future_created_autoscale_lane_for_lookahead() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    install_future_created_autoscale_lane(
+        actor.state.as_ref(),
+        LaneId::new(1),
+        /*created_height*/ 10,
+    );
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+    }
+
+    for _ in 0..5 {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        4,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        /*height*/ 6,
+        0,
+    );
+
+    assert_eq!(
+        tx_guards.len(),
+        1,
+        "single active lane should fill one slot"
+    );
+    assert!(
+        deferred.is_empty(),
+        "future-created autoscale lanes must not enable multilane lookahead overfetch"
+    );
+
+    drop(tx_guards);
+
+    assert_eq!(
+        actor.queue.queued_len(),
+        4,
+        "inactive autoscale lane must not cause extra transactions to be popped for requeue"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_queue_scan_budget_ignores_unrouted_same_dataspace_sidecar_for_lookahead() {
+    use iroha_config::parameters::actual::LaneRoutingPolicy;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: LaneId::new(1),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "unrouted-sidecar".to_string(),
+                ..ModelLaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog;
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.routing_policy = LaneRoutingPolicy::default();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    for _ in 0..5 {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        4,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert_eq!(
+        tx_guards.len(),
+        1,
+        "single routable lane should fill one slot"
+    );
+    assert!(
+        deferred.is_empty(),
+        "unrouted sidecar lanes must not enable multilane lookahead overfetch"
+    );
+
+    drop(tx_guards);
+
+    assert_eq!(
+        actor.queue.queued_len(),
+        4,
+        "unrouted sidecar lane must not cause extra transactions to be popped for requeue"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
@@ -142061,6 +142253,239 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
             .expect("requeue deferred tx");
     }
     assert_eq!(actor.queue.queued_len(), 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_gas_budget_prefers_fitting_cross_lane_tx_over_oversized_first_candidate() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..ModelLaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+
+    let chain = ChainId::from("gas-fit-cross-lane");
+    let oversized_key = checked_keypair();
+    let (_, oversized_private_key) = oversized_key.clone().into_parts();
+    let oversized_authority = AccountId::new(oversized_key.public_key().clone());
+    let oversized_tx = TransactionBuilder::new(chain.clone(), oversized_authority.clone())
+        .with_instructions([
+            Log::new(Level::INFO, "oversized first lane tx a".to_string()),
+            Log::new(Level::INFO, "oversized first lane tx b".to_string()),
+        ])
+        .sign(&oversized_private_key);
+    let oversized_hash = oversized_tx.hash();
+
+    let fitting_key = checked_keypair();
+    let (_, fitting_private_key) = fitting_key.clone().into_parts();
+    let fitting_authority = AccountId::new(fitting_key.public_key().clone());
+    let fitting_tx = TransactionBuilder::new(chain, fitting_authority.clone())
+        .with_instructions([Log::new(Level::INFO, "fitting second lane tx".to_string())])
+        .sign(&fitting_private_key);
+    let fitting_hash = fitting_tx.hash();
+
+    let tx_gas_cost = |tx: &SignedTransaction| {
+        let instructions = match tx.instructions() {
+            Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+                panic!("test transaction should be ISI-based")
+            }
+        };
+        crate::gas::meter_instructions(&instructions)
+    };
+    let fitting_gas = tx_gas_cost(&fitting_tx);
+    let oversized_gas = tx_gas_cost(&oversized_tx);
+    assert!(
+        oversized_gas > fitting_gas,
+        "two-log transaction should exceed one-log gas cost"
+    );
+    let gas_cap = NonZeroU64::new(fitting_gas).expect("fitting gas must be non-zero");
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(fitting_authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ],
+    ));
+    for tx in [oversized_tx, fitting_tx] {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        2,
+        Some(gas_cap),
+        None,
+        false,
+        &mut tx_guards,
+        2,
+        0,
+    );
+
+    assert_eq!(
+        tx_guards.len(),
+        1,
+        "one fitting transaction should fill the capped proposal slot"
+    );
+    assert_eq!(
+        tx_guards[0].as_accepted().hash(),
+        fitting_hash,
+        "scanner should choose the gas-fitting cross-lane transaction before oversized fallback"
+    );
+    assert_eq!(tx_guards[0].routing(), lane1);
+    assert_eq!(
+        deferred.len(),
+        1,
+        "oversized first-lane tx should be deferred"
+    );
+    assert_eq!(deferred[0].0.hash(), oversized_hash);
+
+    drop(tx_guards);
+    for (tx, routing_plan) in deferred {
+        actor
+            .queue
+            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
+            .expect("requeue deferred oversized tx");
+    }
+    assert_eq!(actor.queue.queued_len(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_gas_budget_keeps_oversized_first_candidate_when_no_fit_exists() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
+        .with_instructions([
+            Log::new(Level::INFO, "oversized fallback tx a".to_string()),
+            Log::new(Level::INFO, "oversized fallback tx b".to_string()),
+        ])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+    let instructions = match tx.instructions() {
+        Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+            panic!("test transaction should be ISI-based")
+        }
+    };
+    assert!(
+        crate::gas::meter_instructions(&instructions) > 1,
+        "test transaction must exceed the tiny gas cap"
+    );
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push oversized tx");
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(5_usize),
+        5,
+        NonZeroU64::new(1),
+        None,
+        false,
+        &mut tx_guards,
+        2,
+        0,
+    );
+
+    assert!(
+        deferred.is_empty(),
+        "oversized fallback should not defer the only candidate"
+    );
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+
+    drop(tx_guards);
 
     harness.shutdown.send();
 }
@@ -144720,6 +145145,117 @@ async fn pacemaker_rotates_stale_proposal_seen_without_materialized_owner() {
             .get_proposal(tracked_height, view)
             .is_none(),
         "same-view proposal must not be rebuilt after stale marker cleanup"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_rotates_stale_exact_slot_proposal_evidence_after_no_progress() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut committed_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    committed_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(committed_qc);
+
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let view = (1..search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
+        .expect("find non-zero view where local peer is leader");
+
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        tracked_height,
+        view,
+        Some(committed_block.hash()),
+    );
+    let block_hash = insert_validated_pending(actor, block);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending block exists")
+        .note_local_commit_vote_emitted();
+    assert!(
+        actor.slot_has_proposal_evidence(tracked_height, view),
+        "test setup requires exact-view proposal evidence with local payload"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("pending block exists")
+            .commit_qc_observed(),
+        "test setup must model evidence that has not reached commit QC"
+    );
+
+    let now = Instant::now();
+    let stale_window = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    let stale_start = now
+        .checked_sub(stale_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, stale_start);
+    actor.mark_proposal_liveness_state(
+        tracked_height,
+        view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        stale_start,
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "stale exact-slot proposal evidence should rotate the recovery view instead of pinning it"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(view.saturating_add(1)),
+        "stale exact-slot evidence should advance the frontier view"
+    );
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(tracked_height, view)),
+        "rotation should clear the stale proposal-seen marker for the exhausted view"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "rotation should preserve the pending body for ordinary recovery paths"
     );
 
     harness.shutdown.send();
@@ -178942,6 +179478,33 @@ fn rbc_ready_signature_valid_rejects_invalid_bls_signature() {
 }
 
 #[test]
+fn rbc_ready_signature_valid_rejects_all_zero_signature_material() {
+    let chain: ChainId = "rbc-ready-all-zero-bls".parse().expect("chain id parses");
+    let keypair = checked_bls_keypair();
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x2B; Hash::LENGTH]));
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash,
+        height: 7,
+        view: 2,
+        epoch: 0,
+        roster_hash: roster_hash(topology.as_ref()),
+        chunk_root: Hash::prehashed([0xAC; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0_u8; 96],
+    };
+
+    assert!(!super::rbc::rbc_ready_signature_valid(
+        &ready,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG
+    ));
+}
+
+#[test]
 fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
     let chain: ChainId = "rbc-deliver-invalid".parse().expect("chain id parses");
     let keypair = deterministic_keypair(b"rbc-deliver-out-of-range", Algorithm::Ed25519);
@@ -178999,6 +179562,34 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
         .to_vec();
     signature[0] ^= 0xFF;
     deliver.signature = signature;
+
+    assert!(!super::rbc::rbc_deliver_signature_valid(
+        &deliver,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG
+    ));
+}
+
+#[test]
+fn rbc_deliver_signature_valid_rejects_all_zero_signature_material() {
+    let chain: ChainId = "rbc-deliver-all-zero-bls".parse().expect("chain id parses");
+    let keypair = checked_bls_keypair();
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash,
+        height: 4,
+        view: 1,
+        epoch: 0,
+        roster_hash: roster_hash(topology.as_ref()),
+        chunk_root: Hash::prehashed([0xBD; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0_u8; 96],
+        ready_signatures: Vec::new(),
+    };
 
     assert!(!super::rbc::rbc_deliver_signature_valid(
         &deliver,

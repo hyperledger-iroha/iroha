@@ -5529,6 +5529,18 @@ private func sourceProofEvmReceiptType(_ receipt: [String: Any]) throws -> UInt8
     return admittedType
 }
 
+private func requireSourceProofEvmLogNotRemoved(_ log: [String: Any], label: String) throws {
+    guard let removed = log["removed"] else {
+        return
+    }
+    guard let removedFlag = removed as? Bool else {
+        throw SccpSourceProofHashError.invalidRlp("\(label).removed")
+    }
+    if removedFlag {
+        throw SccpSourceProofHashError.invalidRlp(label)
+    }
+}
+
 private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws -> [Data] {
     let logs: [[String: Any]]
     if let typedLogs = receipt["logs"] as? [[String: Any]] {
@@ -5544,9 +5556,7 @@ private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws ->
         throw SccpSourceProofHashError.invalidRlp("receipt.logs")
     }
     return try logs.enumerated().map { index, log in
-        if (log["removed"] as? Bool) == true {
-            throw SccpSourceProofHashError.invalidRlp("receipt.logs[\(index)]")
-        }
+        try requireSourceProofEvmLogNotRemoved(log, label: "receipt.logs[\(index)]")
         guard let topics = log["topics"] as? [Any], topics.count <= 4 else {
             throw SccpSourceProofHashError.invalidRlp("receipt.logs[\(index)].topics")
         }

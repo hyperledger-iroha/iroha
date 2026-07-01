@@ -80,9 +80,12 @@ Implemented foundations include:
   dry-run emits the checker-backed `evidence_contract` map for selected SF-12
   evidence kinds, and validates the schema-closed collection plan, required
   kinds, thresholds, external evidence map, evidence contract, and command steps
-  before dry-run output or verifier execution. Mirror datastore, checkpoint
-  recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance
-  approval artifacts must carry the same `public_head_cid_hex` as a valid
+  before dry-run output or verifier execution. That validation now also rejects
+  non-canonical nested required-kind, threshold, external-evidence,
+  evidence-contract, and command-step shapes. Mirror
+  datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS
+  end-to-end, and governance approval artifacts must carry the same
+  `public_head_cid_hex` as a valid
   publisher-service artifact in the same bundle, so rollout evidence cannot mix
   mirror, recovery, dashboard, public IPFS/IPNS, or approval records from
   different signed DAG heads. Publisher-service artifacts must also carry
@@ -553,8 +556,11 @@ planner dry-run JSON also includes the checker-backed `evidence_contract` map so
 can inspect the exact required fields for each requested evidence kind, and the
 runner validates the schema-closed collection plan, required kinds, thresholds,
 external evidence map, evidence contract, and command steps before collecting
-or submitting live publication artifacts. Use the canary builder for reviewed
-SF-12 promotion evidence so public-head binding, freshness thresholds,
+or submitting live publication artifacts. It also rejects non-canonical nested
+required-kind, threshold, external-evidence, evidence-contract, and command-step
+shapes. Use the
+canary builder for reviewed SF-12 promotion evidence so public-head binding,
+freshness thresholds,
 payload-free inclusion flags, and checker prevalidation stay consistent with the
 rollout gate. This does not replace the missing always-on ingest/publisher
 services, public IPFS/IPNS publication, runtime RocksDB/IPLD mirror, or

@@ -4,6 +4,7 @@ use super::proposals::block_payload_bytes;
 use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use crate::state::WorldReadOnly;
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
@@ -13,6 +14,7 @@ use iroha_data_model::consensus::{
 };
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
+use mv::storage::StorageReadOnly;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
@@ -1154,6 +1156,14 @@ impl Actor {
         }
     }
 
+    pub(super) fn proposal_multilane_lookahead_enabled(
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> bool {
+        nexus.enabled
+            && crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
@@ -1180,7 +1190,7 @@ impl Actor {
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
         let multilane_lookahead =
-            committed_nexus.enabled && committed_nexus.uses_multilane_catalogs();
+            Self::proposal_multilane_lookahead_enabled(&committed_nexus, height);
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1259,7 +1269,7 @@ impl Actor {
                     }
                 };
 
-            for idx in order {
+            for (order_pos, idx) in order.iter().copied().enumerate() {
                 let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
                     continue;
                 };
@@ -1289,7 +1299,24 @@ impl Actor {
                     let allow_oversized =
                         gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
 
-                    if would_exceed && !allow_oversized {
+                    let fitting_later_candidate = would_exceed
+                        && allow_oversized
+                        && order.iter().skip(order_pos + 1).any(|candidate_idx| {
+                            fetched_slots
+                                .get(*candidate_idx)
+                                .and_then(Option::as_ref)
+                                .is_some_and(|candidate| {
+                                    let candidate_is_ivm_heavy = Self::is_ivm_heavy_transaction(
+                                        candidate.as_accepted(),
+                                        replay_ivm_proved,
+                                    );
+                                    max_ivm_transactions.is_none_or(|max| {
+                                        !candidate_is_ivm_heavy || ivm_transactions_included < max
+                                    }) && candidate.gas_cost() <= remaining_gas
+                                })
+                        });
+
+                    if would_exceed && (!allow_oversized || fitting_later_candidate) {
                         release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                         continue;
@@ -3315,8 +3342,12 @@ impl Actor {
                 let npos_effects =
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
+                let world_view = self.state.world_view();
                 let sccp_messages =
-                    crate::bridge::collect_sccp_messages_from_accepted_transactions(&tx_batch);
+                    crate::bridge::collect_new_sccp_messages_from_accepted_transactions(
+                        &tx_batch,
+                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                    );
                 builder = builder.with_sccp_commitment_root(
                     crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
                 );
@@ -4991,6 +5022,71 @@ impl Actor {
         (view_age >= stale_window).then_some((view_age, stale_window))
     }
 
+    fn stale_slot_proposal_evidence_allows_recovery_rotation(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        now: Instant,
+        precommit_votes_at_view: usize,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> Option<(Duration, Duration)> {
+        if !self.config.resilience.enabled
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || view == 0
+            || precommit_votes_at_view > 0
+            || !self.frontier_missing_qc_liveness_active(height, view)
+            || self.same_height_has_recoverable_qc(height)
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.validation_status != ValidationStatus::Invalid
+                        && inflight.pending.height == height
+                        && inflight.pending.view == view
+                })
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == height
+                    && pending.view == view
+                    && pending.commit_qc_observed()
+            })
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view == view
+                    && slot.quorum_progress.commit_qc_observed
+            })
+        {
+            return None;
+        }
+
+        if let Some(existing_vote) = self.local_same_height_vote(height, epoch)
+            && existing_vote.view >= view
+            && self.local_same_height_vote_blocks_fresh_proposal_assembly(
+                height,
+                view,
+                &existing_vote,
+                now,
+                true,
+                highest_qc,
+            )
+        {
+            return None;
+        }
+
+        let stale_window = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1));
+        let view_age = self.phase_tracker.view_age(height, now)?;
+        (view_age >= stale_window).then_some((view_age, stale_window))
+    }
+
     pub(super) fn on_pacemaker_backpressure_deferral(
         &mut self,
         now: Instant,
@@ -6654,6 +6750,49 @@ impl Actor {
                 "slot_has_proposal_evidence",
             );
             if !progressed {
+                if let Some((view_age, stale_window)) = self
+                    .stale_slot_proposal_evidence_allows_recovery_rotation(
+                        height,
+                        view_idx,
+                        epoch,
+                        now,
+                        precommit_votes_at_view,
+                        highest_qc,
+                    )
+                {
+                    self.slot_tracker.proposals_seen.remove(&(height, view_idx));
+                    if self
+                        .subsystems
+                        .propose
+                        .proposal_liveness
+                        .is_some_and(|slot| slot.height == height && slot.view == view_idx)
+                    {
+                        self.subsystems.propose.proposal_liveness = None;
+                    }
+                    warn!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        view_age_ms = view_age.as_millis(),
+                        stale_window_ms = stale_window.as_millis(),
+                        "proposal evidence made no local progress; rotating recovery view"
+                    );
+                    self.apply_view_change_after_exhausted_frontier_recovery(
+                        height,
+                        view_idx,
+                        ViewChangeCause::QuorumTimeout,
+                    );
+                    self.maybe_rebroadcast_new_view_votes(height, now);
+                    self.warn_resilience_frontier_proposal_deferred(
+                        height,
+                        view_idx,
+                        "stale_slot_proposal_evidence",
+                        highest_qc,
+                        pending_queue_len,
+                        now,
+                    );
+                    return false;
+                }
                 self.nudge_frontier_recovery_proposal_retry(now);
             }
             if pending_queue_len > 0 {

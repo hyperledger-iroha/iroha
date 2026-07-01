@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 264051a66d5c54052bb9be3d2eff7b24e6674240bc293473f5690627819c4984
+source_hash: 114a0c842fc23f56396f3cb070e94530b2fc56e1d3aaf1a621244976bf3aa254
 source_last_modified: "2026-06-25T18:08:03+00:00"
 translation_last_reviewed: 2026-06-25
 title: Reserve+Rent & Lifecycle Policy

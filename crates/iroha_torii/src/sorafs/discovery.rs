@@ -3,12 +3,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
 use norito::to_bytes;
 use sorafs_manifest::{
-    AdvertValidationError, CapabilityType, ProviderAdvertV1, SignatureAlgorithm,
+    AdvertSignatureError, AdvertValidationError, CapabilityType, ProviderAdvertV1,
+    SignatureAlgorithm,
 };
 use thiserror::Error;
 
@@ -332,38 +330,12 @@ fn fingerprint(advert: &ProviderAdvertV1) -> Result<[u8; FINGERPRINT_LEN], Adver
 }
 
 fn verify_signature(advert: &ProviderAdvertV1) -> Result<(), AdvertError> {
-    match advert.signature.algorithm {
-        SignatureAlgorithm::Ed25519 => {}
-        other => return Err(AdvertError::UnsupportedSignature(other)),
-    }
-
-    if advert.signature.public_key.len() != PUBLIC_KEY_LENGTH {
-        return Err(AdvertError::Signature(format!(
-            "unexpected public key length: {}",
-            advert.signature.public_key.len()
-        )));
-    }
-    if advert.signature.signature.len() != SIGNATURE_LENGTH {
-        return Err(AdvertError::Signature(format!(
-            "unexpected signature length: {}",
-            advert.signature.signature.len()
-        )));
-    }
-
-    let mut pk = [0u8; PUBLIC_KEY_LENGTH];
-    pk.copy_from_slice(&advert.signature.public_key);
-    let verifying_key =
-        VerifyingKey::from_bytes(&pk).map_err(|err| AdvertError::Signature(err.to_string()))?;
-
-    let mut sig_bytes = [0u8; SIGNATURE_LENGTH];
-    sig_bytes.copy_from_slice(&advert.signature.signature);
-    let signature = DalekSignature::from_bytes(&sig_bytes);
-
-    let body_bytes = to_bytes(&advert.body)?;
-
-    verifying_key
-        .verify(&body_bytes, &signature)
-        .map_err(|err| AdvertError::Signature(err.to_string()))
+    advert.verify_signature().map_err(|err| match err {
+        AdvertSignatureError::UnsupportedAlgorithm(other) => {
+            AdvertError::UnsupportedSignature(other)
+        }
+        other => AdvertError::Signature(other.to_string()),
+    })
 }
 
 /// Return the canonical capability name used in configuration and responses.

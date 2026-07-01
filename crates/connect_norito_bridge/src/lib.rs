@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -570,6 +570,69 @@ fn build_fee_sponsor_metadata(fee_sponsor: Option<AccountId>) -> Metadata {
         );
     }
     metadata
+}
+
+unsafe fn parse_optional_string_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<Option<String>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(None);
+    }
+    unsafe { read_string_bridge(ptr, len) }.map(Some)
+}
+
+unsafe fn parse_metadata_object_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<Metadata> {
+    let mut metadata = Metadata::default();
+    if ptr.is_null() || len == 0 {
+        return Ok(metadata);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let value: norito::json::Value =
+        norito::json::from_slice(bytes).map_err(|_| BridgeError::MetadataValue)?;
+    let object = value.as_object().ok_or(BridgeError::MetadataValue)?;
+    for (key, value) in object {
+        let name = Name::from_str(key).map_err(|_| BridgeError::MetadataKey)?;
+        let json = Json::from_norito_value_ref(value).map_err(|_| BridgeError::MetadataValue)?;
+        metadata.insert(name, json);
+    }
+    Ok(metadata)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_validation_fee_metadata(
+    mut metadata: Metadata,
+    policy_version: u64,
+    policy_hash: String,
+    fee_instruction_index: u64,
+    fee_sponsor: Option<AccountId>,
+    memo: Option<String>,
+) -> BridgeResult<Metadata> {
+    metadata.insert(
+        Name::from_str("validation_fee_policy_version").expect("static metadata key"),
+        Json::new(policy_version),
+    );
+    metadata.insert(
+        Name::from_str("validation_fee_policy_hash").expect("static metadata key"),
+        Json::new(policy_hash),
+    );
+    metadata.insert(
+        Name::from_str("validation_fee_instruction_index").expect("static metadata key"),
+        Json::new(fee_instruction_index),
+    );
+    if let Some(fee_sponsor) = fee_sponsor {
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static metadata key"),
+            Json::new(fee_sponsor.to_string()),
+        );
+    }
+    if let Some(memo) = memo {
+        metadata.insert(
+            Name::from_str("memo").expect("static metadata key"),
+            Json::new(memo),
+        );
+    }
+    Ok(metadata)
 }
 
 fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
@@ -3821,7 +3884,7 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    Ok(Signature::from_bytes(&signature_bytes))
+    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_payload_value(
@@ -4281,7 +4344,10 @@ pub unsafe extern "C" fn connect_norito_verify_detached(
         let message = unsafe { slice::from_raw_parts(message_ptr, message_len as usize) };
         let signature_bytes =
             unsafe { slice::from_raw_parts(signature_ptr, signature_len as usize) };
-        let signature = Signature::from_bytes(signature_bytes);
+        let signature = match Signature::try_from_bytes(signature_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(()),
+        };
         match signature.verify(&public_key, message) {
             Ok(()) => {
                 unsafe { *out_valid = 1 };
@@ -6558,7 +6624,10 @@ pub unsafe extern "C" fn connect_norito_encode_control_approve_ext_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = Signature::from_bytes(sig_bytes);
+        let signature = match Signature::try_from_bytes(sig_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return -4,
+        };
         let ctrl = proto::ConnectControlV1::Approve {
             wallet_pk: wallet_pk_arr,
             account_id,
@@ -10399,7 +10468,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 12);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 13);
     }
 
     #[test]
@@ -14546,7 +14615,10 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_ok_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = Signature::from_bytes(sig_bytes);
+        let signature = match Signature::try_from_bytes(sig_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return -2,
+        };
         let env = proto::EnvelopeV1 {
             seq,
             payload: proto::ConnectPayloadV1::SignResultOk {
@@ -15305,6 +15377,140 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             || {
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
+            },
+        )?;
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    principal_asset_definition_ptr: *const c_char,
+    principal_asset_definition_len: c_ulong,
+    principal_quantity_ptr: *const c_char,
+    principal_quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_asset_definition_ptr: *const c_char,
+    fee_asset_definition_len: c_ulong,
+    fee_quantity_ptr: *const c_char,
+    fee_quantity_len: c_ulong,
+    treasury_ptr: *const c_char,
+    treasury_len: c_ulong,
+    policy_version: u64,
+    policy_hash_ptr: *const c_char,
+    policy_hash_len: c_ulong,
+    fee_instruction_index: u64,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    memo_ptr: *const c_char,
+    memo_len: c_ulong,
+    metadata_json_ptr: *const c_char,
+    metadata_json_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let inputs = unsafe {
+            gather_asset_tx_inputs(AssetInputPointers {
+                chain_ptr,
+                chain_len,
+                authority_ptr,
+                authority_len,
+                asset_definition_ptr: principal_asset_definition_ptr,
+                asset_definition_len: principal_asset_definition_len,
+                quantity_ptr: principal_quantity_ptr,
+                quantity_len: principal_quantity_len,
+                destination_ptr,
+                destination_len,
+                ttl_ms,
+                ttl_present,
+                private_key_ptr,
+                private_key_len,
+            })?
+        };
+
+        let fee_asset_definition =
+            unsafe { read_string_bridge(fee_asset_definition_ptr, fee_asset_definition_len) }?;
+        let fee_quantity = unsafe { read_string_bridge(fee_quantity_ptr, fee_quantity_len) }?;
+        let treasury = unsafe { read_string_bridge(treasury_ptr, treasury_len) }?;
+        let policy_hash = unsafe { read_string_bridge(policy_hash_ptr, policy_hash_len) }?;
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let memo = unsafe { parse_optional_string_bridge(memo_ptr, memo_len)? };
+        let metadata =
+            unsafe { parse_metadata_object_bridge(metadata_json_ptr, metadata_json_len)? };
+        let metadata = build_validation_fee_metadata(
+            metadata,
+            policy_version,
+            policy_hash,
+            fee_instruction_index,
+            fee_sponsor,
+            memo,
+        )?;
+
+        let (fee_asset_definition, fee_asset_scope) =
+            parse_asset_definition_with_balance_scope(fee_asset_definition)?;
+        let fee_quantity = parse_quantity(fee_quantity)?;
+        let treasury = parse_destination(treasury)?;
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            asset_scope,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let principal_asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
+        let fee_asset_id = AssetId::with_scope(
+            fee_asset_definition.clone(),
+            authority.clone(),
+            fee_asset_scope,
+        );
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
+            private_key,
+            || {
+                let principal_transfer =
+                    Transfer::asset_numeric(principal_asset_id, quantity, destination);
+                let fee_transfer = Transfer::asset_numeric(fee_asset_id, fee_quantity, treasury);
+                Executable::from([
+                    InstructionBox::from(principal_transfer),
+                    InstructionBox::from(fee_transfer),
+                ])
             },
         )?;
 
@@ -21459,7 +21665,10 @@ fn java_verify_detached_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let public_key = PublicKey::from_bytes(algorithm, public_key)
         .map_err(|_| "invalid public key bytes".to_string())?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match Signature::try_from_bytes(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     match signature.verify(&public_key, message) {
         Ok(()) => Ok(true),
         Err(CryptoError::BadSignature) => Ok(false),
@@ -32251,6 +32460,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_identifier_receipt_rejects_all_zero_signed_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let mut value = sample_identifier_signed_receipt_json(&payload);
+        set_json_string_at_path(&mut value, &["attestation", "signature"], "00".repeat(64));
+
+        let err = parse_identifier_receipt_value(value)
+            .expect_err("all-zero identifier receipt signature must reject");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
     fn validate_identifier_claim_account_rejects_mismatched_receipt_account() {
         let payload = sample_identifier_receipt_payload();
         let receipt =
@@ -32606,6 +32826,47 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_all_zero_signature_material() {
+        let private = vec![0x11; 32];
+        let message = b"ffi-ed25519-signing";
+        let mut pk_ptr: *mut c_uchar = ptr::null_mut();
+        let mut pk_len: c_ulong = 0;
+        let rc_pk = unsafe {
+            connect_norito_public_key_from_private(
+                Algorithm::Ed25519 as u8,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut pk_ptr,
+                &mut pk_len,
+            )
+        };
+        assert_eq!(rc_pk, 0, "public key derivation must succeed");
+        let public_key = unsafe { slice::from_raw_parts(pk_ptr, pk_len as usize).to_vec() };
+        connect_norito_free(pk_ptr);
+
+        let signature = [0_u8; 64];
+        let mut valid: c_uchar = 1;
+        let rc_verify = unsafe {
+            connect_norito_verify_detached(
+                Algorithm::Ed25519 as u8,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut valid,
+            )
+        };
+
+        assert_eq!(
+            rc_verify, 0,
+            "verification call must stay fallible only for API errors"
+        );
+        assert_eq!(valid, 0, "malformed signature material must not verify");
+    }
+
+    #[test]
     fn ffi_sign_verify_secp256k1() {
         let mut private = [0u8; 32];
         private[31] = 1;
@@ -32650,6 +32911,86 @@ mod tests {
                 .expect("Java verify helper runs"),
             "Java helper signature must verify"
         );
+    }
+
+    #[test]
+    fn java_detached_verify_helper_rejects_all_zero_signature_material() {
+        let private = vec![0x21; 32];
+        let message = b"java-helper-detached-signing";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        let public = java_public_key_from_private_bytes(algorithm, &private)
+            .expect("Java public-key helper derives key");
+        let signature = [0_u8; 64];
+
+        assert!(
+            !java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "all-zero signature material must not verify"
+        );
+    }
+
+    #[test]
+    fn encode_control_approve_ext_with_alg_rejects_all_zero_signature_material() {
+        let sid = [0x11_u8; 32];
+        let wallet_pk = [0x22_u8; 32];
+        let account = b"wallet-account";
+        let algorithm = b"ed25519";
+        let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_control_approve_ext_with_alg(
+                sid.as_ptr(),
+                1,
+                7,
+                wallet_pk.as_ptr(),
+                account.as_ptr().cast::<c_char>(),
+                account.len() as c_ulong,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -4);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn encode_envelope_sign_result_ok_with_alg_rejects_all_zero_signature_material() {
+        let algorithm = b"ed25519";
+        let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_envelope_sign_result_ok_with_alg(
+                9,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -2);
+        assert_eq!(out_len, 0);
     }
 
     #[test]

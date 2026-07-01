@@ -1289,6 +1289,24 @@ fn validate_certificate_time_bounds(
     valid_after: i64,
     valid_until: i64,
 ) -> Result<(), CertificateError> {
+    if published_at < 0 {
+        return Err(CertificateError::InvalidFieldValue {
+            field: "certificate.published_at",
+            reason: "must be non-negative Unix seconds".to_owned(),
+        });
+    }
+    if valid_after < 0 {
+        return Err(CertificateError::InvalidFieldValue {
+            field: "certificate.valid_after",
+            reason: "must be non-negative Unix seconds".to_owned(),
+        });
+    }
+    if valid_until < 0 {
+        return Err(CertificateError::InvalidFieldValue {
+            field: "certificate.valid_until",
+            reason: "must be non-negative Unix seconds".to_owned(),
+        });
+    }
     if valid_after >= valid_until {
         return Err(CertificateError::InvalidFieldValue {
             field: "certificate.valid_until",
@@ -2692,6 +2710,44 @@ mod tests {
 
     #[test]
     fn parse_certificate_payload_rejects_invalid_validity_windows() {
+        let mut certificate = sample_certificate();
+        certificate.published_at = -1;
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("negative publication timestamps must fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.published_at");
+                assert!(reason.contains("non-negative"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut certificate = sample_certificate();
+        certificate.valid_after = -1;
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("negative valid_after timestamps must fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.valid_after");
+                assert!(reason.contains("non-negative"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut certificate = sample_certificate();
+        certificate.published_at = 0;
+        certificate.valid_after = 0;
+        certificate.valid_until = -1;
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("negative valid_until timestamps must fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.valid_until");
+                assert!(reason.contains("non-negative"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
         let mut certificate = sample_certificate();
         certificate.valid_until = certificate.valid_after;
         let err = parse_certificate_payload(&certificate.to_cbor())

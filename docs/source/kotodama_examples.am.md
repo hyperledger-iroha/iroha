@@ -57,7 +57,7 @@ seiyaku TransferDemo {
 ```
 
 ካርታ ስራ (ጠቋሚ-ABI)፡-
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`፣ `r11=&AccountId(to)`፣ `r12=&AssetDefinitionId(def)`፣ `r13=amount`፣ ከዚያ `SCALL 0x24`
+- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`፣ `r11=&AccountId(to)`፣ `r12=&AssetDefinitionId(def)`፣ `r13=amount`፣ ከዚያ `SCALL 0x2C`
 
 ## NFT ይፍጠሩ + ያስተላልፉ
 

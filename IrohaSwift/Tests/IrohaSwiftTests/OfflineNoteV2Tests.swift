@@ -955,6 +955,14 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertEqual(claim.assetId, issue.assetId)
         XCTAssertEqual(claim.amount, "5.5000")
         XCTAssertEqual(try claim.claimHash().count, 32)
+        XCTAssertThrowsError(try OfflineNoteIssuedClaimV2(
+            noteCommitment: issue.noteCommitment,
+            keyCertificatePayloadHash: try certificate.payloadHash(),
+            assetId: issue.assetId,
+            amount: "05.5000"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteV2Error, .nonCanonicalField(field: "amount"))
+        }
 
         XCTAssertThrowsError(try OfflineNoteIssueV2(
             noteCommitment: Data(repeating: 0x01, count: 31),

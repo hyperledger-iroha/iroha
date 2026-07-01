@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 231a8896b03d3655b0fb091fffd98cc4a4020a1bd86fd1b04e3039bc3c59ed85
+source_hash: 79361847387bd036acab39be2e4354b154704ff8357b8179c5c9d101856a401c
 source_last_modified: "2026-06-25T17:31:52+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS Repair Automation & Auditor API

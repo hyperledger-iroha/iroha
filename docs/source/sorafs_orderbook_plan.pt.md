@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ed6530c63c3155ded54ab06b2c1bcdb91fecbe7e301147f1277998b5e317b797
+source_hash: 05ab4453341ea966e2ba178c417d46dae8ca5584b712019f5322521ff1b336f6
 source_last_modified: "2026-06-25T17:28:04+00:00"
 translation_last_reviewed: 2026-06-25
 ---

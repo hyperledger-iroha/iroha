@@ -198,6 +198,210 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "multi-peer-reconciliation.json" not in diagnostics
 
 
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\nappeal"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["required_kinds"] = [
+        "pricing_config",
+        "pricing_config",
+        "unknown_kind",
+        "bad\nkind",
+    ]
+    rendered["thresholds"] = {
+        "max_canary_age_secs": -1,
+        "max_dashboard_age_secs": False,
+        "max_route_latency_ms": 0,
+        "max_settlement_lag_secs": "soon",
+        "min_peers": 0,
+        "now_unix": 0,
+        "bad\nfield": 1,
+        "private_key": 2,
+    }
+    rendered["external_evidence"] = {
+        "pricing_config": [],
+        "unknown_kind": ["unknown.json"],
+        "quote_api": "quote-api.json",
+        "bad\nkind": ["pricing-config.json"],
+        "dashboard_metrics": ["bad\npath"],
+    }
+    rendered["evidence_contract"] = {
+        "pricing_config": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.appeal_finance.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "quote_api": "contract-shaped-entry",
+        "bad\nkind": {
+            "schema": MODULE.KIND_BY_NAME["pricing_config"].schema,
+            "required_payload_fields": ["schema"],
+        },
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "appeal finance rollout runner plan fields must be canonical strings"
+        in diagnostics
+    )
+    assert "appeal finance rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "appeal finance rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan required_kinds must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan required_kinds must not contain duplicate kinds"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan required_kinds must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds must contain only configured threshold fields"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds.max_canary_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds.max_dashboard_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds.max_settlement_lag_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds.max_route_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds.min_peers must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan external_evidence keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan external_evidence keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan external_evidence must map each kind to non-empty path lists"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan external_evidence paths must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
+    tmp_path: Path,
+) -> None:
+    payload = write_payload(tmp_path / "pricing-config.json")
+    args = MODULE.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path / "evidence"),
+            "--require-kind",
+            "pricing_config",
+            "--pricing-config-evidence",
+            str(payload),
+        ]
+    )
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["external_evidence"]["quote_api"] = [str(tmp_path / "quote-api.json")]
+    rendered["evidence_contract"]["quote_api"] = {
+        "schema": MODULE.KIND_BY_NAME["quote_api"].schema,
+        "required_payload_fields": list(MODULE.EVIDENCE_REQUIRED_FIELDS["quote_api"]),
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "appeal finance rollout runner plan external_evidence must contain only required kinds"
+        in diagnostics
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract must contain only required kinds"
+        in diagnostics
+    )
+    assert "quote_api" not in diagnostics
+
+
 def test_execution_rejects_plan_validation_drift_before_running(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

@@ -476,7 +476,10 @@ evidence carries a matching `policy_digest_hex`, the multi-peer reconciliation
 run covers at least four peers, and the governance approval is bound to
 `iroha_config`. The collection planner includes the checker-backed
 `evidence_contract` map in `--dry-run` output so operators can review the exact
-SFM-4b2 artifact contract before promoting staged evidence.
+SFM-4b2 artifact contract before promoting staged evidence. The shared runner
+plan guard rejects non-canonical nested required-kind, threshold,
+external-evidence, evidence-contract, and command-step shapes before dry-run
+output or verifier execution.
 
 ## Remaining Production Gates
 
@@ -506,4 +509,7 @@ The rollout evidence scripts have focused Python coverage in:
 - `scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py`
 
-The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The runner validates the schema-closed collection-plan envelope before printing
+dry-run JSON or executing the verifier. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes.

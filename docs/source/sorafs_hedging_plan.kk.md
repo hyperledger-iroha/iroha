@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_hedging_plan.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c10eb65b23c970244c54576102ab255eaf2dac073b6a3ea9d545dd81f18bb08
+source_hash: 7b3ced1c3cb1b6380de9c1c36bdb3ca31e45ea25f0c3df19445b4a5b56e3e2a7
 source_last_modified: "2026-06-26T00:58:45+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS XOR Hedging & Billing

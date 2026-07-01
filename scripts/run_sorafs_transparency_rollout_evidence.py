@@ -7,7 +7,6 @@ import argparse
 import os
 import re
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -49,6 +48,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_url_args,
     render_runner_plan,
     validate_runner_input_parent_chain,
+    validate_runner_context_evidence_plan,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -85,6 +85,9 @@ PLAN_FIELDS = frozenset(
         "evidence_contract",
         "steps",
     }
+)
+PLAN_DEPLOYMENT_CONTEXT_FIELDS = frozenset(
+    {"deployment_id", "environment", "deployment_context_reviewed"}
 )
 
 
@@ -323,35 +326,24 @@ def validate_plan_json(
 ) -> list[str]:
     """Validate the transparency collection-plan envelope before use."""
 
-    errors: list[str] = []
-    if not isinstance(rendered, Mapping):
-        return ["transparency rollout runner plan must be an object"]
-    if set(rendered) != PLAN_FIELDS:
-        errors.append(
-            "transparency rollout runner plan fields must match the schema-closed contract"
-        )
-    if rendered.get("schema") != PLAN_SCHEMA:
-        errors.append("transparency rollout runner plan schema must match the contract")
-    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
-        errors.append(
-            "transparency rollout runner plan verifier schema must match checker summary"
-        )
     expected_context = deployment_context(args)
-    if rendered.get("deployment_context") != expected_context:
-        errors.append("transparency rollout runner plan deployment_context must match args")
-    else:
-        require_rollout_deployment_id(expected_context, errors)
-        require_rollout_environment(expected_context, errors)
-        if expected_context.get("deployment_context_reviewed") is not True:
-            errors.append(
-                "transparency rollout runner plan deployment_context must be reviewed"
-            )
-    if rendered.get("evidence_contract") != evidence_contract():
-        errors.append(
-            "transparency rollout runner plan evidence_contract must match checker fields"
-        )
-    errors.extend(validate_runner_plan_steps(rendered, plan))
-    return errors
+    context_errors: list[str] = []
+    require_rollout_deployment_id(expected_context, context_errors)
+    require_rollout_environment(expected_context, context_errors)
+    return validate_runner_context_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="transparency rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        deployment_context=expected_context,
+        deployment_context_fields=PLAN_DEPLOYMENT_CONTEXT_FIELDS,
+        deployment_context_errors=context_errors,
+        known_kinds=KIND_BY_NAME,
+        evidence_contract=evidence_contract(),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def deployment_context_write_open_flags() -> int:

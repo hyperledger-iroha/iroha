@@ -96,12 +96,15 @@ emits the matching collection plan and dry-run evidence contract so operators
 can review the required fields before submitting promotion packets, and the
 runner validates the schema-closed collection plan, required kinds, thresholds,
 external evidence map, evidence contract, and command steps before dry-run
-output or verifier execution. `scripts/build_sorafs_gateway_load_canary.py`
-builds individual payload-free evidence artifacts for local conformance,
-staging load, telemetry/SLO, transport-scope, and governance approval runs. The
-builder requires reviewed deployment context, complete deterministic scenario
-and metric coverage where applicable, suite/staging digest bindings, SLO
-threshold facts, and validates every generated artifact through
+output or verifier execution. The shared runner plan guard also rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before any live gateway-load contact.
+`scripts/build_sorafs_gateway_load_canary.py` builds individual payload-free
+evidence artifacts for local conformance, staging load, telemetry/SLO,
+transport-scope, and governance approval runs. The builder requires reviewed
+deployment context, complete deterministic scenario and metric coverage where
+applicable, suite/staging digest bindings, SLO threshold facts, and validates
+every generated artifact through
 `scripts/check_sorafs_gateway_load_rollout_evidence.py` before writing. Checked
 in response-file examples cover the local conformance and staging-load roots.
 

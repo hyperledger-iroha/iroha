@@ -56,6 +56,11 @@ public final class TonSccpProver {
         "tonTemplateFinalityPolicyHash"),
     TEMPLATE_SHARD_STATE_VERIFIER_HASH
   };
+  private static final String[] GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = {
+    "0x2626262626262626262626262626262626262626262626262626262626262626",
+    "0x2727272727272727272727272727272727272727272727272727272727272727",
+    "0x2828282828282828282828282828282828282828282828282828282828282828"
+  };
   public static final long CURRENT_VALIDATOR_SET_CONFIG_PARAM = 34L;
   public static final int CONFIG_PARAM_KEY_BITS = 32;
 
@@ -7163,11 +7168,29 @@ public final class TonSccpProver {
             input.tonMasterchainConfigVerifierHash(),
             input.tonValidatorSetTransitionVerifierHash(),
             input.tonShardAccountsDictionaryVerifierHash());
+    requireGovernedSourceAdapterDeploymentAuditForBinding(input);
     return SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
         input.sourceDomain(),
         input.targetDomain(),
         sourceAdapterDeploymentHash,
         input.deploymentReceiptHash());
+  }
+
+  private static void requireGovernedSourceAdapterDeploymentAuditForBinding(
+      final SourceAdapterDeploymentInput input) {
+    final String[] auditHashes = {
+      normalizeHex32(input.tonMasterchainConfigVerifierHash(), "tonMasterchainConfigVerifierHash"),
+      normalizeHex32(
+          input.tonValidatorSetTransitionVerifierHash(),
+          "tonValidatorSetTransitionVerifierHash"),
+      normalizeHex32(
+          input.tonShardAccountsDictionaryVerifierHash(),
+          "tonShardAccountsDictionaryVerifierHash")
+    };
+    if (!Arrays.equals(auditHashes, GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1)) {
+      throw new IllegalArgumentException(
+          "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes");
+    }
   }
 
   /** TON live-account evidence collected by UI code before route canary submission. */

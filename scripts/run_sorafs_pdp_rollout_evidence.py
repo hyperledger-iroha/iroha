@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -44,6 +43,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_no_unrequired_evidence,
     require_runner_non_negative_int,
     require_runner_positive_int,
+    validate_runner_evidence_plan,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -62,6 +62,27 @@ PLAN_FIELDS = frozenset(
         "steps",
     }
 )
+PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
+    {
+        "max_evidence_age_secs",
+        "max_route_latency_ms",
+        "max_proof_latency_ms",
+        "min_providers",
+        "min_challenges",
+        "min_proofs",
+    }
+)
+PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset(
+    {
+        "max_route_latency_ms",
+        "max_proof_latency_ms",
+        "min_providers",
+        "min_challenges",
+        "min_proofs",
+        "now_unix",
+    }
+)
+PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_evidence_age_secs"})
 
 
 @dataclass(frozen=True)
@@ -230,27 +251,23 @@ def validate_plan_json(
 ) -> list[str]:
     """Validate the PDP collection-plan envelope before use."""
 
-    errors: list[str] = []
-    if not isinstance(rendered, Mapping):
-        return ["PDP rollout runner plan must be an object"]
-    if set(rendered) != PLAN_FIELDS:
-        errors.append(
-            "PDP rollout runner plan fields must match the schema-closed contract"
-        )
-    if rendered.get("schema") != PLAN_SCHEMA:
-        errors.append("PDP rollout runner plan schema must match the contract")
-    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
-        errors.append("PDP rollout runner plan verifier schema must match checker summary")
-    if rendered.get("required_kinds") != list(args.required_kinds):
-        errors.append("PDP rollout runner plan required_kinds must match args")
-    if rendered.get("thresholds") != threshold_values(args):
-        errors.append("PDP rollout runner plan thresholds must match args")
-    if rendered.get("external_evidence") != external_evidence(args):
-        errors.append("PDP rollout runner plan external_evidence must match args")
-    if rendered.get("evidence_contract") != evidence_contract(args):
-        errors.append("PDP rollout runner plan evidence_contract must match checker fields")
-    errors.extend(validate_runner_plan_steps(rendered, plan))
-    return errors
+    return validate_runner_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="PDP rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        required_kinds=args.required_kinds,
+        known_kinds=KIND_BY_NAME,
+        thresholds=threshold_values(args),
+        required_threshold_fields=PLAN_REQUIRED_THRESHOLD_FIELDS,
+        positive_threshold_fields=PLAN_POSITIVE_THRESHOLD_FIELDS,
+        non_negative_threshold_fields=PLAN_NON_NEGATIVE_THRESHOLD_FIELDS,
+        external_evidence=external_evidence(args),
+        evidence_contract=evidence_contract(args),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:

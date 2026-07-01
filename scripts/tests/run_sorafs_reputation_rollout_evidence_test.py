@@ -167,6 +167,111 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "provider-a-proof" not in diagnostics
 
 
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\nreputation"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["external_evidence"] = {
+        "metrics": "bad\npath",
+        "publish": ["publish.json"],
+        "unknown_kind": "unknown.json",
+        "bad\nkind": "metrics.json",
+        "private_key": "runtime-only-key-material",
+    }
+    rendered["evidence_contract"] = {
+        "metrics": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.reputation.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "bad\nkind": "contract-shaped-entry",
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert "reputation rollout runner plan fields must be canonical strings" in diagnostics
+    assert "reputation rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "reputation rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan external_evidence keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan external_evidence keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan external_evidence must contain only configured evidence fields"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan external_evidence values must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan external_evidence must match configured fields"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "reputation rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
 def test_execution_rejects_plan_validation_drift_before_running(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

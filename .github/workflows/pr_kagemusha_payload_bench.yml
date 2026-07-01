@@ -310,6 +310,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNote.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashTextCodec.java"
@@ -1299,6 +1300,10 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-amount-normalization
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-max-inputs-strictness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-input-claim-strictness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-issued-claim-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-note-issued-claim-amount-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-note-issued-claim-asset-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-note-issued-claim-amount-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage
@@ -1315,6 +1320,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-retired-offline-note-transaction-builders
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-classic-offline-note-fixture-labels
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-retired-state-migration
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-wallet-note-json-amount-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-commitment-hex-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-draft-proof-replacement
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-wallet-input-cap

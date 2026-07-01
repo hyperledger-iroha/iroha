@@ -26,28 +26,28 @@ seiyaku PredictionMarket {
 
     if (caller == oracle_yes) {
       if (!resolved && alice_staked && bob_staked) {
-        transfer_asset(pool, alice, asset, 20);
+        transfer_asset(pool, alice, asset, 20, dataspace_id("0"));
         resolved = true;
       }
       return;
     }
     if (caller == oracle_no) {
       if (!resolved && alice_staked && bob_staked) {
-        transfer_asset(pool, bob, asset, 20);
+        transfer_asset(pool, bob, asset, 20, dataspace_id("0"));
         resolved = true;
       }
       return;
     }
     if (caller == alice) {
       if (!resolved && !alice_staked) {
-        transfer_asset(caller, pool, asset, 10);
+        transfer_asset(caller, pool, asset, 10, dataspace_id("0"));
         alice_staked = true;
       }
       return;
     }
     if (caller == bob) {
       if (!resolved && !bob_staked) {
-        transfer_asset(caller, pool, asset, 10);
+        transfer_asset(caller, pool, asset, 10, dataspace_id("0"));
         bob_staked = true;
       }
       return;

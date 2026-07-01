@@ -57,6 +57,13 @@ class RawResponse:
         return self.payload[:size]
 
 
+class HostileImportedScalar:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token imported EVM source live metadata was stringified"
+        )
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -341,6 +348,32 @@ def source_args(module, fake, *, domain=1):
         args,
     )
     return args, material_hash, deployment_hash
+
+
+def full_evm_source_live_summary(module):
+    fake = fake_opener_for(module)
+    args, material_hash, deployment_hash = source_args(module, fake)
+    return module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_rpc_chain_id=1,
+            expected_source_bridge_code_hash=fake.bridge_code_hash,
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            source_trust_anchor_hash=args.source_trust_anchor_hash,
+            consensus_verifier_hash=args.consensus_verifier_hash,
+            message_inclusion_verifier_hash=args.message_inclusion_verifier_hash,
+            finality_policy_hash=args.finality_policy_hash,
+            adapter_verifier_vk_hash=args.adapter_verifier_vk_hash,
+            deployment_receipt_hash=args.deployment_receipt_hash,
+            expected_source_verifier_material_hash=material_hash,
+            expected_source_adapter_engine_deployment_hash=deployment_hash,
+            block_tag="finalized",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
 
 
 def test_evm_source_json_rpc_response_size_is_bounded():
@@ -1349,6 +1382,66 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
                 raise AssertionError(
                     "EVM source live TOML leaked parser detail for bridge address"
                 )
+
+
+def test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_source_live_summary(module)
+
+    cases = (
+        (
+            ("source_bridge", "bridge_address"),
+            "source bridge address must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "expected_source_bridge_code_hash"),
+            "expected source bridge code hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "bridge_runtime_bytecode_hex"),
+            "source bridge runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            ("source_bridge", "deployment_transaction_hash"),
+            "deployment transaction hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_contract_address"),
+            "deployment receipt contract address must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_finalized_block_hash"),
+            "deployment receipt finalized block hash must be an exact hex string",
+        ),
+        (
+            ("source_records", "source_verifier_material_hash"),
+            "source verifier material hash must be an exact hex string",
+        ),
+        (
+            ("source_records", "expected_source_adapter_engine_deployment_hash"),
+            "expected source adapter engine deployment hash must be an exact hex string",
+        ),
+    )
+
+    for path, expected_message in cases:
+        forged = copy.deepcopy(summary)
+        container = forged
+        for key in path[:-1]:
+            container = container[key]
+        container[path[-1]] = HostileImportedScalar()
+
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM source TOML accepted non-string copied {'.'.join(path)}"
+            )
 
 
 def test_bsc_source_live_evidence_uses_canonical_bsc_profile():

@@ -86,10 +86,13 @@ canaries, and writes atomically without following output symlinks. The checker
 exports its required
   top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
   dry-run emits the checker-backed `evidence_contract` map for selected SFM-2
-  evidence kinds. Matcher, settlement, API gateway,
-event stream, SDK release, observability, reconciliation, and governance
-approval artifacts must carry a `contract_digest_hex` that matches a valid
-contract-surface artifact in the same bundle. Contract-digest mismatches are
+  evidence kinds. The shared runner plan guard rejects non-canonical nested
+  required-kind, threshold, external-evidence, evidence-contract, and
+  command-step shapes before dry-run output or verifier execution. Matcher,
+  settlement, API gateway, event stream, SDK release, observability,
+  reconciliation, and governance approval artifacts must carry a
+  `contract_digest_hex` that matches a valid contract-surface artifact in the
+  same bundle. Contract-digest mismatches are
 recorded on the offending artifact in the JSON summary before required-kind
 validity is reported. Contract-surface evidence must also carry
 `policy_digest_hex`, the checker publishes valid contract-surface policies as
@@ -475,4 +478,7 @@ reconciliation evidence.
   `policy_digest_hex` is not anchored to one of those valid policies.
 - Remaining: implement on-chain contract surface, durable matcher service, daemonized settlement receipt service with escrow custody mutation, on-chain/governance-backed admission policy, contract-backed capability policy authorization, contract forwarding, durable contract/matcher-backed WebSocket/SSE streams, SDK release artifacts/live smoke evidence, live dashboard wiring and alert routing, contract/mirror reconciliation tests, and staged/live rollout evidence that passes the SFM-2 gate.
 
-The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The runner validates the schema-closed collection-plan envelope before printing
+dry-run JSON or executing the verifier. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes.

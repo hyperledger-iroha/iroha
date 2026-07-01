@@ -1347,6 +1347,45 @@ def test_staging_deployment_id_cannot_promote_production_readiness(
     assert staging_deployment not in errors
 
 
+def test_numbered_staging_deployment_id_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    staging_deployment = "gateway-staging1-a"
+    write_gate(tmp_path, "gateway_load", deployment_id=staging_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-production deployment markers "
+        "['staging']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-production deployment markers ['staging']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert staging_deployment not in errors
+
+
 def test_joined_nonproduction_alias_cannot_promote_production_readiness(
     tmp_path: Path,
 ) -> None:
@@ -1374,12 +1413,12 @@ def test_joined_nonproduction_alias_cannot_promote_production_readiness(
     errors = "\n".join(result["errors"])
     assert (
         "aggregate deployment_id must not contain non-reviewed deployment "
-        "markers ['stageproduction']"
+        "markers ['stage']"
         in errors
     )
     assert (
         "gateway_load aggregate row deployment_id must not contain "
-        "non-reviewed deployment markers ['stageproduction']"
+        "non-reviewed deployment markers ['stage']"
         in errors
     )
     assert result["status"] == "blocked"
@@ -1491,12 +1530,12 @@ def test_preview_prerelease_alias_cannot_promote_production_readiness(
     errors = "\n".join(result["errors"])
     assert (
         "aggregate deployment_id must not contain non-reviewed deployment "
-        "markers ['preprodrelease']"
+        "markers ['preprod']"
         in errors
     )
     assert (
         "gateway_load aggregate row deployment_id must not contain "
-        "non-reviewed deployment markers ['preprodrelease']"
+        "non-reviewed deployment markers ['preprod']"
         in errors
     )
     assert result["status"] == "blocked"
@@ -1540,6 +1579,240 @@ def test_canary_alias_cannot_promote_production_readiness(
     )
     assert result["status"] == "blocked"
     assert canary_deployment not in errors
+
+
+def test_stg_alias_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    stg_deployment = "gateway-stgproduction-202606"
+    write_gate(tmp_path, "gateway_load", deployment_id=stg_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment "
+        "markers ['stg']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['stg']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert stg_deployment not in errors
+
+
+def test_poc_alias_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    poc_deployment = "gateway-prod-poc-202606"
+    write_gate(tmp_path, "gateway_load", deployment_id=poc_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment "
+        "markers ['poc']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['poc']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert poc_deployment not in errors
+
+
+def test_smoke_alias_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    smoke_deployment = "gateway-production-smoke-202606"
+    write_gate(tmp_path, "gateway_load", deployment_id=smoke_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment "
+        "markers ['smoke']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['smoke']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert smoke_deployment not in errors
+
+
+def test_stress_alias_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    stress_deployment = "gateway-prod-stress-202606"
+    write_gate(tmp_path, "gateway_load", deployment_id=stress_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment "
+        "markers ['stress']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['stress']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert stress_deployment not in errors
+
+
+def test_shadow_alias_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    shadow_deployment = "gateway-prod-shadow-202606"
+    write_gate(tmp_path, "gateway_load", deployment_id=shadow_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment "
+        "markers ['shadow']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['shadow']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert shadow_deployment not in errors
+
+
+def test_cutover_alias_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    cutover_deployment = "gateway-prod-cutover-202606"
+    write_gate(tmp_path, "gateway_load", deployment_id=cutover_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-reviewed deployment "
+        "markers ['cutover']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-reviewed deployment markers ['cutover']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert cutover_deployment not in errors
 
 
 def test_explicit_nonproduction_environment_fails_before_validation(
@@ -3499,6 +3772,209 @@ def test_recognized_artifact_count_mismatch_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_required_artifact_count_mismatch_reports_observed_aggregate_count(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    observed_count = sum(
+        len(row["artifacts"]) for row in payload["required"].values()
+    )
+    payload["required"][first_required]["artifact_count"] += 1
+    payload["recognized_artifact_count"] = observed_count + 1
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    row = result["required"]["gateway_load"]
+    diagnostics = "\n".join(result["errors"] + row["errors"])
+    assert row["artifact_count"] == observed_count
+    assert row["recognized_artifact_count"] == observed_count
+    assert (
+        f"gateway_load.required.{first_required}.artifact_count must match artifact object count"
+        in diagnostics
+    )
+    assert (
+        "recognized_artifact_count must match recognized artifact object count"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row recognized_artifact_count must match artifact_count"
+        not in diagnostics
+    )
+
+
+def test_non_object_required_artifact_does_not_inflate_aggregate_count(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    payload["required"][first_required]["artifacts"].append("payload-shaped-entry")
+    payload["required"][first_required]["artifact_count"] += 1
+    observed_count = sum(
+        sum(1 for artifact in row["artifacts"] if isinstance(artifact, dict))
+        for row in payload["required"].values()
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    row = result["required"]["gateway_load"]
+    diagnostics = "\n".join(result["errors"] + row["errors"])
+    assert row["artifact_count"] == observed_count
+    assert (
+        f"gateway_load.required.{first_required}.artifact_count must match artifact object count"
+        in diagnostics
+    )
+    assert (
+        f"gateway_load.required.{first_required}.artifacts[1] must be an object"
+        in diagnostics
+    )
+
+
+def test_non_object_required_artifact_does_not_inflate_recognized_expected_count(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+    payload["required"][first_required]["artifacts"].append("payload-shaped-entry")
+    payload["required"][first_required]["artifact_count"] += 1
+    payload["recognized_artifact_count"] = len(payload["recognized_artifacts"])
+    payload["evidence_file_count"] = len(
+        {artifact["path"] for artifact in payload["recognized_artifacts"]}
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    diagnostics = "\n".join(result["errors"] + result["required"]["gateway_load"]["errors"])
+    assert (
+        f"gateway_load.required.{first_required}.artifacts[1] must be an object"
+        in diagnostics
+    )
+    assert (
+        f"gateway_load.required.{first_required}.artifact_count must match artifact object count"
+        in diagnostics
+    )
+    assert "recognized_artifacts must match required artifact counts" not in diagnostics
+
+
+def test_non_object_recognized_artifact_does_not_inflate_aggregate_count(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    recognized_object_count = sum(
+        1 for artifact in payload["recognized_artifacts"] if isinstance(artifact, dict)
+    )
+    payload["recognized_artifacts"].append("payload-shaped-entry")
+    non_object_index = len(payload["recognized_artifacts"]) - 1
+    payload["recognized_artifact_count"] = recognized_object_count + 1
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    row = result["required"]["gateway_load"]
+    diagnostics = "\n".join(result["errors"] + row["errors"])
+    assert row["recognized_artifact_count"] == recognized_object_count
+    assert row["artifact_count"] == recognized_object_count
+    assert f"recognized_artifacts[{non_object_index}] must be an object" in diagnostics
+    assert (
+        "recognized_artifact_count must match recognized artifact object count"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row recognized_artifact_count must match artifact_count"
+        not in diagnostics
+    )
+
+
+def test_empty_required_artifacts_do_not_inflate_aggregate_count(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    payload["required"][first_required]["artifacts"] = []
+    observed_count = sum(
+        sum(
+            1
+            for artifact in row.get("artifacts", [])
+            if isinstance(artifact, dict)
+        )
+        for row in payload["required"].values()
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    row = result["required"]["gateway_load"]
+    diagnostics = "\n".join(result["errors"] + row["errors"])
+    assert row["artifact_count"] == observed_count
+    assert (
+        f"gateway_load.required.{first_required}.artifacts must be a non-empty array"
+        in diagnostics
+    )
+    assert (
+        f"gateway_load.required.{first_required}.artifact_count must match artifact object count"
+        in diagnostics
+    )
+
+
 def test_evidence_file_count_exceeds_artifacts_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     payload["evidence_file_count"] = payload["recognized_artifact_count"] + 1
@@ -3515,6 +3991,37 @@ def test_evidence_file_count_must_match_recognized_artifact_paths(
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_evidence_file_count_ignores_unsafe_recognized_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    unsafe_path = "/tmp/runtime-only/sorafs-evidence.json"
+    payload["recognized_artifacts"][0]["path"] = unsafe_path
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    diagnostics = "\n".join(result["errors"])
+    assert "evidence_file_count must match recognized artifact path count" in diagnostics
+    assert (
+        ".path must be archive-relative without absolute, empty, current, "
+        "parent, or platform-specific segments"
+        in diagnostics
+    )
+    assert unsafe_path not in diagnostics
 
 
 def test_malformed_top_level_counts_fail(tmp_path: Path) -> None:
@@ -3746,6 +4253,11 @@ def test_aggregate_gate_row_output_shape_is_validated() -> None:
     row["private_key"] = "runtime-only-key-material"
     row["path"] = "/tmp/runtime-only/gateway_load.json"
     row["sha256"] = "AB" * 32
+    row["required_kind_count"] = 0
+    row["expected_required_kind_count"] = len(gate.required_kinds) + 1
+    row["artifact_count"] = 1
+    row["recognized_artifact_count"] = 2
+    row["evidence_file_count"] = 3
     row["expected_required_kinds"] = list(reversed(row["expected_required_kinds"]))
     row["newest_generated_at_unix"] = row["oldest_generated_at_unix"] - 1
     row["environment"] = "staging"
@@ -3768,6 +4280,22 @@ def test_aggregate_gate_row_output_shape_is_validated() -> None:
     )
     assert (
         "gateway_load aggregate row expected_required_kinds must match gate contract"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate row required_kind_count must match gate contract"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate row expected_required_kind_count must match gate contract"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate row recognized_artifact_count must match artifact_count"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate row evidence_file_count must not exceed recognized_artifact_count"
         in diagnostics
     )
     assert (
@@ -3877,11 +4405,95 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
 
     errors = []
     ready_summary = copy.deepcopy(summary)
+    ready_summary["summary_file_count"] = 2
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary ready summary_file_count must match required gate count"
+        in diagnostics
+    )
+
+    errors = []
+    drifted_threshold_summary = copy.deepcopy(summary)
+    drifted_threshold_summary["thresholds"]["shadow_threshold"] = 1
+    MODULE.validate_aggregate_summary_output(
+        drifted_threshold_summary,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary thresholds must contain only max_summary_artifact_age_secs"
+        in diagnostics
+    )
+    assert "shadow_threshold" not in diagnostics
+
+    errors = []
+    drifted_required_gates_summary = copy.deepcopy(summary)
+    drifted_required_gates_summary["required_gates"] = [
+        "gateway_load",
+        "gateway_load",
+        "shadow_gate",
+        "bad\ngate",
+    ]
+    MODULE.validate_aggregate_summary_output(
+        drifted_required_gates_summary,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary required_gates must match requested gates" in diagnostics
+    assert (
+        "aggregate summary required_gates must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "aggregate summary required_gates must not contain duplicate gates"
+        in diagnostics
+    )
+    assert (
+        "aggregate summary required_gates must use known gate names" in diagnostics
+    )
+    assert "bad\ngate" not in diagnostics
+    assert "shadow_gate" not in diagnostics
+
+    errors = []
+    drifted_required_gates_summary = copy.deepcopy(summary)
+    drifted_required_gates_summary["required_gates"] = "gateway_load"
+    MODULE.validate_aggregate_summary_output(
+        drifted_required_gates_summary,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary required_gates must be a list" in diagnostics
+    assert "gateway_load" not in diagnostics
+
+    errors = []
+    ready_summary = copy.deepcopy(summary)
     ready_summary["required"]["gateway_load"]["valid"] = False
     ready_summary["required"]["gateway_load"]["errors"] = ["invalid required row"]
     MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
     diagnostics = "\n".join(errors)
     assert "aggregate summary ready rows must all be present and valid" in diagnostics
+
+    errors = []
+    duplicate_error_summary = copy.deepcopy(summary)
+    duplicate_error_summary["status"] = "blocked"
+    duplicate_error_summary["errors"] = [
+        "drifted aggregate diagnostic",
+        "drifted aggregate diagnostic",
+    ]
+    MODULE.validate_aggregate_summary_output(
+        duplicate_error_summary,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary errors must not contain duplicate diagnostics"
+        in diagnostics
+    )
 
     errors = []
     summary["private_key"] = "runtime-only-key-material"
@@ -3950,6 +4562,7 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
         errors,
     )
     assert errors == []
+    valid_gateway_row = copy.deepcopy(summary["required"]["gateway_load"])
 
     missing_row = dict(summary["required"]["reputation"])
     missing_row["errors"] = [
@@ -3967,8 +4580,13 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     summary["required"]["gateway_load"]["errors"] = []
     summary["required"]["gateway_load"]["sha256"] = "AB" * 32
     summary["required"]["gateway_load"]["thresholds"] = {"bad\nkey": False}
-    summary["required"]["gateway_load"]["oldest_generated_at_unix"] = GENERATED_AT + 1
-    summary["required"]["gateway_load"]["newest_generated_at_unix"] = GENERATED_AT
+    summary["required"]["gateway_load"]["evidence_file_count"] = None
+    summary["required"]["gateway_load"]["recognized_artifact_count"] = "1"
+    summary["required"]["gateway_load"]["artifact_count"] = False
+    summary["required"]["gateway_load"]["required_kind_count"] = 0
+    summary["required"]["gateway_load"]["expected_required_kind_count"] = 999
+    summary["required"]["gateway_load"]["oldest_generated_at_unix"] = 0
+    summary["required"]["gateway_load"]["newest_generated_at_unix"] = False
     summary["required"]["gateway_load"]["deployment_id"] = " runtime-only-deployment"
     summary["required"]["gateway_load"]["environment"] = "prod\nsecret"
     summary["required"]["reputation"]["present"] = True
@@ -3998,7 +4616,35 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     )
     assert "gateway_load aggregate invalid row errors must not be empty" in diagnostics
     assert (
-        "gateway_load aggregate invalid row newest_generated_at_unix must be >= oldest_generated_at_unix"
+        "gateway_load aggregate invalid row evidence_file_count must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row recognized_artifact_count must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row artifact_count must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row oldest_generated_at_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row newest_generated_at_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row required_kind_count must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row required_kind_count must match gate contract"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row expected_required_kind_count must match gate contract"
         in diagnostics
     )
     assert (
@@ -4035,6 +4681,64 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     assert "AB" * 32 not in diagnostics
     assert "runtime-only-deployment" not in diagnostics
     assert "prod\nsecret" not in diagnostics
+
+    errors = []
+    invalid_count_row = copy.deepcopy(valid_gateway_row)
+    invalid_count_row["valid"] = False
+    invalid_count_row["errors"] = ["invalid production readiness summary"]
+    invalid_count_row["artifact_count"] = 1
+    invalid_count_row["recognized_artifact_count"] = 2
+    invalid_count_row["evidence_file_count"] = 3
+    MODULE.validate_aggregate_required_row_output(
+        MODULE.GATE_BY_NAME["gateway_load"],
+        invalid_count_row,
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "gateway_load aggregate invalid row recognized_artifact_count must match artifact_count"
+        in diagnostics
+    )
+    assert (
+        "gateway_load aggregate invalid row evidence_file_count must not exceed recognized_artifact_count"
+        in diagnostics
+    )
+
+    errors = []
+    invalid_row = copy.deepcopy(summary["required"]["gateway_load"])
+    invalid_row["private_key"] = "runtime-only-key-material"
+    invalid_row["valid"] = False
+    invalid_row["errors"] = ["invalid production readiness summary"]
+    invalid_row["environment"] = "staging"
+    MODULE.validate_aggregate_required_row_output(
+        MODULE.GATE_BY_NAME["gateway_load"],
+        invalid_row,
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "gateway_load aggregate invalid row environment must be production when present"
+        in diagnostics
+    )
+    assert "staging" not in diagnostics
+
+    errors = []
+    invalid_row = copy.deepcopy(summary["required"]["gateway_load"])
+    invalid_row["valid"] = False
+    invalid_row["errors"] = [
+        "invalid production readiness summary",
+        "invalid production readiness summary",
+    ]
+    MODULE.validate_aggregate_required_row_output(
+        MODULE.GATE_BY_NAME["gateway_load"],
+        invalid_row,
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "gateway_load aggregate invalid row errors must not contain duplicate diagnostics"
+        in diagnostics
+    )
 
 
 def test_duplicate_gate_summary_fails(tmp_path: Path) -> None:

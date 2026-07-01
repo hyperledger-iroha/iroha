@@ -2553,8 +2553,14 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
     assert "def render_runner_plan" in helper
     assert "def write_runner_plan" in helper
     assert "def validate_runner_plan_steps" in helper
+    assert "def validate_runner_evidence_plan" in helper
+    assert "def canonical_runner_plan_string" in helper
     assert "runner plan must be an object" in helper
     assert "runner plan steps must match command plan" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
+    assert "evidence_contract required_payload_fields must match checker fields" in helper
     assert "render_runner_plan(rendered_plan)" in helper
     assert 'json.dumps(plan, indent=2, sort_keys=True, allow_nan=False) + "\\n"' in helper
     assert "sys.stdout.write(render_runner_plan(plan))" in helper
@@ -2566,6 +2572,11 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
     assert "test_validate_runner_plan_steps_matches_command_plan" in helper_test
     assert "test_validate_runner_plan_steps_rejects_non_object_and_drift" in helper_test
     assert "test_validate_runner_plan_steps_rejects_unrenderable_plan" in helper_test
+    assert "test_validate_runner_evidence_plan_accepts_schema_closed_plan" in helper_test
+    assert (
+        "test_validate_runner_evidence_plan_rejects_nested_drift_without_leaking"
+        in helper_test
+    )
     assert "test_write_runner_plan_reports_non_object_plan_without_stdout" in helper_test
     assert "test_write_runner_plan_sanitizes_malformed_render_error" in helper_test
     assert all("validate_runner_plan_steps," in read(path) for path in RUNNERS)
@@ -2594,7 +2605,34 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
             "run_sorafs_transparency_rollout_evidence.py",
         }:
             assert wrapped_marker in source
-            assert "errors.extend(validate_runner_plan_steps(rendered, plan))" in source
+            if path.name in {
+                "run_sorafs_appeal_finance_rollout_evidence.py",
+                "run_sorafs_gateway_compliance_rollout_evidence.py",
+                "run_sorafs_gateway_load_rollout_evidence.py",
+                "run_sorafs_governance_dag_rollout_evidence.py",
+                "run_sorafs_hedging_rollout_evidence.py",
+                "run_sorafs_moderation_panel_rollout_evidence.py",
+                "run_sorafs_orderbook_rollout_evidence.py",
+                "run_sorafs_pdp_rollout_evidence.py",
+                "run_sorafs_pop_credentials_rollout_evidence.py",
+                "run_sorafs_por_rollout_evidence.py",
+                "run_sorafs_potr_rollout_evidence.py",
+                "run_sorafs_reference_sdk_release_evidence.py",
+                "run_sorafs_repair_rollout_evidence.py",
+                "run_sorafs_reserve_rent_rollout_evidence.py",
+            }:
+                assert "validate_runner_evidence_plan(" in source
+            elif path.name in {
+                "run_sorafs_ai_prescreen_rollout_evidence.py",
+                "run_sorafs_reputation_rollout_evidence.py",
+            }:
+                assert "validate_runner_fixed_evidence_plan(" in source
+            elif path.name in {
+                "run_sorafs_transparency_rollout_evidence.py",
+            }:
+                assert "validate_runner_context_evidence_plan(" in source
+            else:
+                assert "errors.extend(validate_runner_plan_steps(rendered, plan))" in source
             assert source.index(wrapped_marker) < source.index("if args.dry_run:")
         else:
             assert direct_marker in source
@@ -2705,6 +2743,7 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
 
 def test_transparency_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_transparency_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
     )
@@ -2712,24 +2751,26 @@ def test_transparency_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_SCHEMA" in runner
     assert "PLAN_FIELDS" in runner
     assert "def validate_plan_json" in runner
-    assert "transparency rollout runner plan must be an object" in runner
+    assert "validate_runner_context_evidence_plan" in runner
+    assert 'diagnostic_prefix="transparency rollout runner plan"' in runner
+    assert "def validate_runner_context_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "deployment_context fields must match configured fields" in helper
+    assert "deployment_context values must be canonical strings" in helper
     assert (
-        "transparency rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "transparency rollout runner plan deployment_context must match args" in runner
-    assert (
-        "transparency rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
     assert "test_plan_json_deployment_context_must_stay_reviewed" in runner_test
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_reputation_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_reputation_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_reputation_rollout_evidence_test.py"
     )
@@ -2738,23 +2779,25 @@ def test_reputation_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "EXTERNAL_EVIDENCE_FIELDS" in runner
     assert "def validate_plan_json" in runner
-    assert "reputation rollout runner plan must be an object" in runner
+    assert "validate_runner_fixed_evidence_plan" in runner
+    assert 'diagnostic_prefix="reputation rollout runner plan"' in runner
+    assert "def validate_runner_fixed_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "external_evidence must contain only configured evidence fields" in helper
+    assert "external_evidence values must be canonical strings" in helper
     assert (
-        "reputation rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "reputation rollout runner plan external_evidence must match args" in runner
-    assert (
-        "reputation rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_gateway_load_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_gateway_load_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_gateway_load_rollout_evidence_test.py"
     )
@@ -2763,25 +2806,30 @@ def test_gateway_load_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "gateway load rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="gateway load rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "gateway load rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "gateway load rollout runner plan required_kinds must match args" in runner
-    assert "gateway load rollout runner plan thresholds must match args" in runner
-    assert "gateway load rollout runner plan external_evidence must match args" in runner
-    assert (
-        "gateway load rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_gateway_compliance_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_gateway_compliance_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_gateway_compliance_rollout_evidence_test.py"
     )
@@ -2790,28 +2838,30 @@ def test_gateway_compliance_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "gateway compliance rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="gateway compliance rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "gateway compliance rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "gateway compliance rollout runner plan required_kinds must match args" in runner
-    assert "gateway compliance rollout runner plan thresholds must match args" in runner
-    assert (
-        "gateway compliance rollout runner plan external_evidence must match args"
-        in runner
-    )
-    assert (
-        "gateway compliance rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_ai_prescreen_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_ai_prescreen_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
     )
@@ -2819,89 +2869,115 @@ def test_ai_prescreen_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_SCHEMA" in runner
     assert "PLAN_FIELDS" in runner
     assert "def validate_plan_json" in runner
-    assert "AI pre-screen rollout runner plan must be an object" in runner
+    assert "validate_runner_fixed_evidence_plan" in runner
+    assert 'diagnostic_prefix="AI pre-screen rollout runner plan"' in runner
+    assert "def validate_runner_fixed_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "external_evidence must contain only configured evidence fields" in helper
+    assert "external_evidence values must be canonical strings" in helper
     assert (
-        "AI pre-screen rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "AI pre-screen rollout runner plan external_evidence must match args" in runner
-    assert (
-        "AI pre-screen rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_pdp_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_pdp_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_pdp_rollout_evidence_test.py")
 
     assert "PLAN_SCHEMA" in runner
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "PDP rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="PDP rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "PDP rollout runner plan fields must match the schema-closed contract"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
-    assert "PDP rollout runner plan required_kinds must match args" in runner
-    assert "PDP rollout runner plan thresholds must match args" in runner
-    assert "PDP rollout runner plan external_evidence must match args" in runner
-    assert "PDP rollout runner plan evidence_contract must match checker fields" in runner
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_potr_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_potr_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_potr_rollout_evidence_test.py")
 
     assert "PLAN_SCHEMA" in runner
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "PoTR rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="PoTR rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "PoTR rollout runner plan fields must match the schema-closed contract"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
-    assert "PoTR rollout runner plan required_kinds must match args" in runner
-    assert "PoTR rollout runner plan thresholds must match args" in runner
-    assert "PoTR rollout runner plan external_evidence must match args" in runner
-    assert "PoTR rollout runner plan evidence_contract must match checker fields" in runner
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_por_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_por_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_por_rollout_evidence_test.py")
 
     assert "PLAN_SCHEMA" in runner
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "PoR rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="PoR rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "PoR rollout runner plan fields must match the schema-closed contract"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
-    assert "PoR rollout runner plan required_kinds must match args" in runner
-    assert "PoR rollout runner plan thresholds must match args" in runner
-    assert "PoR rollout runner plan external_evidence must match args" in runner
-    assert "PoR rollout runner plan evidence_contract must match checker fields" in runner
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_repair_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_repair_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_repair_rollout_evidence_test.py"
     )
@@ -2910,22 +2986,30 @@ def test_repair_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "repair rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="repair rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "repair rollout runner plan fields must match the schema-closed contract"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
-    assert "repair rollout runner plan required_kinds must match args" in runner
-    assert "repair rollout runner plan thresholds must match args" in runner
-    assert "repair rollout runner plan external_evidence must match args" in runner
-    assert "repair rollout runner plan evidence_contract must match checker fields" in runner
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_governance_dag_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_governance_dag_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_governance_dag_rollout_evidence_test.py"
     )
@@ -2934,28 +3018,29 @@ def test_governance_dag_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "Governance DAG rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="Governance DAG rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "Governance DAG rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "Governance DAG rollout runner plan required_kinds must match args" in runner
-    assert "Governance DAG rollout runner plan thresholds must match args" in runner
-    assert (
-        "Governance DAG rollout runner plan external_evidence must match args"
-        in runner
-    )
-    assert (
-        "Governance DAG rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields" in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_orderbook_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_orderbook_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_orderbook_rollout_evidence_test.py"
     )
@@ -2964,25 +3049,35 @@ def test_orderbook_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "orderbook rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="orderbook rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "canonical_runner_plan_string" in helper
+    assert "must be an object" in helper
+    assert "fields must be canonical strings" in helper
+    assert "fields must match the schema-closed contract" in helper
+    assert "schema must be canonical" in helper
+    assert "required_kinds must contain canonical strings" in helper
+    assert "thresholds must be an object" in helper
+    assert "external_evidence keys must be canonical kind names" in helper
+    assert "evidence_contract keys must be canonical kind names" in helper
     assert (
-        "orderbook rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "orderbook rollout runner plan required_kinds must match args" in runner
-    assert "orderbook rollout runner plan thresholds must match args" in runner
-    assert "orderbook rollout runner plan external_evidence must match args" in runner
-    assert (
-        "orderbook rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_appeal_finance_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_appeal_finance_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_appeal_finance_rollout_evidence_test.py"
     )
@@ -2991,28 +3086,31 @@ def test_appeal_finance_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "appeal finance rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="appeal finance rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "must be an object" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "appeal finance rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "appeal finance rollout runner plan required_kinds must match args" in runner
-    assert "appeal finance rollout runner plan thresholds must match args" in runner
-    assert (
-        "appeal finance rollout runner plan external_evidence must match args"
-        in runner
-    )
-    assert (
-        "appeal finance rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_reserve_rent_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_reserve_rent_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_reserve_rent_rollout_evidence_test.py"
     )
@@ -3021,25 +3119,29 @@ def test_reserve_rent_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "reserve/rent rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="reserve/rent rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "reserve/rent rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "reserve/rent rollout runner plan required_kinds must match args" in runner
-    assert "reserve/rent rollout runner plan thresholds must match args" in runner
-    assert "reserve/rent rollout runner plan external_evidence must match args" in runner
-    assert (
-        "reserve/rent rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields" in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_pop_credentials_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_pop_credentials_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_pop_credentials_rollout_evidence_test.py"
     )
@@ -3048,28 +3150,30 @@ def test_pop_credentials_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "PoP credential rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="PoP credential rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "PoP credential rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "PoP credential rollout runner plan required_kinds must match args" in runner
-    assert "PoP credential rollout runner plan thresholds must match args" in runner
-    assert (
-        "PoP credential rollout runner plan external_evidence must match args"
-        in runner
-    )
-    assert (
-        "PoP credential rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields"
+        in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_hedging_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_hedging_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_hedging_rollout_evidence_test.py"
     )
@@ -3078,28 +3182,29 @@ def test_hedging_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "hedging/billing rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="hedging/billing rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "hedging/billing rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "hedging/billing rollout runner plan required_kinds must match args" in runner
-    assert "hedging/billing rollout runner plan thresholds must match args" in runner
-    assert (
-        "hedging/billing rollout runner plan external_evidence must match args"
-        in runner
-    )
-    assert (
-        "hedging/billing rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields" in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_moderation_panel_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_moderation_panel_rollout_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_moderation_panel_rollout_evidence_test.py"
     )
@@ -3108,23 +3213,23 @@ def test_moderation_panel_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_FIELDS" in runner
     assert "def threshold_values" in runner
     assert "def validate_plan_json" in runner
-    assert "moderation panel rollout runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="moderation panel rollout runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "moderation panel rollout runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert "moderation panel rollout runner plan required_kinds must match args" in runner
-    assert "moderation panel rollout runner plan thresholds must match args" in runner
-    assert (
-        "moderation panel rollout runner plan external_evidence must match args"
-        in runner
-    )
-    assert (
-        "moderation panel rollout runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields" in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
@@ -5677,8 +5782,45 @@ def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
     assert '"experimental"' in helper
     assert '"nonproduction"' in helper
     assert '"notprod"' in helper
+    assert '"poc"' in helper
+    assert '"proofofconcept"' in helper
+    assert '"prototype"' in helper
+    assert '"smoke"' in helper
+    assert '"fixture"' in helper
+    assert '"stub"' in helper
+    assert '"lab"' in helper
+    assert '"temporary"' in helper
+    assert '"benchmark"' in helper
+    assert '"loadtest"' in helper
+    assert '"wip"' in helper
+    assert '"perf"' in helper
+    assert '"performance"' in helper
+    assert '"stress"' in helper
+    assert '"soak"' in helper
+    assert '"chaos"' in helper
+    assert '"burnin"' in helper
+    assert '"scaletest"' in helper
+    assert '"shadow"' in helper
+    assert '"darklaunch"' in helper
+    assert '"dogfood"' in helper
+    assert '"rehearsal"' in helper
+    assert '"dressrehearsal"' in helper
+    assert '"training"' in helper
+    assert '"drill"' in helper
+    assert '"gameday"' in helper
+    assert '"cutover"' in helper
+    assert '"bluegreen"' in helper
+    assert '"greenblue"' in helper
+    assert '"rollback"' in helper
+    assert '"rollforward"' in helper
+    assert '"failover"' in helper
+    assert '"fallback"' in helper
+    assert '"switchover"' in helper
+    assert '"stg"' in helper
     assert "ROLLOUT_DEPLOYMENT_REVIEW_LABELS" in helper
     assert "FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS" in helper
+    assert "def numbered_rollout_marker_token" in helper
+    assert "numbered_joined_forbidden" in helper
     assert "joined_forbidden" in helper
     assert 'f"{marker}{label}"' in helper
     assert 'f"{label}{marker}"' in helper
@@ -5702,6 +5844,46 @@ def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
     )
     assert '"gateway-prod-dry-run-202606"' in helper_test
     assert '"reference-releaseexperimental-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_staging_abbreviations"
+        in helper_test
+    )
+    assert '"gateway-stgproduction-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_numbered_marker_aliases"
+        in helper_test
+    )
+    assert '"gateway-qa2-production-202606"' in helper_test
+    assert '"orderbook-uat01release-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_proof_of_concept_markers"
+        in helper_test
+    )
+    assert '"gateway-proof-of-concept-production-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_test_harness_markers"
+        in helper_test
+    )
+    assert '"gateway-production-smoke-202606"' in helper_test
+    assert '"reference-releasefixture-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_perf_resilience_markers"
+        in helper_test
+    )
+    assert '"gateway-prod-perf-202606"' in helper_test
+    assert '"pdp-stressproduction-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_rehearsal_markers"
+        in helper_test
+    )
+    assert '"gateway-prod-shadow-202606"' in helper_test
+    assert '"pdp-dark-launch-production-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_transition_markers"
+        in helper_test
+    )
+    assert '"gateway-prod-cutover-202606"' in helper_test
+    assert '"pdp-greenblueproduction-202606"' in helper_test
     assert missing_shared_context == []
     assert unexpected_shared_context == []
     assert unexpected_deployment_fingerprints == []
@@ -5724,6 +5906,10 @@ def test_rollout_checkers_enforce_consistent_deployment_context() -> None:
         EVIDENCE_VALIDATION_HELPER,
         "build_required_evidence_summary",
     )
+    helper_context = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "record_consistent_deployment_context",
+    )
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def record_consistent_deployment_context" in helper
@@ -5737,9 +5923,14 @@ def test_rollout_checkers_enforce_consistent_deployment_context() -> None:
     )
     assert "values: Any" in helper
     assert "not isinstance(values, Mapping)" in helper
-    assert 'label_name=f"deployment context {key}"' in helper
+    assert 'label_name="deployment context deployment_id"' in helper
+    assert 'label_name="deployment context environment"' in helper
+    assert '"deployment_id": deployment_id' in helper
+    assert '"environment": environment' in helper
+    assert "if deployment_id is None or environment is None" in helper
     assert "record_consistent_deployment_context(" in helper_summary
     assert "record_artifact_error(artifact, error, errors)" in helper
+    assert 'if value == "":' not in helper_context
     assert '"deployment_id" not in fingerprint' in helper_summary
     assert '"environment" not in fingerprint' in helper_summary
     assert "row_errors: list[str] = []" in helper_summary
@@ -5749,6 +5940,10 @@ def test_rollout_checkers_enforce_consistent_deployment_context() -> None:
     assert "evidence deployment context must match across artifacts" in helper_summary
     assert "test_build_required_evidence_summary_rejects_mixed_deployments" in helper_test
     assert "test_deployment_context_summary_rejects_malformed_values" in helper_test
+    assert (
+        "test_record_consistent_deployment_context_rejects_empty_fingerprint_values"
+        in helper_test
+    )
     assert missing_required_summary == []
 
 
@@ -9577,6 +9772,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Final release-specific URLs, signatures, and package versions remain SF-11 release evidence.",
         "Operators should keep SF-11 release promotion fail-closed until payload-free release evidence passes the checked-in gate:",
         "Narrowed `--require-kind` release runs also reject evidence supplied for excluded kinds before the plan is rendered or the verifier starts.",
+        "The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.",
         "The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for release archives, signed manifests, downstream bindings, cookbook smoke, FFI/header contract, and governance approval.",
         "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
@@ -9638,6 +9834,7 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
 
 def test_reference_sdk_release_runner_plan_envelope_is_schema_closed() -> None:
     runner = read(SCRIPTS_DIR / "run_sorafs_reference_sdk_release_evidence.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     runner_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_reference_sdk_release_evidence_test.py"
     )
@@ -9645,17 +9842,23 @@ def test_reference_sdk_release_runner_plan_envelope_is_schema_closed() -> None:
     assert "PLAN_SCHEMA" in runner
     assert "PLAN_FIELDS" in runner
     assert "def validate_plan_json" in runner
-    assert "reference SDK release runner plan must be an object" in runner
+    assert "validate_runner_evidence_plan" in runner
+    assert 'diagnostic_prefix="reference SDK release runner plan"' in runner
+    assert "def validate_runner_evidence_plan" in helper
+    assert "fields must be canonical strings" in helper
+    assert "required_kinds must not contain duplicate kinds" in helper
+    assert "thresholds must contain only configured threshold fields" in helper
+    assert "external_evidence must contain only required kinds" in helper
     assert (
-        "reference SDK release runner plan fields must match the schema-closed contract"
-        in runner
-    )
-    assert (
-        "reference SDK release runner plan evidence_contract must match checker fields"
-        in runner
+        "evidence_contract required_payload_fields must match checker fields" in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
     assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_nested_shapes_are_validated" in runner_test
+    assert (
+        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
+        in runner_test
+    )
     assert "test_subset_gate_rejects_evidence_for_unrequired_kind" in runner_test
     assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
@@ -10947,6 +11150,14 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "require an explicit final `--deployment-id`/`--environment` pair even for direct checker invocations",
         "SoraFS production promotion now has an aggregate readiness gate over the existing per-lane rollout/release evidence summaries",
         "The same shared validator now rejects compact and tokenized pre-release aliases such as `prerelease`, `releasecandidate`, `candidateproduction`, `productionpreview`, `preprodrelease`, `pre-production`, `production-candidate`, `prod-rc`, `prod-preview`, and `preprod-production`",
+        "The same validator also rejects synthetic rollout maturity labels such as `canary`, `alpha`, `beta`, `dry-run`, `pilot`, `experimental`, and `trial` even when joined to `prod`, `production`, or `release` labels",
+        "The shared deployment-id validator also rejects the `stg` staging abbreviation as a token or when glued to `prod`, `production`, or `release` labels",
+        "The shared deployment-id validator rejects proof-of-concept labels such as `poc`, `proof-of-concept`, and `prototype` before final promotion",
+        "The shared deployment-id validator also rejects smoke, fixture, stub, lab, temporary, benchmark, load-test, and work-in-progress deployment labels before final promotion",
+        "The shared deployment-id validator rejects performance, stress, soak, chaos, burn-in, and scale-test deployment labels before final promotion",
+        "The shared deployment-id validator rejects shadow, dark-launch, dogfood, rehearsal, training, drill, and game-day deployment labels before final promotion",
+        "The shared deployment-id validator rejects cutover, blue-green, rollback, roll-forward, failover, fallback, and switchover deployment labels before final promotion",
+        "The shared and final aggregate validators also collapse numeric non-production aliases such as `qa2`, `uat01`, `canary2`, and `staging1` to their underlying marker before promotion",
         "This does not close the live deployment gaps above",
     )
     missing = [
@@ -11102,8 +11313,56 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "aggregate invalid row newest_generated_at_unix must be >= oldest_generated_at_unix"
         in checker
     )
+    assert "aggregate row required_kind_count must match gate contract" in checker
+    assert "aggregate row expected_required_kind_count must match gate contract" in checker
+    assert (
+        "aggregate row recognized_artifact_count must match artifact_count" in checker
+    )
+    assert (
+        "aggregate row evidence_file_count must not exceed recognized_artifact_count"
+        in checker
+    )
+    assert "aggregate invalid row {field} must be a non-negative integer" in checker
+    assert (
+        "aggregate invalid row recognized_artifact_count must match artifact_count"
+        in checker
+    )
+    assert (
+        "aggregate invalid row evidence_file_count must not exceed recognized_artifact_count"
+        in checker
+    )
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "aggregate invalid row evidence_file_count must be a non-negative integer"
+        in readiness_test
+    )
+    assert (
+        "aggregate invalid row recognized_artifact_count must be a non-negative integer"
+        in readiness_test
+    )
+    assert (
+        "aggregate invalid row artifact_count must be a non-negative integer"
+        in readiness_test
+    )
+    assert (
+        "aggregate invalid row oldest_generated_at_unix must be a positive integer"
+        in readiness_test
+    )
+    assert (
+        "aggregate invalid row newest_generated_at_unix must be a positive integer"
+        in readiness_test
+    )
+    assert "aggregate invalid row required_kind_count must match gate contract" in checker
+    assert (
+        "aggregate invalid row expected_required_kind_count must match gate contract"
+        in checker
+    )
     assert "f\"{gate.name} aggregate invalid row deployment_id\"" in checker
     assert "aggregate invalid row environment must be canonical when present" in checker
+    assert "aggregate invalid row environment must be production when present" in checker
+    assert "must not contain duplicate diagnostics" in checker
     assert "aggregate invalid row {threshold_error}" in checker
     assert "deterministic missing summary diagnostic" in checker
     assert "validate_duplicate_summary_diagnostics" in checker
@@ -11113,7 +11372,14 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "unknown-schema diagnostics must match discovered unknown summaries" in checker
     assert "unrequired-gate diagnostics must match explicit unrequired summaries" in checker
     assert "validate_aggregate_summary_output" in checker
+    assert "aggregate summary required_gates must be a list" in checker
+    assert "aggregate summary required_gates must contain canonical strings" in checker
+    assert "aggregate summary required_gates must not contain duplicate gates" in checker
+    assert "aggregate summary required_gates must use known gate names" in checker
+    assert "thresholds must contain only max_summary_artifact_age_secs" in checker
+    assert "errors.append(f\"aggregate summary {threshold_error}\")" in checker
     assert "aggregate summary status must match aggregate diagnostics" in checker
+    assert "aggregate summary errors must not contain duplicate diagnostics" in checker
     assert "summary.get(\"status\") != evidence_gate_status(error_values)" in checker
     assert (
         "aggregate summary ready deployment must include deployment_id and environment"
@@ -11124,6 +11390,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "def is_production_ready_environment" in checker
     assert "def require_reviewed_deployment_id_value" in checker
     assert "def require_production_deployment_id_value" in checker
+    assert "numbered_rollout_marker_token" in checker
     assert "require_rollout_deployment_id" in checker
     assert "aggregate environment must be production" in checker
     assert "aggregate row environment must be production" in checker
@@ -11153,6 +11420,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert "test_staging_deployment_id_cannot_promote_production_readiness" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_numbered_staging_deployment_id_cannot_promote_production_readiness"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert (
         "test_joined_nonproduction_alias_cannot_promote_production_readiness"
@@ -11197,11 +11468,18 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_staging_deployment_id_fails" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
+    assert "test_numbered_staging_deployment_id_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
     assert "test_joined_nonproduction_deployment_id_fails" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
     assert (
         "aggregate summary ready recognized_summary_count must match required gate count"
+        in checker
+    )
+    assert (
+        "aggregate summary ready summary_file_count must match required gate count"
         in checker
     )
     assert "aggregate summary ready rows must all be present and valid" in checker
@@ -11210,6 +11488,23 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_aggregate_summary_output_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "observed_artifact_count = sum(" in checker
+    assert "isinstance(artifact, dict)" in checker
+    assert "artifact_count must match artifact object count" in checker
+    assert "artifact_count = observed_artifact_count" in checker
+    assert "test_required_artifact_count_mismatch_reports_observed_aggregate_count" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_non_object_required_artifact_does_not_inflate_aggregate_count" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_non_object_required_artifact_does_not_inflate_recognized_expected_count"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert "test_empty_required_artifacts_do_not_inflate_aggregate_count" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_complete_lane_fixture_summaries_pass_aggregate_contract" in read(
@@ -11297,9 +11592,22 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "recognized_artifacts length must match recognized_artifact_count" in checker
+    assert (
+        "recognized_artifact_count must match recognized artifact object count"
+        in checker
+    )
+    assert "recognized_artifact_object_count" in checker
     assert "recognized_artifacts must be present" in checker
     assert "must be a non-empty array" in checker
     assert "recognized_artifact_paths" in checker
+    assert "is_archive_portable_artifact_path(\n            artifact_file_path" in checker
+    assert "test_evidence_file_count_ignores_unsafe_recognized_artifact_paths" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_non_object_recognized_artifact_does_not_inflate_aggregate_count"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "evidence_file_count must match recognized artifact path count" in checker
     assert "recognized_artifacts must match required artifact counts" in checker
     assert "recognized_artifacts must match required artifact identities" in checker
@@ -11315,10 +11623,199 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "production readiness runner plan must be an object" in runner
     assert "render_runner_plan(rendered)" in runner
     assert "production readiness runner plan must be strict JSON renderable" in runner
+    assert (
+        "production readiness runner plan fields must be canonical strings"
+        in runner
+    )
     assert "production readiness runner plan fields must match the schema-closed contract" in runner
+    assert "production readiness runner plan schema must be canonical" in runner
+    assert (
+        "production readiness runner plan verifier schema must be canonical"
+        in runner
+    )
     assert "production readiness runner plan steps must match command plan" in runner
+    assert "production readiness runner plan thresholds must be an object" in runner
+    assert (
+        "production readiness runner plan thresholds keys must be canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan thresholds must contain only max_summary_artifact_age_secs and optional now_unix"
+        in runner
+    )
+    assert (
+        "production readiness runner plan thresholds.max_summary_artifact_age_secs must be present"
+        in runner
+    )
+    assert (
+        "production readiness runner plan thresholds.max_summary_artifact_age_secs must be a non-negative integer"
+        in runner
+    )
+    assert (
+        "production readiness runner plan thresholds.now_unix must be a positive integer"
+        in runner
+    )
+    assert (
+        "production readiness runner plan deployment_context must be an object"
+        in runner
+    )
+    assert (
+        "production readiness runner plan deployment_context fields must be deployment_id and environment"
+        in runner
+    )
+    assert (
+        "production readiness runner plan deployment_context keys must be canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan deployment_context must be canonical"
+        in runner
+    )
+    assert (
+        "production readiness runner plan deployment_context must match args"
+        in runner
+    )
+    assert "production readiness runner plan required_gates must be a list" in runner
+    assert (
+        "production readiness runner plan required_gates must contain canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan required_gates must not contain duplicate gates"
+        in runner
+    )
+    assert (
+        "production readiness runner plan required_gates must use known gate names"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries must be an object"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries keys must be canonical gate names"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries keys must use known gate names"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries must contain only required gates"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries must map each gate to a summary path list"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries must contain exactly one summary path per gate"
+        in runner
+    )
+    assert (
+        "production readiness runner plan external_summaries paths must be canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract must be an object"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract keys must be canonical gate names"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract keys must use known gate names"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract must contain only required gates"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract must map each gate to a contract object"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract gate fields must be schema and required_kinds"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract gate fields must be canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract schemas must match gate schema"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract required_kinds must be non-empty lists"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract required_kinds must contain canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract required_kinds must not contain duplicate kinds"
+        in runner
+    )
+    assert (
+        "production readiness runner plan summary_contract required_kinds must match gate contract"
+        in runner
+    )
+    assert "production readiness runner plan steps must be a non-empty list" in runner
+    assert "production readiness runner plan steps must contain objects" in runner
+    assert (
+        "production readiness runner plan step fields must be label, artifact, and command"
+        in runner
+    )
+    assert (
+        "production readiness runner plan step fields must be canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan step labels must be canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan step artifacts must be null or canonical strings"
+        in runner
+    )
+    assert (
+        "production readiness runner plan step commands must be non-empty lists"
+        in runner
+    )
+    assert (
+        "production readiness runner plan step commands must contain canonical strings"
+        in runner
+    )
     assert "production readiness runner plan deployment_id" in runner
     assert "production readiness runner plan environment must be production" in runner
+    assert "test_plan_json_schema_fields_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_top_level_fields_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_deployment_context_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_thresholds_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_required_gates_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_external_summaries_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_summary_contract_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_plan_json_steps_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
     assert "test_plan_json_deployment_context_must_be_final_production" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )

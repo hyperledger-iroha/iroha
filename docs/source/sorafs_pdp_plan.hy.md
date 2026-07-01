@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0665310b28953bf369d804830d1d05fc48805ece24ab8963f3ef48442be0b4dc
+source_hash: b968ba92edfff30a42e2edac0b39f78978214001908264e3d3897e4ca4b4ad79
 source_last_modified: "2026-06-25T17:38:19+00:00"
 translation_last_reviewed: 2026-06-25
 title: Sora-PDP Hot Storage Proofs

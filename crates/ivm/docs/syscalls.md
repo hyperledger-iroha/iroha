@@ -164,7 +164,7 @@ NFTs
 - 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Name, r12=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
-- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer from `AssetId::with_scope(asset_definition, from, Dataspace(dataspace))`.
+- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric), r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
 
 Zero‑knowledge (verification/state‑read)
 - 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
@@ -310,7 +310,7 @@ Native asset escrow
 - 0xAE ANONYMOUS_ESCROW_CANCEL — Args: `r10=&NoritoBytes(CancelAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow cancellation ISI.
 - 0xAF ANONYMOUS_ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAnonymousEscrowDispute`.
 - 0xBF ANONYMOUS_ESCROW_RESOLVE_DISPUTE — Args: `r10=&NoritoBytes(ResolveAnonymousEscrowDispute)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow dispute-resolution ISI.
-- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and `TRANSFER_ASSET_SCOPED` always addresses an explicit dataspace balance.
+- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and `TRANSFER_ASSET_SCOPED` resolves the source balance scope from the asset definition policy, using `r14` only for dataspace-restricted definitions.
 
 Soracloud runtime host surface
 - 0xC0 SORACLOUD_READ_COMMITTED_STATE — Args: `r10=&SoracloudRequest(ReadCommittedState)` → `r10=&SoracloudResponse(ReadCommittedState)`. Returns committed service-state metadata for one declared binding/key pair.

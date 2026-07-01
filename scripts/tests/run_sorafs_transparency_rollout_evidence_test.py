@@ -170,6 +170,112 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "runner plan steps must match command plan" in diagnostics
 
 
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\ntransparency"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["deployment_context"] = {
+        "deployment_id": "bad\ndeployment",
+        "environment": False,
+        "deployment_context_reviewed": False,
+        "bad\nfield": "runtime-only-key-material",
+        "private_key": "runtime-only-key-material",
+    }
+    rendered["evidence_contract"] = {
+        "source_entry": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.transparency.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "bad\nkind": "contract-shaped-entry",
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert "transparency rollout runner plan fields must be canonical strings" in diagnostics
+    assert "transparency rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "transparency rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context fields must match configured fields"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context values must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context must be reviewed"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context must match args"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\ndeployment" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
 def test_plan_json_deployment_context_must_stay_reviewed(tmp_path: Path) -> None:
     args = MODULE.parse_args(complete_args(tmp_path))
     plan = MODULE.build_command_plan(args)

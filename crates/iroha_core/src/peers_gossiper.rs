@@ -950,9 +950,11 @@ fn process_trust_records(
 ) -> TrustGossipOutcome {
     let mut newly_trusted = BTreeSet::new();
     for SignedPeerTrust { info, signature } in trust {
-        let sig = Signature::from_bytes(&signature);
         let payload = PeersGossiper::trust_payload(&info);
-        if sig.verify(from_peer.id().public_key(), &payload).is_err() {
+        let invalid_signature = Signature::try_from_bytes(&signature).map_or(true, |sig| {
+            sig.verify(from_peer.id().public_key(), &payload).is_err()
+        });
+        if invalid_signature {
             iroha_logger::warn!(peer=%from_peer, "Rejected trust gossip with invalid signature");
             let score = trust_book.penalize(
                 from_peer.id(),
@@ -1799,6 +1801,57 @@ mod tests {
         assert!(
             outcome.drop_sender,
             "sender should be dropped after unknown peer penalty"
+        );
+        assert!(outcome.newly_trusted.is_empty());
+        assert!(trust_book.score(from_peer.id(), now) <= -2);
+    }
+
+    #[test]
+    fn trust_gossip_penalizes_all_zero_signature_material() {
+        let kp_sender = checked_seed_keypair(&[17, 18, 19, 20]);
+        let kp_reported = checked_seed_keypair(&[21, 22, 23, 24]);
+        let from_peer = Peer::new(
+            "127.0.0.1:9000".parse().expect("addr"),
+            kp_sender.public_key().clone(),
+        );
+        let reported_peer = Peer::new(
+            "127.0.0.1:9001".parse().expect("addr"),
+            kp_reported.public_key().clone(),
+        );
+
+        let info = PeerTrustInfo {
+            peer_id: reported_peer.id().clone(),
+            trusted: true,
+            score: 1,
+        };
+        let trust = vec![SignedPeerTrust {
+            info,
+            signature: vec![0_u8; 64],
+        }];
+        let now = Instant::now();
+        let mut trust_book = TrustBook::new(
+            Duration::from_millis(0),
+            TrustPenalties {
+                bad_gossip: 4,
+                unknown_peer: 3,
+            },
+            -2,
+        );
+        trust_book.seed([from_peer.id().clone()], now);
+
+        let outcome = process_trust_records(
+            trust,
+            &from_peer,
+            false,
+            &BTreeSet::from([reported_peer.id().clone()]),
+            &BTreeSet::from([from_peer.id().clone()]),
+            &mut trust_book,
+            now,
+        );
+
+        assert!(
+            outcome.drop_sender,
+            "sender should be dropped after all-zero trust-signature penalty"
         );
         assert!(outcome.newly_trusted.is_empty());
         assert!(trust_book.score(from_peer.id(), now) <= -2);

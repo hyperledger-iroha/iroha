@@ -1041,6 +1041,24 @@ fn main() -> Result<()> {
     } else {
         "committed"
     };
+    let operation_receipt = norito::json!({
+        "operation_kind": ("contract_deploy"),
+        "status": (operation_status),
+        "transport": ("ivm-contract-deploy-helper"),
+        "dataspace": (dataspace_id.to_string()),
+        "contract_alias": (contract_alias.to_string()),
+        "contract_address": (contract_address.to_string()),
+        "code_hash_hex": (code_hash_hex.clone()),
+        "abi_hash_hex": (Option::<String>::None),
+        "tx_hash_hex": (activate_tx_hash.to_string()),
+        "entrypoint": (Option::<String>::None),
+        "entrypoint_hash_hex": (Option::<String>::None),
+        "gas_limit": (args.gas_limit),
+        "gas_used": (Option::<u64>::None),
+        "gas_asset_id": (args.gas_asset_id.clone()),
+        "fee_sponsor": (Option::<String>::None),
+        "payload_digest_hex": (payload_digest_hex),
+    });
     let result = norito::json!({
         "ok": true,
         "submitted": (!args.emit_only),
@@ -1059,33 +1077,16 @@ fn main() -> Result<()> {
         "register_bytes_stage_tx_hashes": (register_stage_tx_hashes),
         "register_manifest_via_ivm_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
-        "operation_receipt": (norito::json!({
-            "operation_kind": "contract_deploy",
-            "status": (operation_status),
-            "transport": "ivm-contract-deploy-helper",
-            "dataspace": (dataspace_id.to_string()),
-            "contract_alias": (contract_alias.to_string()),
-            "contract_address": (contract_address.to_string()),
-            "code_hash_hex": (code_hash_hex),
-            "abi_hash_hex": (Option::<String>::None),
-            "tx_hash_hex": (activate_tx_hash.to_string()),
-            "entrypoint": (Option::<String>::None),
-            "entrypoint_hash_hex": (Option::<String>::None),
-            "gas_limit": (args.gas_limit),
-            "gas_used": (Option::<u64>::None),
-            "gas_asset_id": (args.gas_asset_id.clone()),
-            "fee_sponsor": (Option::<String>::None),
-            "payload_digest_hex": (payload_digest_hex),
-        })),
+        "operation_receipt": (operation_receipt),
         "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),
         "final": (if args.emit_only {
             norito::json!({
-                "kind": "Prepared",
+                "kind": ("Prepared"),
                 "hash": (activate_tx_hash),
             })
         } else {
             norito::json!({
-                "kind": "Committed",
+                "kind": ("Committed"),
                 "hash": (activate_tx_hash),
             })
         }),

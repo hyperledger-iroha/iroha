@@ -35,7 +35,10 @@ payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
 checker-backed `evidence_contract` map in dry-run output for the selected
 required kinds, and validates the schema-closed collection plan, required
 kinds, thresholds, external evidence map, evidence contract, and command steps
-before dry-run output or verifier execution. Signed auditor API, worker lifecycle, event stream, governance
+before dry-run output or verifier execution. The shared runner plan guard also
+rejects non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before dry-run output or verifier
+execution. Signed auditor API, worker lifecycle, event stream, governance
 handoff, and approval artifacts must bind to a valid
 auditor roster digest; worker, event stream, and handoff artifacts must also
 bind to a valid failure-capture evidence bundle digest; governance approval
@@ -412,7 +415,9 @@ carry a matching `policy_digest_hex`.
 Its collection planner exposes those exact required payload fields through
 `--dry-run` and validates the schema-closed collection plan, required kinds,
 thresholds, external evidence map, evidence contract, and command steps before
-touching live repair services.
+touching live repair services. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before any live repair contact.
 
 ## Rollout Status
 Implemented engineering coverage:

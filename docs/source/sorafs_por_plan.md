@@ -32,7 +32,10 @@ required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
 planner includes the checker-backed `evidence_contract` map in dry-run output
 for the selected required kinds, and validates the schema-closed collection
 plan, required kinds, thresholds, external evidence map, evidence contract, and
-command steps before dry-run output or verifier execution. The gate now also requires
+command steps before dry-run output or verifier execution. The shared runner
+plan guard also rejects non-canonical nested required-kind, threshold,
+external-evidence, evidence-contract, and command-step shapes before dry-run
+output or verifier execution. The gate now also requires
 scheduler runtime, validator replay, reporting/archive, observability, and
 governance approval artifacts to carry a `seed_replay_digest_hex` matching a
 valid randomness artifact in the same evidence bundle. Seed-replay mismatches

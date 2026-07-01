@@ -642,3 +642,4 @@ or reserve top-up transfers.
 - Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+It also rejects malformed nested required-kind, threshold, external-evidence, and checker-backed evidence-contract shapes before live SFM-6 rollout evidence can be submitted.

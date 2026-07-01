@@ -148,10 +148,12 @@ in the emitted summary instead of only blocking the top-level status. Use the ru
 or promoting staged gateway compliance evidence; the runner validates the
 schema-closed collection plan, required kinds, thresholds, external evidence
 map, evidence contract, and command steps before dry-run output or verifier
-execution. Use the canary builder for reviewed controller-runtime and
-moderation-toggle deployment evidence so count equality, `iroha_config` binding,
-payload-free inclusion flags, and checker prevalidation stay consistent with the
-promotion gate. The payload-free controller-runtime and moderation-toggle canary builder does not replace the missing deployed controller daemon or toggle service; it only standardizes reviewed promotion evidence once those boundaries produce deployment facts.
+execution. The shared runner plan guard also rejects non-canonical nested
+required-kind, threshold, external-evidence, evidence-contract, and command-step
+shapes before any live gateway-compliance contact. Use the canary builder for
+reviewed controller-runtime and moderation-toggle deployment evidence so count
+equality, `iroha_config` binding, payload-free inclusion flags, and checker
+prevalidation stay consistent with the promotion gate. The payload-free controller-runtime and moderation-toggle canary builder does not replace the missing deployed controller daemon or toggle service; it only standardizes reviewed promotion evidence once those boundaries produce deployment facts.
 
 ## Enforcement Semantics
 

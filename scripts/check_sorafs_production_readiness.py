@@ -42,6 +42,7 @@ from sorafs_evidence_sensitivity import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     evidence_gate_status,
+    numbered_rollout_marker_token,
     require_rollout_deployment_id,
 )
 from sorafs_path_identity import resolve_path_identity  # noqa: E402
@@ -767,9 +768,22 @@ def require_production_deployment_id_value(
         token for token in re.split(r"[._-]+", deployment_id.lower()) if token
     ]
     forbidden = sorted(
-        token
-        for token in set(tokens)
-        if token in FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS
+        {
+            token
+            for token in set(tokens)
+            if token in FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS
+        }
+        | {
+            marker
+            for token in tokens
+            if (
+                marker := numbered_rollout_marker_token(
+                    token,
+                    FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS,
+                )
+            )
+            is not None
+        }
     )
     if forbidden:
         errors.append(
@@ -838,6 +852,14 @@ def require_positive_int_field(
         errors.append(f"{field} must be a positive integer")
         return None
     return value
+
+
+def canonical_int_value(value: Any) -> int | None:
+    """Return an integer value while excluding booleans."""
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def require_empty_error_list(value: Any, path: str, errors: list[str]) -> bool:
@@ -2025,9 +2047,15 @@ def validate_required_row(
     artifacts = row.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         errors.append(f"{path}.artifacts must be a non-empty array")
-        return artifact_count, [], set()
-    if artifact_count and artifact_count != len(artifacts):
-        errors.append(f"{path}.artifact_count must match artifacts length")
+        if artifact_count:
+            errors.append(f"{path}.artifact_count must match artifact object count")
+        return 0, [], set()
+    observed_artifact_count = sum(
+        1 for artifact in artifacts if isinstance(artifact, dict)
+    )
+    if artifact_count and artifact_count != observed_artifact_count:
+        errors.append(f"{path}.artifact_count must match artifact object count")
+    artifact_count = observed_artifact_count
 
     generated_times: list[int] = []
     deployment_contexts: set[tuple[str, str]] = set()
@@ -2072,23 +2100,33 @@ def validate_recognized_artifacts(
     recognized_artifact_count: int | None,
     options: ValidationOptions,
     errors: list[str],
-) -> tuple[list[int], set[tuple[str, str]], int | None]:
+) -> tuple[list[int], set[tuple[str, str]], int | None, int | None]:
     """Validate required top-level recognized artifact inventory rows."""
 
     if "recognized_artifacts" not in payload:
         errors.append("recognized_artifacts must be present")
-        return [], set(), None
+        return [], set(), None, None
     artifacts = payload.get("recognized_artifacts")
     path = "recognized_artifacts"
     if not isinstance(artifacts, list) or not artifacts:
         errors.append(f"{path} must be a non-empty array")
-        return [], set(), None
+        return [], set(), None, None
+    recognized_artifact_object_count = sum(
+        1 for artifact in artifacts if isinstance(artifact, dict)
+    )
     if (
         recognized_artifact_count is not None
         and len(artifacts) != recognized_artifact_count
     ):
         errors.append(
             "recognized_artifacts length must match recognized_artifact_count"
+        )
+    if (
+        recognized_artifact_count is not None
+        and recognized_artifact_object_count != recognized_artifact_count
+    ):
+        errors.append(
+            "recognized_artifact_count must match recognized artifact object count"
         )
 
     generated_times: list[int] = []
@@ -2098,7 +2136,11 @@ def validate_recognized_artifacts(
     expected_required_kinds = set(gate.required_kinds)
     expected_artifact_counts = {
         kind_name: (
-            len(row.get("artifacts"))
+            sum(
+                1
+                for artifact in row.get("artifacts")
+                if isinstance(artifact, dict)
+            )
             if isinstance(row, dict) and isinstance(row.get("artifacts"), list)
             else 0
         )
@@ -2128,7 +2170,9 @@ def validate_recognized_artifacts(
             errors.append(f"{artifact_path} must be an object")
             continue
         artifact_file_path = canonical_string(artifact.get("path"))
-        if artifact_file_path is not None:
+        if artifact_file_path is not None and is_archive_portable_artifact_path(
+            artifact_file_path
+        ):
             recognized_artifact_paths.add(artifact_file_path)
             recognized_artifact_path_counts[artifact_file_path] += 1
         kind_name = canonical_string(artifact.get("kind"))
@@ -2176,7 +2220,12 @@ def validate_recognized_artifacts(
     unexpected_identities = recognized_artifact_identities - expected_artifact_identities
     if missing_identities or unexpected_identities:
         errors.append("recognized_artifacts must match required artifact identities")
-    return generated_times, deployment_contexts, len(recognized_artifact_paths)
+    return (
+        generated_times,
+        deployment_contexts,
+        recognized_artifact_object_count,
+        len(recognized_artifact_paths),
+    )
 
 
 def validate_aggregate_gate_row_output(
@@ -2220,6 +2269,31 @@ def validate_aggregate_gate_row_output(
         value = row.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             errors.append(f"{gate.name} aggregate row {field} must be a positive integer")
+    evidence_file_count = canonical_int_value(row.get("evidence_file_count"))
+    recognized_artifact_count = canonical_int_value(
+        row.get("recognized_artifact_count")
+    )
+    artifact_count = canonical_int_value(row.get("artifact_count"))
+    if (
+        evidence_file_count is not None
+        and recognized_artifact_count is not None
+        and evidence_file_count > 0
+        and recognized_artifact_count > 0
+        and evidence_file_count > recognized_artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate row evidence_file_count must not exceed recognized_artifact_count"
+        )
+    if (
+        recognized_artifact_count is not None
+        and artifact_count is not None
+        and recognized_artifact_count > 0
+        and artifact_count > 0
+        and recognized_artifact_count != artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate row recognized_artifact_count must match artifact_count"
+        )
     oldest = row.get("oldest_generated_at_unix")
     newest = row.get("newest_generated_at_unix")
     if (
@@ -2233,6 +2307,14 @@ def validate_aggregate_gate_row_output(
     ):
         errors.append(
             f"{gate.name} aggregate row newest_generated_at_unix must be >= oldest_generated_at_unix"
+        )
+    if row.get("required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate row required_kind_count must match gate contract"
+        )
+    if row.get("expected_required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate row expected_required_kind_count must match gate contract"
         )
     thresholds_errors: list[str] = []
     require_threshold_map(row, "thresholds", thresholds_errors)
@@ -2289,10 +2371,16 @@ def validate_aggregate_row_error_list(
         return
     if require_non_empty and not value:
         errors.append(f"{path} must not be empty")
+    seen_errors: set[str] = set()
     for error in value:
-        if canonical_string(error) is None:
+        error_label = canonical_string(error)
+        if error_label is None:
             errors.append(f"{path} must contain canonical strings")
             return
+        if error_label in seen_errors:
+            errors.append(f"{path} must not contain duplicate diagnostics")
+            return
+        seen_errors.add(error_label)
 
 
 def validate_aggregate_required_row_output(
@@ -2358,21 +2446,60 @@ def validate_aggregate_required_row_output(
         validate_aggregate_gate_row_output(gate, row, errors)
         return
     for field in (
-        "required_kind_count",
-        "expected_required_kind_count",
         "evidence_file_count",
         "recognized_artifact_count",
         "artifact_count",
-        "oldest_generated_at_unix",
-        "newest_generated_at_unix",
     ):
         value = row.get(field)
-        if value is not None and (
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-        ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             errors.append(
-                f"{gate.name} aggregate invalid row {field} must be a non-negative integer when present"
+                f"{gate.name} aggregate invalid row {field} must be a non-negative integer"
             )
+    evidence_file_count = canonical_int_value(row.get("evidence_file_count"))
+    recognized_artifact_count = canonical_int_value(
+        row.get("recognized_artifact_count")
+    )
+    artifact_count = canonical_int_value(row.get("artifact_count"))
+    if (
+        evidence_file_count is not None
+        and recognized_artifact_count is not None
+        and evidence_file_count >= 0
+        and recognized_artifact_count >= 0
+        and evidence_file_count > recognized_artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row evidence_file_count must not exceed recognized_artifact_count"
+        )
+    if (
+        recognized_artifact_count is not None
+        and artifact_count is not None
+        and recognized_artifact_count >= 0
+        and artifact_count >= 0
+        and recognized_artifact_count != artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row recognized_artifact_count must match artifact_count"
+        )
+    for field in ("oldest_generated_at_unix", "newest_generated_at_unix"):
+        value = row.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            errors.append(
+                f"{gate.name} aggregate invalid row {field} must be a positive integer"
+            )
+    for field in ("required_kind_count", "expected_required_kind_count"):
+        value = row.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            errors.append(
+                f"{gate.name} aggregate invalid row {field} must be a positive integer"
+            )
+    if row.get("required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate invalid row required_kind_count must match gate contract"
+        )
+    if row.get("expected_required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate invalid row expected_required_kind_count must match gate contract"
+        )
     oldest = row.get("oldest_generated_at_unix")
     newest = row.get("newest_generated_at_unix")
     if (
@@ -2399,13 +2526,16 @@ def validate_aggregate_required_row_output(
             errors,
             f"{gate.name} aggregate invalid row deployment_id",
         )
-    if (
-        row.get("environment") is not None
-        and canonical_string(row.get("environment")) is None
-    ):
-        errors.append(
-            f"{gate.name} aggregate invalid row environment must be canonical when present"
-        )
+    environment = row.get("environment")
+    if environment is not None:
+        if canonical_string(environment) is None:
+            errors.append(
+                f"{gate.name} aggregate invalid row environment must be canonical when present"
+            )
+        elif not is_production_ready_environment(environment):
+            errors.append(
+                f"{gate.name} aggregate invalid row environment must be production when present"
+            )
     if row.get("expected_required_kinds") != list(gate.required_kinds):
         errors.append(
             f"{gate.name} aggregate invalid row expected_required_kinds must match gate contract"
@@ -2460,12 +2590,47 @@ def validate_aggregate_summary_output(
     if summary.get("status") not in {"ready", "failed", "blocked"}:
         errors.append("aggregate summary status must be ready, failed, or blocked")
     required_gates_value = summary.get("required_gates")
+    if not isinstance(required_gates_value, list):
+        errors.append("aggregate summary required_gates must be a list")
+    else:
+        seen_required_gates: set[str] = set()
+        emitted_required_gate_diagnostics: set[str] = set()
+        for gate_name in required_gates_value:
+            gate_name_label = canonical_string(gate_name)
+            if gate_name_label is None:
+                diagnostic = (
+                    "aggregate summary required_gates must contain canonical strings"
+                )
+                if diagnostic not in emitted_required_gate_diagnostics:
+                    errors.append(diagnostic)
+                    emitted_required_gate_diagnostics.add(diagnostic)
+                continue
+            if gate_name_label in seen_required_gates:
+                diagnostic = (
+                    "aggregate summary required_gates must not contain duplicate gates"
+                )
+                if diagnostic not in emitted_required_gate_diagnostics:
+                    errors.append(diagnostic)
+                    emitted_required_gate_diagnostics.add(diagnostic)
+            else:
+                seen_required_gates.add(gate_name_label)
+            if gate_name_label not in GATE_BY_NAME:
+                diagnostic = (
+                    "aggregate summary required_gates must use known gate names"
+                )
+                if diagnostic not in emitted_required_gate_diagnostics:
+                    errors.append(diagnostic)
+                    emitted_required_gate_diagnostics.add(diagnostic)
     if list(required_gates) != required_gates_value:
         errors.append("aggregate summary required_gates must match requested gates")
     thresholds_errors: list[str] = []
     thresholds = require_threshold_map(summary, "thresholds", thresholds_errors)
     if "max_summary_artifact_age_secs" not in thresholds:
         thresholds_errors.append("thresholds.max_summary_artifact_age_secs must be present")
+    if thresholds and set(thresholds) != {"max_summary_artifact_age_secs"}:
+        thresholds_errors.append(
+            "thresholds must contain only max_summary_artifact_age_secs"
+        )
     for threshold_error in thresholds_errors:
         errors.append(f"aggregate summary {threshold_error}")
     for field in ("summary_file_count", "recognized_summary_count"):
@@ -2582,6 +2747,14 @@ def validate_aggregate_summary_output(
                 "aggregate summary ready deployment must include deployment_id and environment"
             )
         if (
+            isinstance(summary_file_count, int)
+            and not isinstance(summary_file_count, bool)
+            and summary_file_count != len(required_gates)
+        ):
+            errors.append(
+                "aggregate summary ready summary_file_count must match required gate count"
+            )
+        if (
             isinstance(recognized_summary_count, int)
             and not isinstance(recognized_summary_count, bool)
             and recognized_summary_count != len(required_gates)
@@ -2600,10 +2773,18 @@ def validate_aggregate_summary_output(
     if not isinstance(error_values, list):
         errors.append("aggregate summary errors must be a list")
     else:
+        seen_errors: set[str] = set()
         for error in error_values:
-            if canonical_string(error) is None:
+            error_label = canonical_string(error)
+            if error_label is None:
                 errors.append("aggregate summary errors must contain canonical strings")
                 break
+            if error_label in seen_errors:
+                errors.append(
+                    "aggregate summary errors must not contain duplicate diagnostics"
+                )
+                break
+            seen_errors.add(error_label)
         if summary.get("status") != evidence_gate_status(error_values):
             errors.append("aggregate summary status must match aggregate diagnostics")
 
@@ -2720,6 +2901,7 @@ def validate_gate_summary(
     (
         recognized_times,
         recognized_contexts,
+        recognized_artifact_object_count,
         recognized_artifact_path_count,
     ) = validate_recognized_artifacts(
         gate,
@@ -2764,6 +2946,11 @@ def validate_gate_summary(
             errors.append(f"{gate.name} deployment_id must match --deployment-id")
         if options.environment is not None and environment != options.environment:
             errors.append(f"{gate.name} environment must match --environment")
+    summary_recognized_artifact_count = (
+        recognized_artifact_object_count
+        if recognized_artifact_object_count is not None
+        else recognized_artifact_count
+    )
 
     summary = {
         "schema": gate.schema,
@@ -2772,7 +2959,7 @@ def validate_gate_summary(
         "required_kind_count": len(required_kinds),
         "expected_required_kind_count": len(gate.required_kinds),
         "evidence_file_count": evidence_file_count,
-        "recognized_artifact_count": recognized_artifact_count,
+        "recognized_artifact_count": summary_recognized_artifact_count,
         "artifact_count": artifact_total,
         "thresholds": thresholds,
         "oldest_generated_at_unix": min(generated_times) if generated_times else None,

@@ -134,11 +134,11 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   config swaps also reserve the configured
   `autoscale.min_lanes..autoscale.max_lanes` elastic id range for the
   autoscaler, so operator-managed base/governance/zk lanes cannot silently
-  consume future scale-out ids. The routing `default_lane` must stay outside
-  that range too, so an autoscale-owned elastic lane cannot become the default
-  route's stable base anchor. Full config swaps may preserve active
-  autoscale-managed lanes unchanged, but swaps that add, mutate, omit, or
-  replace one are treated as
+  consume future scale-out ids. The routing `default_lane` must stay below
+  `autoscale.min_lanes`, so the default route has a stable base anchor and
+  cannot point at or above the autoscale-owned elastic range. Full config swaps
+  may preserve active autoscale-managed lanes unchanged, but swaps that add,
+  mutate, omit, or replace one are treated as
   manual autoscale-lane changes and fail atomically. Preserved
   autoscale-managed lanes must also remain inside the configured
   `autoscale.min_lanes..autoscale.max_lanes` id range and stay bound to
@@ -234,11 +234,14 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   use that same ordering at commit time, and staged DA indexes remain behind
   the failure boundary when a new or retiring elastic lane hits a Kura or tiered
   conflict.
-  State-free router fast paths defer unmatched no-target default traffic to the
-  live Nexus route even when unrelated policy rules are present, so unmatched
-  rules cannot bypass the autoscale elastic range. Corrupted managed lanes
-  outside the configured elastic id range are ignored instead of receiving
-  default traffic. Fallible default-route resolution rejects a
+  State-free router fast paths defer unmatched no-target default traffic,
+  including no-target IVM/proved-VM traffic, to the live Nexus route even when
+  unrelated policy rules are present, so unmatched rules cannot bypass the
+  autoscale elastic range. State-free query routing, non-fallible state-free
+  hints, and live non-fallible routing fallbacks also reject autoscale-owned
+  default or explicit-rule lanes. Corrupted managed lanes outside the configured
+  elastic id range are ignored instead of
+  receiving default traffic. Fallible default-route resolution rejects a
   corrupted in-memory policy whose default lane claims autoscale ownership
   before returning a route or routing plan.
 - Autoscale scale-in runs through the block-local lifecycle path during block
@@ -271,9 +274,9 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   present and pruning explicit cache entries whose target lane no longer exists.
   Scale-in also requires a
   resolvable default route, default
-  route autoscale capacity strictly above `autoscale.min_lanes`, and a complete
-  historical sample window before any managed elastic lane can be retired, so
-  unrelated manual lanes cannot make scale-in eligible.
+  route autoscale capacity strictly above the configured default-route lane,
+  and a complete historical sample window before any managed elastic lane can
+  be retired, so unrelated manual lanes cannot make scale-in eligible.
 - Fresh lane-id additions also reset any rehydrated volatile lane state for
   that id. This closes the restart edge where Kura can reload historical merge
   snapshots or persisted DA shard cursor journals for a lane that was retired
@@ -295,13 +298,13 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   integer intermediates and saturate only the final permille value, so extreme
   counters or timestamps cannot wrap or deflate a hot sample into a cold one.
   Utilization capacity is measured against the default route's eligible lanes
-  only, so unrelated
-  governance, zk, manually managed, or out-of-range autoscale-managed lanes do
-  not dilute default-lane scale-out decisions. Live routing disables elastic
+  only: the configured default lane plus valid managed elastic lanes. Unrelated
+  base/governance/zk, manually managed, malformed, or out-of-range lanes do not
+  dilute default-lane scale-out decisions. Live routing disables elastic
   default-route sharding when runtime autoscale bounds are invalid or the
-  default lane is inside the elastic range, keeping no-target traffic on the
-  configured default lane until runtime state is repaired. Scale-out eligibility
-  uses that same default-route autoscale
+  default lane is at or above `autoscale.min_lanes`, keeping no-target traffic
+  on the configured default lane until runtime state is repaired. Scale-out
+  eligibility uses that same default-route autoscale
   capacity instead of total catalog length, so unrelated manual lanes and
   corrupted out-of-range managed lanes do not inflate hot default-traffic
   capacity. Runtime autoscale prechecks fail closed before plan construction
@@ -313,9 +316,9 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   sample window incomplete, and incomplete windows fail closed rather than
   extrapolating load from the current block alone or clamping bad timing
   evidence into synthetic hot/cold samples.
-- Autoscale config parsing rejects zero lane/window/target values, inverted
-  `min_lanes`/`max_lanes`, configured maxima above the compiled safety cap, and
-  scale-in thresholds that are not strictly below scale-out thresholds. Ratio
+- Autoscale config parsing rejects zero lane/window/target values, empty or
+  inverted `min_lanes`/`max_lanes`, configured maxima above the compiled safety
+  cap, and scale-in thresholds that are not strictly below scale-out thresholds. Ratio
   thresholds must also round to at least one permille, so tiny positive values
   cannot become zero thresholds, and scale-in ratios must still round below
   scale-out ratios at permille precision. The programmatic `set_nexus`,
@@ -387,6 +390,14 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   Outgoing gossip batch assembly also refreshes cached full routing plans from
   current Nexus state before emitting route hints, so Native AMX participant
   drift is corrected before serialization.
+  Commit event production now consumes the full routing plan before any legacy
+  coordinator-only hint, keeping lane/dataspace metadata tied to the
+  digest-checked plan when both ledger shapes are present.
+  Queue-side expiry and unresolved-route rejection events now use the same
+  full-plan-first cleanup, so terminal pipeline events keep digest-checked
+  lane/dataspace metadata even when a stale coordinator-only shadow remains.
+  Shared routing-ledger plan discard also clears same-hash legacy shadows once
+  the expected full plan is removed.
   Torii submit-transaction proxy receivers now apply the same full-plan
   comparison to ingress hints, so Native AMX participant drift is rejected even
   when the coordinator route is unchanged. They also validate redundant routing
@@ -394,6 +405,16 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   canonical, and a Native AMX hint's advertised `plan_digest` must match the
   digest recomputed from its route legs, so forged proxy hints are rejected
   instead of normalized.
+  Deterministic autoscale scale-out also rejects any internally generated lane
+  addition whose `autoscale.created_height` is not the current transition block,
+  so stale or future-dated owned lanes cannot be staged by the production
+  lifecycle path. Internal autoscale transition metadata must match the exact
+  plan shape too: scale-out stages one addition for the logged lane, while
+  scale-in stages one retirement for the logged lane, and the recorded
+  `active_lanes`/`autoscale_capacity_lanes` values must match current
+  default-route autoscale capacity before staging. The same pending transition
+  height, plan shape, and capacity metadata are revalidated at block commit
+  before storage geometry is published.
 - Proposal assembly now uses the same live Nexus snapshot and autoscale elastic
   range when it refreshes routing vectors for proposal sidecars and execution
   context assembly, so autoscaled default-route transactions cannot be
@@ -401,7 +422,13 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   compares full routing plans, so Native AMX proposal vectors also replace stale
   participant legs even when the coordinator route is unchanged. Proposal
   size-cap trimming preserves full routing plans for removed transactions too,
-  so overflow requeue keeps Native AMX participant metadata.
+  so overflow requeue keeps Native AMX participant metadata. Gas-capped
+  proposal assembly also defers an oversized first candidate when another
+  scanned transaction fits the remaining gas and IVM budgets, preventing a
+  gas-heavy lane from suppressing fitting cross-lane work during multilane
+  lookahead. The lookahead gate now counts active lanes at the candidate block
+  height, so future-created autoscale lanes cannot make an otherwise single-lane
+  proposal overfetch and churn deferred transactions before activation.
 - Block validation and block execution also recompute execution-context routing
   and per-lane transaction summaries with the live Nexus autoscale range.
   Matching elastic execution contexts validate, while stale base-lane contexts
@@ -478,6 +505,10 @@ election profile, multisig account-rekey, and Torii stake-share/reward app
 endpoints apply the matching exact-key filter for `(lane_id, validator, staker)`
 and `(lane_id, epoch)` economic rows before consuming or serializing
 account-facing state.
+Public-lane staking mutations also bind authority to the owner being mutated:
+validator registration and exit require the validator authority, registration
+initial stake must be validator-owned self-stake, and
+bond/schedule-unbond/finalize-unbond require the staker authority.
 Public-lane stake-share rows, reward records, and reward-claim cursors are live
 economic indices rather than audit history; the same reset paths delete
 reset-owned rows (by storage key or embedded lane where present) and clear
@@ -488,7 +519,23 @@ state committed until storage geometry can move atomically.
 Authoritative lane validator and peer resolution additionally rejects any lane
 absent from the active derived lane config, or whose dataspace is absent from
 the active dataspace catalog, so stale manifest bindings or active public
-validator records cannot revive a removed or rebound lane committee. The global
+validator records cannot revive a removed or rebound lane committee.
+Explicit manifest validators and bindings are exposed only when the declared
+validator list is duplicate-free, each binding names a declared validator, and
+the binding list has no duplicate validators or peers before public binding,
+route-authority, or account-authority reads consume them, so undeclared or
+duplicate manifest rows cannot inflate peer or validator authority. Protected
+governance admission and transaction state validation use the same
+duplicate-free canonical validator set before authority or quorum checks, so
+duplicate validator rows fail closed instead of being silently deduplicated.
+The `gov_manifest_approvers` quorum metadata is also duplicate-free: repeated
+approver claims reject admission and state validation instead of collapsing into
+one approval. Manifest loading rejects duplicate protected namespaces and
+duplicate runtime-upgrade allowlist ids after trimming, so governance manifests
+cannot carry shadow duplicate policy rows. Duplicate manifest filenames that
+resolve to the same lane alias in one source directory invalidate that alias and
+keep the governed lane locked until the duplicate source is removed.
+The global
 NPoS epoch stake snapshot applies the same active lane/dataspace guard before
 public validator records can affect topology scope, council member mapping, or
 stake-ranked candidates. With Nexus enabled, active-topology derivation,

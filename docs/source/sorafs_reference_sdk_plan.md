@@ -478,7 +478,10 @@ summary matches the fail-closed release decision. The runner's dry-run plan
 includes an `evidence_contract` map that operators can review before collecting
 release evidence, and the runner validates the schema-closed collection-plan
 envelope, required kinds, thresholds, external evidence map, evidence contract,
-and command steps before dry-run output or verifier execution. Narrowed
+and command steps before dry-run output or verifier execution.
+The shared runner plan guard also rejects non-canonical nested required-kind,
+threshold, external-evidence, evidence-contract, and command-step shapes before
+dry-run output or verifier execution. Narrowed
 `--require-kind` release runs also reject evidence supplied for excluded kinds
 before the plan is rendered or the verifier starts.
 `scripts/build_sorafs_reference_sdk_release_canary.py` is the checked-in

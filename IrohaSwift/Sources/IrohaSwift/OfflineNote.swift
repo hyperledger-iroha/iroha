@@ -39,6 +39,7 @@ public enum OfflineNoteError: Error, LocalizedError, Equatable {
     case auditOutputCountMismatch(commitments: Int, claims: Int)
     case auditOutputClaimOrderMismatch(index: Int)
     case auditOutputClaimNotCommitted(String)
+    case nonCanonicalField(field: String)
     case unsupportedRecursiveVerifierKey(expectedBackend: String, expectedName: String, actualBackend: String, actualName: String)
     case unsupportedRecursiveProofBackend(expected: String, actual: String)
     case proofPublicInputsHashMismatch(expected: String, actual: String)
@@ -81,6 +82,8 @@ public enum OfflineNoteError: Error, LocalizedError, Equatable {
             return "Offline audit output claim at index \(index) must match the output commitment at the same index."
         case let .auditOutputClaimNotCommitted(commitment):
             return "Offline audit output claim \(commitment) is not listed in output commitments."
+        case let .nonCanonicalField(field):
+            return "\(field) must be canonical."
         case let .unsupportedRecursiveVerifierKey(expectedBackend, expectedName, actualBackend, actualName):
             return "Offline recursive proof verifier key must be \(expectedBackend):\(expectedName), got \(actualBackend):\(actualName)."
         case let .unsupportedRecursiveProofBackend(expected, actual):
@@ -556,8 +559,16 @@ public struct OfflineNoteIssuedClaim: Equatable, Sendable {
         self.domain = domain
         self.noteCommitment = noteCommitment
         self.keyCertificatePayloadHash = keyCertificatePayloadHash
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteError.nonCanonicalField(field: "asset_id")
+        }
+        let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        guard amount == canonicalAmount else {
+            throw OfflineNoteError.nonCanonicalField(field: "amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
     }
 
     public static func fromIssue(_ issue: OfflineNoteIssue) throws -> OfflineNoteIssuedClaim {

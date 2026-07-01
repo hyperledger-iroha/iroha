@@ -207,4 +207,4 @@ python3 -m pytest -q scripts/tests/check_sorafs_pop_credentials_rollout_evidence
 Add dedicated service, CLI, and deployed verifier tests when the issuer,
 registry, juror client, and privacy-proof backend land.
 
-The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier. The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.

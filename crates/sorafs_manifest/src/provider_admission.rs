@@ -699,7 +699,12 @@ fn verify_council_signatures_over_digest(
                     reason: err.to_string(),
                 }
             })?;
-        let sig = Signature::from_bytes(&signature.signature);
+        let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+            ProviderAdmissionSignatureError::Verification {
+                signer: signature.signer,
+                reason: format!("invalid signature material: {err}"),
+            }
+        })?;
         sig.verify(&public_key, digest).map_err(|err| {
             ProviderAdmissionSignatureError::Verification {
                 signer: signature.signer,
@@ -1412,6 +1417,38 @@ mod tests {
         let council_key = SigningKey::from_bytes(&[0x44; 32]);
         let mut signature = council_signature_from_key(&council_key, &proposal_digest);
         signature.signature[0] ^= 0x01;
+        let envelope = ProviderAdmissionEnvelopeV1 {
+            version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            proposal,
+            proposal_digest,
+            advert_body,
+            advert_body_digest: advert_digest,
+            issued_at: 50,
+            retention_epoch: 150,
+            council_signatures: vec![signature],
+            notes: None,
+        };
+
+        let err = verify_envelope(&envelope).unwrap_err();
+        assert!(matches!(
+            err,
+            ProviderAdmissionEnvelopeError::Signature(
+                ProviderAdmissionSignatureError::Verification { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn verify_envelope_rejects_all_zero_signature_material() {
+        let mut proposal = sample_proposal();
+        let provider_key = SigningKey::from_bytes(&[0x33; 32]);
+        proposal.advert_key = *provider_key.verifying_key().as_bytes();
+        let advert_body = advert_body_from_proposal(&proposal);
+        let advert_digest = compute_advert_body_digest(&advert_body).expect("digest");
+        let proposal_digest = compute_proposal_digest(&proposal).expect("digest");
+        let council_key = SigningKey::from_bytes(&[0x44; 32]);
+        let mut signature = council_signature_from_key(&council_key, &proposal_digest);
+        signature.signature.fill(0);
         let envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
             proposal,

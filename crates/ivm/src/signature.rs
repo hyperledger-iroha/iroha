@@ -1,3 +1,4 @@
+use curve25519_dalek::edwards::CompressedEdwardsY;
 /// Digital signature verification helpers used by the VM.
 ///
 /// This module provides wrappers around common signature libraries so that
@@ -53,6 +54,28 @@ pub enum SignatureScheme {
     Secp256k1,
 }
 
+/// Returns true when the supplied signature payload is an inert all-zero buffer.
+#[must_use]
+pub(crate) fn signature_bytes_are_all_zero(signature: &[u8]) -> bool {
+    signature.iter().all(|byte| *byte == 0)
+}
+
+/// Returns true when an Ed25519 signature carries a noncanonical or small-order `R`.
+#[must_use]
+pub(crate) fn signature_has_invalid_ed25519_r(signature: &[u8]) -> bool {
+    let Some(r_bytes) = signature.get(..32) else {
+        return false;
+    };
+    let Ok(r_bytes) = <[u8; 32]>::try_from(r_bytes) else {
+        return false;
+    };
+    let compressed = CompressedEdwardsY(r_bytes);
+    let Some(point) = compressed.decompress() else {
+        return true;
+    };
+    point.is_small_order() || point.compress().as_bytes() != &r_bytes
+}
+
 /// Ed25519 batch verification input.
 #[derive(Clone, Debug)]
 pub struct Ed25519BatchItem<'a> {
@@ -104,6 +127,12 @@ pub fn verify_signature(
                 Ok(pk) => pk,
                 Err(_) => return false,
             };
+            if signature_bytes_are_all_zero(signature) {
+                return false;
+            }
+            if signature_has_invalid_ed25519_r(signature) {
+                return false;
+            }
             let sig = match Ed25519Signature::from_slice(signature) {
                 Ok(s) => s,
                 Err(_) => return false,
@@ -114,6 +143,9 @@ pub fn verify_signature(
             if public_key.len() != dilithium::public_key_bytes()
                 || signature.len() != dilithium::signature_bytes()
             {
+                return false;
+            }
+            if signature_bytes_are_all_zero(signature) {
                 return false;
             }
             let pk = match dilithium::PublicKey::from_bytes(public_key) {
@@ -154,6 +186,17 @@ pub fn verify_ed25519_batch(
             actual: request.entries.len(),
         });
     }
+    for (index, entry) in request.entries.iter().enumerate() {
+        if entry.signature.len() != 64 || entry.public_key.len() != 32 {
+            return Err(Ed25519BatchError::InvalidEntry { index });
+        }
+        if signature_bytes_are_all_zero(&entry.signature) {
+            return Err(Ed25519BatchError::SignatureFailed { index });
+        }
+        if signature_has_invalid_ed25519_r(&entry.signature) {
+            return Err(Ed25519BatchError::SignatureFailed { index });
+        }
+    }
 
     let messages: Vec<&[u8]> = request
         .entries
@@ -175,6 +218,12 @@ pub fn verify_ed25519_batch(
         Ok(()) => Ok(()),
         Err(_) => {
             for (index, entry) in request.entries.iter().enumerate() {
+                if signature_bytes_are_all_zero(&entry.signature) {
+                    return Err(Ed25519BatchError::SignatureFailed { index });
+                }
+                if signature_has_invalid_ed25519_r(&entry.signature) {
+                    return Err(Ed25519BatchError::SignatureFailed { index });
+                }
                 let sig = match Ed25519Signature::from_slice(entry.signature.as_slice()) {
                     Ok(sig) => sig,
                     Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
@@ -223,6 +272,14 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     };
 
     for item in items {
+        if signature_bytes_are_all_zero(&item.signature) {
+            parsed.push(None);
+            continue;
+        }
+        if signature_has_invalid_ed25519_r(&item.signature) {
+            parsed.push(None);
+            continue;
+        }
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;

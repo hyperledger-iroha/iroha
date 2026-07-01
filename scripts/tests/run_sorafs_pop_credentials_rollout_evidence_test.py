@@ -194,6 +194,206 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "issuer-bundle.json" not in diagnostics
 
 
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\npop"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["required_kinds"] = [
+        "issuer_bundle",
+        "issuer_bundle",
+        "unknown_kind",
+        "bad\nkind",
+    ]
+    rendered["thresholds"] = {
+        "max_root_age_secs": -1,
+        "max_revocation_age_secs": False,
+        "max_service_lag_secs": "soon",
+        "max_verify_latency_ms": 0,
+        "now_unix": 0,
+        "bad\nfield": 1,
+        "private_key": 2,
+    }
+    rendered["external_evidence"] = {
+        "issuer_bundle": [],
+        "unknown_kind": ["unknown.json"],
+        "commitment_root": "commitment-root.json",
+        "bad\nkind": ["issuer-bundle.json"],
+        "metrics_alerts": ["bad\npath"],
+    }
+    rendered["evidence_contract"] = {
+        "issuer_bundle": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.pop.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "commitment_root": "contract-shaped-entry",
+        "bad\nkind": {
+            "schema": MODULE.KIND_BY_NAME["issuer_bundle"].schema,
+            "required_payload_fields": ["schema"],
+        },
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert "PoP credential rollout runner plan fields must be canonical strings" in diagnostics
+    assert "PoP credential rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "PoP credential rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan required_kinds must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan required_kinds must not contain duplicate kinds"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan required_kinds must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds must contain only configured threshold fields"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds.max_root_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds.max_revocation_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds.max_service_lag_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds.max_verify_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan external_evidence keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan external_evidence keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan external_evidence must map each kind to non-empty path lists"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan external_evidence paths must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
+    tmp_path: Path,
+) -> None:
+    payload = write_payload(tmp_path / "issuer-bundle.json")
+    args = MODULE.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path / "evidence"),
+            "--require-kind",
+            "issuer_bundle",
+            "--issuer-bundle-evidence",
+            str(payload),
+        ]
+    )
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["external_evidence"]["commitment_root"] = [
+        str(tmp_path / "commitment-root.json")
+    ]
+    rendered["evidence_contract"]["commitment_root"] = {
+        "schema": MODULE.KIND_BY_NAME["commitment_root"].schema,
+        "required_payload_fields": list(
+            MODULE.EVIDENCE_REQUIRED_FIELDS["commitment_root"]
+        ),
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "PoP credential rollout runner plan external_evidence must contain only required kinds"
+        in diagnostics
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract must contain only required kinds"
+        in diagnostics
+    )
+    assert "commitment_root" not in diagnostics
+
+
 def test_execution_rejects_plan_validation_drift_before_running(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

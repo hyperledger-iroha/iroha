@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a5e92da6e765ec9507e2929c651034101531ff4b2ed6e60c7b2ff22a78e32a37
+source_hash: 0fa58b4b6a1ede4cbf5af1690bcd17a55e6435c3f445edd79dcb47165d55f29c
 source_last_modified: "2026-06-25T17:58:13+00:00"
 translation_last_reviewed: 2026-06-25
 title: Governance DAG Publishing Pipeline

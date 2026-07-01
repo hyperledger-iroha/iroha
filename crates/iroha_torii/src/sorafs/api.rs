@@ -22261,7 +22261,9 @@ fn validate_manifest_envelope_signature(entry: &Value, message: &[u8]) -> bool {
     if signature_bytes.len() != 64 {
         return false;
     }
-    let signature = Signature::from_bytes(&signature_bytes);
+    let Ok(signature) = Signature::try_from_bytes(&signature_bytes) else {
+        return false;
+    };
     signature.verify(&public_key, message).is_ok()
 }
 
@@ -23199,6 +23201,23 @@ mod gateway_policy_violation_tests {
         );
         let encoded = norito::json::to_vec(&Value::Object(envelope.clone())).expect("json");
         assert!(validate_manifest_envelope_bytes(&record, &encoded));
+
+        let mut inert_signature_envelope = envelope.clone();
+        let signatures = inert_signature_envelope
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .expect("signature list");
+        let signature_entry = signatures
+            .first_mut()
+            .and_then(Value::as_object_mut)
+            .expect("signature entry");
+        signature_entry.insert("signature".into(), Value::from(hex::encode([0_u8; 64])));
+        let inert_signature_encoded =
+            norito::json::to_vec(&Value::Object(inert_signature_envelope)).expect("json");
+        assert!(
+            !validate_manifest_envelope_bytes(&record, &inert_signature_encoded),
+            "all-zero envelope signatures must fail before backend verification"
+        );
 
         envelope.insert(
             "chunk_digest_sha3_256".into(),

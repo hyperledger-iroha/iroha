@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5f60ae4378454be41100957d7c5685a189e614fae29cd478a7ef1d8c3acd9976
+source_hash: bc25807c7aad464e3e1e156bb6094e9e41097e37ad1a5cbd18e9c718e4a34d68
 source_last_modified: "2026-06-25T17:24:16+00:00"
 translation_last_reviewed: 2026-06-25
 ---

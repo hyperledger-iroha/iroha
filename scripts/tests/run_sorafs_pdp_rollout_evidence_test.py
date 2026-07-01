@@ -179,6 +179,213 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "proof-generation.json" not in diagnostics
 
 
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\npdp"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["required_kinds"] = [
+        "provider_transport",
+        "provider_transport",
+        "unknown_kind",
+        "bad\nkind",
+    ]
+    rendered["thresholds"] = {
+        "max_evidence_age_secs": -1,
+        "max_route_latency_ms": 0,
+        "max_proof_latency_ms": False,
+        "min_providers": "many",
+        "min_challenges": 0,
+        "min_proofs": 0,
+        "now_unix": 0,
+        "bad\nfield": 1,
+        "private_key": 2,
+    }
+    rendered["external_evidence"] = {
+        "provider_transport": [],
+        "unknown_kind": ["unknown.json"],
+        "proof_generation": "proof-generation.json",
+        "bad\nkind": ["provider-transport.json"],
+        "observability": ["bad\npath"],
+    }
+    rendered["evidence_contract"] = {
+        "provider_transport": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.pdp.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "proof_generation": "contract-shaped-entry",
+        "bad\nkind": {
+            "schema": MODULE.KIND_BY_NAME["provider_transport"].schema,
+            "required_payload_fields": ["schema"],
+        },
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert "PDP rollout runner plan fields must be canonical strings" in diagnostics
+    assert "PDP rollout runner plan schema must be canonical" in diagnostics
+    assert "PDP rollout runner plan verifier schema must be canonical" in diagnostics
+    assert (
+        "PDP rollout runner plan required_kinds must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan required_kinds must not contain duplicate kinds"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan required_kinds must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds must contain only configured threshold fields"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.max_evidence_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.max_route_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.max_proof_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.min_providers must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.min_challenges must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.min_proofs must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan external_evidence keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan external_evidence keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan external_evidence must map each kind to non-empty path lists"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan external_evidence paths must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
+    tmp_path: Path,
+) -> None:
+    payload = write_payload(tmp_path / "provider-transport.json")
+    args = MODULE.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path / "evidence"),
+            "--require-kind",
+            "provider_transport",
+            "--provider-transport-evidence",
+            str(payload),
+        ]
+    )
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["external_evidence"]["proof_generation"] = [
+        str(tmp_path / "proof-generation.json")
+    ]
+    rendered["evidence_contract"]["proof_generation"] = {
+        "schema": MODULE.KIND_BY_NAME["proof_generation"].schema,
+        "required_payload_fields": list(
+            MODULE.EVIDENCE_REQUIRED_FIELDS["proof_generation"]
+        ),
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "PDP rollout runner plan external_evidence must contain only required kinds"
+        in diagnostics
+    )
+    assert (
+        "PDP rollout runner plan evidence_contract must contain only required kinds"
+        in diagnostics
+    )
+    assert "proof_generation" not in diagnostics
+
+
 def test_execution_rejects_plan_validation_drift_before_running(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

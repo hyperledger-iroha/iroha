@@ -4936,7 +4936,10 @@ pub(crate) mod valid {
                         let pop = pops
                             .get(peer.public_key())
                             .ok_or(SignatureVerificationError::MissingPop)?;
-                        bls_normal_signatures.push(signature.signature().payload());
+                        let signature_payload = signature.signature().payload();
+                        iroha_crypto::Signature::try_from_bytes(signature_payload)
+                            .map_err(|_| SignatureVerificationError::UnknownSignature)?;
+                        bls_normal_signatures.push(signature_payload);
                         bls_normal_public_keys.push(peer.public_key());
                         bls_normal_pops.push(pop.as_slice());
                     }
@@ -5387,6 +5390,13 @@ pub(crate) mod valid {
             } else {
                 Err(BlockValidationError::SccpCommitmentRootMismatch { expected, actual })
             }
+        }
+
+        fn refresh_sccp_commitment_root(block: &mut SignedBlock) {
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
+            block.set_sccp_commitment_root(crate::bridge::sccp_commitment_root_from_messages(
+                &messages,
+            ));
         }
 
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -7559,6 +7569,7 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
+            Self::refresh_sccp_commitment_root(block);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -11650,6 +11661,7 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
+            Self::refresh_sccp_commitment_root(block);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
                 timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
             }
@@ -12098,6 +12110,7 @@ pub(crate) mod valid {
                 pin_intent::{DaPinIntent, DaPinIntentBundle},
                 types::{BlobDigest, StorageTicketId},
             },
+            domain::DomainId,
             isi::{InstructionBox, Log, error::Mismatch},
             metadata::Metadata,
             nexus::{
@@ -12127,6 +12140,7 @@ pub(crate) mod valid {
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
         use mv::cell::Cell;
+        use mv::storage::StorageReadOnly;
         use nonzero_ext::nonzero;
 
         use super::*;
@@ -12531,24 +12545,59 @@ pub(crate) mod valid {
             })
         }
 
-        fn sccp_accepted_transaction() -> AcceptedTransaction<'static> {
-            let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+        fn sccp_chain_id() -> ChainId {
+            "00000000-0000-0000-0000-000000000000"
                 .parse()
-                .expect("valid chain id");
-            let (account_id, keypair) = gen_account_in("sccp");
+                .expect("valid chain id")
+        }
+
+        fn sccp_state_with_account(account_id: &AccountId) -> State {
+            let domain_id = DomainId::try_new("sccp", "universal").expect("domain id");
+            let domain = Domain::new(domain_id).build(account_id);
+            let account = Account::new(account_id.clone()).build(account_id);
+            let world = World::with([domain], [account], []);
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            State::new_with_chain(world, kura, query_handle, sccp_chain_id())
+        }
+
+        fn sccp_accepted_transaction_with_record_count(
+            account_id: AccountId,
+            keypair: &KeyPair,
+            record_count: usize,
+        ) -> AcceptedTransaction<'static> {
             let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&sccp_transfer_payload());
-            let overlay = vec![InstructionBox::from(
-                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload_bytes),
-            )];
-            let tx = TransactionBuilder::new(chain_id, account_id)
+            let overlay = core::iter::repeat_with(|| {
+                InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    payload_bytes.clone(),
+                ))
+            })
+            .take(record_count)
+            .collect::<Vec<_>>();
+            let mut bytecode = ivm::ProgramMetadata {
+                version_major: 1,
+                version_minor: 0,
+                mode: ivm::ivm_mode::ZK,
+                vector_length: 0,
+                max_cycles: 1,
+                abi_version: 1,
+            }
+            .encode();
+            bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let tx = TransactionBuilder::new(sccp_chain_id(), account_id)
                 .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                    bytecode: IvmBytecode::from_compiled(bytecode),
                     overlay: overlay.into(),
                     events_commitment: Hash::new(b"events"),
                     gas_policy_commitment: Hash::new(b"gas"),
                 }))
                 .sign(keypair.private_key());
             AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+        }
+
+        fn sccp_accepted_transaction() -> AcceptedTransaction<'static> {
+            let (account_id, keypair) = gen_account_in("sccp");
+            sccp_accepted_transaction_with_record_count(account_id, &keypair, 1)
         }
 
         fn signed_sccp_block(root: Option<[u8; 32]>) -> SignedBlock {
@@ -12559,6 +12608,26 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {})
                 .into()
+        }
+
+        fn set_single_sccp_transaction_result(
+            block: &mut SignedBlock,
+            result: iroha_data_model::transaction::TransactionResultInner,
+        ) {
+            let hashes = block
+                .external_transactions()
+                .map(|transaction| transaction.hash_as_entrypoint())
+                .collect::<Vec<_>>();
+            block
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &hashes,
+                    vec![result],
+                    std::collections::BTreeMap::new(),
+                    Vec::new(),
+                    None,
+                )
+                .expect("SCCP test block entrypoint hashes should match");
         }
 
         #[test]
@@ -12606,6 +12675,116 @@ pub(crate) mod valid {
                     actual: Some(_),
                 }
             ));
+        }
+
+        #[test]
+        fn refresh_sccp_commitment_root_sets_root_after_successful_result() {
+            let mut block = signed_sccp_block(None);
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
+
+            ValidBlock::refresh_sccp_commitment_root(&mut block);
+
+            assert!(block.header().sccp_commitment_root().is_some());
+            ValidBlock::validate_sccp_commitment_root(&block)
+                .expect("successful SCCP result should leave a matching root");
+        }
+
+        #[test]
+        fn refresh_sccp_commitment_root_keeps_block_signature_verifiable() {
+            let leader = crate::block::checked_keypair();
+            let mut block: SignedBlock = BlockBuilder::new(vec![sccp_accepted_transaction()])
+                .chain(0, None)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            let signed_hash = block.hash();
+            block
+                .signatures()
+                .next()
+                .expect("signed SCCP test block should have a leader signature")
+                .signature()
+                .verify_hash(leader.public_key(), signed_hash)
+                .expect("leader signature should verify before SCCP root refresh");
+
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
+            ValidBlock::refresh_sccp_commitment_root(&mut block);
+
+            assert!(block.header().sccp_commitment_root().is_some());
+            assert_eq!(
+                signed_hash,
+                block.hash(),
+                "post-execution SCCP root refresh must not change block hash"
+            );
+            block
+                .signatures()
+                .next()
+                .expect("signed SCCP test block should retain its leader signature")
+                .signature()
+                .verify_hash(leader.public_key(), block.hash())
+                .expect("leader signature should verify after SCCP root refresh");
+        }
+
+        #[test]
+        fn refresh_sccp_commitment_root_clears_root_after_failed_result() {
+            let mut block = signed_sccp_block(Some([0xAA; 32]));
+            set_single_sccp_transaction_result(
+                &mut block,
+                Err(
+                    iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::NotPermitted(
+                            "failed SCCP transaction fixture".to_owned(),
+                        ),
+                    ),
+                ),
+            );
+
+            ValidBlock::refresh_sccp_commitment_root(&mut block);
+
+            assert_eq!(block.header().sccp_commitment_root(), None);
+            ValidBlock::validate_sccp_commitment_root(&block)
+                .expect("failed SCCP result should clear the commitment root");
+        }
+
+        #[test]
+        fn validate_and_record_transactions_clears_sccp_root_after_rejected_record_tx() {
+            let (account_id, keypair) = gen_account_in("sccp");
+            let state = sccp_state_with_account(&account_id);
+            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 1);
+            let candidate_messages =
+                crate::bridge::collect_sccp_messages_from_accepted_transactions(
+                    &[accepted.clone()],
+                );
+            let candidate_root =
+                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
+                    .expect("candidate SCCP root");
+            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let leader = crate::block::checked_keypair();
+            let block = BlockBuilder::new(vec![accepted])
+                .chain(0, None)
+                .with_sccp_commitment_root(Some(candidate_root))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            assert_eq!(block.header().sccp_commitment_root(), Some(candidate_root));
+
+            let mut state_block = state.block(block.header);
+            let valid = block
+                .validate_and_record_transactions(&mut state_block)
+                .unpack(|_| {});
+
+            assert!(
+                valid.as_ref().error(0).is_some(),
+                "invalid SCCP proved record should reject the transaction"
+            );
+            assert_eq!(valid.as_ref().header().sccp_commitment_root(), None);
+            assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
+            ValidBlock::validate_sccp_commitment_root(valid.as_ref())
+                .expect("failed SCCP record transaction must not leave a commitment root");
         }
 
         #[test]
@@ -13329,6 +13508,42 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_signatures_subset(block.as_ref(), &topology, &view)
                 .expect_err("missing pop should be rejected");
             assert_eq!(err, SignatureVerificationError::MissingPop);
+        }
+
+        #[test]
+        fn validate_signatures_subset_rejects_all_zero_signature_material_before_aggregate() {
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
+            block
+                .block
+                .replace_signatures(BTreeSet::from([BlockSignature::new(
+                    0,
+                    SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&[0_u8; 96])),
+                )]))
+                .expect("replace block signature fixture");
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                &key_pairs[0],
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(world, kura, query);
+            let view = state.view();
+
+            let err = ValidBlock::validate_signatures_subset(block.as_ref(), &topology, &view)
+                .expect_err("all-zero block signature payload must reject before aggregation");
+            assert_eq!(err, SignatureVerificationError::UnknownSignature);
         }
 
         #[test]
@@ -19919,26 +20134,33 @@ mod event {
             let block_height = self.as_ref().header().height();
 
             let block = self.as_ref();
-            let tx_events = block
-                .external_transactions()
-                .enumerate()
-                .map(move |(idx, tx)| {
+            let tx_events = block.external_entrypoints_cloned().enumerate().filter_map(
+                move |(idx, entrypoint)| {
+                    let tx = match entrypoint {
+                        TransactionEntrypoint::External(tx) => tx,
+                        TransactionEntrypoint::SealedReveal(reveal) => {
+                            reveal.signed_transaction().clone()
+                        }
+                        TransactionEntrypoint::SealedCommitment(_)
+                        | TransactionEntrypoint::PrivateKaigi(_)
+                        | TransactionEntrypoint::Time(_) => return None,
+                    };
                     let hash = tx.hash();
-                    let routing = routing_ledger::take(&hash).unwrap_or_default();
-                    let _ = routing_ledger::take_plan(&hash);
+                    let routing = routing_ledger::take_route(&hash).unwrap_or_default();
                     let status = block.error(idx).map_or_else(
                         || TransactionStatus::Approved,
                         |error| TransactionStatus::Rejected(Box::new(error.clone())),
                     );
 
-                    TransactionEvent {
+                    Some(TransactionEvent {
                         hash,
                         block_height: Some(block_height),
                         lane_id: routing.lane_id,
                         dataspace_id: routing.dataspace_id,
                         status,
-                    }
-                });
+                    })
+                },
+            );
 
             let block_event = core::iter::once(BlockEvent {
                 header: self.as_ref().header(),
@@ -20061,6 +20283,159 @@ mod event {
             // Similar to `BlockValidationError`: emission is performed by the
             // caller at the site where the header is available.
             core::iter::empty()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn valid_block_transaction_events_use_entrypoint_index_after_sealed_commitment() {
+            let keypair = iroha_crypto::KeyPair::try_random()
+                .expect("test keypair generation should succeed");
+            let chain_id: iroha_data_model::ChainId =
+                "event-sealed-index".parse().expect("chain id");
+            let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+            let inner_tx = iroha_data_model::prelude::TransactionBuilder::new(
+                chain_id.clone(),
+                authority.clone(),
+            )
+            .sign(keypair.private_key());
+            let commitment =
+                iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                    &chain_id, &inner_tx, [0x59; 32], 5,
+                );
+            let sealed_payload =
+                iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+                    chain_id: chain_id.clone(),
+                    authority: authority.clone(),
+                    commitment,
+                    reveal_after_height: 2,
+                    reveal_deadline_height: 5,
+                    nonce: None,
+                };
+            let sealed_entrypoint =
+                iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(
+                    iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                        sealed_payload,
+                        keypair.private_key(),
+                    ),
+                );
+            let sealed_hash = sealed_entrypoint.hash();
+            let rejected_tx =
+                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority)
+                    .sign(keypair.private_key());
+            let rejected_hash = rejected_tx.hash_as_entrypoint();
+            let header = iroha_data_model::block::BlockHeader::new(
+                nonzero_ext::nonzero!(1_u64),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            let mut block = iroha_data_model::block::SignedBlock::presigned(
+                signature,
+                header,
+                vec![rejected_tx.clone()],
+            );
+            block.set_external_entrypoints(vec![
+                sealed_entrypoint,
+                iroha_data_model::transaction::signed::TransactionEntrypoint::External(rejected_tx),
+            ]);
+            block
+                .set_transaction_results(
+                    Vec::new(),
+                    &[sealed_hash, rejected_hash],
+                    vec![
+                        iroha_data_model::transaction::TransactionResultInner::Ok(
+                            iroha_data_model::trigger::DataTriggerSequence::default(),
+                        ),
+                        iroha_data_model::transaction::TransactionResultInner::Err(
+                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                iroha_data_model::ValidationFail::NotPermitted(
+                                    "failed event fixture".to_owned(),
+                                ),
+                            ),
+                        ),
+                    ],
+                )
+                .expect("test block entrypoint hashes should match payload");
+
+            let valid = ValidBlock::new_unverified_for_tests(block);
+            let events = valid.produce_events().collect::<Vec<_>>();
+            let transaction_event = events
+                .iter()
+                .find_map(|event| match event {
+                    PipelineEventBox::Transaction(event) => Some(event),
+                    _ => None,
+                })
+                .expect("transaction event should be produced");
+
+            assert!(matches!(
+                transaction_event.status,
+                TransactionStatus::Rejected(_)
+            ));
+        }
+
+        #[test]
+        fn valid_block_transaction_events_prefer_full_routing_plan_over_legacy_decision() {
+            let keypair = iroha_crypto::KeyPair::try_random()
+                .expect("test keypair generation should succeed");
+            let chain_id: iroha_data_model::ChainId =
+                "event-routing-plan-first".parse().expect("chain id");
+            let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+            let tx =
+                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority.clone())
+                    .sign(keypair.private_key());
+            let hash = tx.hash();
+            let plan_route =
+                crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70));
+            let stale_route =
+                crate::queue::RoutingDecision::new(LaneId::new(99), DataSpaceId::new(99));
+            let plan = crate::queue::RoutingPlan::single(plan_route);
+            routing_ledger::record_plan_bounded(
+                hash,
+                plan.clone(),
+                iroha_config::parameters::defaults::queue::CAPACITY.get(),
+            );
+            routing_ledger::record(hash, stale_route);
+            let header = iroha_data_model::block::BlockHeader::new(
+                nonzero_ext::nonzero!(1_u64),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            let block =
+                iroha_data_model::block::SignedBlock::presigned(signature, header, vec![tx]);
+
+            let valid = ValidBlock::new_unverified_for_tests(block);
+            let events = valid.produce_events().collect::<Vec<_>>();
+            let transaction_event = events
+                .iter()
+                .find_map(|event| match event {
+                    PipelineEventBox::Transaction(event) => Some(event),
+                    _ => None,
+                })
+                .expect("transaction event should be produced");
+
+            assert_eq!(transaction_event.lane_id, plan_route.lane_id);
+            assert_eq!(transaction_event.dataspace_id, plan_route.dataspace_id);
+            assert_eq!(routing_ledger::get_plan(&hash), None);
+            assert_eq!(routing_ledger::get(&hash), None);
         }
     }
 }

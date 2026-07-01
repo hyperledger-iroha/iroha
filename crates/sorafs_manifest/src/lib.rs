@@ -47,6 +47,26 @@ pub mod retention;
 pub mod token;
 pub mod validation;
 
+/// Decode a fixed-width Ed25519 signature after rejecting inert all-zero payloads.
+pub(crate) fn checked_ed25519_signature_from_bytes(
+    signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
+) -> Option<ed25519_dalek::Signature> {
+    if signature.iter().all(|byte| *byte == 0) {
+        return None;
+    }
+    Some(ed25519_dalek::Signature::from_bytes(signature))
+}
+
+#[cfg(test)]
+mod checked_ed25519_signature_tests {
+    use ed25519_dalek::SIGNATURE_LENGTH;
+
+    #[test]
+    fn checked_ed25519_signature_rejects_all_zero_signature_material() {
+        assert!(super::checked_ed25519_signature_from_bytes(&[0; SIGNATURE_LENGTH]).is_none());
+    }
+}
+
 pub use capacity::{
     AssignmentError, CAPACITY_DECLARATION_VERSION_V1, CAPACITY_DISPUTE_VERSION_V1,
     CAPACITY_TELEMETRY_VERSION_V1, CapacityDeclarationV1, CapacityDeclarationValidationError,

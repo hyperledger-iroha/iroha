@@ -184,6 +184,13 @@ def _parse_hex32(value: str, *, label: str) -> bytes:
     return evidence.parse_hex_bytes(value, label=label, byte_length=32)
 
 
+def _exact_summary_string(record: dict[str, Any], field: str, *, label: str) -> str:
+    value = record.get(field)
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{label} must be an exact non-empty string") from None
+    return value
+
+
 def _parse_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> bytes:
     if type(nonzero) is not bool:
         raise ValueError("TRON live hex nonzero must be a boolean")
@@ -5116,7 +5123,11 @@ def _check_expected_source_config_hash(
     if expected_config_hash is None:
         return
     observed_config_hash = _parse_hex32(
-        str(source["source_bridge_config_hash"]),
+        _exact_summary_string(
+            source,
+            "source_bridge_config_hash",
+            label="source bridge config hash",
+        ),
         label="source bridge config hash",
     )
     if expected_config_hash != observed_config_hash:
@@ -5134,11 +5145,19 @@ def _check_source_destination_network_id_match(summary: dict[str, Any]) -> None:
     if not isinstance(source, dict) or not isinstance(destination, dict):
         return
     source_network_id = _parse_hex32(
-        str(source.get("source_bridge_network_id")),
+        _exact_summary_string(
+            source,
+            "source_bridge_network_id",
+            label="source bridge network id",
+        ),
         label="source bridge network id",
     )
     destination_network_id = _parse_hex32(
-        str(destination.get("network_id")),
+        _exact_summary_string(
+            destination,
+            "network_id",
+            label="destination verifier network id",
+        ),
         label="destination verifier network id",
     )
     if source_network_id != destination_network_id:
@@ -5161,7 +5180,11 @@ def _check_expected_destination_binding_hash(
     if expected_binding_hash is None:
         return
     observed_binding_hash = _parse_hex32(
-        str(destination["destination_binding_hash"]),
+        _exact_summary_string(
+            destination,
+            "destination_binding_hash",
+            label="destination binding hash",
+        ),
         label="destination binding hash",
     )
     if expected_binding_hash != observed_binding_hash:
@@ -5197,15 +5220,27 @@ def _validate_route_allowlist_hash(
             "--route-allowlist-hash requires --expected-destination-binding-hash"
         )
     destination_binding_hash = _parse_hex32(
-        str(destination_verifier.get("destination_binding_hash")),
+        _exact_summary_string(
+            destination_verifier,
+            "destination_binding_hash",
+            label="destination binding hash",
+        ),
         label="destination binding hash",
     )
     source_verifier_material_hash = _parse_hex32(
-        str(source_records.get("source_verifier_material_hash")),
+        _exact_summary_string(
+            source_records,
+            "source_verifier_material_hash",
+            label="source verifier material hash",
+        ),
         label="source verifier material hash",
     )
     source_adapter_engine_deployment_hash = _parse_hex32(
-        str(source_records.get("source_adapter_engine_deployment_hash")),
+        _exact_summary_string(
+            source_records,
+            "source_adapter_engine_deployment_hash",
+            label="source adapter engine deployment hash",
+        ),
         label="source adapter engine deployment hash",
     )
     expected_hash = evidence.tron_route_allowlist_hash(

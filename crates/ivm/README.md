@@ -333,7 +333,7 @@ HALT             ; stop execution
 
 ```asm
 BLTU x13, x12, abort    ; if balance < amount -> abort
-SCALL 0x24              ; TRANSFER_ASSET
+SCALL 0x2C              ; TRANSFER_ASSET_SCOPED (r14 = &DataSpaceId)
 HALT
 abort:
 SCALL 0x02             ; ABORT

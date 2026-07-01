@@ -95,6 +95,32 @@ fn ensure_validator_authority(
     Ok(())
 }
 
+fn ensure_staker_authority(
+    authority: &AccountId,
+    staker: &AccountId,
+    context: &str,
+) -> Result<(), Error> {
+    if authority != staker {
+        return Err(Error::InvariantViolation(
+            format!("{context} rejected: authority must match staker account").into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_registration_uses_validator_stake(
+    validator: &AccountId,
+    stake_account: &AccountId,
+    context: &str,
+) -> Result<(), Error> {
+    if validator != stake_account {
+        return Err(Error::InvariantViolation(
+            format!("{context} rejected: stake account must match validator account").into(),
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_public_lane_validator_record_matches_key(
     key: &(LaneId, AccountId),
     record: &PublicLaneValidatorRecord,
@@ -117,12 +143,18 @@ impl Execute for RegisterPublicLaneValidator {
     #[allow(clippy::too_many_lines)]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
             state_transaction,
             self.lane_id,
+            "register_public_lane_validator",
+        )?;
+        ensure_validator_authority(authority, &self.validator, "register_public_lane_validator")?;
+        ensure_registration_uses_validator_stake(
+            &self.validator,
+            &self.stake_account,
             "register_public_lane_validator",
         )?;
         finalize_validator_lifecycle(state_transaction)?;
@@ -471,7 +503,7 @@ impl Execute for ExitPublicLaneValidator {
     )]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
@@ -479,6 +511,7 @@ impl Execute for ExitPublicLaneValidator {
             self.lane_id,
             "exit_public_lane_validator",
         )?;
+        ensure_validator_authority(authority, &self.validator, "exit_public_lane_validator")?;
         let now_ms = state_transaction.block_unix_timestamp_ms();
         if self.release_at_ms < now_ms {
             return Err(Error::InvariantViolation(
@@ -544,10 +577,11 @@ impl Execute for BondPublicLaneStake {
     )]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(state_transaction, self.lane_id, "bond_public_lane_stake")?;
+        ensure_staker_authority(authority, &self.staker, "bond_public_lane_stake")?;
         finalize_validator_lifecycle(state_transaction)?;
         ensure_positive_amount(&self.amount, "stake amount")?;
 
@@ -638,7 +672,7 @@ impl Execute for SchedulePublicLaneUnbond {
     )]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
@@ -646,6 +680,7 @@ impl Execute for SchedulePublicLaneUnbond {
             self.lane_id,
             "schedule_public_lane_unbond",
         )?;
+        ensure_staker_authority(authority, &self.staker, "schedule_public_lane_unbond")?;
         finalize_validator_lifecycle(state_transaction)?;
         ensure_positive_amount(&self.amount, "unbond amount")?;
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
@@ -748,7 +783,7 @@ impl Execute for FinalizePublicLaneUnbond {
     )]
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
@@ -756,6 +791,7 @@ impl Execute for FinalizePublicLaneUnbond {
             self.lane_id,
             "finalize_public_lane_unbond",
         )?;
+        ensure_staker_authority(authority, &self.staker, "finalize_public_lane_unbond")?;
         finalize_validator_lifecycle(state_transaction)?;
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
         let stake_ctx = stake_context(
@@ -2112,7 +2148,7 @@ mod tests {
             initial_stake: initial_stake.clone(),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, stx)
+        .execute(&validator, stx)
         .expect("register validator for rewards");
 
         (sink, validator, reward_asset, asset_def_id)
@@ -2260,7 +2296,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
 
         assert!(
@@ -2313,6 +2349,92 @@ mod tests {
     }
 
     #[test]
+    fn register_rejects_non_validator_authority() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let err = RegisterPublicLaneValidator {
+            lane_id: LaneId::new(81),
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("non-validator authority must not register validator stake");
+
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg)
+                if msg.contains("register_public_lane_validator rejected: authority must match validator account")
+        ));
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(LaneId::new(81), validator))
+                .is_none(),
+            "rejected registration must not create a validator record"
+        );
+        assert!(
+            stx.world
+                .assets
+                .get(&AssetId::new(asset_def_id, escrow))
+                .is_none(),
+            "rejected registration must not touch escrow"
+        );
+    }
+
+    #[test]
+    fn register_rejects_non_validator_stake_account() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let err = RegisterPublicLaneValidator {
+            lane_id: LaneId::new(82),
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: delegator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect_err("registration must not pull initial self-stake from another account");
+
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg)
+                if msg.contains("register_public_lane_validator rejected: stake account must match validator account")
+        ));
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(LaneId::new(82), validator))
+                .is_none(),
+            "rejected registration must not create a validator record"
+        );
+        assert!(
+            stx.world
+                .assets
+                .get(&AssetId::new(asset_def_id.clone(), escrow))
+                .is_none(),
+            "rejected registration must not touch escrow"
+        );
+        let delegator_stake = stx
+            .world
+            .assets
+            .get(&AssetId::new(asset_def_id, delegator))
+            .expect("delegator stake balance remains present");
+        assert_eq!(delegator_stake.as_ref(), &Numeric::new(10_000, 0));
+    }
+
+    #[test]
     fn register_rejects_without_live_consensus_key() {
         let state = setup_state();
         let block = new_block();
@@ -2336,7 +2458,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(
             result.is_err(),
@@ -2381,7 +2503,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(
             matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("not yet active")),
@@ -2426,7 +2548,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(
             matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("expired")),
@@ -2473,11 +2595,11 @@ mod tests {
             lane_id,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
-            stake_account: validator,
+            stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect_err("admin-managed lanes must reject staking");
 
         assert!(matches!(
@@ -2532,11 +2654,11 @@ mod tests {
             lane_id: future_lane,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
-            stake_account: validator,
+            stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect_err("future-created autoscale lane must reject staking before creation height");
 
         assert!(matches!(
@@ -2614,7 +2736,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("stake-elected lane should accept staking");
 
         let err = RegisterPublicLaneValidator {
@@ -2625,7 +2747,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .expect_err("admin-managed lane must reject staking");
         assert!(matches!(
             err,
@@ -2791,7 +2913,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(
             result.is_err(),
@@ -2833,7 +2955,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("registration should accept a distinct peer binding");
 
         let record = stx
@@ -2865,18 +2987,18 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("first validator should bind the shared peer");
 
         let err = RegisterPublicLaneValidator {
             lane_id: LaneId::new(44),
             peer_id: shared_peer,
             validator: replacement.clone(),
-            stake_account: replacement,
+            stake_account: replacement.clone(),
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&replacement, &mut stx)
         .expect_err("second validator must not reuse the same peer binding");
 
         assert!(matches!(
@@ -2921,7 +3043,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("mismatched stale row must not consume capacity or peer binding");
 
         let record = stx
@@ -2958,7 +3080,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
 
         let original = {
@@ -3011,7 +3133,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
 
         stx.commit_topology.get_mut().clear();
@@ -3048,7 +3170,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register primary validator");
         RegisterPublicLaneValidator {
             lane_id,
@@ -3058,7 +3180,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&replacement, &mut stx)
         .expect("register replacement validator");
 
         let err = RebindPublicLaneValidatorPeer::new(
@@ -3091,7 +3213,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register primary validator");
         {
             let record = stx
@@ -3195,7 +3317,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
 
         let err = RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement_peer)
@@ -3236,7 +3358,7 @@ mod tests {
                 initial_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
             }
-            .execute(&ALICE_ID, &mut stx)
+            .execute(&validator, &mut stx)
             .expect("register validator");
             stx.world
                 .public_lane_validators
@@ -3290,7 +3412,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(
             matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("peer must be registered")),
@@ -3478,7 +3600,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
         let pending = stx
             .world
@@ -3559,7 +3681,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator in genesis");
         let pending = stx
             .world
@@ -3629,7 +3751,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
         if let Some(record) = stx
             .world
@@ -3759,7 +3881,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
         stx.apply();
         state_block.commit().unwrap();
@@ -3840,7 +3962,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
         let key = (LaneId::new(11), validator.clone());
         stx.world
@@ -3904,7 +4026,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("first validator should register");
 
         let second_attempt = RegisterPublicLaneValidator {
@@ -3915,7 +4037,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&replacement, &mut stx);
         assert!(
             matches!(&second_attempt, Err(Error::InvariantViolation(msg)) if msg.contains("maximum validator capacity")),
             "capacity guard should reject second validator: {second_attempt:?}"
@@ -3938,7 +4060,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&replacement, &mut stx)
         .expect("second validator should register after removal");
 
         let former = stx
@@ -3980,7 +4102,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
 
         ExitPublicLaneValidator {
@@ -3988,7 +4110,7 @@ mod tests {
             validator: validator.clone(),
             release_at_ms: stx.block_unix_timestamp_ms().saturating_add(5),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("mark exiting validator");
 
         stx.apply();
@@ -4024,7 +4146,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&replacement, &mut stx)
         .expect("replacement should register after exit release");
 
         let stale_record = stx
@@ -4068,7 +4190,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
         stx.apply();
         state_block.commit().unwrap();
@@ -4096,7 +4218,7 @@ mod tests {
             validator: validator.clone(),
             release_at_ms: stx.block_unix_timestamp_ms(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("exit slashed validator");
         finalize_validator_lifecycle(&mut stx).expect("finalize exit lifecycle");
         stx.apply();
@@ -4129,7 +4251,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("re-register exited validator after slash");
 
         let record = stx
@@ -4179,7 +4301,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("register validator");
 
         let release_at_ms = stx.block_unix_timestamp_ms().saturating_add(50);
@@ -4188,7 +4310,7 @@ mod tests {
             validator: validator.clone(),
             release_at_ms,
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("mark validator exiting");
 
         stx.apply();
@@ -4236,7 +4358,7 @@ mod tests {
                 initial_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
             }
-            .execute(&ALICE_ID, &mut stx)
+            .execute(&replacement, &mut stx)
             .expect_err("capacity should remain consumed until exit finalizes");
             assert!(matches!(
                 err,
@@ -4263,7 +4385,7 @@ mod tests {
                 initial_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
             }
-            .execute(&ALICE_ID, &mut stx)
+            .execute(&replacement, &mut stx)
             .expect("capacity should free after exit release");
             stx.apply();
         }
@@ -4323,7 +4445,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         ActivatePublicLaneValidator {
             lane_id,
@@ -4403,7 +4525,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         ActivatePublicLaneValidator {
             lane_id,
@@ -4486,7 +4608,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         ActivatePublicLaneValidator {
             lane_id,
@@ -4567,7 +4689,7 @@ mod tests {
             initial_stake: Numeric::new(500, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         BondPublicLaneStake {
@@ -4577,7 +4699,7 @@ mod tests {
             amount: Numeric::new(250, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .unwrap();
 
         let release_at_ms = stx.block_unix_timestamp_ms();
@@ -4589,7 +4711,7 @@ mod tests {
             amount: Numeric::new(100, 0),
             release_at_ms,
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .unwrap();
 
         FinalizePublicLaneUnbond {
@@ -4598,7 +4720,7 @@ mod tests {
             staker: delegator.clone(),
             request_id: Hash::new("req"),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .unwrap();
 
         assert!(
@@ -4652,6 +4774,150 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn bond_schedule_and_finalize_require_staker_authority() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(83);
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(500, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect("register validator");
+
+        let err = BondPublicLaneStake {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            amount: Numeric::new(250, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("non-staker authority must not bond delegator funds");
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg)
+                if msg.contains("bond_public_lane_stake rejected: authority must match staker account")
+        ));
+        assert!(
+            stx.world
+                .public_lane_stake_shares
+                .get(&(lane_id, validator.clone(), delegator.clone()))
+                .is_none(),
+            "rejected bond must not create delegator stake"
+        );
+
+        BondPublicLaneStake {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            amount: Numeric::new(250, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&delegator, &mut stx)
+        .expect("delegator can bond own funds");
+
+        let release_at_ms = stx.block_unix_timestamp_ms();
+        let err = SchedulePublicLaneUnbond {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            request_id: Hash::new("authority-unbond"),
+            amount: Numeric::new(100, 0),
+            release_at_ms,
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("non-staker authority must not schedule delegator unbond");
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg)
+                if msg.contains("schedule_public_lane_unbond rejected: authority must match staker account")
+        ));
+        let share = stx
+            .world
+            .public_lane_stake_shares
+            .get(&(lane_id, validator.clone(), delegator.clone()))
+            .expect("delegator share remains present");
+        assert_eq!(share.bonded, Numeric::new(250, 0));
+        assert!(share.pending_unbonds.is_empty());
+
+        SchedulePublicLaneUnbond {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            request_id: Hash::new("authority-unbond"),
+            amount: Numeric::new(100, 0),
+            release_at_ms,
+        }
+        .execute(&delegator, &mut stx)
+        .expect("delegator can schedule own unbond");
+
+        let err = FinalizePublicLaneUnbond {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            request_id: Hash::new("authority-unbond"),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("non-staker authority must not finalize delegator unbond");
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg)
+                if msg.contains("finalize_public_lane_unbond rejected: authority must match staker account")
+        ));
+        let share = stx
+            .world
+            .public_lane_stake_shares
+            .get(&(lane_id, validator.clone(), delegator.clone()))
+            .expect("delegator share remains present after rejected finalize");
+        assert!(
+            share
+                .pending_unbonds
+                .contains_key(&Hash::new("authority-unbond")),
+            "rejected finalize must leave pending unbond intact"
+        );
+
+        FinalizePublicLaneUnbond {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            request_id: Hash::new("authority-unbond"),
+        }
+        .execute(&delegator, &mut stx)
+        .expect("delegator can finalize own unbond");
+
+        let share = stx
+            .world
+            .public_lane_stake_shares
+            .get(&(lane_id, validator.clone(), delegator.clone()))
+            .expect("delegator share remains after finalize");
+        assert_eq!(share.bonded, Numeric::new(150, 0));
+        assert!(share.pending_unbonds.is_empty());
+
+        let escrow_balance = stx
+            .world
+            .assets
+            .get(&AssetId::new(asset_def_id.clone(), escrow))
+            .expect("escrow balance after authorized finalize");
+        assert_eq!(escrow_balance.as_ref(), &Numeric::new(650, 0));
+        let delegator_balance = stx
+            .world
+            .assets
+            .get(&AssetId::new(asset_def_id, delegator))
+            .expect("delegator balance after authorized finalize");
+        assert_eq!(delegator_balance.as_ref(), &Numeric::new(9_850, 0));
+    }
+
+    #[test]
     fn register_requires_peer() {
         let state = setup_state();
         let block = new_block();
@@ -4668,7 +4934,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(res.is_err(), "expected register to fail when peer missing");
     }
@@ -4693,7 +4959,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         ActivatePublicLaneValidator {
@@ -4734,7 +5000,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         let now_ms = stx.block_unix_timestamp_ms();
@@ -4743,7 +5009,7 @@ mod tests {
             validator: validator.clone(),
             release_at_ms: now_ms,
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         // Re-register should succeed once exited.
@@ -4755,8 +5021,55 @@ mod tests {
             initial_stake: Numeric::new(500, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("re-register after exit");
+    }
+
+    #[test]
+    fn exit_rejects_non_validator_authority() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(84);
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect("register validator");
+
+        let err = ExitPublicLaneValidator {
+            lane_id,
+            validator: validator.clone(),
+            release_at_ms: stx.block_unix_timestamp_ms(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("non-validator authority must not exit another validator");
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg)
+                if msg.contains("exit_public_lane_validator rejected: authority must match validator account")
+        ));
+
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("validator record remains present");
+        assert!(
+            matches!(
+                record.status,
+                PublicLaneValidatorStatus::PendingActivation(_)
+            ),
+            "rejected exit must not mutate validator lifecycle state"
+        );
     }
 
     #[test]
@@ -4816,7 +5129,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         SlashPublicLaneValidator {
@@ -4838,7 +5151,7 @@ mod tests {
             initial_stake: Numeric::new(250, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect_err("slashed validator should remain registered until exited");
         assert!(matches!(
             err,
@@ -4851,7 +5164,7 @@ mod tests {
             validator: validator.clone(),
             release_at_ms: now_ms,
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("exit slashed validator");
 
         RegisterPublicLaneValidator {
@@ -4862,7 +5175,7 @@ mod tests {
             initial_stake: Numeric::new(250, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .expect("re-register after exit");
 
         stx.apply();
@@ -4912,7 +5225,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         SlashPublicLaneValidator {
@@ -4932,7 +5245,7 @@ mod tests {
             validator: validator.clone(),
             release_at_ms,
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         stx.apply();
         state_block.commit().unwrap();
@@ -4979,7 +5292,7 @@ mod tests {
                 initial_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
             }
-            .execute(&ALICE_ID, &mut prerelease_tx)
+            .execute(&replacement, &mut prerelease_tx)
             .expect_err("capacity should remain full until release time");
             assert!(
                 matches!(
@@ -5013,7 +5326,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut post_tx)
+        .execute(&replacement, &mut post_tx)
         .expect("capacity should free after exit release");
 
         let previous = post_tx
@@ -5057,7 +5370,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         ActivatePublicLaneValidator {
@@ -5116,7 +5429,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         ActivatePublicLaneValidator {
@@ -5133,7 +5446,7 @@ mod tests {
             amount: Numeric::new(250, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .unwrap();
 
         // Ensure stake shares exist before unregistration.
@@ -5199,7 +5512,7 @@ mod tests {
             initial_stake: Numeric::new(500, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         let res = BondPublicLaneStake {
@@ -5209,7 +5522,7 @@ mod tests {
             amount: Numeric::new(500, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&delegator, &mut stx);
 
         assert!(
             matches!(res, Err(Error::Math(MathError::NotEnoughQuantity))),
@@ -5256,7 +5569,7 @@ mod tests {
             amount: Numeric::new(100, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .expect_err("mismatched validator row must reject bonding");
 
         assert!(
@@ -5302,7 +5615,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(res.is_err(), "expected min stake rejection");
     }
@@ -5338,7 +5651,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&validator, &mut stx);
 
         assert!(
             matches!(res, Err(Error::InvariantViolation(ref msg)) if msg.contains("peer")),
@@ -5363,7 +5676,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         let release_at_ms = stx.block_unix_timestamp_ms();
@@ -5375,7 +5688,7 @@ mod tests {
             amount: Numeric::new(100, 0),
             release_at_ms,
         }
-        .execute(&ALICE_ID, &mut stx);
+        .execute(&delegator, &mut stx);
 
         assert!(res.is_err(), "expected unbond delay enforcement");
     }
@@ -5402,12 +5715,12 @@ mod tests {
         let err = SchedulePublicLaneUnbond {
             lane_id,
             validator: validator.clone(),
-            staker: delegator,
+            staker: delegator.clone(),
             request_id: Hash::new("req-mismatched"),
             amount: Numeric::new(100, 0),
             release_at_ms: stx.block_unix_timestamp_ms(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .expect_err("mismatched validator row must reject unbond scheduling");
 
         assert!(
@@ -5440,7 +5753,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
         BondPublicLaneStake {
             lane_id: LaneId::new(13),
@@ -5449,7 +5762,7 @@ mod tests {
             amount: Numeric::new(500, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&delegator, &mut stx)
         .unwrap();
 
         SlashPublicLaneValidator {
@@ -5769,7 +6082,7 @@ mod tests {
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
-        .execute(&ALICE_ID, &mut stx)
+        .execute(&validator, &mut stx)
         .unwrap();
 
         let res = SlashPublicLaneValidator {

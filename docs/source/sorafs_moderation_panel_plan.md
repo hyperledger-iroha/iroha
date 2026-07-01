@@ -262,3 +262,6 @@ The rollout evidence scripts have focused Python coverage in:
 - `scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py`
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The shared runner plan guard also rejects non-canonical nested required-kind,
+threshold, external-evidence, evidence-contract, and command-step shapes before
+dry-run output or verifier execution.

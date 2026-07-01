@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_potr_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a2ccc59f3083f5c73cce85d0ce53e86f2816d6e16ab5eba77f57013421baa6c4
+source_hash: a3533acfa38661f5148f527ebe6d2ec60b8e2f20df924cf5bbb11a8c0292a422
 source_last_modified: "2026-06-25T17:46:08+00:00"
 translation_last_reviewed: 2026-06-25
 title: PoTR-Lite Deadline Proofs Status

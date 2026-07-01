@@ -275,3 +275,6 @@ Required before rollout:
   two successful staged billing cycles whose evidence passes the SFM-5 gate.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The shared runner plan guard also rejects non-canonical nested required-kind,
+threshold, external-evidence, evidence-contract, and command-step shapes before
+dry-run output or verifier execution.

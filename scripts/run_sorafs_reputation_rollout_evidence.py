@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -38,6 +37,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_passthrough_args,
     require_runner_positive_int,
     require_runner_url_args,
+    validate_runner_fixed_evidence_plan,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -287,35 +287,19 @@ def validate_plan_json(
 ) -> list[str]:
     """Validate the reputation collection-plan envelope before use."""
 
-    errors: list[str] = []
-    if not isinstance(rendered, Mapping):
-        return ["reputation rollout runner plan must be an object"]
-    if set(rendered) != PLAN_FIELDS:
-        errors.append(
-            "reputation rollout runner plan fields must match the schema-closed contract"
-        )
-    if rendered.get("schema") != PLAN_SCHEMA:
-        errors.append("reputation rollout runner plan schema must match the contract")
-    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
-        errors.append(
-            "reputation rollout runner plan verifier schema must match checker summary"
-        )
-    if rendered.get("external_evidence") != external_evidence(args):
-        errors.append(
-            "reputation rollout runner plan external_evidence must match args"
-        )
-    else:
-        external = rendered.get("external_evidence")
-        if not isinstance(external, Mapping) or set(external) != EXTERNAL_EVIDENCE_FIELDS:
-            errors.append(
-                "reputation rollout runner plan external_evidence must match required fields"
-            )
-    if rendered.get("evidence_contract") != evidence_contract():
-        errors.append(
-            "reputation rollout runner plan evidence_contract must match checker fields"
-        )
-    errors.extend(validate_runner_plan_steps(rendered, plan))
-    return errors
+    return validate_runner_fixed_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="reputation rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        external_evidence=external_evidence(args),
+        external_evidence_fields=EXTERNAL_EVIDENCE_FIELDS,
+        known_kinds=KIND_BY_NAME,
+        evidence_contract=evidence_contract(),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:

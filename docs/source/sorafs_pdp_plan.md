@@ -47,7 +47,10 @@ Implemented locally:
   checker-backed `evidence_contract` map in dry-run output for the selected
   required kinds, and validates the schema-closed collection plan, required
   kinds, thresholds, external evidence map, evidence contract, and command steps
-  before dry-run output or verifier execution.
+  before dry-run output or verifier execution. The shared runner plan guard also
+  rejects non-canonical nested required-kind, threshold, external-evidence,
+  evidence-contract, and command-step shapes before dry-run output or verifier
+  execution.
 - `scripts/build_sorafs_pdp_canary.py` builds individual payload-free SF-13
   canary artifacts for provider transport, proof generation, validator replay,
   governance/repair, observability, and governance approval evidence. The
