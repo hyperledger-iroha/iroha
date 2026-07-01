@@ -4670,9 +4670,14 @@ fn build_confidential_encrypted_payload(
     Ok(payload)
 }
 
-fn decode_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
-    let body = hex_str.trim().trim_start_matches("0x");
-    let bytes = hex::decode(body).map_err(|_| BridgeError::ProofAttachment)?;
+fn decode_exact_lower_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
+    if hex_str.len() != N * 2
+        || !hex_str.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || hex_str.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let bytes = hex::decode(hex_str).map_err(|_| BridgeError::ProofAttachment)?;
     if bytes.len() != N {
         return Err(BridgeError::ProofAttachment);
     }
@@ -4783,10 +4788,15 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
 
     let mut attachment = attachment;
     if let Some(commit_hex) = value.get("vk_commitment_hex").and_then(JsonValue::as_str) {
-        attachment.vk_commitment = Some(decode_hex_array(commit_hex)?);
+        attachment.vk_commitment = Some(decode_exact_lower_hex_array(commit_hex)?);
     }
-    if let Some(envelope_hex) = value.get("envelope_hash_hex").and_then(JsonValue::as_str) {
-        attachment.envelope_hash = Some(decode_hex_array(envelope_hex)?);
+    let envelope_hex = value
+        .get("envelope_hash_hex")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::ProofAttachment)?;
+    attachment.envelope_hash = Some(decode_exact_lower_hex_array(envelope_hex)?);
+    if attachment.structural_error().is_some() {
+        return Err(BridgeError::ProofAttachment);
     }
     Ok(attachment)
 }
@@ -17724,6 +17734,17 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
 
+    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
+        let hash: [u8; Hash::LENGTH] = Hash::new(bytes).into();
+        hex::encode(hash)
+    }
+
+    fn proof_attachment_json(backend: &str, proof_b64: &str, envelope_hash_hex: &str) -> String {
+        format!(
+            r#"{{"backend":"{backend}","proof_b64":"{proof_b64}","vk_ref":{{"backend":"{backend}","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+        )
+    }
+
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
     }
@@ -19023,9 +19044,8 @@ mod accel_tests {
         let asset_definition = asset_definition_cstring("bank", "usd");
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
-        );
+        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
+        let proof = cstring(&proof_json);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
         let mut out_hash = [0u8; 32];
@@ -19078,10 +19098,8 @@ mod accel_tests {
         let destination = authority.clone();
         let input = [0x11_u8; 32];
         let output = [0x22_u8; 32];
-        let proof = parse_proof_attachment_from_json_slice(
-            br#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
-        )
-        .expect("proof");
+        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
+        let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
 
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction(chain_id, authority, 1, None, private_key, || {
@@ -19365,6 +19383,75 @@ mod accel_tests {
                 .expect_err("legacy inline verifying-key field rejected");
             assert!(matches!(err, BridgeError::ProofAttachment));
         }
+    }
+
+    #[test]
+    fn proof_attachment_json_accepts_matching_envelope_hash() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let attachment =
+            parse_proof_attachment_value(&value).expect("matching envelope hash should parse");
+        assert_eq!(attachment.envelope_hash, Some(Hash::new(&[0_u8]).into()));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_missing_envelope_hash() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+        )
+        .expect("json");
+        let err =
+            parse_proof_attachment_value(&value).expect_err("envelope_hash_hex must be present");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_forged_envelope_hash() {
+        let forged_hash = hex::encode([0x11_u8; 32]);
+        let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("envelope_hash_hex must match proof bytes");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_noncanonical_envelope_hash_hex() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        for noncanonical in [
+            envelope_hash_hex.to_uppercase(),
+            format!("0x{envelope_hash_hex}"),
+            format!(" {envelope_hash_hex}"),
+        ] {
+            let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
+            let value: JsonValue = norito::json::from_str(&json).expect("json");
+            let err = parse_proof_attachment_value(&value)
+                .expect_err("envelope_hash_hex must be exact lowercase hex");
+            assert!(matches!(err, BridgeError::ProofAttachment));
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_zero_vk_commitment() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        json.insert_str(
+            json.len() - 1,
+            r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
+        );
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value).expect_err("zero vk commitment must reject");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_empty_proof_bytes() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[]);
+        let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value).expect_err("empty proof bytes must reject");
+        assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]

@@ -28,10 +28,11 @@ import kagemusha_pull_android_device_lab_raw_slot as raw_puller  # noqa: E402
 CAPTURE_SUMMARY_SCHEMA = "iroha.android.device_lab.kagemusha.capture.v1"
 MAX_CAPTURE_JSON_BYTES = device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
 MAX_CAPTURE_CHALLENGE_BYTES = 4096
-MAX_CAPTURE_SIGNING_KEY_BYTES = 64 * 1024
+MAX_CAPTURE_SIGNING_KEY_BYTES = device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES
 MAX_ADB_PREFLIGHT_OUTPUT_CHARS = 240
 ADB_SERIAL_REDACTION = "<redacted-adb-serial>"
 ADB_DEVICES_NO_VISIBLE_ROWS = "no_visible_devices"
+FORBIDDEN_INHERITED_CAPTURE_ENV_KEYS = frozenset(("ANDROID_SERIAL",))
 DISRUPTIVE_EXECUTABLE_NAMES = frozenset(
     ("halt", "kill", "killall", "pkill", "poweroff", "reboot", "shutdown")
 )
@@ -774,6 +775,8 @@ def _capture_env(
     include_serial: bool = True,
 ) -> dict[str, str]:
     env = os.environ.copy()
+    for key in FORBIDDEN_INHERITED_CAPTURE_ENV_KEYS:
+        env.pop(key, None)
     if include_serial:
         env["ANDROID_SERIAL"] = args.serial
     if args.java_home is not None:

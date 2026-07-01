@@ -20516,6 +20516,53 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ["trusted signer public key OpenSSL public key command could not be run"],
         )
 
+    def test_openssl_public_key_der_scrubs_operator_openssl_env(self) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+        captured_env: dict[str, str] = {}
+
+        def fake_run(command, **kwargs):
+            captured_env.update(kwargs["env"])
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=b"canonical-public-key-der",
+                stderr=b"",
+            )
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = fake_run
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not private key material\n", encoding="utf-8")
+                errors: list[str] = []
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "PATH": "/usr/bin",
+                        **{
+                            key: f"/tmp/unsafe-{key.lower()}"
+                            for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS  # type: ignore[attr-defined]
+                        },
+                    },
+                    clear=True,
+                ):
+                    der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                        public_key,
+                        errors=errors,
+                        label="trusted signer public key",
+                    )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+
+        self.assertEqual(errors, [])
+        self.assertEqual(der, b"canonical-public-key-der")
+        self.assertEqual(captured_env["PATH"], "/usr/bin")
+        for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS:  # type: ignore[attr-defined]
+            self.assertNotIn(key, captured_env)
+
     def test_openssl_public_key_der_rejects_invalid_public_key_after_openssl_failure(
         self,
     ) -> None:
@@ -20601,6 +20648,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(der)
         self.assertEqual(errors, ["trusted signer public key must be a regular file"])
+
+    def test_openssl_public_key_der_rejects_oversized_public_key_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for an oversized public key")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_bytes(
+                    b"x" * (device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES + 1)
+                )
+                errors: list[str] = []
+
+                der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                    public_key,
+                    errors=errors,
+                    label="trusted signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(der)
+        self.assertEqual(
+            errors,
+            [
+                "trusted signer public key must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES} bytes"
+            ],
+        )
 
     def test_openssl_public_key_der_rejects_file_metadata_failure_before_openssl_lookup(
         self,
@@ -20906,6 +20987,49 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab.subprocess.run = original_run
 
         self.assertEqual(errors, ["signature verification command could not be run"])
+
+    def test_verify_signature_scrubs_operator_openssl_env(self) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+        captured_env: dict[str, str] = {}
+
+        def fake_run(command, **kwargs):
+            captured_env.update(kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = fake_run
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not private key material\n", encoding="utf-8")
+                errors: list[str] = []
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "PATH": "/usr/bin",
+                        **{
+                            key: f"/tmp/unsafe-{key.lower()}"
+                            for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS  # type: ignore[attr-defined]
+                        },
+                    },
+                    clear=True,
+                ):
+                    device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                        public_key_path=public_key,
+                        payload=b"payload",
+                        signature=b"x" * device_lab.ED25519_SIGNATURE_BYTES,
+                        errors=errors,
+                        label="signer public key",
+                    )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+
+        self.assertEqual(errors, [])
+        self.assertEqual(captured_env["PATH"], "/usr/bin")
+        for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS:  # type: ignore[attr-defined]
+            self.assertNotIn(key, captured_env)
 
     def test_private_public_pair_preserves_public_key_path_error_before_mismatch(
         self,
@@ -25959,6 +26083,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(signature)
         self.assertEqual(errors, ["private key must be a regular file"])
 
+    def test_sign_ed25519_rejects_oversized_private_key_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for an oversized private key")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_bytes(
+                    b"x" * (device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES + 1)
+                )
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(signature)
+        self.assertEqual(
+            errors,
+            [
+                "private key must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES} bytes"
+            ],
+        )
+
     def test_sign_ed25519_rejects_private_key_file_metadata_failure_before_openssl(
         self,
     ) -> None:
@@ -26331,6 +26489,50 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(signature)
         self.assertEqual(errors, ["signature command could not be run"])
+
+    def test_sign_ed25519_scrubs_operator_openssl_env(self) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        captured_env: dict[str, str] = {}
+
+        def fake_run(command, **kwargs):
+            captured_env.update(kwargs["env"])
+            signature_path = Path(command[command.index("-out") + 1])
+            signature_path.write_bytes(b"s" * device_lab.ED25519_SIGNATURE_BYTES)
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = fake_run
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "PATH": "/usr/bin",
+                        **{
+                            key: f"/tmp/unsafe-{key.lower()}"
+                            for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS  # type: ignore[attr-defined]
+                        },
+                    },
+                    clear=True,
+                ):
+                    signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                        private_key,
+                        b"payload",
+                        errors,
+                    )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+
+        self.assertEqual(errors, [])
+        self.assertEqual(signature, b"s" * device_lab.ED25519_SIGNATURE_BYTES)
+        self.assertEqual(captured_env["PATH"], "/usr/bin")
+        for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS:  # type: ignore[attr-defined]
+            self.assertNotIn(key, captured_env)
 
     def test_sign_ed25519_rejects_invalid_private_key_after_openssl_failure(
         self,
@@ -29466,6 +29668,45 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             ],
         )
         self.assertNotIn("Infinity", rendered)
+
+    def test_android_capture_env_scrubs_inherited_android_serial_for_auto(self) -> None:
+        args = mock.Mock(
+            serial="auto",
+            java_home=None,
+            android_home=None,
+            android_sdk_root=None,
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"ANDROID_SERIAL": "stale-shell-serial", "PATH": "/usr/bin"},
+            clear=True,
+        ):
+            env = capture_runner._capture_env(args, include_serial=False)
+
+        self.assertNotIn("ANDROID_SERIAL", env)
+        self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_android_capture_env_overrides_inherited_android_serial(self) -> None:
+        args = mock.Mock(
+            serial="resolved-device-123",
+            java_home="/jdk-21",
+            android_home="/android-home",
+            android_sdk_root="/android-sdk",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"ANDROID_SERIAL": "stale-shell-serial", "PATH": "/usr/bin"},
+            clear=True,
+        ):
+            env = capture_runner._capture_env(args)
+
+        self.assertEqual(env["ANDROID_SERIAL"], "resolved-device-123")
+        self.assertEqual(env["JAVA_HOME"], "/jdk-21")
+        self.assertEqual(env["ANDROID_HOME"], "/android-home")
+        self.assertEqual(env["ANDROID_SDK_ROOT"], "/android-sdk")
+        self.assertNotEqual(env["ANDROID_SERIAL"], "stale-shell-serial")
 
     def test_android_capture_assembler_command_passes_adb_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:

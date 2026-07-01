@@ -2577,6 +2577,19 @@ fn parse_hex32_lower(value: &str, field: &str) -> Result<String> {
     Ok(hex::encode(bytes))
 }
 
+fn parse_exact_lower_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        eyre::bail!("{field} must be exactly 32 lowercase hex bytes");
+    }
+    if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        eyre::bail!("{field} must be exactly 32 lowercase hex bytes");
+    }
+    let bytes = hex::decode(value).wrap_err_with(|| format!("invalid {field}"))?;
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
 fn build_proof_attachment_from_json(
     v: &norito::json::Value,
 ) -> eyre::Result<iroha::data_model::proof::ProofAttachment> {
@@ -2586,7 +2599,7 @@ fn build_proof_attachment_from_json(
         .ok_or_else(|| eyre::eyre!("proof attachment JSON must be an object"))?;
     for field in object.keys() {
         match field.as_str() {
-            "backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex" => {}
+            "backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex" | "envelope_hash_hex" => {}
             "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
                 return Err(eyre::eyre!(
                     "legacy inline verifying-key field `{field}` is not supported; use vk_ref"
@@ -2638,16 +2651,18 @@ fn build_proof_attachment_from_json(
         return Err(eyre::eyre!("vk_ref must be provided"));
     };
     if let Some(hex) = v.get("vk_commitment_hex").and_then(|x| x.as_str()) {
-        let bytes = hex::decode(hex).map_err(|e| eyre::eyre!("invalid vk_commitment_hex: {e}"))?;
-        if bytes.len() != 32 {
-            return Err(eyre::eyre!(
-                "vk_commitment_hex must decode to 32 bytes, got {}",
-                bytes.len()
-            ));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        att.vk_commitment = Some(arr);
+        att.vk_commitment = Some(parse_exact_lower_hex32(hex, "vk_commitment_hex")?);
+    }
+    let envelope_hash = v
+        .get("envelope_hash_hex")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| eyre::eyre!("envelope_hash_hex must be provided"))?;
+    att.envelope_hash = Some(parse_exact_lower_hex32(
+        envelope_hash,
+        "envelope_hash_hex",
+    )?);
+    if let Some((field, message)) = att.structural_error() {
+        return Err(eyre::eyre!("{field} {message}"));
     }
     Ok(att)
 }
@@ -3228,16 +3243,23 @@ mod tests {
         );
     }
 
+    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
+        let hash: [u8; 32] = CryptoHash::new(bytes).into();
+        hex::encode(hash)
+    }
+
     #[test]
     fn build_proof_attachment_from_json_vk_ref() {
         // proof_b64 = "Hello" in base64
         let proof_b64 = "SGVsbG8=";
+        let envelope_hash_hex = proof_bytes_hash_hex(b"Hello");
         let json = format!(
             r#"{{
                 "backend": "halo2/ipa",
                 "proof_b64": "{proof_b64}",
                 "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
-                "vk_commitment_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+                "vk_commitment_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+                "envelope_hash_hex": "{envelope_hash_hex}"
             }}"#
         );
         let v = norito::json::from_str(&json).expect("vk_ref json");
@@ -3246,7 +3268,9 @@ mod tests {
         assert_eq!(att.proof.backend.as_str(), "halo2/ipa");
         assert_eq!(att.proof.bytes, b"Hello");
         assert_eq!(att.vk_ref.name.as_str(), "vk_transfer");
-        assert_eq!(att.vk_commitment.unwrap(), [0u8; 32]);
+        assert_eq!(att.vk_commitment.unwrap(), [0x11u8; 32]);
+        let expected_hash: [u8; 32] = CryptoHash::new(b"Hello").into();
+        assert_eq!(att.envelope_hash.unwrap(), expected_hash);
     }
 
     #[test]
@@ -3281,7 +3305,92 @@ mod tests {
         }"#;
         let v = norito::json::from_str(json).expect("short commitment json");
         let err = build_proof_attachment_from_json(&v).expect_err("short commitment rejected");
-        assert!(format!("{err}").contains("32 bytes"));
+        assert!(format!("{err}").contains("32 lowercase hex bytes"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_zero_vk_commitment() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0]);
+        let json = format!(
+            r#"{{
+                "backend": "halo2/ipa",
+                "proof_b64": "AA==",
+                "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
+                "vk_commitment_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+                "envelope_hash_hex": "{envelope_hash_hex}"
+            }}"#
+        );
+        let v = norito::json::from_str(&json).expect("zero commitment json");
+        let err = build_proof_attachment_from_json(&v).expect_err("zero commitment rejected");
+        assert!(format!("{err}").contains("vk_commitment must be non-zero"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_missing_envelope_hash() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
+        }"#;
+        let v = norito::json::from_str(json).expect("missing envelope hash json");
+        let err =
+            build_proof_attachment_from_json(&v).expect_err("missing envelope_hash_hex rejected");
+        assert!(format!("{err}").contains("envelope_hash_hex must be provided"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_forged_envelope_hash() {
+        let json = r#"{
+            "backend": "halo2/ipa",
+            "proof_b64": "AA==",
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" },
+            "envelope_hash_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+        }"#;
+        let v = norito::json::from_str(json).expect("forged envelope hash json");
+        let err =
+            build_proof_attachment_from_json(&v).expect_err("forged envelope_hash_hex rejected");
+        assert!(format!("{err}").contains("envelope_hash must match proof bytes"));
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_noncanonical_envelope_hash_hex() {
+        let uppercase_hash = proof_bytes_hash_hex(&[0]).to_uppercase();
+        let prefixed_hash = format!("0x{}", proof_bytes_hash_hex(&[0]));
+        for envelope_hash_hex in [uppercase_hash, prefixed_hash] {
+            let json = format!(
+                r#"{{
+                    "backend": "halo2/ipa",
+                    "proof_b64": "AA==",
+                    "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
+                    "envelope_hash_hex": "{envelope_hash_hex}"
+                }}"#
+            );
+            let v = norito::json::from_str(&json).expect("noncanonical envelope hash json");
+            let err = build_proof_attachment_from_json(&v)
+                .expect_err("noncanonical envelope_hash_hex rejected");
+            assert!(
+                format!("{err}").contains(
+                    "envelope_hash_hex must be exactly 32 lowercase hex bytes"
+                ),
+                "unexpected noncanonical hash error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_empty_proof_bytes() {
+        let empty_hash_hex = proof_bytes_hash_hex(&[]);
+        let json = format!(
+            r#"{{
+                "backend": "halo2/ipa",
+                "proof_b64": "",
+                "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
+                "envelope_hash_hex": "{empty_hash_hex}"
+            }}"#
+        );
+        let v = norito::json::from_str(&json).expect("empty proof json");
+        let err = build_proof_attachment_from_json(&v).expect_err("empty proof rejected");
+        assert!(format!("{err}").contains("proof.bytes must be non-empty"));
     }
 
     #[test]
@@ -3686,18 +3795,11 @@ impl Run for UnshieldArgs {
         let inputs = parse_inputs_csv(&self.inputs)?;
         let proof_json_str = std::fs::read_to_string(&self.proof_json)?;
         let v: norito::json::Value = norito::json::from_str(&proof_json_str)?;
-        let mut proof_att = build_proof_attachment_from_json(&v)?;
+        let proof_att = build_proof_attachment_from_json(&v)?;
         let root_hint = match self.root_hint {
             Some(h) => Some(parse_hex32(&h)?),
             None => None,
         };
-        // Optional: derive envelope hash from proof_b64 for audit binding (demo).
-        // We use blake2b-32 of proof bytes as a placeholder.
-        if proof_att.envelope_hash.is_none() {
-            use iroha::crypto::Hash;
-            let h = Hash::new(&proof_att.proof.bytes);
-            proof_att.envelope_hash = Some(h.into());
-        }
         let ib: InstructionBox = iroha::data_model::isi::zk::Unshield::new(
             asset,
             to,

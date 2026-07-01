@@ -4358,6 +4358,10 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
 )]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "first-release consensus telemetry exposes independent status flags without compatibility aliases"
+)]
 pub struct SumeragiConsensusStatus {
     /// Current runtime consensus mode tag.
     pub mode_tag: String,
@@ -4539,6 +4543,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SumeragiConsensusStatus {
 }
 
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "serialized consensus telemetry payload mirrors independent first-release status flags"
+)]
 struct SumeragiConsensusStatusPayload {
     mode_tag: String,
     staged_mode_tag: Option<String>,
@@ -18916,6 +18924,13 @@ mod test {
 
     use super::*;
 
+    fn assert_float_metric_eq(actual: f64, expected: f64, context: &str) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "{context}: expected {expected}, got {actual}"
+        );
+    }
+
     #[test]
     fn metrics_lifecycle() {
         let metrics = Metrics::default();
@@ -19474,26 +19489,29 @@ mod test {
         let metrics = Metrics::default();
         metrics.record_sorafs_egress_reconciliation("provider-a", 1_000, Some(1_100), Some(900));
 
-        assert_eq!(
+        assert_float_metric_eq(
             metrics
                 .torii_sorafs_egress_bytes
                 .with_label_values(&["provider-a", "billing"])
                 .get(),
-            1_000.0
+            1_000.0,
+            "billing egress bytes",
         );
-        assert_eq!(
+        assert_float_metric_eq(
             metrics
                 .torii_sorafs_egress_bytes
                 .with_label_values(&["provider-a", "gateway"])
                 .get(),
-            1_100.0
+            1_100.0,
+            "gateway egress bytes",
         );
-        assert_eq!(
+        assert_float_metric_eq(
             metrics
                 .torii_sorafs_egress_bytes
                 .with_label_values(&["provider-a", "orchestrator"])
                 .get(),
-            900.0
+            900.0,
+            "orchestrator egress bytes",
         );
         assert!(
             (metrics
@@ -19513,12 +19531,13 @@ mod test {
                 .abs()
                 < f64::EPSILON
         );
-        assert_eq!(
+        assert_float_metric_eq(
             metrics
                 .torii_sorafs_egress_drift_ratio
                 .with_label_values(&["provider-a", "billing"])
                 .get(),
-            0.0
+            0.0,
+            "billing egress drift ratio",
         );
         let exported = metrics.try_to_string().expect("metrics should serialize");
         assert!(
@@ -19663,12 +19682,13 @@ mod test {
                 .get(),
             1
         );
-        assert_eq!(
+        assert_float_metric_eq(
             metrics
                 .sorafs_reputation_score
                 .with_label_values(&["provider-a"])
                 .get(),
-            1_200.0
+            1_200.0,
+            "provider reputation score",
         );
         assert_eq!(
             metrics

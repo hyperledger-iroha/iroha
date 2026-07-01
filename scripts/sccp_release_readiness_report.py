@@ -10453,6 +10453,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="__main__.py",
         description=(
             f"Render a public SCCP release-readiness report from {ACTIVE_LAUNCH_DISPLAY} "
             "launch-lane evidence, all-lanes diagnostics, and "
@@ -11366,6 +11367,12 @@ def _redacted_native_evm_artifact_summary(
     if not isinstance(value, dict):
         return value
     redacted = dict(value)
+    if redact_unsafe_path and (
+        type(redacted.get("bytes")) is not int
+        or redacted.get("bytes") <= 0
+        or not _is_nonzero_canonical_sha256_text(redacted.get("sha256"))
+    ):
+        return None
     if (
         redact_unsafe_path
         and "path" in redacted

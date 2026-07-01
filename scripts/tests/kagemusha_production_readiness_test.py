@@ -301,7 +301,7 @@ def create_lineage_artifact_files(root: Path) -> None:
     for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
         path = root / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"lineage artifact {artifact}\n".encode("utf-8"))
+        path.write_bytes(lineage_artifact_bytes(artifact))
 
 
 def create_lineage_artifact_files_for_profile(root: Path, profile: str) -> None:
@@ -314,7 +314,13 @@ def create_lineage_artifact_files_for_profile(root: Path, profile: str) -> None:
     for artifact in artifacts:
         path = root / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"generated {profile} lineage artifact {artifact}\n".encode("utf-8"))
+        path.write_bytes(lineage_artifact_bytes(artifact, profile=profile))
+
+
+def lineage_artifact_bytes(artifact: str, *, profile: str | None = None) -> bytes:
+    seed = f"{profile or 'full'}:{artifact}".encode("utf-8")
+    digest = hashlib.sha256(seed).digest()
+    return b"KGLN\x00\x01" + digest + digest[::-1]
 
 
 def write_lineage_staged_run_report(
@@ -1246,6 +1252,36 @@ def build_release_bundle_from_fixture(
         min_localnet_lifecycle_evidence_at=min_localnet_at,
         max_localnet_lifecycle_evidence_at=None,
     )
+
+
+def verify_existing_release_bundle_after_manifest_mutation(
+    mutate_manifest: Callable[[dict[str, Any]], None],
+) -> tuple[int, int, str]:
+    """Build a ready release bundle, mutate its manifest, then verify it."""
+
+    with tempfile.TemporaryDirectory() as temp:
+        fixture = create_ready_release_bundle_fixture(Path(temp))
+        bundle_root = fixture["bundle_root"]
+        assert isinstance(bundle_root, Path)
+        out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            status = release_bundle.main(release_bundle_args(fixture))
+        manifest = json.loads(out.read_text(encoding="utf-8"))
+        mutate_manifest(manifest)
+        write_json(out, manifest)
+        stderr = io.StringIO()
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            verify_status = release_bundle.main(
+                [
+                    *release_bundle_args(fixture),
+                    "--verify-existing",
+                    "dist/kagemusha-production-release-bundle.json",
+                ]
+            )
+
+    return status, verify_status, stderr.getvalue()
 
 
 def first_dynamic_d2d_release_bundle_artifact(
@@ -7687,6 +7723,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("lineage_proof_evidence_artifact_placeholder", rendered)
         self.assertIn("kagemusha_release_lineage_artifact_placeholder", rendered)
 
+    def test_kagemusha_release_bundle_rejects_all_placeholder_lineage_prefixes(
+        self,
+    ) -> None:
+        for marker in readiness.LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = create_ready_release_bundle_fixture(Path(temp))
+                    bundle_root = fixture["bundle_root"]
+                    lineage_proof_evidence = fixture["lineage_evidence"]
+                    summary_path = fixture["summary_path"]
+                    assert isinstance(bundle_root, Path)
+                    assert isinstance(lineage_proof_evidence, Path)
+                    assert isinstance(summary_path, Path)
+                    artifact = (
+                        bundle_root
+                        / "artifacts"
+                        / "kagemusha"
+                        / "lineage-init-len128.pk"
+                    )
+                    placeholder = marker + b"lineage-init-len128.pk\n"
+                    artifact.write_bytes(placeholder)
+                    placeholder_sha256 = hashlib.sha256(placeholder).hexdigest()
+                    lineage_evidence = json.loads(
+                        lineage_proof_evidence.read_text(encoding="utf-8")
+                    )
+                    lineage_evidence["artifacts"][artifact.name] = placeholder_sha256
+                    lineage_evidence["artifact_size_bytes"][artifact.name] = len(
+                        placeholder
+                    )
+                    write_json(lineage_proof_evidence, lineage_evidence)
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    summary["lineage_proof_evidence"]["artifact_sha256"][
+                        artifact.name
+                    ] = placeholder_sha256
+                    summary["lineage_proof_evidence"]["artifact_size_bytes"][
+                        artifact.name
+                    ] = len(placeholder)
+                    write_json(summary_path, summary)
+                    stderr = io.StringIO()
+
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = release_bundle.main(release_bundle_args(fixture))
+
+                self.assertEqual(status, 1)
+                rendered = stderr.getvalue()
+                self.assertIn("lineage_proof_evidence_artifact_placeholder", rendered)
+                self.assertIn("kagemusha_release_lineage_artifact_placeholder", rendered)
+
     def test_kagemusha_release_bundle_rejects_placeholder_compact_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
@@ -7838,7 +7922,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["generated_at_utc"] = "2026-01-08T00:00:00Z"
+            manifest["generated_at_utc"] = manifest["readiness_summary"][
+                "generated_at_utc"
+            ]
             write_json(out, manifest)
             stdout = io.StringIO()
 
@@ -7854,6 +7940,150 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 0)
         self.assertIn("[kagemusha-release-bundle] verified", stdout.getvalue())
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_manifest_timestamp_before_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["generated_at_utc"] = "2026-01-08T00:00:00Z"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_timestamp_bounds",
+            rendered,
+        )
+        self.assertIn("must not predate bound release evidence", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_readiness_summary_timestamp_binding_drift(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"][
+                "generated_at_utc"
+            ] = readiness.DEFAULT_MIN_SIGNED_AT_UTC
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value_binding",
+            rendered,
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_missing_readiness_summary_section(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            del manifest["readiness_summary"]
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn("kagemusha_release_bundle_manifest_missing_field", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_nonobject_readiness_summary_section(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"] = "2026-01-08T00:00:00Z"
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_shape",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_missing_readiness_summary_timestamp(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            del manifest["readiness_summary"]["generated_at_utc"]
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_missing_field",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_timestamp",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_readiness_summary_timestamp(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"][
+                "generated_at_utc"
+            ] = "2026-01-08T00:00:00+00:00"
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_timestamp",
+            rendered,
+        )
+        self.assertIn("canonical UTC YYYY-MM-DDTHH:MM:SSZ", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_future_dated_readiness_summary_timestamp(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"][
+                "generated_at_utc"
+            ] = "2999-01-01T00:00:00Z"
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_future_dated",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_generated_at_section_binding_drift(
         self,
@@ -23041,6 +23271,95 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
 
+    def test_freshness_invalid_signed_evidence_does_not_satisfy_android_matrix_coverage(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "stale",
+                "2026-06-05T23:59:59Z",
+                readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "test cutoff",
+                )[0],
+                None,
+                "android_signed_evidence_stale",
+            ),
+            (
+                "future",
+                "2026-06-06T00:05:01Z",
+                None,
+                readiness.parse_utc_timestamp(
+                    "2026-06-06T00:05:00Z",
+                    "test max timestamp",
+                )[0],
+                "android_signed_evidence_future_dated",
+            ),
+        )
+        for name, signed_at_utc, min_signed_at, max_signed_at, expected_code in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp) / "slots"
+                    root.mkdir(parents=True)
+                    trusted, signer_digest = create_direct_android_trusted_signer(
+                        Path(temp)
+                    )
+                    transports = tuple(
+                        sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
+                    )
+                    bindings = direct_android_d2d_transcript_bindings(
+                        transports,
+                        primary_transport=transports[0],
+                    )
+                    report = direct_android_signed_evidence_report(
+                        signed_at_utc=signed_at_utc,
+                        signed_evidence_signer_public_key_sha256=signer_digest,
+                        d2d_payment_transport=transports[0],
+                        d2d_payment_transcript_path=bindings[transports[0]]["path"],
+                        d2d_payment_transcript_sha256=bindings[transports[0]][
+                            "sha256"
+                        ],
+                        d2d_payment_transports=list(transports),
+                        d2d_payment_transcripts=bindings,
+                    )
+
+                    with mock.patch.object(
+                        readiness,
+                        "_slot_reports",
+                        return_value=([report], []),
+                    ):
+                        summary = readiness.check_android_device_lab(
+                            root,
+                            trusted,
+                            min_signed_at=min_signed_at,
+                            max_signed_at=max_signed_at,
+                        )
+
+                self.assertFalse(summary["ok"])
+                codes = {item["code"] for item in summary["blockers"]}
+                self.assertIn(expected_code, codes)
+                self.assertIn("android_device_lab_standard_matrix_missing", codes)
+                self.assertIn("android_device_lab_d2d_transport_matrix_missing", codes)
+                self.assertEqual(summary["covered_device_families"], [])
+                self.assertEqual(
+                    summary["missing_device_families"],
+                    list(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+                )
+                self.assertEqual(summary["covered_d2d_payment_transports"], [])
+                self.assertEqual(
+                    summary["missing_d2d_payment_transports"],
+                    list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+                )
+                self.assertEqual(
+                    summary["covered_d2d_payment_transports_by_family"],
+                    {
+                        family: []
+                        for family in (
+                            slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+                        )
+                    },
+                )
+
     def test_android_signed_evidence_freshness_redacts_secret_slot_after_sanitize(
         self,
     ) -> None:
@@ -31450,6 +31769,62 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             generator_log_sha256,
         )
 
+    def test_compact_key_staged_runner_resume_rebuilds_placeholder_key_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            placeholder_artifact = staged_artifact_dir / "recursive-compact-len4.pk"
+            placeholder_artifact.write_bytes(
+                b"recursive compact key artifact recursive-compact-len4.pk\n"
+            )
+            write_compact_key_execution_report(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file.write_text("0\n", encoding="utf-8")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                self.assertEqual(cwd, staged_artifact_dir.parent.parent)
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            regenerated_artifact = placeholder_artifact.read_bytes()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                compact_key_staged_runner.shlex.split(
+                    compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND
+                )
+            ],
+        )
+        self.assertNotEqual(
+            regenerated_artifact,
+            b"recursive compact key artifact recursive-compact-len4.pk\n",
+        )
+        self.assertTrue(regenerated_artifact.startswith(b"KCGK\x00\x01"))
+
     def test_compact_key_staged_runner_rejects_replace_with_resume_keygen(
         self,
     ) -> None:
@@ -32642,8 +33017,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
                 ) -> None:
                     calls.append((command, cwd, stderr))
+                    test_case.assertNotIn(
+                        readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,
+                        env,
+                    )
                     test_case.assertIsNot(
                         stdout,
                         compact_key_staged_runner.subprocess.PIPE,
@@ -32712,6 +33092,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(status, 17)
         self.assertEqual(log_text, "compact local iroha probe\n")
+
+    def test_compact_key_staged_runner_scrubs_runtime_keygen_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            local_bin = repo_root / "target" / "debug"
+            local_bin.mkdir(parents=True)
+            local_iroha = local_bin / "iroha"
+            local_iroha.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'compact runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'compact runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            local_iroha.chmod(0o700)
+            log_path = root / "compact-keygen.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": "",
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                status = compact_key_staged_runner._run_command_to_log(
+                    ["iroha", "probe"],
+                    repo_root,
+                    log_path,
+                    executable_repo_root=repo_root,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(log_text, "compact runtime keygen env scrubbed\n")
+
+    def test_compact_key_staged_runner_scrubs_runtime_keygen_env_without_repo_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            probe = root / "compact-probe.sh"
+            probe.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'compact direct runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'compact direct runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            probe.chmod(0o700)
+            log_path = root / "compact-keygen.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                status = compact_key_staged_runner._run_command_to_log(
+                    [str(probe)],
+                    root,
+                    log_path,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(log_text, "compact direct runtime keygen env scrubbed\n")
 
     def test_compact_key_staged_runner_explicit_iroha_bin_precedes_stale_release(
         self,
@@ -33001,7 +33458,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
                 ) -> None:
+                    del env
                     self.command = command
                     self.stdout = stdout
                     stdout.write(b"compact child start\n")
@@ -35849,6 +36308,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(exit_text, "0\n")
         self.assertEqual(append_log_text, "regenerated append lineage keys\n")
 
+    def test_lineage_proof_staged_runner_resume_regenerates_placeholder_init_phase(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+            placeholder_artifact = staged_artifact_dir / "lineage-init-len128.pk"
+            placeholder_artifact.write_bytes(
+                b"lineage artifact lineage-init-len128.pk\n"
+            )
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).write_text("generated init lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(staged_artifact_dir, "init")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+            init_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+            )
+            append_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+            )
+            proof_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+            )
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                expected_cwd = REPO_ROOT if command == proof_command else root / "staged"
+                self.assertEqual(cwd, expected_cwd)
+                if command == init_command:
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                    log_path.write_text("regenerated init lineage keys\n", encoding="utf-8")
+                    return 0
+                if command == append_command:
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("generated append lineage keys\n", encoding="utf-8")
+                    return 0
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[1.0, 2.0, 3.0]),
+            )
+            regenerated_artifact = placeholder_artifact.read_bytes()
+            init_log_text = (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(calls, [init_command, append_command, proof_command])
+        self.assertEqual(
+            regenerated_artifact,
+            lineage_artifact_bytes("lineage-init-len128.pk", profile="init"),
+        )
+        self.assertEqual(init_log_text, "regenerated init lineage keys\n")
+
     def test_lineage_proof_staged_runner_resume_replaces_killed_append_phase(
         self,
     ) -> None:
@@ -37501,8 +38037,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
                 ) -> None:
                     calls.append((command, cwd, stderr))
+                    test_case.assertNotIn(
+                        readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,
+                        env,
+                    )
                     test_case.assertIsNot(
                         stdout,
                         lineage_staged_runner.subprocess.PIPE,
@@ -37571,6 +38112,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(status, 19)
         self.assertEqual(log_text, "lineage local iroha probe\n")
+
+    def test_lineage_proof_staged_runner_scrubs_runtime_keygen_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            local_bin = repo_root / "target" / "debug"
+            local_bin.mkdir(parents=True)
+            local_iroha = local_bin / "iroha"
+            local_iroha.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'lineage runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'lineage runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            local_iroha.chmod(0o700)
+            log_path = root / "lineage-proof.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": "",
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                status = lineage_staged_runner._run_command_to_log(
+                    ["iroha", "probe"],
+                    repo_root,
+                    log_path,
+                    executable_repo_root=repo_root,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(log_text, "lineage runtime keygen env scrubbed\n")
+
+    def test_lineage_proof_staged_runner_scrubs_runtime_keygen_env_without_repo_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            probe = root / "lineage-probe.sh"
+            probe.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'lineage direct runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'lineage direct runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            probe.chmod(0o700)
+            log_path = root / "lineage-proof.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                status = lineage_staged_runner._run_command_to_log(
+                    [str(probe)],
+                    root,
+                    log_path,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(log_text, "lineage direct runtime keygen env scrubbed\n")
 
     def test_lineage_proof_staged_runner_explicit_iroha_bin_precedes_stale_release(
         self,
@@ -37718,7 +38336,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
                 ) -> None:
+                    del env
                     self.command = command
                     self.stdout = stdout
                     stdout.write(b"lineage child start\n")
@@ -41374,6 +41994,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
 
+    def test_lineage_proof_evidence_rejects_placeholder_local_artifact_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            artifact = evidence_path.parent / "lineage-init-len128.pk"
+            placeholder = b"lineage artifact lineage-init-len128.pk\n"
+            artifact.write_bytes(placeholder)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(placeholder).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(readiness.LINEAGE_ARTIFACT_PLACEHOLDER_ERROR, json.dumps(result))
+        self.assertNotIn(artifact.name, result["artifact_sha256"])
+        self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
+    def test_lineage_proof_evidence_rejects_all_placeholder_prefixes(self) -> None:
+        for marker in readiness.LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+                    artifact = evidence_path.parent / "lineage-init-len128.pk"
+                    placeholder = marker + b"lineage-init-len128.pk\n"
+                    artifact.write_bytes(placeholder)
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    evidence["artifacts"][artifact.name] = hashlib.sha256(
+                        placeholder
+                    ).hexdigest()
+                    evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+                    write_json(evidence_path, evidence)
+
+                    result = readiness.check_lineage_proof_evidence(evidence_path)
+
+                self.assertFalse(result["ok"])
+                self.assertIn(
+                    "lineage_proof_evidence_artifact_placeholder",
+                    {item["code"] for item in result["blockers"]},
+                )
+                self.assertNotIn(artifact.name, result["artifact_sha256"])
+                self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
     def test_lineage_proof_evidence_rejects_all_zero_local_artifact_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
@@ -42546,7 +43215,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(evidence["artifact_size_bytes"], expected_sizes)
         self.assertEqual(
             evidence["artifacts"]["lineage-init-len128.vk"],
-            hashlib.sha256(b"lineage artifact lineage-init-len128.vk\n").hexdigest(),
+            hashlib.sha256(lineage_artifact_bytes("lineage-init-len128.vk")).hexdigest(),
         )
         self.assertEqual(
             evidence["tests"]["record_archive_proof"]["log_sha256"],
@@ -43213,6 +43882,81 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "lineage artifact lineage-append-len128.pk must be non-empty",
             stderr.getvalue(),
         )
+
+    def test_lineage_proof_evidence_helper_rejects_placeholder_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            (artifact_dir / "lineage-append-len128.pk").write_bytes(
+                b"lineage artifact lineage-append-len128.pk\n"
+            )
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            out = artifact_dir / "lineage-proof-evidence.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(readiness.LINEAGE_ARTIFACT_PLACEHOLDER_ERROR, stderr.getvalue())
+
+    def test_lineage_proof_evidence_helper_rejects_all_placeholder_prefixes(
+        self,
+    ) -> None:
+        for marker in readiness.LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    artifact_dir = Path(temp) / "artifacts"
+                    create_lineage_artifact_files(artifact_dir)
+                    (artifact_dir / "lineage-append-len128.pk").write_bytes(
+                        marker + b"lineage-append-len128.pk\n"
+                    )
+                    proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                        "record_archive_proof"
+                    ]
+                    write_passing_lineage_proof_log(proof_log)
+                    out = artifact_dir / "lineage-proof-evidence.json"
+                    stderr = io.StringIO()
+
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = evidence_helper.main(
+                            [
+                                "--artifact-dir",
+                                str(artifact_dir),
+                                "--proof-log",
+                                str(proof_log),
+                                "--elapsed-seconds",
+                                "14400.5",
+                                "--generated-at-utc",
+                                readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                                "--out",
+                                str(out),
+                            ]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertFalse(out.exists())
+                self.assertIn(
+                    readiness.LINEAGE_ARTIFACT_PLACEHOLDER_ERROR,
+                    stderr.getvalue(),
+                )
 
     def test_lineage_proof_evidence_helper_rejects_all_zero_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

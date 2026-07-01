@@ -39,6 +39,9 @@ MAX_EXIT_MARKER_BYTES = 32
 STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0
 COMMAND_LAUNCH_FAILURE_DETAIL = "process launch failed"
 DEFAULT_COMPACT_KEY_COMMAND = compact_evidence.DEFAULT_COMPACT_KEY_COMMAND
+FORBIDDEN_CHILD_ENV_KEYS = frozenset(
+    (readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,)
+)
 CommandRunner = Callable[[list[str], Path, Path], int]
 CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
 SECRET_EXIT_MARKER_REDACTION = "<redacted-secret-marker>"
@@ -122,6 +125,15 @@ def validate_iroha_bin_path(path: Path | None) -> list[str]:
     return []
 
 
+def _scrubbed_child_env() -> dict[str, str]:
+    """Return a child environment that cannot enable runtime lineage keygen."""
+
+    env = os.environ.copy()
+    for key in FORBIDDEN_CHILD_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
 def _child_env_with_repo_binaries(
     repo_root: Path,
     *,
@@ -129,7 +141,7 @@ def _child_env_with_repo_binaries(
 ) -> dict[str, str]:
     """Return a child environment that can find locally built Iroha binaries."""
 
-    env = os.environ.copy()
+    env = _scrubbed_child_env()
     absolute_repo_root = _absolute_repo_root(repo_root)
     explicit_bins = []
     if iroha_bin is not None:
@@ -898,19 +910,16 @@ def _run_command_to_log(
     child_env = (
         _child_env_with_repo_binaries(executable_repo_root, iroha_bin=iroha_bin)
         if executable_repo_root is not None
-        else None
+        else _scrubbed_child_env()
     )
     with log_path.open("xb") as log_handle:
         os.fchmod(log_handle.fileno(), 0o600)
-        popen_kwargs = {}
-        if child_env is not None:
-            popen_kwargs["env"] = child_env
         process = subprocess.Popen(
             command,
             cwd=cwd,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            **popen_kwargs,
+            env=child_env,
         )
         started = time.monotonic()
         while True:

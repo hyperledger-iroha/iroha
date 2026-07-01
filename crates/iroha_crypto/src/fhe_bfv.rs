@@ -4402,11 +4402,11 @@ pub struct BfvBootstrapKey {
     pub public_key_digest: Option<Hash>,
     /// First-round encryption of zero added during refresh.
     ///
-    /// This mirrors `round_refreshes[0]` for first-release compatibility with
-    /// existing key-bundle descriptors. Multi-round refresh must consume
-    /// `round_refreshes` by round index rather than reusing this ciphertext.
-    /// `FullBootstrapV1` keys must carry an empty sentinel instead of encrypted
-    /// zero material.
+    /// `RefreshOnlyV1` keys must set this to `round_refreshes[0]` so
+    /// single-round and indexed refresh APIs bind the same ciphertext.
+    /// Multi-round refresh must consume `round_refreshes` by round index rather
+    /// than reusing this ciphertext. `FullBootstrapV1` keys must carry an empty
+    /// sentinel instead of encrypted-zero material.
     pub zero_refresh: BfvCiphertext,
     /// Domain-separated encryptions of zero, one per authorized refresh round.
     ///
@@ -9144,9 +9144,9 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
 
 /// Apply a rounded BFV Galois automorphism through the registered RNS bridge.
 ///
-/// This compatibility wrapper now delegates to the registered target-limb
-/// basis-extension bridge so production registered callers validate the same
-/// key-switch decomposition/evaluator-chain corridor as full-bootstrap.
+/// This registered entry point delegates to the target-limb basis-extension
+/// bridge so production callers validate the same key-switch
+/// decomposition/evaluator-chain corridor as full-bootstrap.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the parameter set is not registered, rounded BFV
@@ -9647,10 +9647,9 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_ex
 
 /// Rotate a rounded BFV packed ciphertext through the registered RNS bridge.
 ///
-/// This compatibility wrapper now delegates to the registered target-limb
-/// basis-extension bridge so production registered packed rotations validate
-/// the same Galois key-switch decomposition/evaluator-chain corridor as
-/// full-bootstrap.
+/// This registered entry point delegates to the target-limb basis-extension
+/// bridge so production packed rotations validate the same Galois key-switch
+/// decomposition/evaluator-chain corridor as full-bootstrap.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the parameter set is not registered, rounded BFV
@@ -9976,9 +9975,9 @@ pub fn bootstrap_key_from_seed(
 /// Derive a deterministic bounded public bootstrap refresh key from a BFV public key.
 ///
 /// The returned key contains one domain-separated encrypted-zero refresh
-/// ciphertext per authorized round. Round zero is mirrored in `zero_refresh`
-/// for first-release descriptor compatibility; evaluators must consume
-/// `round_refreshes` by index for multi-round refreshes.
+/// ciphertext per authorized round. `zero_refresh` must match
+/// `round_refreshes[0]` for the canonical V1 descriptor shape; evaluators must
+/// consume `round_refreshes` by index for multi-round refreshes.
 ///
 /// # Errors
 /// Returns [`BfvError`] when parameter, public-key, key id, refresh-round, or
@@ -10058,9 +10057,9 @@ pub fn bootstrap_key_bounded_noise_from_seed(
 /// Derive a deterministic bounded-noise public bootstrap refresh key.
 ///
 /// The returned key contains one domain-separated rounded BFV encrypted-zero
-/// refresh ciphertext per authorized round. Round zero is mirrored in
-/// `zero_refresh` for descriptor compatibility; evaluators should consume
-/// `round_refreshes` by index.
+/// refresh ciphertext per authorized round. `zero_refresh` must match
+/// `round_refreshes[0]` for the canonical V1 descriptor shape; evaluators
+/// should consume `round_refreshes` by index.
 ///
 /// # Errors
 /// Returns [`BfvError`] when parameter, public-key, key id, refresh-round, or
@@ -10116,8 +10115,8 @@ pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
 ///
 /// Full-bootstrap keys do not carry public encrypted-zero refresh masks. This
 /// constructor binds the key id, public-key digest, and full-bootstrap circuit
-/// material while setting the legacy refresh fields to their empty sentinel
-/// values, so callers cannot accidentally route governed full-bootstrap
+/// material while setting encrypted-zero refresh fields to their empty
+/// sentinels, so callers cannot accidentally route governed full-bootstrap
 /// admission through the refresh-only bridge.
 ///
 /// # Errors
@@ -15087,6 +15086,10 @@ pub fn validate_bfv_full_bootstrap_native_proof_key_material_bytes_for_role_and_
 /// parameter profile cannot be derived, public-input/evaluator/profile digests
 /// are missing, placeholders, or aliases, native key bytes are inert or
 /// oversized, or canonical encoding fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "first-release proof-key envelope admission keeps all commitment checks in one deterministic path"
+)]
 pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -18732,6 +18735,10 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, record
 /// signing fails, manifest construction fails, or any digesting step fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "byte-admission helpers return decoded objects and all derived digests together to avoid caller recomputation"
+)]
 pub fn bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_artifact_bundle_bytes_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -19606,6 +19613,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_
 /// Returns [`BfvError`] when byte admission fails, the record does not match the
 /// artifacts, the manifest does not match the record, the signed reviewer
 /// identity/key does not match the trusted reviewer inputs, or any digest fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "trusted-reviewer admission returns validated objects and every pinned digest as one atomic result"
+)]
 pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -20032,6 +20043,10 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifact_bu
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, deterministic
 /// report/archive generation fails, or generated byte digesting fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "release-audit inventory admission returns decoded artifacts, generated bytes, and their digests together"
+)]
 pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -20071,6 +20086,10 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, deterministic
 /// report/archive generation fails, or generated byte digesting fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "release-audit inventory admission returns decoded artifacts, generated bytes, and all digests together"
+)]
 pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_all_digests_for_artifact_bundle_bytes_decoded_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -20274,6 +20293,10 @@ pub fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_v1
     Ok((record, manifest, package))
 }
 
+#[expect(
+    clippy::type_complexity,
+    reason = "internal package assembly carries admitted objects and signed digests from one byte path"
+)]
 fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_with_admitted_digests_v1(
     record_bytes: &[u8],
     manifest_bytes: &[u8],
@@ -20401,6 +20424,10 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manif
 /// # Errors
 /// Returns [`BfvError`] when record or manifest byte admission fails, package
 /// construction fails, or any digesting step fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "package byte-admission helpers expose every signed digest with the decoded package"
+)]
 pub fn bfv_full_bootstrap_release_audit_package_and_all_digests_for_record_and_manifest_bytes_v1(
     record_bytes: &[u8],
     manifest_bytes: &[u8],
@@ -20553,6 +20580,10 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_
 /// # Errors
 /// Returns [`BfvError`] when byte admission fails, externally reviewed package
 /// construction fails, or any digesting step fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "external review admission returns the signed package and all commitment digests atomically"
+)]
 pub fn bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_record_and_manifest_bytes_v1(
     record_bytes: &[u8],
     manifest_bytes: &[u8],
@@ -20773,6 +20804,10 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, externally
 /// reviewed package construction fails, or digesting fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "artifact-bundle review admission returns decoded artifacts, package, and every derived digest together"
+)]
 pub fn bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_artifact_bundle_bytes_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -21055,6 +21090,10 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_
 /// # Errors
 /// Returns [`BfvError`] when artifact-bundle byte admission fails, package
 /// construction fails, or digesting fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "artifact-bundle package admission returns decoded artifacts, package, and all deterministic digests together"
+)]
 pub fn bfv_full_bootstrap_release_audit_package_and_all_digests_for_artifact_bundle_bytes_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -21367,6 +21406,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_r
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validation must bind artifacts, reviewer identity, and the caller-pinned digest source in one path"
+)]
 fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_with_digest_source_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -22277,6 +22320,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
 /// admission fails, package validation fails, the packaged signoff was not
 /// issued by the trusted reviewer id/key pair, or the derived package digest
 /// aliases one of the package's signed commitments.
+#[expect(
+    clippy::type_complexity,
+    reason = "trusted package-byte admission returns decoded artifacts, package, and all admitted digests together"
+)]
 pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -26766,6 +26813,10 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_diges
 /// key is not bound to the bootstrap key, the artifact bundle does not match
 /// that material, any digesting step fails, or the proof input does not match
 /// the decoded governance inputs.
+#[expect(
+    clippy::type_complexity,
+    reason = "governance-byte admission returns decoded material proof inputs and all source digests together"
+)]
 pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
     params: &BfvParameters,
     public_key_bytes: &[u8],
@@ -28647,6 +28698,10 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_gove
 /// decoded public key is not bound to the bootstrap key, the artifact bundle does
 /// not match that material, proof input digesting fails, or the proof input does
 /// not match the decoded governance inputs.
+#[expect(
+    clippy::type_complexity,
+    reason = "governance-byte admission returns decoded execution proof inputs with the admitted digest"
+)]
 pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
     params: &BfvParameters,
     public_key_bytes: &[u8],
@@ -28707,6 +28762,10 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
 /// decoded public key is not bound to the bootstrap key, the artifact bundle does
 /// not match that material, any digesting step fails, or the proof input does
 /// not match the decoded governance inputs.
+#[expect(
+    clippy::type_complexity,
+    reason = "governance-byte admission returns decoded execution proof inputs and all source digests together"
+)]
 pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
     params: &BfvParameters,
     public_key_bytes: &[u8],
@@ -29026,6 +29085,10 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1
 /// sentinel, the statement hash equals the trace-material digest, or the
 /// canonical public opening range cannot accommodate the first-release verifier
 /// query count.
+#[expect(
+    clippy::too_many_lines,
+    reason = "transcript-bound opening derivation keeps validation, rejection sampling, and final ordering together"
+)]
 pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1(
     statement_hash: Hash,
     trace_material_digest: Hash,
@@ -31478,6 +31541,10 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_gov
 /// decoded public key is not bound to the bootstrap key, the artifact bundle does
 /// not match that material, prover input digesting fails, or the prover input
 /// does not match the decoded governance inputs.
+#[expect(
+    clippy::type_complexity,
+    reason = "governance-byte admission returns decoded prover inputs with the admitted digest"
+)]
 pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digest_for_governance_bytes_v1(
     params: &BfvParameters,
     public_key_bytes: &[u8],
@@ -31538,6 +31605,10 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
 /// decoded public key is not bound to the bootstrap key, the artifact bundle does
 /// not match that material, any digesting step fails, or the prover input does
 /// not match the decoded governance inputs.
+#[expect(
+    clippy::type_complexity,
+    reason = "governance-byte admission returns decoded prover inputs and all source digests together"
+)]
 pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_digests_for_governance_bytes_v1(
     params: &BfvParameters,
     public_key_bytes: &[u8],
@@ -34725,9 +34796,9 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_rns_basis_extension_exact(
 
 /// Rotate a rounded BFV ciphertext-slot envelope through the registered RNS corridor.
 ///
-/// This compatibility wrapper delegates to the registered target-limb
-/// basis-extension corridor, so older registered API names validate the same
-/// governed decomposition/evaluator-chain binding as full-bootstrap paths.
+/// This registered entry point delegates to the target-limb basis-extension
+/// corridor, so slot rotations validate the same governed
+/// decomposition/evaluator-chain binding as full-bootstrap paths.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the parameter set is not registered, rounded BFV
@@ -37351,10 +37422,9 @@ pub fn multiply_ciphertexts_bounded_noise_rns_exact(
 
 /// Multiply two rounded BFV ciphertexts through the registered RNS bridge.
 ///
-/// This compatibility wrapper now delegates to the registered target-limb
-/// basis-extension bridge so production registered multiplication validates
-/// the same relinearization decomposition/evaluator-chain corridor as
-/// full-bootstrap.
+/// This registered entry point delegates to the target-limb basis-extension
+/// bridge so production multiplication validates the same relinearization
+/// decomposition/evaluator-chain corridor as full-bootstrap.
 ///
 /// # Errors
 /// Returns [`BfvError`] when the parameter set is not registered, rounded BFV
@@ -44063,6 +44133,17 @@ mod tests {
         fn(&mut BfvFullBootstrapCircuitArtifactPayloadV1, Hash),
     );
 
+    fn run_large_stack_release_audit_test(test: fn()) {
+        let handle = std::thread::Builder::new()
+            .name("bfv-release-audit-heavy-test".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn BFV release-audit heavy test thread");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     fn params() -> BfvParameters {
         BfvParameters {
             polynomial_degree: 8,
@@ -47380,6 +47461,10 @@ mod tests {
 
     #[track_caller]
     #[inline(never)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test helper binds one package fixture across every byte-level production admission path"
+    )]
     fn assert_machine_generated_package_bytes_rejected_by_production_admission(
         params: &BfvParameters,
         material: &BfvFullBootstrapCircuitMaterialV1,
@@ -47534,6 +47619,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::similar_names,
+        reason = "test compares single-digest, digest-pair, and all-digest helper outputs side by side"
+    )]
     fn release_audit_external_review_package_digest_pins_reviewed_bytes() {
         let params = ram_lfe_bfv_parameters_v1();
         let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
@@ -50084,8 +50173,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "artifact-bundle byte digest helper must reject binary-split placeholder artifact text before Norito decode",
+            "Norito-encoded BFV material",
+            "artifact-bundle byte digest helper must reject non-Norito artifact bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
@@ -50093,8 +50182,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "report/archive byte digest builder must reject binary-split artifact-bundle placeholder text before generation",
+            "Norito-encoded BFV material",
+            "report/archive byte digest builder must reject non-Norito artifact-bundle bytes before generation",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
@@ -50106,8 +50195,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "combined byte-level production admission must reject binary-split artifact-bundle placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "combined byte-level production admission must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -50118,8 +50207,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "derived-digest combined admission must reject binary-split artifact-bundle placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "derived-digest combined admission must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
@@ -50130,8 +50219,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "combined byte-level production admission with digests must reject binary-split artifact-bundle placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "combined byte-level production admission with digests must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
@@ -50142,8 +50231,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "combined byte-level production admission with all digests must reject binary-split artifact-bundle placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "combined byte-level production admission with all digests must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -50154,8 +50243,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted record/artifact byte validation must reject binary-split artifact-bundle placeholders before record trust",
+            "Norito-encoded BFV material",
+            "trusted record/artifact byte validation must reject non-Norito artifact-bundle bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_v1(
@@ -50164,8 +50253,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &record_bytes,
             ),
-            "placeholder text",
-            "record/artifact byte digest validation must reject binary-split artifact-bundle placeholders before record trust",
+            "Norito-encoded BFV material",
+            "record/artifact byte digest validation must reject non-Norito artifact-bundle bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -50176,8 +50265,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted record/artifact byte digest validation must reject binary-split artifact-bundle placeholders before record trust",
+            "Norito-encoded BFV material",
+            "trusted record/artifact byte digest validation must reject non-Norito artifact-bundle bytes before record trust",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_record_and_all_digests_for_artifact_bundle_bytes_v1(
@@ -50189,8 +50278,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "record/artifact byte builder with all digests must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "record/artifact byte builder with all digests must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_artifact_bundle_bytes_v1(
@@ -50202,8 +50291,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "manifest/artifact byte builder with all digests must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "manifest/artifact byte builder with all digests must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -50215,8 +50304,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte validation must reject binary-split artifact-bundle placeholders before manifest trust",
+            "Norito-encoded BFV material",
+            "trusted manifest/artifact/record byte validation must reject non-Norito artifact-bundle bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -50228,8 +50317,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte digest validation must reject binary-split artifact-bundle placeholders before manifest trust",
+            "Norito-encoded BFV material",
+            "trusted manifest/artifact/record byte digest validation must reject non-Norito artifact-bundle bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -50241,8 +50330,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte digests validation must reject binary-split artifact-bundle placeholders before manifest trust",
+            "Norito-encoded BFV material",
+            "trusted manifest/artifact/record byte digests validation must reject non-Norito artifact-bundle bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -50254,8 +50343,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte all-digests validation must reject binary-split artifact-bundle placeholders before manifest trust",
+            "Norito-encoded BFV material",
+            "trusted manifest/artifact/record byte all-digests validation must reject non-Norito artifact-bundle bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -50266,8 +50355,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted signoff/artifact byte validation must reject binary-split artifact-bundle placeholders before trust",
+            "Norito-encoded BFV material",
+            "trusted signoff/artifact byte validation must reject non-Norito artifact-bundle bytes before trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -50278,8 +50367,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted signoff/artifact byte digest validation must reject binary-split artifact-bundle placeholders before trust",
+            "Norito-encoded BFV material",
+            "trusted signoff/artifact byte digest validation must reject non-Norito artifact-bundle bytes before trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_v1(
@@ -50288,8 +50377,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &signoff_bytes,
             ),
-            "placeholder text",
-            "signoff/artifact byte digests validation must reject binary-split artifact-bundle placeholders before trust",
+            "Norito-encoded BFV material",
+            "signoff/artifact byte digests validation must reject non-Norito artifact-bundle bytes before trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -50300,8 +50389,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted signoff/artifact byte digests validation must reject binary-split artifact-bundle placeholders before trust",
+            "Norito-encoded BFV material",
+            "trusted signoff/artifact byte digests validation must reject non-Norito artifact-bundle bytes before trust",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_artifact_bundle_bytes_v1(
@@ -50313,8 +50402,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "byte-level external-review builder must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "byte-level external-review builder must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_artifact_bundle_bytes_v1(
@@ -50326,8 +50415,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "byte-level external-review builder with digests must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "byte-level external-review builder with digests must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_for_artifact_bundle_bytes_v1(
@@ -50339,8 +50428,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "byte-level external-review builder with all digests must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "byte-level external-review builder with all digests must reject non-Norito artifact-bundle bytes before signing",
         );
         let compressed_package_bytes =
             norito::to_compressed_bytes(&package, Some(norito::CompressionConfig::default()))
@@ -51084,8 +51173,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "byte-level production package admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded package",
+            "byte-level production package admission must reject non-Norito package bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_trusted_reviewer_v1(
@@ -51096,8 +51185,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "byte-derived production package admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded package",
+            "byte-derived production package admission must reject non-Norito package bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -51108,8 +51197,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "derived-digest combined admission must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "derived-digest combined admission must reject non-Norito package bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digest_v1(
@@ -51121,8 +51210,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "combined byte-level production admission must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "combined byte-level production admission must reject non-Norito package bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_digests_v1(
@@ -51133,8 +51222,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "combined byte-level production admission with digests must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "combined byte-level production admission with digests must reject non-Norito package bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bundle_bytes_trusted_reviewer_and_all_digests_v1(
@@ -51145,29 +51234,29 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "combined byte-level production admission with all digests must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "combined byte-level production admission with all digests must reject non-Norito package bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(
                 &binary_split_placeholder_package_bytes,
             ),
-            "placeholder text",
-            "package-byte digest helper must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "package-byte digest helper must reject non-Norito package bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(
                 &binary_split_placeholder_package_bytes,
             ),
-            "placeholder text",
-            "package-byte digests helper must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "package-byte digests helper must reject non-Norito package bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_all_digests_from_bytes_v1(
                 &binary_split_placeholder_package_bytes,
             ),
-            "placeholder text",
-            "package-byte all-digests helper must reject binary-split placeholder package text before Norito decode",
+            "Norito-encoded package",
+            "package-byte all-digests helper must reject non-Norito package bytes",
         );
         let binary_split_placeholder_evidence_bytes =
             b"t\xffo\xffd\xffo pending externally reviewed BFV full-bootstrap release audit evidence bytes".to_vec();
@@ -51175,8 +51264,8 @@ mod tests {
             bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "evidence-byte digest helper must reject binary-split placeholder evidence text before Norito decode",
+            "Norito-encoded release-audit object",
+            "evidence-byte digest helper must reject non-Norito evidence bytes",
         );
         let binary_split_placeholder_record_bytes =
             b"t\xffo\xffd\xffo pending externally reviewed BFV full-bootstrap release audit record bytes".to_vec();
@@ -51184,29 +51273,29 @@ mod tests {
             bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "record-byte digest helper must reject binary-split placeholder record text before Norito decode",
+            "Norito-encoded release-audit object",
+            "record-byte digest helper must reject non-Norito record bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "record-byte digests helper must reject binary-split placeholder record text before Norito decode",
+            "Norito-encoded release-audit object",
+            "record-byte digests helper must reject non-Norito record bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_digests_for_record_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "manifest record-byte builder with digests must reject binary-split record placeholders before manifest generation",
+            "Norito-encoded release-audit object",
+            "manifest record-byte builder with digests must reject non-Norito record bytes before manifest generation",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "manifest record-byte builder with all digests must reject binary-split record placeholders before manifest generation",
+            "Norito-encoded release-audit object",
+            "manifest record-byte builder with all digests must reject non-Norito record bytes before manifest generation",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -51217,8 +51306,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted record/artifact byte validation must reject binary-split record placeholders before record trust",
+            "Norito-encoded release-audit object",
+            "trusted record/artifact byte validation must reject non-Norito record bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_v1(
@@ -51227,8 +51316,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "record/artifact byte digest validation must reject binary-split record placeholders before record trust",
+            "Norito-encoded release-audit object",
+            "record/artifact byte digest validation must reject non-Norito record bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_v1(
@@ -51237,8 +51326,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "record/artifact byte digests validation must reject binary-split record placeholders before record trust",
+            "Norito-encoded release-audit object",
+            "record/artifact byte digests validation must reject non-Norito record bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -51249,8 +51338,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted record/artifact byte digest validation must reject binary-split record placeholders before record trust",
+            "Norito-encoded release-audit object",
+            "trusted record/artifact byte digest validation must reject non-Norito record bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -51261,8 +51350,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted record/artifact byte digests validation must reject binary-split record placeholders before record trust",
+            "Norito-encoded release-audit object",
+            "trusted record/artifact byte digests validation must reject non-Norito record bytes before record trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51274,24 +51363,24 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte validation must reject binary-split record placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte validation must reject non-Norito record bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_v1(
                 &manifest_bytes,
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "manifest/record byte digest validation must reject binary-split record placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "manifest/record byte digest validation must reject non-Norito record bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_v1(
                 &manifest_bytes,
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "manifest/record byte digests validation must reject binary-split record placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "manifest/record byte digests validation must reject non-Norito record bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51303,8 +51392,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte digest validation must reject binary-split record placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte digest validation must reject non-Norito record bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51316,8 +51405,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte digests validation must reject binary-split record placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte digests validation must reject non-Norito record bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51329,8 +51418,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte all-digests validation must reject binary-split record placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte all-digests validation must reject non-Norito record bytes before manifest trust",
         );
         let binary_split_placeholder_signoff_bytes =
             b"t\xffo\xffd\xffo pending externally reviewed BFV full-bootstrap release audit signoff bytes".to_vec();
@@ -51341,8 +51430,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "signoff/artifact byte validation must reject binary-split signoff placeholders before signature trust",
+            "Norito-encoded release-audit object",
+            "signoff/artifact byte validation must reject non-Norito signoff bytes before signature trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_artifact_bundle_bytes_v1(
@@ -51351,22 +51440,22 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "signoff/artifact byte digest validation must reject binary-split signoff placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "signoff/artifact byte digest validation must reject non-Norito signoff bytes before hashing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "signoff byte digest helper must reject binary-split signoff placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "signoff byte digest helper must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_signoff_and_digests_from_bytes_v1(
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "signoff byte digests helper must reject binary-split signoff placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "signoff byte digests helper must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bundle_bytes_trusted_reviewer_v1(
@@ -51506,8 +51595,8 @@ mod tests {
                 &package.audit_report_bytes,
                 &package.audit_evidence_archive_bytes,
             ),
-            "placeholder text",
-            "record/manifest byte package builder must reject binary-split record placeholders before package construction",
+            "Norito-encoded release-audit object",
+            "record/manifest byte package builder must reject non-Norito record bytes before package construction",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manifest_bytes_v1(
@@ -51516,8 +51605,8 @@ mod tests {
                 &package.audit_report_bytes,
                 &package.audit_evidence_archive_bytes,
             ),
-            "placeholder text",
-            "record/manifest byte package-and-digests builder must reject binary-split record placeholders before package construction",
+            "Norito-encoded release-audit object",
+            "record/manifest byte package-and-digests builder must reject non-Norito record bytes before package construction",
         );
         let binary_split_placeholder_manifest_bytes =
             b"t\xffo\xffd\xffo pending externally reviewed BFV full-bootstrap release audit manifest bytes".to_vec();
@@ -51525,15 +51614,15 @@ mod tests {
             bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
             ),
-            "placeholder text",
-            "manifest-byte digest helper must reject binary-split placeholder manifest text before Norito decode",
+            "Norito-encoded release-audit object",
+            "manifest-byte digest helper must reject non-Norito manifest bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
             ),
-            "placeholder text",
-            "manifest-byte digests helper must reject binary-split placeholder manifest text before Norito decode",
+            "Norito-encoded release-audit object",
+            "manifest-byte digests helper must reject non-Norito manifest bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51545,24 +51634,24 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte validation must reject binary-split manifest placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte validation must reject non-Norito manifest bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_record_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
                 &record_bytes,
             ),
-            "placeholder text",
-            "manifest/record byte digest validation must reject binary-split manifest placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "manifest/record byte digest validation must reject non-Norito manifest bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_record_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
                 &record_bytes,
             ),
-            "placeholder text",
-            "manifest/record byte digests validation must reject binary-split manifest placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "manifest/record byte digests validation must reject non-Norito manifest bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51574,8 +51663,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte digest validation must reject binary-split manifest placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte digest validation must reject non-Norito manifest bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51587,8 +51676,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte digests validation must reject binary-split manifest placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte digests validation must reject non-Norito manifest bytes before manifest trust",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_for_artifact_bundle_and_record_bytes_trusted_reviewer_v1(
@@ -51600,8 +51689,8 @@ mod tests {
                 reviewer_id,
                 reviewer_key_pair.public_key(),
             ),
-            "placeholder text",
-            "trusted manifest/artifact/record byte all-digests validation must reject binary-split manifest placeholders before manifest trust",
+            "Norito-encoded release-audit object",
+            "trusted manifest/artifact/record byte all-digests validation must reject non-Norito manifest bytes before manifest trust",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_record_and_manifest_bytes_v1(
@@ -51610,8 +51699,8 @@ mod tests {
                 &package.audit_report_bytes,
                 &package.audit_evidence_archive_bytes,
             ),
-            "placeholder text",
-            "record/manifest byte external-review builder must reject binary-split manifest placeholders before package construction",
+            "Norito-encoded release-audit object",
+            "record/manifest byte external-review builder must reject non-Norito manifest bytes before package construction",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_record_and_manifest_bytes_v1(
@@ -51620,8 +51709,8 @@ mod tests {
                 &package.audit_report_bytes,
                 &package.audit_evidence_archive_bytes,
             ),
-            "placeholder text",
-            "record/manifest byte external-review package-and-digests builder must reject binary-split manifest placeholders before package construction",
+            "Norito-encoded release-audit object",
+            "record/manifest byte external-review package-and-digests builder must reject non-Norito manifest bytes before package construction",
         );
         let mut stale_manifest_for_package_bytes = package.manifest.clone();
         stale_manifest_for_package_bytes.audit_report_digest =
@@ -58954,6 +59043,90 @@ mod tests {
     }
 
     #[test]
+    fn opaque_bfv_material_bytes_accept_marker_looking_coefficients() {
+        let params = ram_lfe_bfv_parameters_v1();
+        for marker in [b"fake".as_slice(), b"todo", b"draft", b"pending"] {
+            let mut marker_bytes = [0_u8; size_of::<u64>()];
+            marker_bytes[..marker.len()].copy_from_slice(marker);
+            let marker_coefficient = u64::from_le_bytes(marker_bytes);
+            assert!(
+                marker_coefficient < params.ciphertext_modulus,
+                "marker fixture coefficient must fit the registered ciphertext modulus"
+            );
+            let mut marker_poly = vec![1; params.degree()];
+            marker_poly[0] = marker_coefficient;
+
+            let public_key = BfvPublicKey {
+                b: marker_poly.clone(),
+                a: vec![2; params.degree()],
+            };
+            let public_key_bytes = norito::to_bytes(&public_key).expect("encode marker public key");
+            assert!(
+                ascii_windows_contains(&public_key_bytes, marker),
+                "canonical public-key bytes must contain marker-looking coefficient bytes"
+            );
+            assert_eq!(
+                decode_bfv_public_key_bytes_v1(&params, &public_key_bytes)
+                    .expect("decode marker-containing public-key bytes"),
+                public_key,
+            );
+            bfv_public_key_digest_from_bytes_v1(&params, &public_key_bytes)
+                .expect("hash marker-containing public-key bytes");
+            bfv_public_key_proof_statement_digest_from_public_key_bytes_v1(
+                &params,
+                &public_key_bytes,
+            )
+            .expect("hash marker-containing public-key statement bytes");
+
+            let ciphertext = BfvCiphertext {
+                c0: marker_poly.clone(),
+                c1: vec![3; params.degree()],
+            };
+            let ciphertext_bytes = norito::to_bytes(&ciphertext).expect("encode marker ciphertext");
+            assert!(
+                ascii_windows_contains(&ciphertext_bytes, marker),
+                "canonical ciphertext bytes must contain marker-looking coefficient bytes"
+            );
+            assert_eq!(
+                decode_bfv_ciphertext_bytes_v1(&params, &ciphertext_bytes)
+                    .expect("decode marker-containing ciphertext bytes"),
+                ciphertext,
+            );
+            bfv_ciphertext_digest_from_bytes_v1(&params, &ciphertext_bytes)
+                .expect("hash marker-containing ciphertext bytes");
+
+            let entry = BfvRelinearizationKeyEntry {
+                b: marker_poly,
+                a: vec![4; params.degree()],
+            };
+            let entries = vec![
+                entry;
+                params
+                    .decomposition_digits()
+                    .expect("registered params have decomposition digits")
+            ];
+            let bundle = BfvEvaluationKeyBundle {
+                relinearization_key: BfvRelinearizationKey { entries },
+                rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
+                bootstrap_key: None,
+            };
+            let bundle_bytes = norito::to_bytes(&bundle).expect("encode marker evaluation bundle");
+            assert!(
+                ascii_windows_contains(&bundle_bytes, marker),
+                "canonical evaluation-key bundle bytes must contain marker-looking coefficient bytes"
+            );
+            assert_eq!(
+                decode_bfv_evaluation_key_bundle_bytes_v1(&params, &bundle_bytes)
+                    .expect("decode marker-containing evaluation-key bundle bytes"),
+                bundle,
+            );
+            bfv_evaluation_key_bundle_digest_from_bytes_v1(&params, &bundle_bytes)
+                .expect("hash marker-containing evaluation-key bundle bytes");
+        }
+    }
+
+    #[test]
     fn public_key_proof_statement_digest_binds_public_key_material() {
         let params = params();
         let (_, public_key, _) =
@@ -59025,24 +59198,24 @@ mod tests {
             b"t\xffo\xffd\xffo pending BFV public-key bytes".to_vec();
         assert_error_contains(
             decode_bfv_public_key_bytes_v1(&params, &binary_split_placeholder_public_key_bytes),
-            "placeholder text",
-            "public-key byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "public-key byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_public_key_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_public_key_bytes,
             ),
-            "placeholder text",
-            "public-key byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "public-key byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_public_key_and_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_public_key_bytes,
             ),
-            "placeholder text",
-            "public-key byte decode-and-digest must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "public-key byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         let statement_material = BfvPublicKeyProofStatementMaterial {
             version: BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_VERSION_V1,
@@ -59147,32 +59320,32 @@ mod tests {
                 &params,
                 &binary_split_placeholder_public_key_bytes,
             ),
-            "placeholder text",
-            "exact public-key statement byte hashing must reject binary-split placeholder text",
+            "Norito-encoded BFV material",
+            "exact public-key statement byte hashing must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_public_key_proof_statement_and_digest_from_public_key_bytes_v1(
                 &params,
                 &binary_split_placeholder_public_key_bytes,
             ),
-            "placeholder text",
-            "exact public-key statement byte decode-and-digest must reject binary-split placeholder text",
+            "Norito-encoded BFV material",
+            "exact public-key statement byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_public_key_proof_statement_digest_from_public_key_bytes_v1(
                 &params,
                 &binary_split_placeholder_public_key_bytes,
             ),
-            "placeholder text",
-            "bounded public-key statement byte hashing must reject binary-split placeholder text",
+            "Norito-encoded BFV material",
+            "bounded public-key statement byte hashing must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_public_key_proof_statement_and_digest_from_public_key_bytes_v1(
                 &params,
                 &binary_split_placeholder_public_key_bytes,
             ),
-            "placeholder text",
-            "bounded public-key statement byte decode-and-digest must reject binary-split placeholder text",
+            "Norito-encoded BFV material",
+            "bounded public-key statement byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         assert_eq!(
             bounded_digest,
@@ -59305,24 +59478,24 @@ mod tests {
             b"t\xffo\xffd\xffo pending BFV ciphertext bytes".to_vec();
         assert_error_contains(
             decode_bfv_ciphertext_bytes_v1(&params, &binary_split_placeholder_ciphertext_bytes),
-            "placeholder text",
-            "ciphertext byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "ciphertext byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_ciphertext_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_ciphertext_bytes,
             ),
-            "placeholder text",
-            "ciphertext byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "ciphertext byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_ciphertext_and_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_ciphertext_bytes,
             ),
-            "placeholder text",
-            "ciphertext byte decode-and-digest must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "ciphertext byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         let exact_digest = bfv_ciphertext_exact_residual_proof_statement_digest(
             &params,
@@ -59574,8 +59747,8 @@ mod tests {
                 &ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "exact ciphertext statement byte hashing must reject binary-split placeholder public-key bytes",
+            "Norito-encoded BFV material",
+            "exact ciphertext statement byte hashing must reject non-Norito public-key bytes",
         );
         assert_error_contains(
             bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
@@ -59584,8 +59757,8 @@ mod tests {
                 &ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "exact ciphertext statement byte decode-and-digest must reject binary-split placeholder public-key bytes",
+            "Norito-encoded BFV material",
+            "exact ciphertext statement byte decode-and-digest must reject non-Norito public-key bytes",
         );
         assert_error_contains(
             bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
@@ -59594,8 +59767,8 @@ mod tests {
                 &binary_split_placeholder_ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "exact ciphertext statement byte hashing must reject binary-split placeholder ciphertext bytes",
+            "Norito-encoded BFV material",
+            "exact ciphertext statement byte hashing must reject non-Norito ciphertext bytes",
         );
         assert_error_contains(
             bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
@@ -59604,8 +59777,8 @@ mod tests {
                 &binary_split_placeholder_ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "exact ciphertext statement byte decode-and-digest must reject binary-split placeholder ciphertext bytes",
+            "Norito-encoded BFV material",
+            "exact ciphertext statement byte decode-and-digest must reject non-Norito ciphertext bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_ciphertext_proof_statement_digest_from_bytes_v1(
@@ -59614,8 +59787,8 @@ mod tests {
                 &ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "bounded ciphertext statement byte hashing must reject binary-split placeholder public-key bytes",
+            "Norito-encoded BFV material",
+            "bounded ciphertext statement byte hashing must reject non-Norito public-key bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
@@ -59624,8 +59797,8 @@ mod tests {
                 &ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "bounded ciphertext statement byte decode-and-digest must reject binary-split placeholder public-key bytes",
+            "Norito-encoded BFV material",
+            "bounded ciphertext statement byte decode-and-digest must reject non-Norito public-key bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_ciphertext_proof_statement_digest_from_bytes_v1(
@@ -59634,8 +59807,8 @@ mod tests {
                 &binary_split_placeholder_ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "bounded ciphertext statement byte hashing must reject binary-split placeholder ciphertext bytes",
+            "Norito-encoded BFV material",
+            "bounded ciphertext statement byte hashing must reject non-Norito ciphertext bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
@@ -59644,8 +59817,8 @@ mod tests {
                 &binary_split_placeholder_ciphertext_bytes,
                 declared_bound,
             ),
-            "placeholder text",
-            "bounded ciphertext statement byte decode-and-digest must reject binary-split placeholder ciphertext bytes",
+            "Norito-encoded BFV material",
+            "bounded ciphertext statement byte decode-and-digest must reject non-Norito ciphertext bytes",
         );
         assert_eq!(
             bounded_digest,
@@ -60518,26 +60691,26 @@ mod tests {
                 let binary_split_placeholder_bytes = $placeholder_bytes.to_vec();
                 assert_error_contains(
                     $decode(&binary_split_placeholder_bytes),
-                    "placeholder text",
+                    "Norito-encoded BFV proof input material",
                     concat!(
                         $context,
-                        " byte admission must reject binary-split placeholder text before Norito decode"
+                        " byte admission must reject non-Norito placeholder-looking bytes"
                     ),
                 );
                 assert_error_contains(
                     $digest_from_bytes(&binary_split_placeholder_bytes),
-                    "placeholder text",
+                    "Norito-encoded BFV proof input material",
                     concat!(
                         $context,
-                        " byte digesting must reject binary-split placeholder text before Norito decode"
+                        " byte digesting must reject non-Norito placeholder-looking bytes"
                     ),
                 );
                 assert_error_contains(
                     $and_digest_from_bytes(&binary_split_placeholder_bytes),
-                    "placeholder text",
+                    "Norito-encoded BFV proof input material",
                     concat!(
                         $context,
-                        " byte decode-and-digest must reject binary-split placeholder text before Norito decode"
+                        " byte decode-and-digest must reject non-Norito placeholder-looking bytes"
                     ),
                 );
             }};
@@ -60687,8 +60860,8 @@ mod tests {
                 &exact_public_key,
                 &binary_split_exact_public_key_placeholder,
             ),
-            "placeholder text",
-            "caller-bound exact public-key proof input admission must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound exact public-key proof input admission must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_for_public_key_v1(
@@ -60696,8 +60869,8 @@ mod tests {
                 &exact_public_key,
                 &binary_split_exact_public_key_placeholder,
             ),
-            "placeholder text",
-            "caller-bound exact public-key proof input byte digesting must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound exact public-key proof input byte digesting must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
@@ -60705,8 +60878,8 @@ mod tests {
                 &exact_public_key,
                 &binary_split_exact_public_key_placeholder,
             ),
-            "placeholder text",
-            "caller-bound exact public-key proof input byte digest helper must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound exact public-key proof input byte digest helper must reject non-Norito bytes",
         );
         assert_error_contains(
             validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_public_key_v1(
@@ -60982,8 +61155,8 @@ mod tests {
                 &bounded_public_key,
                 &binary_split_bounded_public_key_placeholder,
             ),
-            "placeholder text",
-            "caller-bound bounded public-key proof input admission must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound bounded public-key proof input admission must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_for_public_key_v1(
@@ -60991,8 +61164,8 @@ mod tests {
                 &bounded_public_key,
                 &binary_split_bounded_public_key_placeholder,
             ),
-            "placeholder text",
-            "caller-bound bounded public-key proof input byte digesting must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound bounded public-key proof input byte digesting must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_for_public_key_v1(
@@ -61000,8 +61173,8 @@ mod tests {
                 &bounded_public_key,
                 &binary_split_bounded_public_key_placeholder,
             ),
-            "placeholder text",
-            "caller-bound bounded public-key proof input byte digest helper must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound bounded public-key proof input byte digest helper must reject non-Norito bytes",
         );
         let compressed_bounded_public_key_object_bytes = norito::to_compressed_bytes(
             &bounded_public_key,
@@ -61567,8 +61740,8 @@ mod tests {
                 exact_bound,
                 &binary_split_exact_ciphertext_placeholder,
             ),
-            "placeholder text",
-            "caller-bound exact ciphertext proof input admission must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound exact ciphertext proof input admission must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_for_ciphertext_v1(
@@ -61578,8 +61751,8 @@ mod tests {
                 exact_bound,
                 &binary_split_exact_ciphertext_placeholder,
             ),
-            "placeholder text",
-            "caller-bound exact ciphertext proof input byte digesting must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound exact ciphertext proof input byte digesting must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
@@ -61589,8 +61762,8 @@ mod tests {
                 exact_bound,
                 &binary_split_exact_ciphertext_placeholder,
             ),
-            "placeholder text",
-            "caller-bound exact ciphertext proof input byte digest helper must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound exact ciphertext proof input byte digest helper must reject non-Norito bytes",
         );
 
         let bounded_ciphertext_digest =
@@ -61942,8 +62115,8 @@ mod tests {
                 bounded_bound,
                 &binary_split_bounded_ciphertext_placeholder,
             ),
-            "placeholder text",
-            "caller-bound bounded ciphertext proof input admission must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound bounded ciphertext proof input admission must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_for_ciphertext_v1(
@@ -61953,8 +62126,8 @@ mod tests {
                 bounded_bound,
                 &binary_split_bounded_ciphertext_placeholder,
             ),
-            "placeholder text",
-            "caller-bound bounded ciphertext proof input byte digesting must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound bounded ciphertext proof input byte digesting must reject non-Norito bytes",
         );
         assert_error_contains(
             bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_for_ciphertext_v1(
@@ -61964,8 +62137,8 @@ mod tests {
                 bounded_bound,
                 &binary_split_bounded_ciphertext_placeholder,
             ),
-            "placeholder text",
-            "caller-bound bounded ciphertext proof input byte digest helper must reject placeholder bytes",
+            "Norito-encoded BFV proof input material",
+            "caller-bound bounded ciphertext proof input byte digest helper must reject non-Norito bytes",
         );
         assert_error_contains(
             validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciphertext_v1(
@@ -62634,7 +62807,7 @@ mod tests {
         assert_error_contains(
             bootstrap_key_refresh_digest_summary_v1(&mismatched_zero_refresh),
             "zero_refresh must match round_refreshes[0]",
-            "bootstrap refresh summaries must reject legacy zero_refresh drift before digesting",
+            "bootstrap refresh summaries must reject noncanonical zero_refresh drift before digesting",
         );
         assert_error_contains(
             bootstrap_key_zero_refresh_proof_statement_digest(
@@ -62643,7 +62816,7 @@ mod tests {
                 &mismatched_zero_refresh,
             ),
             "zero_refresh must match round_refreshes[0]",
-            "exact bootstrap proof statements must reject legacy zero_refresh drift",
+            "exact bootstrap proof statements must reject noncanonical zero_refresh drift",
         );
         assert_error_contains(
             bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
@@ -62652,7 +62825,7 @@ mod tests {
                 &mismatched_zero_refresh,
             ),
             "zero_refresh must match round_refreshes[0]",
-            "bounded bootstrap proof statements must reject legacy zero_refresh drift",
+            "bounded bootstrap proof statements must reject noncanonical zero_refresh drift",
         );
 
         let mut duplicated_round_refresh = bootstrap_key.clone();
@@ -63131,24 +63304,24 @@ mod tests {
                 &params,
                 &binary_split_placeholder_material_bytes,
             ),
-            "placeholder text",
-            "circuit material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "circuit material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_circuit_material_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_material_bytes,
             ),
-            "placeholder text",
-            "circuit material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "circuit material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_circuit_material_and_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_material_bytes,
             ),
-            "placeholder text",
-            "circuit material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "circuit material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_eq!(
             digest,
@@ -64409,6 +64582,16 @@ mod tests {
 
     #[test]
     fn full_bootstrap_release_audit_evidence_binds_generated_artifacts() {
+        run_large_stack_release_audit_test(
+            full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner,
+        );
+    }
+
+    #[expect(
+        clippy::similar_names,
+        reason = "test compares digest and all-digest release-audit helpers with intentionally parallel names"
+    )]
+    fn full_bootstrap_release_audit_evidence_binds_generated_artifacts_inner() {
         let params = ram_lfe_bfv_parameters_v1();
         let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
         let material = sample_full_bootstrap_circuit_material_for_artifacts(&params, &artifacts);
@@ -64760,8 +64943,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "release audit evidence byte derivation must reject binary-split placeholder artifact-bundle bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit evidence byte derivation must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_decoded_v1(
@@ -64769,8 +64952,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "release audit evidence decoded byte derivation must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit evidence decoded byte derivation must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_evidence_and_digest_from_artifact_bundle_bytes_decoded_v1(
@@ -64778,8 +64961,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "release audit decoded evidence digesting must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit decoded evidence digesting must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_evidence_and_digests_from_artifact_bundle_bytes_decoded_v1(
@@ -64787,8 +64970,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "release audit decoded evidence all-digest derivation must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit decoded evidence all-digest derivation must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_v1(
@@ -64797,8 +64980,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence byte-pair validation must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit evidence byte-pair validation must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_decoded_v1(
@@ -64807,8 +64990,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence raw-byte admission must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit evidence raw-byte admission must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
@@ -64817,8 +65000,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence raw-byte digest admission must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit evidence raw-byte digest admission must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
@@ -64827,8 +65010,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence raw-byte all-digest admission must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit evidence raw-byte all-digest admission must reject non-Norito artifact-bundle bytes",
         );
         let binary_split_placeholder_evidence_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap release audit evidence bytes".to_vec();
@@ -64839,8 +65022,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence byte-pair validation must reject binary-split evidence placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit evidence byte-pair validation must reject non-Norito evidence bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bundle_bytes_decoded_v1(
@@ -64849,8 +65032,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence raw-byte admission must reject binary-split evidence placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit evidence raw-byte admission must reject non-Norito evidence bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_artifact_bundle_bytes_decoded_v1(
@@ -64859,8 +65042,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence raw-byte digest admission must reject binary-split evidence placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit evidence raw-byte digest admission must reject non-Norito evidence bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_artifact_bundle_bytes_decoded_v1(
@@ -64869,8 +65052,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "release audit evidence raw-byte all-digest admission must reject binary-split evidence placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit evidence raw-byte all-digest admission must reject non-Norito evidence bytes",
         );
         let mut stale_byte_evidence = evidence.clone();
         stale_byte_evidence.artifact_bundle_digest =
@@ -65521,15 +65704,15 @@ mod tests {
             decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "safe release audit evidence byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit evidence byte admission must reject non-Norito evidence bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(
                 &binary_split_placeholder_evidence_bytes,
             ),
-            "placeholder text",
-            "safe release audit evidence byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit evidence byte digesting must reject non-Norito evidence bytes",
         );
 
         let reviewer_key_pair =
@@ -66347,39 +66530,39 @@ mod tests {
             decode_bfv_full_bootstrap_release_audit_signoff_bytes_v1(
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "safe release audit signoff byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit signoff byte admission must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "safe release audit signoff byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit signoff byte digesting must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_v1(
                 &evidence_bytes,
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "release audit signoff byte-pair validation must reject binary-split signoff placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit signoff byte-pair validation must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_v1(
                 &evidence_bytes,
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "release audit signoff byte-pair digest validation must reject binary-split signoff placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "release audit signoff byte-pair digest validation must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_v1(
                 &evidence_bytes,
                 &binary_split_placeholder_signoff_bytes,
             ),
-            "placeholder text",
-            "release audit signoff byte-pair digests validation must reject binary-split signoff placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "release audit signoff byte-pair digests validation must reject non-Norito signoff bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_bytes_trusted_reviewer_v1(
@@ -66449,24 +66632,24 @@ mod tests {
                 &binary_split_placeholder_evidence_bytes,
                 &signoff_bytes,
             ),
-            "placeholder text",
-            "release audit signoff byte-pair validation must reject binary-split evidence placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit signoff byte-pair validation must reject non-Norito evidence bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_evidence_bytes_v1(
                 &binary_split_placeholder_evidence_bytes,
                 &signoff_bytes,
             ),
-            "placeholder text",
-            "release audit signoff byte-pair digest validation must reject binary-split evidence placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "release audit signoff byte-pair digest validation must reject non-Norito evidence bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_evidence_bytes_v1(
                 &binary_split_placeholder_evidence_bytes,
                 &signoff_bytes,
             ),
-            "placeholder text",
-            "release audit signoff byte-pair digests validation must reject binary-split evidence placeholders before hashing",
+            "Norito-encoded release-audit object",
+            "release audit signoff byte-pair digests validation must reject non-Norito evidence bytes",
         );
         let mut stale_signoff_evidence = evidence.clone();
         stale_signoff_evidence.artifact_bundle_digest =
@@ -66819,15 +67002,15 @@ mod tests {
             decode_bfv_full_bootstrap_release_audit_record_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "safe release audit record byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit record byte admission must reject non-Norito record bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "safe release audit record byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit record byte digesting must reject non-Norito record bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifacts_v1(
@@ -66836,8 +67019,8 @@ mod tests {
                 &artifacts,
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "release audit record byte admission must reject binary-split record placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit record byte admission must reject non-Norito record bytes",
         );
         let binary_split_placeholder_artifact_bundle_bytes =
             b"t\xffo\xffd\xffo pending BFV full-bootstrap release audit record artifact bundle"
@@ -66849,8 +67032,8 @@ mod tests {
                 &binary_split_placeholder_artifact_bundle_bytes,
                 &record_bytes,
             ),
-            "placeholder text",
-            "release audit record raw-byte admission must reject binary-split artifact-bundle placeholder bytes before Norito decode",
+            "Norito-encoded BFV material",
+            "release audit record raw-byte admission must reject non-Norito artifact-bundle bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_bytes_v1(
@@ -66862,8 +67045,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "release audit record byte builder must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "release audit record byte builder must reject non-Norito artifact-bundle bytes before signing",
         );
         let stale_record_bytes = norito::to_bytes(&stale_generated_body_record)
             .expect("encode stale release audit record");
@@ -67069,8 +67252,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "report/archive byte builder must reject binary-split artifact-bundle placeholders before inventory generation",
+            "Norito-encoded BFV material",
+            "report/archive byte builder must reject non-Norito artifact-bundle bytes before inventory generation",
         );
         assert!(
             generated_audit_report_bytes
@@ -67713,8 +67896,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "deterministic package byte builder must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "deterministic package byte builder must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_bytes_v1(
@@ -67724,8 +67907,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "deterministic package byte builder with digests must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "deterministic package byte builder with digests must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_and_all_digests_for_artifact_bundle_bytes_v1(
@@ -67735,8 +67918,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "deterministic package byte builder with all digests must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "deterministic package byte builder with all digests must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
@@ -72326,8 +72509,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "release audit manifest artifact-byte builder must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "release audit manifest artifact-byte builder must reject non-Norito artifact-bundle bytes before signing",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle_bytes_v1(
@@ -72339,8 +72522,8 @@ mod tests {
                 "sora-zk-audit-wg-2026",
                 reviewer_key_pair.private_key(),
             ),
-            "placeholder text",
-            "release audit manifest artifact-byte all-digests builder must reject binary-split artifact-bundle placeholders before signing",
+            "Norito-encoded BFV material",
+            "release audit manifest artifact-byte all-digests builder must reject non-Norito artifact-bundle bytes before signing",
         );
         let compressed_manifest_bytes =
             norito::to_compressed_bytes(&manifest, Some(norito::CompressionConfig::default()))
@@ -72395,38 +72578,38 @@ mod tests {
             decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
             ),
-            "placeholder text",
-            "safe release audit manifest byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit manifest byte admission must reject non-Norito manifest bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
             ),
-            "placeholder text",
-            "safe release audit manifest byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded release-audit object",
+            "safe release audit manifest byte digesting must reject non-Norito manifest bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes_v1(
                 &binary_split_placeholder_manifest_bytes,
                 &record_bytes,
             ),
-            "placeholder text",
-            "release audit manifest byte-pair validation must reject binary-split manifest placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit manifest byte-pair validation must reject non-Norito manifest bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes_v1(
                 &manifest_bytes,
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "release audit manifest byte-pair validation must reject binary-split record placeholder bytes before Norito decode",
+            "Norito-encoded release-audit object",
+            "release audit manifest byte-pair validation must reject non-Norito record bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(
                 &binary_split_placeholder_record_bytes,
             ),
-            "placeholder text",
-            "release audit manifest record-byte builder must reject binary-split record placeholders before manifest construction",
+            "Norito-encoded release-audit object",
+            "release audit manifest record-byte builder must reject non-Norito record bytes before manifest construction",
         );
         let stale_native_payload_manifest_bytes = norito::to_bytes(&stale_native_payload_manifest)
             .expect("encode stale native-payload release audit manifest");
@@ -72526,15 +72709,15 @@ mod tests {
             decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
                 &binary_split_placeholder_package_bytes,
             ),
-            "placeholder text",
-            "safe release audit package byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded package",
+            "safe release audit package byte admission must reject non-Norito package bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(
                 &binary_split_placeholder_package_bytes,
             ),
-            "placeholder text",
-            "safe release audit package byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded package",
+            "safe release audit package byte digesting must reject non-Norito package bytes",
         );
         assert_ne!(
             package_digest, record_digest,
@@ -77022,8 +77205,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "artifact-bundle byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "artifact-bundle byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_circuit_artifact_bundle_digest_from_bytes_v1(
@@ -77031,8 +77214,8 @@ mod tests {
                 &material,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "artifact-bundle byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "artifact-bundle byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_circuit_material_from_artifact_bundle_bytes_v1(
@@ -77040,8 +77223,8 @@ mod tests {
                 material.max_bootstrap_depth,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "artifact-bundle byte material derivation must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "artifact-bundle byte material derivation must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_circuit_material_from_artifact_bundle_bytes_decoded_v1(
@@ -77049,8 +77232,8 @@ mod tests {
                 material.max_bootstrap_depth,
                 &binary_split_placeholder_artifact_bundle_bytes,
             ),
-            "placeholder text",
-            "artifact-bundle decoded byte material derivation must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "artifact-bundle decoded byte material derivation must reject non-Norito placeholder-looking bytes",
         );
         let bundle_digest_material = BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
             version: BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1,
@@ -77280,7 +77463,7 @@ mod tests {
                 &artifacts,
             ),
             "public-key digest must be distinct from artifact bundle digest",
-            "artifact-aware full-bootstrap execution preflight must reject public-key digest replay from the artifact bundle digest before artifact fallback",
+            "artifact-aware full-bootstrap execution preflight must reject public-key digest replay from the artifact bundle digest before execution",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
@@ -80626,22 +80809,22 @@ mod tests {
             decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1(
                 &binary_split_placeholder_material_bytes,
             ),
-            "placeholder text",
-            "AIR contract material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "AIR contract material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_bytes_v1(
                 &binary_split_placeholder_material_bytes,
             ),
-            "placeholder text",
-            "AIR contract material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "AIR contract material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1(
                 &binary_split_placeholder_material_bytes,
             ),
-            "placeholder text",
-            "AIR contract material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "AIR contract material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
 
         macro_rules! expect_air_material_rejection {
@@ -81088,22 +81271,22 @@ mod tests {
             decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(
                 &binary_split_placeholder_profile_bytes,
             ),
-            "placeholder text",
-            "trace profile byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "trace profile byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_profile_digest_from_bytes_v1(
                 &binary_split_placeholder_profile_bytes,
             ),
-            "placeholder text",
-            "trace profile byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "trace profile byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(
                 &binary_split_placeholder_profile_bytes,
             ),
-            "placeholder text",
-            "trace profile byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "trace profile byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         let placeholder_profile_digest =
             Hash::new(b"pending BFV full-bootstrap execution witness digest");
@@ -84106,22 +84289,22 @@ mod tests {
             decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
                 &binary_split_placeholder_schema_bytes,
             ),
-            "placeholder text",
-            "proof public-input schema byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "proof public-input schema byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_bytes_v1(
                 &binary_split_placeholder_schema_bytes,
             ),
-            "placeholder text",
-            "proof public-input schema byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "proof public-input schema byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_proof_public_input_schema_and_payload_digest_from_bytes_v1(
                 &binary_split_placeholder_schema_bytes,
             ),
-            "placeholder text",
-            "proof public-input schema byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "proof public-input schema byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         let schema_artifact_payload =
             norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(&schema_artifact)
@@ -87715,24 +87898,24 @@ mod tests {
                 &params,
                 &binary_split_placeholder_galois_key_set_bytes,
             ),
-            "placeholder text",
-            "Galois key-set byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded Galois key-set material",
+            "Galois key-set byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_galois_key_set_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_galois_key_set_bytes,
             ),
-            "placeholder text",
-            "Galois key-set byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded Galois key-set material",
+            "Galois key-set byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_galois_key_set_bytes,
             ),
-            "placeholder text",
-            "Galois key-set byte decode-and-digest must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded Galois key-set material",
+            "Galois key-set byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_galois_key_set_digest_from_bytes_for_witness_material_v1(
@@ -87740,8 +87923,8 @@ mod tests {
                 &witness_material,
                 &binary_split_placeholder_galois_key_set_bytes,
             ),
-            "placeholder text",
-            "witness-bound Galois key-set byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded Galois key-set material",
+            "witness-bound Galois key-set byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_for_witness_material_v1(
@@ -87749,8 +87932,8 @@ mod tests {
                 &witness_material,
                 &binary_split_placeholder_galois_key_set_bytes,
             ),
-            "placeholder text",
-            "witness-bound Galois key-set byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded Galois key-set material",
+            "witness-bound Galois key-set byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_galois_key_set_bytes_for_witness_material_v1(
@@ -87758,8 +87941,8 @@ mod tests {
                 &witness_material,
                 &binary_split_placeholder_galois_key_set_bytes,
             ),
-            "placeholder text",
-            "witness-bound Galois key-set byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded Galois key-set material",
+            "witness-bound Galois key-set byte admission must reject non-Norito placeholder-looking bytes",
         );
         let mut inert_galois_keys = galois_keys.clone();
         inert_galois_keys[0].entries[0] = BfvRelinearizationKeyEntry {
@@ -88011,22 +88194,22 @@ mod tests {
             decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(
                 &binary_split_placeholder_witness_material_bytes,
             ),
-            "placeholder text",
-            "witness material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution witness material",
+            "witness material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_witness_digest_from_material_bytes_v1(
                 &binary_split_placeholder_witness_material_bytes,
             ),
-            "placeholder text",
-            "witness material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution witness material",
+            "witness material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_witness_material_bytes,
             ),
-            "placeholder text",
-            "witness material byte decode-and-digest must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution witness material",
+            "witness material byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artifacts_v1(
@@ -88036,8 +88219,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_witness_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound witness byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution witness material",
+            "artifact-bound witness byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_for_artifacts_v1(
@@ -88047,8 +88230,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_witness_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound witness byte decode-and-digest must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution witness material",
+            "artifact-bound witness byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_witness_digest_material_bytes_for_artifacts_v1(
@@ -88058,8 +88241,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_witness_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound witness byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution witness material",
+            "artifact-bound witness byte admission must reject non-Norito placeholder-looking bytes",
         );
 
         let all_zero_ciphertext = zero_ciphertext(&params);
@@ -89578,22 +89761,22 @@ mod tests {
             decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "proof input material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "proof input material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "proof input material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "proof input material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "proof input material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "proof input material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_artifacts_v1(
@@ -89603,8 +89786,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound proof input byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "artifact-bound proof input byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_artifacts_v1(
@@ -89614,8 +89797,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound proof input byte digest helper must reject binary-split placeholder text before hashing",
+            "Norito-encoded execution proof input material",
+            "artifact-bound proof input byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_artifacts_v1(
@@ -89625,8 +89808,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound proof input byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "artifact-bound proof input byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_public_key_and_artifacts_v1(
@@ -89637,8 +89820,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound proof input byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "caller-bound proof input byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
@@ -89649,8 +89832,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound proof input byte digest helper must reject binary-split placeholder text before hashing",
+            "Norito-encoded execution proof input material",
+            "caller-bound proof input byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_and_artifacts_v1(
@@ -89661,8 +89844,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound proof input byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "caller-bound proof input byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
@@ -89673,8 +89856,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "public-key/proof-input byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "public-key/proof-input byte admission must reject non-Norito proof-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_governance_bytes_v1(
@@ -89685,8 +89868,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "execution governance byte admission must reject binary-split proof-input placeholder text before Norito decode",
+            "Norito-encoded execution proof input material",
+            "execution governance byte admission must reject non-Norito proof-input bytes",
         );
         assert_ne!(
             proof_input_material_digest, proof_input.statement_hash,
@@ -90627,46 +90810,46 @@ mod tests {
             decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(
                 &binary_split_placeholder_trace_material_bytes,
             ),
-            "placeholder text",
-            "trace material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded arithmetic trace material",
+            "trace material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_v1(
                 &binary_split_placeholder_trace_material_bytes,
             ),
-            "placeholder text",
-            "trace material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded arithmetic trace material",
+            "trace material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_trace_material_bytes,
             ),
-            "placeholder text",
-            "trace material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded arithmetic trace material",
+            "trace material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_for_proof_input_v1(
                 &proof_input,
                 &binary_split_placeholder_trace_material_bytes,
             ),
-            "placeholder text",
-            "proof-input-bound trace material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded arithmetic trace material",
+            "proof-input-bound trace material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_proof_input_v1(
                 &proof_input,
                 &binary_split_placeholder_trace_material_bytes,
             ),
-            "placeholder text",
-            "proof-input-bound trace material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded arithmetic trace material",
+            "proof-input-bound trace material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_arithmetic_trace_material_bytes_for_proof_input_v1(
                 &proof_input,
                 &binary_split_placeholder_trace_material_bytes,
             ),
-            "placeholder text",
-            "proof-input-bound trace material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded arithmetic trace material",
+            "proof-input-bound trace material byte admission must reject non-Norito placeholder-looking bytes",
         );
         let public_opening_material =
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
@@ -90902,46 +91085,46 @@ mod tests {
             decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
                 &binary_split_placeholder_public_opening_material_bytes,
             ),
-            "placeholder text",
-            "public opening material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded public opening material",
+            "public opening material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
                 &binary_split_placeholder_public_opening_material_bytes,
             ),
-            "placeholder text",
-            "public opening material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded public opening material",
+            "public opening material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_public_opening_material_bytes,
             ),
-            "placeholder text",
-            "public opening material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded public opening material",
+            "public opening material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
                 &trace_material,
                 &binary_split_placeholder_public_opening_material_bytes,
             ),
-            "placeholder text",
-            "trace-bound public opening byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded public opening material",
+            "trace-bound public opening byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_for_trace_v1(
                 &trace_material,
                 &binary_split_placeholder_public_opening_material_bytes,
             ),
-            "placeholder text",
-            "trace-bound public opening byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded public opening material",
+            "trace-bound public opening byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_for_trace_v1(
                 &trace_material,
                 &binary_split_placeholder_public_opening_material_bytes,
             ),
-            "placeholder text",
-            "trace-bound public opening byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded public opening material",
+            "trace-bound public opening byte admission must reject non-Norito placeholder-looking bytes",
         );
         let alternate_public_opening_material =
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcript_v1(
@@ -91337,46 +91520,46 @@ mod tests {
             decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(
                 &binary_split_placeholder_air_evaluation_material_bytes,
             ),
-            "placeholder text",
-            "AIR evaluation material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded AIR evaluation material",
+            "AIR evaluation material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_v1(
                 &binary_split_placeholder_air_evaluation_material_bytes,
             ),
-            "placeholder text",
-            "AIR evaluation material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded AIR evaluation material",
+            "AIR evaluation material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_air_evaluation_material_bytes,
             ),
-            "placeholder text",
-            "AIR evaluation material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded AIR evaluation material",
+            "AIR evaluation material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_for_trace_v1(
                 &trace_material,
                 &binary_split_placeholder_air_evaluation_material_bytes,
             ),
-            "placeholder text",
-            "trace-bound AIR evaluation byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded AIR evaluation material",
+            "trace-bound AIR evaluation byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_for_trace_v1(
                 &trace_material,
                 &binary_split_placeholder_air_evaluation_material_bytes,
             ),
-            "placeholder text",
-            "trace-bound AIR evaluation byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded AIR evaluation material",
+            "trace-bound AIR evaluation byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_for_trace_v1(
                 &trace_material,
                 &binary_split_placeholder_air_evaluation_material_bytes,
             ),
-            "placeholder text",
-            "trace-bound AIR evaluation byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded AIR evaluation material",
+            "trace-bound AIR evaluation byte admission must reject non-Norito placeholder-looking bytes",
         );
         let mut wrong_trace_air_evaluation_material = air_evaluation_material.clone();
         wrong_trace_air_evaluation_material.arithmetic_trace_material_digest =
@@ -93372,22 +93555,22 @@ mod tests {
             decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "prover input material byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution prover input material",
+            "prover input material byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_v1(
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "prover input material byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution prover input material",
+            "prover input material byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "prover input material byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded execution prover input material",
+            "prover input material byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_artifacts_v1(
@@ -93397,8 +93580,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound prover input byte digesting must reject binary-split placeholder text",
+            "Norito-encoded execution prover input material",
+            "artifact-bound prover input byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_artifacts_v1(
@@ -93408,8 +93591,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound prover input byte digest helper must reject binary-split placeholder text before hashing",
+            "Norito-encoded execution prover input material",
+            "artifact-bound prover input byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_artifacts_v1(
@@ -93419,8 +93602,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "artifact-bound prover input byte admission must reject binary-split placeholder text",
+            "Norito-encoded execution prover input material",
+            "artifact-bound prover input byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_public_key_and_artifacts_v1(
@@ -93431,8 +93614,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound prover input byte digesting must reject binary-split placeholder text",
+            "Norito-encoded execution prover input material",
+            "caller-bound prover input byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_for_public_key_and_artifacts_v1(
@@ -93443,8 +93626,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound prover input byte digest helper must reject binary-split placeholder text before hashing",
+            "Norito-encoded execution prover input material",
+            "caller-bound prover input byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_and_artifacts_v1(
@@ -93455,8 +93638,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound prover input byte admission must reject binary-split placeholder text",
+            "Norito-encoded execution prover input material",
+            "caller-bound prover input byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_public_key_bytes_and_artifacts_v1(
@@ -93467,8 +93650,8 @@ mod tests {
                 &galois_keys,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "public-key/prover-input byte admission must reject binary-split placeholder text",
+            "Norito-encoded execution prover input material",
+            "public-key/prover-input byte admission must reject non-Norito prover-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_governance_bytes_v1(
@@ -93479,8 +93662,8 @@ mod tests {
                 &canonical_galois_key_set_bytes,
                 &binary_split_placeholder_prover_input_material_bytes,
             ),
-            "placeholder text",
-            "prover governance byte admission must reject binary-split prover-input placeholder text",
+            "Norito-encoded execution prover input material",
+            "prover governance byte admission must reject non-Norito prover-input bytes",
         );
         let stale_prefix_shape_only_prover_digest =
             bfv_full_bootstrap_execution_prover_input_material_digest_v1(
@@ -95464,14 +95647,14 @@ mod tests {
         };
         let transcript_material_bytes =
             norito::to_bytes(&transcript_material).expect("encode transcript digest material");
-        let legacy_transcript_digest = Hash::new(
+        let canonical_transcript_digest = Hash::new(
             [
                 BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
                 transcript_material_bytes.as_slice(),
             ]
             .concat(),
         );
-        assert_eq!(transcript_digest, legacy_transcript_digest);
+        assert_eq!(transcript_digest, canonical_transcript_digest);
 
         let transcript_statement = bundle
             .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
@@ -98530,24 +98713,24 @@ mod tests {
                 &params,
                 &binary_split_placeholder_evaluation_key_bundle_bytes,
             ),
-            "placeholder text",
-            "evaluation-key bundle byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "evaluation-key bundle byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_evaluation_key_bundle_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_evaluation_key_bundle_bytes,
             ),
-            "placeholder text",
-            "evaluation-key bundle byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "evaluation-key bundle byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_evaluation_key_bundle_and_digest_from_bytes_v1(
                 &params,
                 &binary_split_placeholder_evaluation_key_bundle_bytes,
             ),
-            "placeholder text",
-            "evaluation-key bundle byte decode-and-digest must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded BFV material",
+            "evaluation-key bundle byte decode-and-digest must reject non-Norito placeholder-looking bytes",
         );
 
         let statement_material = BfvFullBootstrapMaterialProofStatementMaterial {
@@ -99206,22 +99389,22 @@ mod tests {
             decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "material proof input byte admission must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded material proof input material",
+            "material proof input byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1(
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "material proof input byte digesting must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded material proof input material",
+            "material proof input byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "material proof input byte digest helper must reject binary-split placeholder text before Norito decode",
+            "Norito-encoded material proof input material",
+            "material proof input byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_for_artifacts_v1(
@@ -99231,8 +99414,8 @@ mod tests {
                 &artifacts,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound material proof input byte digesting must reject binary-split placeholder text",
+            "Norito-encoded material proof input material",
+            "caller-bound material proof input byte digesting must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_for_artifacts_v1(
@@ -99242,8 +99425,8 @@ mod tests {
                 &artifacts,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound material proof input byte digest helper must reject binary-split placeholder text",
+            "Norito-encoded material proof input material",
+            "caller-bound material proof input byte digest helper must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_artifacts_v1(
@@ -99253,8 +99436,8 @@ mod tests {
                 &artifacts,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "caller-bound material proof input byte admission must reject binary-split placeholder text",
+            "Norito-encoded material proof input material",
+            "caller-bound material proof input byte admission must reject non-Norito placeholder-looking bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_governance_bytes_v1(
@@ -99264,8 +99447,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "governance byte admission must reject binary-split proof-input placeholder text",
+            "Norito-encoded material proof input material",
+            "governance byte admission must reject non-Norito proof-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digest_for_governance_bytes_v1(
@@ -99275,8 +99458,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "governance byte digest admission must reject binary-split proof-input placeholder text",
+            "Norito-encoded material proof input material",
+            "governance byte digest admission must reject non-Norito proof-input bytes",
         );
         assert_error_contains(
             validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_digests_for_governance_bytes_v1(
@@ -99286,8 +99469,8 @@ mod tests {
                 &artifact_bundle_bytes,
                 &binary_split_placeholder_proof_input_material_bytes,
             ),
-            "placeholder text",
-            "governance byte digests admission must reject binary-split proof-input placeholder text",
+            "Norito-encoded material proof input material",
+            "governance byte digests admission must reject non-Norito proof-input bytes",
         );
         assert_ne!(
             proof_input_material_digest, proof_input.statement_hash,
@@ -100174,7 +100357,7 @@ mod tests {
                 &all_zero_full_bootstrap_input,
             ),
             "all-zero",
-            "direct exact full-bootstrap execution must reject all-zero inputs before artifact fallback",
+            "direct exact full-bootstrap execution must reject all-zero inputs before requiring artifacts",
         );
         assert_error_contains(
             full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -100183,7 +100366,7 @@ mod tests {
                 &all_zero_full_bootstrap_input,
             ),
             "all-zero",
-            "direct bounded full-bootstrap execution must reject all-zero inputs before artifact fallback",
+            "direct bounded full-bootstrap execution must reject all-zero inputs before requiring artifacts",
         );
         let mut missing_public_key_digest_key = bootstrap_key.clone();
         missing_public_key_digest_key.public_key_digest = None;
@@ -100203,7 +100386,7 @@ mod tests {
                 &ciphertext,
             ),
             "requires public-key digest",
-            "direct full-bootstrap execution must reject missing public-key digest metadata before artifact fallback",
+            "direct full-bootstrap execution must reject missing public-key digest metadata before requiring artifacts",
         );
         assert_error_contains(
             bfv_full_bootstrap_output_residual_multiple_bound_v1(
@@ -100212,7 +100395,7 @@ mod tests {
                 1,
             ),
             "requires public-key digest",
-            "direct full-bootstrap residual-bound entry must reject missing public-key digest metadata before artifact fallback",
+            "direct full-bootstrap residual-bound entry must reject missing public-key digest metadata before requiring artifacts",
         );
         assert_error_contains(
             full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -100221,7 +100404,7 @@ mod tests {
                 &ciphertext,
             ),
             "requires public-key digest",
-            "bounded direct full-bootstrap execution must reject missing public-key digest metadata before artifact fallback",
+            "bounded direct full-bootstrap execution must reject missing public-key digest metadata before requiring artifacts",
         );
         assert_error_contains(
             bfv_full_bootstrap_bounded_noise_output_bound_v1(
@@ -100230,7 +100413,7 @@ mod tests {
                 1,
             ),
             "requires public-key digest",
-            "bounded direct full-bootstrap bound entry must reject missing public-key digest metadata before artifact fallback",
+            "bounded direct full-bootstrap bound entry must reject missing public-key digest metadata before requiring artifacts",
         );
         let mut placeholder_public_key_digest_key = bootstrap_key.clone();
         placeholder_public_key_digest_key.public_key_digest =
@@ -100251,7 +100434,7 @@ mod tests {
                 &ciphertext,
             ),
             "placeholder",
-            "direct full-bootstrap execution must reject placeholder public-key digest metadata before artifact fallback",
+            "direct full-bootstrap execution must reject placeholder public-key digest metadata before requiring artifacts",
         );
         assert_error_contains(
             bfv_full_bootstrap_output_residual_multiple_bound_v1(
@@ -100260,7 +100443,7 @@ mod tests {
                 1,
             ),
             "placeholder",
-            "direct full-bootstrap residual-bound entry must reject placeholder public-key digest metadata before artifact fallback",
+            "direct full-bootstrap residual-bound entry must reject placeholder public-key digest metadata before requiring artifacts",
         );
         assert_error_contains(
             full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -100269,7 +100452,7 @@ mod tests {
                 &ciphertext,
             ),
             "placeholder",
-            "bounded direct full-bootstrap execution must reject placeholder public-key digest metadata before artifact fallback",
+            "bounded direct full-bootstrap execution must reject placeholder public-key digest metadata before requiring artifacts",
         );
         assert_error_contains(
             bfv_full_bootstrap_bounded_noise_output_bound_v1(
@@ -100278,7 +100461,7 @@ mod tests {
                 1,
             ),
             "placeholder",
-            "bounded direct full-bootstrap bound entry must reject placeholder public-key digest metadata before artifact fallback",
+            "bounded direct full-bootstrap bound entry must reject placeholder public-key digest metadata before requiring artifacts",
         );
         let full_bootstrap_material = bootstrap_key
             .full_bootstrap_material
@@ -100458,16 +100641,17 @@ mod tests {
     }
 
     #[test]
-    fn full_bootstrap_execution_preflight_rejects_legacy_refresh_material() {
+    fn full_bootstrap_execution_preflight_rejects_encrypted_zero_refresh_material() {
         let params = ram_lfe_bfv_parameters_v1();
         let (_, public_key, _) =
-            keygen_from_seed(&params, b"bfv-full-bootstrap-legacy-refresh-keygen").expect("keygen");
+            keygen_from_seed(&params, b"bfv-full-bootstrap-invalid-refresh-keygen")
+                .expect("keygen");
         let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
         let material = sample_full_bootstrap_circuit_material_for_artifacts(&params, &artifacts);
         let bootstrap_key = full_bootstrap_key_from_material_v1(
             &params,
             &public_key,
-            "full-bootstrap-legacy-refresh",
+            "full-bootstrap-invalid-refresh",
             material,
         )
         .expect("full-bootstrap key");
@@ -100475,18 +100659,18 @@ mod tests {
             &params,
             &public_key,
             &[42],
-            b"bfv-full-bootstrap-legacy-refresh-input",
+            b"bfv-full-bootstrap-invalid-refresh-input",
         )
         .expect("encrypt input");
-        let legacy_refresh = encrypt_from_seed(
+        let invalid_refresh = encrypt_from_seed(
             &params,
             &public_key,
             &[0],
-            b"bfv-full-bootstrap-legacy-refresh-mask",
+            b"bfv-full-bootstrap-invalid-refresh-mask",
         )
-        .expect("legacy zero refresh");
+        .expect("invalid zero refresh");
 
-        let assert_rejects_legacy_refresh =
+        let assert_rejects_encrypted_zero_refresh =
             |bootstrap_key: &BfvBootstrapKey, expected: &str, label: &str| {
                 assert_error_contains(
                     validate_bfv_full_bootstrap_execution_preflight_v1(
@@ -100514,12 +100698,14 @@ mod tests {
                         &ciphertext,
                     ),
                     expected,
-                    &format!("{label} must fail direct exact execution before artifact fallback"),
+                    &format!("{label} must fail direct exact execution before requiring artifacts"),
                 );
                 assert_error_contains(
                     bfv_full_bootstrap_output_residual_multiple_bound_v1(&params, bootstrap_key, 1),
                     expected,
-                    &format!("{label} must fail exact bound propagation before artifact fallback"),
+                    &format!(
+                        "{label} must fail exact bound propagation before requiring artifacts"
+                    ),
                 );
                 assert_error_contains(
                     full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -100528,31 +100714,33 @@ mod tests {
                         &ciphertext,
                     ),
                     expected,
-                    &format!("{label} must fail bounded-noise execution before artifact fallback"),
+                    &format!(
+                        "{label} must fail bounded-noise execution before requiring artifacts"
+                    ),
                 );
                 assert_error_contains(
                     bfv_full_bootstrap_bounded_noise_output_bound_v1(&params, bootstrap_key, 1),
                     expected,
                     &format!(
-                        "{label} must fail bounded-noise bound propagation before artifact fallback"
+                        "{label} must fail bounded-noise bound propagation before requiring artifacts"
                     ),
                 );
             };
 
-        let mut legacy_zero_refresh_key = bootstrap_key.clone();
-        legacy_zero_refresh_key.zero_refresh = legacy_refresh.clone();
-        assert_rejects_legacy_refresh(
-            &legacy_zero_refresh_key,
+        let mut invalid_zero_refresh_key = bootstrap_key.clone();
+        invalid_zero_refresh_key.zero_refresh = invalid_refresh.clone();
+        assert_rejects_encrypted_zero_refresh(
+            &invalid_zero_refresh_key,
             "zero_refresh material",
-            "full-bootstrap key with legacy zero_refresh material",
+            "full-bootstrap key with encrypted-zero zero_refresh material",
         );
 
-        let mut legacy_round_refresh_key = bootstrap_key;
-        legacy_round_refresh_key.round_refreshes = vec![legacy_refresh];
-        assert_rejects_legacy_refresh(
-            &legacy_round_refresh_key,
+        let mut invalid_round_refresh_key = bootstrap_key;
+        invalid_round_refresh_key.round_refreshes = vec![invalid_refresh];
+        assert_rejects_encrypted_zero_refresh(
+            &invalid_round_refresh_key,
             "round refresh material",
-            "full-bootstrap key with legacy round_refreshes material",
+            "full-bootstrap key with encrypted-zero round_refreshes material",
         );
     }
 
@@ -103527,7 +103715,7 @@ mod tests {
                 &malformed_ciphertext,
             ),
             "bounded-noise basis-extension RNS relinearization key b[0] length",
-            "registered bounded RNS compatibility multiply must reject entry polynomials before ciphertext shape",
+            "registered bounded RNS multiply must reject entry polynomials before ciphertext shape",
         );
         assert_error_contains(
             multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact(
@@ -104633,15 +104821,15 @@ mod tests {
     }
 
     #[test]
-    fn bfv_chunked_transcripts_match_legacy_contiguous_layout() {
+    fn bfv_chunked_transcripts_match_canonical_contiguous_layout() {
         let params = ram_lfe_bfv_parameters_v1();
 
         let parameter_bytes = norito::to_bytes(&params).expect("encode BFV parameters");
-        let legacy_parameter_digest =
+        let canonical_parameter_digest =
             Hash::new([BFV_PARAMETER_DIGEST_DOMAIN, parameter_bytes.as_slice()].concat());
         assert_eq!(
             registered_bfv_parameter_digest(&params).expect("registered parameter digest"),
-            legacy_parameter_digest
+            canonical_parameter_digest
         );
 
         let (_, _, relinearization_key) =
@@ -104654,7 +104842,7 @@ mod tests {
         };
         let evaluation_bytes =
             norito::to_bytes(&evaluation_keys).expect("encode BFV evaluation keys");
-        let legacy_evaluation_digest = Hash::new(
+        let canonical_evaluation_digest = Hash::new(
             [
                 BFV_EVALUATION_KEY_DIGEST_DOMAIN,
                 evaluation_bytes.as_slice(),
@@ -104665,16 +104853,16 @@ mod tests {
             evaluation_keys
                 .digest(&params)
                 .expect("evaluation-key digest"),
-            legacy_evaluation_digest
+            canonical_evaluation_digest
         );
 
         let mut chunked_rng = derive_rng(b"bfv-rng-domain", b"bfv-rng-seed");
-        let legacy_rng_seed: [u8; Hash::LENGTH] =
+        let canonical_rng_seed: [u8; Hash::LENGTH] =
             Hash::new([b"bfv-rng-domain".as_slice(), b"bfv-rng-seed".as_slice()].concat()).into();
-        let mut legacy_rng = <ChaCha20Rng as rand::SeedableRng>::from_seed(legacy_rng_seed);
+        let mut canonical_rng = <ChaCha20Rng as rand::SeedableRng>::from_seed(canonical_rng_seed);
         assert_eq!(
             sample_uniform_poly(&params, &mut chunked_rng),
-            sample_uniform_poly(&params, &mut legacy_rng)
+            sample_uniform_poly(&params, &mut canonical_rng)
         );
 
         let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
@@ -104684,7 +104872,7 @@ mod tests {
             b"phone#retail",
         )
         .expect("derive identifier key material");
-        let legacy_identifier_seed: [u8; Hash::LENGTH] = Hash::new(
+        let canonical_identifier_seed: [u8; Hash::LENGTH] = Hash::new(
             [
                 IDENTIFIER_KEYGEN_DOMAIN,
                 b"phone#retail".as_slice(),
@@ -104693,13 +104881,13 @@ mod tests {
             .concat(),
         )
         .into();
-        let (_, legacy_public_key, _) =
-            keygen_from_seed(&params, &legacy_identifier_seed).expect("legacy identifier keygen");
-        assert_eq!(public_parameters.public_key, legacy_public_key);
+        let (_, canonical_public_key, _) = keygen_from_seed(&params, &canonical_identifier_seed)
+            .expect("canonical identifier keygen");
+        assert_eq!(public_parameters.public_key, canonical_public_key);
 
         let index = 7_u64;
         let index_bytes = index.to_le_bytes();
-        let legacy_slot_seed: [u8; Hash::LENGTH] = Hash::new(
+        let canonical_slot_seed: [u8; Hash::LENGTH] = Hash::new(
             [
                 IDENTIFIER_SLOT_ENCRYPT_DOMAIN,
                 b"bfv-slot-seed".as_slice(),
@@ -104714,7 +104902,7 @@ mod tests {
                 usize::try_from(index).expect("test index fits usize"),
             )
             .expect("derive slot seed"),
-            legacy_slot_seed
+            canonical_slot_seed
         );
     }
 
@@ -105234,7 +105422,7 @@ mod tests {
         assert!(err.to_string().contains("exact-arithmetic"));
 
         let encoded_chain = norito::to_bytes(&chain).expect("encode RNS chain");
-        let legacy_digest = Hash::new(
+        let canonical_digest = Hash::new(
             [
                 BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN,
                 encoded_chain.as_slice(),
@@ -105245,11 +105433,11 @@ mod tests {
             chain
                 .digest_for_parameters(&params)
                 .expect("RNS chain digest"),
-            legacy_digest
+            canonical_digest
         );
         assert_eq!(
             registered_bfv_rns_modulus_chain_digest(&params).expect("registered RNS digest"),
-            legacy_digest
+            canonical_digest
         );
     }
 
@@ -106279,7 +106467,7 @@ mod tests {
             &rotation_key,
             &slots,
         )
-        .expect("registered bounded-noise compatibility RNS outer rotation");
+        .expect("registered bounded-noise RNS outer rotation");
         let registered_basis_rotated =
             rotate_ciphertext_slots_left_bounded_noise_registered_rns_basis_extension_exact(
                 &params,
@@ -106477,7 +106665,7 @@ mod tests {
             &lhs,
             &rhs,
         )
-        .expect("registered bounded-noise compatibility RNS multiply");
+        .expect("registered bounded-noise RNS multiply");
         let registered_product =
             multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact(
                 &params,
@@ -106529,7 +106717,7 @@ mod tests {
                 &galois_key,
                 &lhs,
             )
-            .expect("registered bounded-noise compatibility RNS Galois switch");
+            .expect("registered bounded-noise RNS Galois switch");
         let registered_galois =
             apply_galois_automorphism_ciphertext_bounded_noise_registered_rns_basis_extension_exact(
                 &params,
@@ -106582,7 +106770,7 @@ mod tests {
                 &packed_ciphertext,
                 1,
             )
-            .expect("registered bounded-noise compatibility RNS packed RotateLeft");
+            .expect("registered bounded-noise RNS packed RotateLeft");
         let registered_rotated =
             rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact(
                 &params,

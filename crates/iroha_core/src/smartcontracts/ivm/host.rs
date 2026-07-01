@@ -20623,7 +20623,8 @@ seiyaku Vault {
         code.extend_from_slice(
             &encoding::wide::encode_sys(
                 instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).expect("syscall id fits in u8"),
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
+                    .expect("syscall id fits in u8"),
             )
             .to_le_bytes(),
         );

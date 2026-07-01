@@ -853,7 +853,7 @@ pub fn kagemusha_recursive_fixed_window_table_schedule(
 ///
 /// This digest is deterministic for the verifier width and fixed-window profile
 /// and uses no trusted setup. It is intended as the compact public commitment
-/// for future compressed recursive verifier evidence that reuses shifted
+/// for compressed recursive verifier evidence that reuses the current shifted
 /// fixed-window table families.
 ///
 /// # Errors
@@ -8444,9 +8444,9 @@ fn kagemusha_verified_fold_step(
 /// public root, nullifier, output, asset, and chain tags exposed by each proof
 /// match the folded hop metadata.
 ///
-/// Future mode-2 work can replace this checked pre-fold path with transparent
-/// in-circuit recursive aggregation once the full recursive verifier is the
-/// canonical compact-token verifier.
+/// Mode-2 recursive compact evidence uses the separate recursive aggregation
+/// paths; this helper remains the checked pre-fold verifier for aggregation
+/// mode `1` folded-token construction.
 ///
 /// # Errors
 ///
@@ -8634,8 +8634,8 @@ pub use pasta_tiny::PallasIpaBatchVerifierPreflight;
 
 /// Validate and bind an ordered batch of native Pallas IPA verifier witnesses.
 ///
-/// This is the production host-side preflight for the future Kagemusha
-/// recursive aggregation mode. It accepts only the bounded power-of-two opening
+/// This is the production host-side preflight for Kagemusha recursive
+/// aggregation mode `2`. It accepts only the bounded power-of-two opening
 /// widths currently used by the transparent no-trusted-setup Halo2 IPA
 /// corridor, validates every native witness transcript/reduction/accumulator
 /// relation with the optimized deterministic Pallas MSM backend, and returns a
@@ -51868,9 +51868,9 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    // Temporary dispatch-verification circuits remain until aggregation mode 2
-    // wires the non-native Vesta/Fq verifier foundations into the in-circuit
-    // Halo2 IPA verifier gadget.
+    // Dispatch-verification circuits exercise the non-native Vesta/Fq verifier
+    // foundations used by current aggregation mode 2 and the in-circuit Halo2
+    // IPA verifier gadget.
     #![cfg_attr(not(test), allow(dead_code))]
 
     use halo2_proofs::{
@@ -63357,7 +63357,7 @@ mod pasta_tiny {
 
     /// Circuit wrapper proving table derivation and table-reused selection together.
     ///
-    /// This is the smallest compressed-table composition used by the future
+    /// This is the smallest compressed-table composition used by the current
     /// recursive verifier: the selector reads the table columns produced by the
     /// table-derivation gadget directly, so no duplicate selection-table copy is
     /// assigned or equality-linked.
@@ -69769,8 +69769,8 @@ mod pasta_tiny {
     /// domain separation and binds the parameter fingerprint, witness order,
     /// fixed-window table profile and schedule digest, transcript projections,
     /// `b` reductions, accumulator folds, final terms, and proof-final scalars
-    /// after each witness has passed native verifier preflight. It is intended
-    /// as the compact host bridge surface for the future recursive-in-circuit
+    /// after each witness has passed native verifier preflight. It is the
+    /// compact host bridge surface for the current recursive-in-circuit
     /// aggregation mode.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct PallasIpaBatchVerifierPreflight {

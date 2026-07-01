@@ -1606,7 +1606,7 @@ mod model {
 
     /// Canonical public-input statement verified for one Kagemusha private hop proof.
     ///
-    /// Wallets and future recursive aggregators hash this statement with
+    /// Wallets and recursive aggregators hash this statement with
     /// [`kagemusha_proof_public_inputs_statement_digest`] before inserting it into a folded-hop
     /// transcript. The statement is canonical only when `vk_hash` is non-zero and
     /// `envelope_aux` is empty; the private proof payload itself is committed separately by
@@ -1743,7 +1743,7 @@ mod model {
     /// Public inputs that a recursive aggregation proof must expose.
     ///
     /// The values are derived from [`KagemushaRecursiveAggregationEvidence`] and
-    /// keep a future mode-2 recursive verifier proof bound to the exact
+    /// keep a mode-2 recursive verifier proof bound to the exact
     /// no-trusted-setup verifier-witness batch, opening width, and ordered
     /// aggregation transcript it claims to compress.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -1759,7 +1759,7 @@ mod model {
         pub evidence_digest: [u8; 32],
         /// Hash of the reserved folded public-input projection claimed by the recursive proof.
         ///
-        /// Future `kagemusha-recursive-compact-v1` admission compares this
+        /// `kagemusha-recursive-compact-v1` admission compares this
         /// value with the chain-visible compact token public-input hash, so a
         /// detached recursive proof cannot be replayed against a different
         /// folded compact-token transcript.
@@ -2663,7 +2663,7 @@ mod model {
         /// Poseidon2 digest of the verifier-key bytes used to verify the per-hop proof.
         ///
         /// This is redundant with [`Self::verifier_key_commitment`] for host checks, but gives
-        /// future recursive verifier circuits a hash-friendly public verifier-key binding without
+        /// recursive verifier circuits a hash-friendly public verifier-key binding without
         /// relying on the host hash function inside the circuit.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub verifier_key_poseidon_digest: [u8; 32],
@@ -2768,8 +2768,8 @@ mod model {
         /// Aggregation mode proved by the folded circuit.
         ///
         /// `1` is the current checked pre-fold mode, where wallet/prover code verifies each
-        /// private hop before building the compact folded transcript. Future recursive modes must
-        /// use a new supported value and verifier circuit.
+        /// private hop before building the compact folded transcript. Mode `2` is the current
+        /// recursive in-circuit mode and must remain bound to recursive compact evidence.
         pub aggregation_mode: u16,
         /// Chain id that scopes the folded token.
         pub chain_id: ChainId,
@@ -3136,7 +3136,9 @@ struct KagemushaRecursiveSpendTransitionProfileDigestPreimage {
     profile: KagemushaRecursiveSpendTransitionProfileV1,
 }
 
-const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_PENDING: [u8; Hash::LENGTH] =
+// Internal sentinel used before the non-circular transition-profile binding
+// digest is derived and written back into the accumulator.
+const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_UNBOUND: [u8; Hash::LENGTH] =
     [0xA5; Hash::LENGTH];
 
 #[derive(Debug, Clone, Decode, Encode)]
@@ -5104,7 +5106,7 @@ fn kagemusha_recursive_spend_accumulator_from_parts(
         fold_digest,
         recursive_proof_chain_digest,
         transition_profile_binding_digest:
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_PENDING,
+            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_UNBOUND,
         append_opening_preflight_digest,
         append_boundary_digest: [0u8; Hash::LENGTH],
         verifier_params_fingerprint: evidence.verifier_params_fingerprint,
@@ -5449,7 +5451,7 @@ fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_digest_part
     let transition_profile_binding_digest =
         kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(&profile)?;
     if accumulator.transition_profile_binding_digest
-        != KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_PENDING
+        != KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_UNBOUND
         && accumulator.transition_profile_binding_digest != transition_profile_binding_digest
     {
         return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
@@ -9963,8 +9965,8 @@ fn kagemusha_canonical_fold_parts(
 /// Build the canonical Poseidon2 aggregation transcript statement for Kagemusha folding.
 ///
 /// The builder performs the same shape checks, per-hop canonicalization, duplicate detection, and
-/// root-continuity checks as [`kagemusha_folded_public_inputs`]. Future recursive verifier
-/// circuits and SDKs should use this function to derive the exact statement that
+/// root-continuity checks as [`kagemusha_folded_public_inputs`]. Recursive verifier
+/// circuits and SDKs use this function to derive the exact statement that
 /// [`kagemusha_poseidon_aggregation_transcript_digest`] hashes.
 ///
 /// # Errors
@@ -10074,7 +10076,7 @@ fn kagemusha_fold_digest_parts_from_aggregation_statement(
 
 /// Project a canonical aggregation transcript statement into folded public inputs.
 ///
-/// Future recursive verifier circuits should produce the same public projection
+/// Recursive verifier circuits should produce the same public projection
 /// from their private hop witness before proving `kagemusha-folded-v1`.
 ///
 /// # Errors
@@ -10210,8 +10212,8 @@ pub fn kagemusha_validate_recursive_evidence_folded_public_input_projection(
 
 /// Validate the chain-visible folded projection claimed by a recursive proof.
 ///
-/// This is the public-input-only relation future
-/// `kagemusha-recursive-compact-v1` admission can enforce from a compact token:
+/// This is the public-input-only relation
+/// `kagemusha-recursive-compact-v1` admission enforces from a compact token:
 /// the folded public inputs must be canonical reserved mode `2`, and the
 /// recursive proof public inputs must expose the exact folded public-input hash,
 /// aggregation transcript digest, and hop count carried by that token.

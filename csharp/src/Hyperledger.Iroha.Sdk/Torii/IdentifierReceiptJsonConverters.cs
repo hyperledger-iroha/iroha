@@ -633,52 +633,14 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? policyId = null;
-        string? opaqueId = null;
-        string? receiptHash = null;
-        string? uaid = null;
-        string? accountId = null;
-        long? resolvedAtMilliseconds = null;
-        long? expiresAtMilliseconds = null;
-        string? backend = null;
-        string? signature = null;
-        string? signaturePayloadHex = null;
-        JsonNode? signaturePayload = null;
         JsonObject? payload = null;
         JsonObject? attestation = null;
-        var seenLegacyField = false;
 
         while (reader.Read())
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
-                if (payload is not null || attestation is not null)
-                {
-                    if (seenLegacyField)
-                    {
-                        throw new JsonException(
-                            "identifier receipt must not mix nested payload/attestation with legacy receipt fields.");
-                    }
-
-                    return ReadNestedResolveResponse(payload, attestation);
-                }
-
-                ValidateLegacySignaturePayload(signaturePayload, "identifier receipt.signature_payload");
-
-                return new ToriiIdentifierResolveResponse
-                {
-                    PolicyId = policyId ?? throw new JsonException("identifier receipt.policy_id is required."),
-                    OpaqueId = opaqueId ?? throw new JsonException("identifier receipt.opaque_id is required."),
-                    ReceiptHash = receiptHash ?? throw new JsonException("identifier receipt.receipt_hash is required."),
-                    Uaid = uaid ?? throw new JsonException("identifier receipt.uaid is required."),
-                    AccountId = accountId ?? throw new JsonException("identifier receipt.account_id is required."),
-                    ResolvedAtMilliseconds = resolvedAtMilliseconds ?? throw new JsonException("identifier receipt.resolved_at_ms is required."),
-                    ExpiresAtMilliseconds = expiresAtMilliseconds,
-                    Backend = backend ?? throw new JsonException("identifier receipt.backend is required."),
-                    Signature = signature ?? throw new JsonException("identifier receipt.signature is required."),
-                    SignaturePayloadHex = signaturePayloadHex ?? throw new JsonException("identifier receipt.signature_payload_hex is required."),
-                    SignaturePayload = signaturePayload,
-                };
+                return ReadNestedResolveResponse(payload, attestation);
             }
 
             if (reader.TokenType != JsonTokenType.PropertyName)
@@ -695,56 +657,6 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
 
             switch (propertyName)
             {
-                case "policy_id":
-                    seenLegacyField = true;
-                    policyId = ToriiIdentifierJson.ReadPolicyId(ref reader, "identifier receipt.policy_id");
-                    break;
-                case "opaque_id":
-                    seenLegacyField = true;
-                    opaqueId = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.opaque_id");
-                    break;
-                case "receipt_hash":
-                    seenLegacyField = true;
-                    receiptHash = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.receipt_hash");
-                    break;
-                case "uaid":
-                    seenLegacyField = true;
-                    uaid = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.uaid");
-                    break;
-                case "account_id":
-                    seenLegacyField = true;
-                    accountId = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.account_id");
-                    break;
-                case "resolved_at_ms":
-                    seenLegacyField = true;
-                    resolvedAtMilliseconds = ReadPositiveInt64(ref reader, "identifier receipt.resolved_at_ms");
-                    break;
-                case "expires_at_ms":
-                    seenLegacyField = true;
-                    expiresAtMilliseconds = reader.TokenType == JsonTokenType.Null
-                        ? null
-                        : ReadPositiveInt64(ref reader, "identifier receipt.expires_at_ms");
-                    break;
-                case "backend":
-                    seenLegacyField = true;
-                    backend = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.backend");
-                    break;
-                case "signature":
-                    seenLegacyField = true;
-                    signature = ToriiIdentifierJson.ReadExactHex(ref reader, "identifier receipt.signature");
-                    break;
-                case "signature_payload_hex":
-                    seenLegacyField = true;
-                    signaturePayloadHex = ToriiIdentifierJson.ReadExactHex(
-                        ref reader,
-                        "identifier receipt.signature_payload_hex");
-                    break;
-                case "signature_payload":
-                    seenLegacyField = true;
-                    signaturePayload = ToriiIdentifierJson.ReadOptionalNode(
-                        ref reader,
-                        "identifier receipt.signature_payload");
-                    break;
                 case "payload":
                     payload = ReadObjectNode(ref reader, "identifier receipt.payload");
                     break;
@@ -752,151 +664,12 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
                     attestation = ReadObjectNode(ref reader, "identifier receipt.attestation");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(
-                        ref reader,
-                        $"identifier receipt.{propertyName}");
-                    break;
+                    throw new JsonException(
+                        $"identifier receipt.{propertyName} is not part of the current payload/attestation envelope.");
             }
         }
 
         throw new JsonException("identifier resolve response object is truncated.");
-    }
-
-    private static void ValidateLegacySignaturePayload(JsonNode? payload, string context)
-    {
-        if (payload is not JsonObject payloadObject)
-        {
-            return;
-        }
-
-        ValidateSignaturePayloadObject(payloadObject, context);
-
-        if (payloadObject.TryGetPropertyValue("payload", out var nestedPayload)
-            && nestedPayload is JsonObject nestedPayloadObject)
-        {
-            ValidateSignaturePayloadObject(nestedPayloadObject, $"{context}.payload");
-        }
-
-        if (payloadObject.TryGetPropertyValue("attestation", out var attestation)
-            && attestation is JsonObject attestationObject)
-        {
-            ValidateSignaturePayloadAttestation(attestationObject, $"{context}.attestation");
-        }
-    }
-
-    private static void ValidateSignaturePayloadObject(JsonObject payload, string context)
-    {
-        ValidateOptionalPolicyId(payload, "policy_id", $"{context}.policy_id");
-        ValidateOptionalExactString(payload, "account_id", $"{context}.account_id");
-        ValidateOptionalExactString(payload, "opaque_id", $"{context}.opaque_id");
-        ValidateOptionalExactString(payload, "receipt_hash", $"{context}.receipt_hash");
-        ValidateOptionalExactString(payload, "uaid", $"{context}.uaid");
-        ValidateSignaturePayloadAttestation(payload, context);
-
-        if (TryGetOptionalObject(payload, "execution", $"{context}.execution", out var execution))
-        {
-            ValidateOptionalExactString(execution, "program_id", $"{context}.execution.program_id");
-            ValidateOptionalExactString(execution, "program_digest", $"{context}.execution.program_digest");
-            ValidateOptionalExactString(execution, "backend", $"{context}.execution.backend");
-            ValidateOptionalExactString(execution, "verification_mode", $"{context}.execution.verification_mode");
-            ValidateOptionalExactString(
-                execution,
-                "input_ciphertext_hash",
-                $"{context}.execution.input_ciphertext_hash");
-            ValidateOptionalExactString(
-                execution,
-                "output_ciphertext_hash",
-                $"{context}.execution.output_ciphertext_hash");
-            ValidateOptionalExactString(execution, "parameter_digest", $"{context}.execution.parameter_digest");
-            ValidateOptionalExactString(
-                execution,
-                "evaluation_key_digest",
-                $"{context}.execution.evaluation_key_digest");
-            ValidateOptionalExactString(execution, "output_hash", $"{context}.execution.output_hash");
-            ValidateOptionalExactString(
-                execution,
-                "associated_data_hash",
-                $"{context}.execution.associated_data_hash");
-            ValidateOptionalPositiveInt64(execution, "executed_at_ms", $"{context}.execution.executed_at_ms");
-            ValidateOptionalPositiveInt64(execution, "expires_at_ms", $"{context}.execution.expires_at_ms");
-        }
-
-        if (TryGetOptionalObject(payload, "opening", $"{context}.opening", out var opening))
-        {
-            ValidateOptionalExactHexString(opening, "signature", $"{context}.opening.signature");
-            if (TryGetOptionalObject(opening, "payload", $"{context}.opening.payload", out var openingPayload))
-            {
-                ValidateOptionalExactString(
-                    openingPayload,
-                    "program_id",
-                    $"{context}.opening.payload.program_id");
-                ValidateOptionalExactString(
-                    openingPayload,
-                    "input_ciphertext_hash",
-                    $"{context}.opening.payload.input_ciphertext_hash");
-                ValidateOptionalExactString(
-                    openingPayload,
-                    "output_ciphertext_hash",
-                    $"{context}.opening.payload.output_ciphertext_hash");
-                ValidateOptionalExactString(
-                    openingPayload,
-                    "parameter_digest",
-                    $"{context}.opening.payload.parameter_digest");
-                ValidateOptionalExactString(
-                    openingPayload,
-                    "evaluation_key_digest",
-                    $"{context}.opening.payload.evaluation_key_digest");
-                ValidateOptionalExactString(
-                    openingPayload,
-                    "opened_output_hash",
-                    $"{context}.opening.payload.opened_output_hash");
-                ValidateOptionalPositiveInt64(
-                    openingPayload,
-                    "opened_at_ms",
-                    $"{context}.opening.payload.opened_at_ms");
-                ValidateOptionalPositiveInt64(
-                    openingPayload,
-                    "expires_at_ms",
-                    $"{context}.opening.payload.expires_at_ms");
-            }
-        }
-    }
-
-    private static void ValidateSignaturePayloadAttestation(JsonObject attestation, string context)
-    {
-        ValidateOptionalExactHexString(attestation, "signature", $"{context}.signature");
-
-        var hasKind = attestation.TryGetPropertyValue("kind", out _);
-        var hasProofBackend = attestation.TryGetPropertyValue("proof_backend", out _);
-        var hasProofBase64 = attestation.TryGetPropertyValue("proof_b64", out _);
-        if (!hasKind)
-        {
-            if (hasProofBackend || hasProofBase64)
-            {
-                throw new JsonException($"{context}.kind is required when proof fields are present.");
-            }
-
-            return;
-        }
-
-        var kind = RequireExactString(attestation, "kind", $"{context}.kind");
-        switch (kind)
-        {
-            case "signed":
-                if (hasProofBackend || hasProofBase64)
-                {
-                    throw new JsonException($"{context} signed attestations must not include proof fields.");
-                }
-
-                break;
-            case "proof":
-                _ = RequireExactString(attestation, "proof_backend", $"{context}.proof_backend");
-                var proof = RequireExactString(attestation, "proof_b64", $"{context}.proof_b64");
-                ValidateExactBase64(proof, $"{context}.proof_b64");
-                break;
-            default:
-                throw new JsonException($"{context}.kind must be signed or proof.");
-        }
     }
 
     private static ToriiIdentifierResolveResponse ReadNestedResolveResponse(
@@ -1282,35 +1055,23 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
             ValidatePositiveInt64(expiresAtMilliseconds, "identifier receipt.expires_at_ms");
         }
 
-        writer.WriteStartObject();
-        writer.WriteString("policy_id", value.PolicyId);
-        writer.WriteString("opaque_id", value.OpaqueId);
-        writer.WriteString("receipt_hash", value.ReceiptHash);
-        writer.WriteString("uaid", value.Uaid);
-        writer.WriteString("account_id", value.AccountId);
-        writer.WriteNumber("resolved_at_ms", value.ResolvedAtMilliseconds);
-        writer.WritePropertyName("expires_at_ms");
-        if (value.ExpiresAtMilliseconds is null)
+        if (value.SignaturePayload is not JsonObject envelope
+            || envelope.Count != 2
+            || !envelope.TryGetPropertyValue("payload", out var payloadNode)
+            || payloadNode is not JsonObject payload
+            || !envelope.TryGetPropertyValue("attestation", out var attestationNode)
+            || attestationNode is not JsonObject attestation)
         {
-            writer.WriteNullValue();
-        }
-        else
-        {
-            writer.WriteNumberValue(value.ExpiresAtMilliseconds.Value);
+            throw new JsonException("identifier receipt must use the current payload/attestation envelope.");
         }
 
-        writer.WriteString("backend", value.Backend);
-        writer.WriteString("signature", value.Signature);
-        writer.WriteString("signature_payload_hex", value.SignaturePayloadHex);
-        writer.WritePropertyName("signature_payload");
-        if (value.SignaturePayload is null)
-        {
-            writer.WriteNullValue();
-        }
-        else
-        {
-            value.SignaturePayload.WriteTo(writer, options);
-        }
+        _ = ReadNestedResolveResponse((JsonObject)payload.DeepClone(), (JsonObject)attestation.DeepClone());
+
+        writer.WriteStartObject();
+        writer.WritePropertyName("payload");
+        payload.WriteTo(writer, options);
+        writer.WritePropertyName("attestation");
+        attestation.WriteTo(writer, options);
 
         writer.WriteEndObject();
     }

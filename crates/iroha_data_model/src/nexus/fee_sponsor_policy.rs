@@ -7,7 +7,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    account::AccountId,
+    account::{AccountId, ParsedAccountId},
     name::Name,
     smart_contract::{ContractAddress, ContractAlias},
 };
@@ -64,7 +64,7 @@ impl FromStr for FeeSponsorPolicyId {
             .rsplit_once('/')
             .ok_or(FeeSponsorPolicyIdParseError::InvalidFormat)?;
         let sponsor = AccountId::parse_encoded(sponsor.trim())
-            .map(|parsed| parsed.into_account_id())
+            .map(ParsedAccountId::into_account_id)
             .map_err(|err| FeeSponsorPolicyIdParseError::InvalidSponsor(err.to_string()))?;
         let name = Name::from_str(name.trim())
             .map_err(|err| FeeSponsorPolicyIdParseError::InvalidName(err.to_string()))?;

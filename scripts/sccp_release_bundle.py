@@ -7727,6 +7727,7 @@ def _build_preflight_report(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="__main__.py",
         description=(
             "Build a self-contained SCCP release-note attachment bundle with "
             "strict readiness reports, all-lanes summary JSON, copied evidence "

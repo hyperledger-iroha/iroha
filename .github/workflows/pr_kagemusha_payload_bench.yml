@@ -683,6 +683,7 @@ on:
       - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs"
@@ -694,6 +695,7 @@ on:
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
@@ -1321,6 +1323,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-classic-offline-note-fixture-labels
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-retired-state-migration
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-wallet-note-json-amount-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-wallet-note-json-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-commitment-hex-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-draft-proof-replacement
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-wallet-input-cap
@@ -1555,6 +1558,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-android-serial-env-scrub
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-non-disruptive-commands
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-command-gate-casefold
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness
@@ -1835,6 +1839,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-path-before-openssl
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-path-before-openssl
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-key-path-before-openssl
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-openssl-env-scrub
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-public-pair-preserves-key-path-errors
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-path-whitespace
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-secret-paths
@@ -1966,6 +1972,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-status-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-attestation-status-exactness
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-matrix-coverage
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-cli-external-blockers
@@ -2045,6 +2052,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-duplicate-archive
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-tooling
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-release-tooling
+          ci/check_kagemusha_production_readiness.sh --negative-control-cli-proof-attachment-envelope-hash
+          ci/check_kagemusha_production_readiness.sh --negative-control-connect-proof-attachment-envelope-hash
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-compact-package-only-verifier-dispatch
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-non-utf8-read
@@ -2113,6 +2122,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-placeholder-artifacts
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-digest-binding
@@ -2121,6 +2131,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-root-default-wording
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-timestamp-bound
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-path
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-fixture-manifest-digest-binding
@@ -2321,6 +2332,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-iroha-bin-validation
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-runtime-keygen-env-scrub
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256
@@ -2329,7 +2341,9 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-log-sha256
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-elapsed-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-artifact-content
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-artifact-prefix
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-exit-file-path-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-finalizer-exit-file-path-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-staged-elapsed-file-path-shape

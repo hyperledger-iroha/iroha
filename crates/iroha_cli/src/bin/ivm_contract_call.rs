@@ -339,6 +339,7 @@ fn main() -> Result<()> {
             payload
                 .as_ref()
                 .map(iroha_primitives::json::Json::get)
+                .map(String::as_str)
                 .unwrap_or("")
                 .as_bytes(),
         )

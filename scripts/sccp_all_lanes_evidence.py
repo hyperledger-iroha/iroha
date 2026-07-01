@@ -7062,6 +7062,7 @@ def _release_checklist_item(
     title: str,
     blockers: list[str],
 ) -> dict[str, Any]:
+    blockers = list(dict.fromkeys(blockers))
     return {
         "id": item_id,
         "title": title,

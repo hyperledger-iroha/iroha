@@ -947,6 +947,7 @@ TEXT_REQUIREMENTS = {
         "ED25519_SIGNATURE_BYTES = 64",
         "REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS",
         "KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH",
+        "MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES = 64 * 1024",
         "attestation/harness-result.json",
         "telemetry/status.ndjson",
         "logs/runtime.log",
@@ -1359,6 +1360,17 @@ TEXT_REQUIREMENTS = {
         "must not be hardlinked",
         "slot.json contains unexpected field",
         "_verify_ed25519_signature",
+        "FORBIDDEN_OPENSSL_CHILD_ENV_KEYS",
+        '"OPENSSL_CONF"',
+        '"OPENSSL_MODULES"',
+        '"OPENSSL_ENGINES"',
+        '"LD_PRELOAD"',
+        '"LD_LIBRARY_PATH"',
+        '"DYLD_INSERT_LIBRARIES"',
+        '"DYLD_LIBRARY_PATH"',
+        "def _openssl_child_env",
+        "env.pop(key, None)",
+        "env=_openssl_child_env()",
         "_write_staged_bytes",
         'with path.open("xb") as handle:',
         '        with path.open("xb") as handle:\n            handle.write(payload)\n            handle.flush()\n            os.fsync(handle.fileno())\n',
@@ -1393,7 +1405,7 @@ TEXT_REQUIREMENTS = {
         "require_complete_signed_evidence=True",
         "trusted_signer_public_key_sha256 is not None",
         "signer_public_key_sha256 not in trusted_signer_public_key_sha256",
-        'if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    try:\n        public_key_bytes = public_key_path.read_bytes()\n    except OSError:\n        errors.append(f"{label} file could not be read")\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n    openssl = _require_openssl(errors)\n',
+        'if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    public_key_bytes = _read_bounded_public_key_bytes(\n        public_key_path,\n        errors=errors,\n        label=label,\n    )\n    if public_key_bytes is None:\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n    openssl = _require_openssl(errors)\n',
         "sha256sum.txt digest mismatch",
         '"abi7_recursive_compact_jni_probe"',
         "slot.json minimum_os",
@@ -1551,8 +1563,13 @@ TEXT_REQUIREMENTS = {
         'f"{label} ancestor directory"',
         '    try:\n        public_key_mode = public_key_path.lstat().st_mode\n    except FileNotFoundError:\n        public_key_mode = None\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return False\n    if public_key_mode is not None and stat.S_ISLNK(public_key_mode):\n        errors.append(f"{label} must not be a symlink")\n        return False\n',
         '    if public_key_mode is None:\n        errors.append(f"{label} must point to an existing public key file")\n        return False\n    if not stat.S_ISREG(public_key_mode):\n        errors.append(f"{label} must be a regular file")\n        return False\n',
-        '    try:\n        link_count = public_key_path.stat().st_nlink\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return False\n',
-        '    try:\n        public_key_bytes = public_key_path.read_bytes()\n    except OSError:\n        errors.append(f"{label} file could not be read")\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n',
+        '    try:\n        public_key_stat = public_key_path.stat()\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return False\n',
+        "if public_key_stat.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+        "def _read_bounded_public_key_bytes(",
+        '    public_key_bytes = _read_bounded_public_key_bytes(\n        public_key_path,\n        errors=errors,\n        label=label,\n    )\n    if public_key_bytes is None:\n        return None\n',
+        "if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+        "if size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+        '    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n',
         "slot directory missing",
         "validate_summary_output_path",
         "write_errors = write_summary",
@@ -1666,6 +1683,7 @@ TEXT_REQUIREMENTS = {
         "signature payload could not be staged",
         "device_lab._write_staged_bytes",
         "signature payload staging verification failed",
+        "env=device_lab._openssl_child_env()",
         '            except subprocess.CalledProcessError:\n                errors.append("private key must be a valid OpenSSL Ed25519 private key")\n                return None\n',
         "signature command could not be run",
         '            except OSError:\n                errors.append("signature command could not be run")\n                return None\n',
@@ -1684,8 +1702,9 @@ TEXT_REQUIREMENTS = {
         'if verify_errors == ["signed evidence artifact signature verification failed"]:\n        errors.append(\n            "private key did not produce a signature accepted by the signer public key"\n        )\n    elif verify_errors:\n        errors.extend(verify_errors)\n',
         "private key must not be a symlink",
         "private key ancestor directory",
-        '    try:\n        link_count = private_key_path.stat().st_nlink\n    except OSError:\n        errors.append("private key hardlink metadata could not be read")\n        return None\n',
+        '    try:\n        private_key_stat = private_key_path.stat()\n    except OSError:\n        errors.append("private key hardlink metadata could not be read")\n        return None\n',
         "private key must not be hardlinked",
+        "private_key_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES",
         '    if private_key_mode is None:\n        errors.append("private key must point to an existing file")\n        return None\n    if not stat.S_ISREG(private_key_mode):\n        errors.append("private key must be a regular file")\n        return None\n',
         "_explicit_output_arg_errors",
         "candidate = Path(output)",
@@ -2383,6 +2402,10 @@ TEXT_REQUIREMENTS = {
         "DEFAULT_INSTRUMENTATION_RUNNER",
         "MAX_CAPTURE_SIGNING_KEY_BYTES",
         "ADB_SERIAL_REDACTION",
+        "FORBIDDEN_INHERITED_CAPTURE_ENV_KEYS",
+        '"ANDROID_SERIAL"',
+        "env.pop(key, None)",
+        "env[\"ANDROID_SERIAL\"] = args.serial",
         "def _is_adb_executable(command: Sequence[str]) -> bool:",
         "executable in {\"adb\", \"adb.exe\"}",
         "if _is_adb_executable(display_tokens):",
@@ -2657,6 +2680,8 @@ TEXT_REQUIREMENTS = {
         "def _android_report_d2d_payment_transport",
         "def _android_report_valid_d2d_transcript_binding",
         "def _android_report_valid_d2d_transcript_bindings",
+        "def _android_report_signed_evidence_is_fresh",
+        "matrix_reports = [",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_ROOTS",
         "expected_root = ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_ROOTS[target_key]",
         "if not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]",
@@ -2923,6 +2948,8 @@ TEXT_REQUIREMENTS = {
         "validate_lineage_proof_log",
         "validate_lineage_proof_command",
         "validate_lineage_artifact_content",
+        "LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES",
+        "LINEAGE_ARTIFACT_PLACEHOLDER_ERROR",
         "content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)",
         "validate_compact_key_command",
         "--command must not contain surrounding whitespace",
@@ -2943,6 +2970,7 @@ TEXT_REQUIREMENTS = {
         "compact_key_evidence_generator_log_artifact_digest",
         "generator_log_artifact_sha256",
         "must be generated lineage material, not all-zero placeholder bytes",
+        "must be generated lineage material, not a placeholder fixture",
         "must be generated key material, not a placeholder fixture",
         "must be generated key material, not all-zero placeholder bytes",
         'def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:\n    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)\n    if file_errors:\n        return None, file_errors\n    digest = hashlib.sha256()\n',
@@ -4415,6 +4443,12 @@ TEXT_REQUIREMENTS = {
         "MAX_EXECUTION_REPORT_BYTES",
         "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
         "COMMAND_LAUNCH_FAILURE_DETAIL = \"process launch failed\"",
+        "FORBIDDEN_CHILD_ENV_KEYS",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV",
+        "def _scrubbed_child_env",
+        "env.pop(key, None)",
+        "else _scrubbed_child_env()",
+        "env=child_env",
         "def _secret_path_error",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         "path_text != path_text.strip()",
@@ -4447,6 +4481,7 @@ TEXT_REQUIREMENTS = {
         "--resume-key-artifacts",
         "--replace and --resume-key-artifacts cannot be combined",
         "_validate_reusable_key_artifact_phase",
+        "return readiness.validate_lineage_artifact_content(path, artifact)",
         "_try_resume_key_artifact_phase",
         "_cleanup_profile_for_resume",
         "validate_output_file_path",
@@ -4508,7 +4543,7 @@ TEXT_REQUIREMENTS = {
         "_child_env_with_repo_binaries",
         'absolute_repo_root / "target" / "release"',
         'absolute_repo_root / "target" / "debug"',
-        'popen_kwargs["env"] = child_env',
+        "env=child_env",
         "staged run exited with",
         "return _wrapper_exit_status(status)",
         "proof_log_size_bytes",
@@ -4552,6 +4587,12 @@ TEXT_REQUIREMENTS = {
         "MAX_RUN_REPORT_BYTES",
         "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
         "COMMAND_LAUNCH_FAILURE_DETAIL = \"process launch failed\"",
+        "FORBIDDEN_CHILD_ENV_KEYS",
+        "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV",
+        "def _scrubbed_child_env",
+        "env.pop(key, None)",
+        "else _scrubbed_child_env()",
+        "env=child_env",
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
@@ -4586,6 +4627,7 @@ TEXT_REQUIREMENTS = {
         "--resume-keygen",
         "--replace and --resume-keygen cannot be combined",
         "_validate_reusable_staged_keygen",
+        "content_errors = readiness.validate_compact_key_artifact_prefix(prefix, artifact)",
         "_validate_reusable_execution_report",
         "_validate_reusable_run_report",
         "_unlink_resume_outputs",
@@ -4646,7 +4688,7 @@ TEXT_REQUIREMENTS = {
         "_child_env_with_repo_binaries",
         'absolute_repo_root / "target" / "release"',
         'absolute_repo_root / "target" / "debug"',
-        'popen_kwargs["env"] = child_env',
+        "env=child_env",
         "staged keygen exited with",
         "return _wrapper_exit_status(status)",
         "generator_log_size_bytes",
@@ -4980,10 +5022,15 @@ TEXT_REQUIREMENTS = {
         "readiness.validate_compact_key_artifact_content",
         "_lineage_proof_log_entries",
         "_stable_release_bundle",
+        "_release_bundle_latest_evidence_timestamp",
         "_check_release_bundle_manifest_shape",
+        '"readiness_summary": frozenset(("generated_at_utc",))',
+        '"readiness_summary": {\n            "generated_at_utc": summary.get("generated_at") if summary else None,',
         "shape_blockers = _check_release_bundle_manifest_shape(existing)",
         "kagemusha_release_bundle_manifest_control_character",
         "kagemusha_release_bundle_manifest_future_dated",
+        "bundle_generated_at_timestamp < evidence_generated_at_timestamp",
+        "kagemusha_release_bundle_manifest_timestamp_bounds",
         "RELEASE_BUNDLE_ALLOWED_EVIDENCE_KEYS",
         "RELEASE_BUNDLE_SINGLE_EVIDENCE_KEYS",
         "RELEASE_BUNDLE_MAP_EVIDENCE_KEYS",
@@ -5649,6 +5696,8 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_missing_extra_d2d_transcript",
         "test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch",
         "test_android_capture_strict_json_load_redacts_nonfinite_constants",
+        "test_android_capture_env_scrubs_inherited_android_serial_for_auto",
+        "test_android_capture_env_overrides_inherited_android_serial",
         "test_android_capture_assembler_command_passes_adb_timeout",
         "test_android_capture_rejects_nonpositive_adb_visibility_poll_before_adb",
         "test_android_capture_runs_full_command_sequence_and_binds_challenge",
@@ -6118,9 +6167,12 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_direct_trusted_signer_digest_key_misbind",
         "test_verify_signature_rejects_secret_public_key_path_before_openssl_lookup",
         "test_openssl_public_key_der_rejects_spawn_failure_after_path_shape",
+        "test_openssl_public_key_der_scrubs_operator_openssl_env",
+        "for key in device_lab.FORBIDDEN_OPENSSL_CHILD_ENV_KEYS",
         "test_openssl_public_key_der_rejects_invalid_public_key_after_openssl_failure",
         "test_openssl_public_key_der_rejects_missing_public_key_before_openssl_lookup",
         "test_openssl_public_key_der_rejects_non_regular_public_key_before_openssl_lookup",
+        "test_openssl_public_key_der_rejects_oversized_public_key_before_openssl_lookup",
         "test_openssl_public_key_der_rejects_file_metadata_failure_before_openssl_lookup",
         "test_verify_signature_rejects_staging_write_failure_before_openssl",
         "test_verify_signature_rejects_payload_staging_readback_mismatch_before_openssl",
@@ -6129,6 +6181,7 @@ TEXT_REQUIREMENTS = {
         "test_write_staged_bytes_rejects_hardlink_created_before_readback",
         "test_verify_signature_rejects_tempdir_failure_before_staging",
         "test_verify_signature_rejects_spawn_failure_after_staging",
+        "test_verify_signature_scrubs_operator_openssl_env",
         "test_private_public_pair_preserves_public_key_path_error_before_mismatch",
         "test_trusted_signer_public_key_rejects_symlinked_ancestor_without_path_leak",
         "test_trusted_signer_public_key_rejects_hardlink_without_path_leak",
@@ -6283,6 +6336,7 @@ TEXT_REQUIREMENTS = {
         "test_sign_ed25519_rejects_control_private_key_path_before_openssl_lookup",
         "test_sign_ed25519_rejects_missing_private_key_before_openssl_lookup",
         "test_sign_ed25519_rejects_non_regular_private_key_before_openssl_lookup",
+        "test_sign_ed25519_rejects_oversized_private_key_before_openssl_lookup",
         "test_sign_ed25519_rejects_private_key_file_metadata_failure_before_openssl",
         "test_sign_ed25519_rejects_private_key_hardlink_metadata_failure_before_openssl",
         "test_sign_ed25519_rejects_payload_staging_write_failure_before_openssl",
@@ -6294,6 +6348,7 @@ TEXT_REQUIREMENTS = {
         "test_sign_ed25519_rejects_short_signature_output_after_openssl",
         "test_sign_ed25519_rejects_tempdir_failure_before_payload_staging",
         "test_sign_ed25519_rejects_spawn_failure_after_payload_staging",
+        "test_sign_ed25519_scrubs_operator_openssl_env",
         "test_sign_ed25519_rejects_invalid_private_key_after_openssl_failure",
         "test_sign_ed25519_rejects_signature_read_failure_after_openssl",
         "test_sign_ed25519_rejects_short_signature_output_after_openssl",
@@ -6410,6 +6465,7 @@ TEXT_REQUIREMENTS = {
         "test_duplicate_attestation_challenge_blocks_rollup",
         "test_stale_signed_evidence_blocks_rollup",
         "test_future_signed_evidence_blocks_rollup",
+        "test_freshness_invalid_signed_evidence_does_not_satisfy_android_matrix_coverage",
         "test_android_signed_evidence_freshness_redacts_secret_slot_after_sanitize",
         "test_android_signed_evidence_freshness_redacts_control_slot_after_sanitize",
         "test_signed_evidence_freshness_uses_validated_report_timestamp",
@@ -6686,6 +6742,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
         "test_compact_key_staged_runner_rejects_replace_with_resume_keygen",
         "test_compact_key_staged_runner_resume_replaces_failed_keygen",
+        "test_compact_key_staged_runner_resume_rebuilds_placeholder_key_artifact",
         "test_compact_key_staged_runner_resume_replaces_killed_keygen",
         "test_compact_key_staged_runner_resume_rejects_symlinked_artifact",
         "test_compact_key_staged_runner_refuses_existing_artifact_before_run",
@@ -6712,6 +6769,8 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
         "test_compact_key_staged_runner_writes_child_output_directly_to_log_file",
         "test_compact_key_staged_runner_finds_repo_local_iroha_with_empty_path",
+        "test_compact_key_staged_runner_scrubs_runtime_keygen_env",
+        "test_compact_key_staged_runner_scrubs_runtime_keygen_env_without_repo_root",
         "test_compact_key_staged_runner_explicit_iroha_bin_precedes_stale_release",
         "test_compact_key_staged_runner_rejects_symlinked_iroha_bin",
         "test_compact_key_staged_runner_rejects_unsafe_iroha_bin_variants",
@@ -6771,6 +6830,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
         "test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts",
         "test_lineage_proof_staged_runner_resume_replaces_failed_append_phase",
+        "test_lineage_proof_staged_runner_resume_regenerates_placeholder_init_phase",
         "test_lineage_proof_staged_runner_resume_replaces_killed_append_phase",
         "test_lineage_proof_staged_runner_resume_rejects_symlinked_phase_output",
         "test_lineage_proof_staged_runner_refuses_existing_log_before_run",
@@ -6793,6 +6853,8 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_log_install_rejects_parent_symlink_swap_before_sync_with_cleanup",
         "test_lineage_proof_staged_runner_log_install_parent_sync_rolls_back_output",
         "test_lineage_proof_staged_runner_log_install_reports_rollback_cleanup_failure",
+        "test_lineage_proof_staged_runner_scrubs_runtime_keygen_env",
+        "test_lineage_proof_staged_runner_scrubs_runtime_keygen_env_without_repo_root",
         "test_lineage_proof_staged_runner_creates_private_staging_outputs",
         "test_lineage_proof_staged_runner_replace_removes_stale_keygen_temp_log",
         "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
@@ -6928,6 +6990,8 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_rejects_hardlinked_local_artifact_file",
         "test_lineage_proof_evidence_rejects_local_artifact_digest_mismatch",
         "test_lineage_proof_evidence_rejects_empty_local_artifact_file",
+        "test_lineage_proof_evidence_rejects_placeholder_local_artifact_file",
+        "test_lineage_proof_evidence_rejects_all_placeholder_prefixes",
         "test_lineage_proof_evidence_rejects_all_zero_local_artifact_file",
         "test_lineage_proof_evidence_placeholder_check_uses_hashed_prefix",
         "test_lineage_proof_evidence_uses_local_file_validation_before_artifact_is_file_preflight",
@@ -6941,6 +7005,13 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_manifest_passes_ready_fixture",
         "test_kagemusha_release_bundle_verify_existing_passes_ready_fixture",
         "test_kagemusha_release_bundle_verify_existing_allows_timestamp_refresh",
+        "test_kagemusha_release_bundle_verify_existing_rejects_manifest_timestamp_before_evidence",
+        "test_kagemusha_release_bundle_verify_existing_rejects_readiness_summary_timestamp_binding_drift",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_readiness_summary_section",
+        "test_kagemusha_release_bundle_verify_existing_rejects_nonobject_readiness_summary_section",
+        "test_kagemusha_release_bundle_verify_existing_rejects_missing_readiness_summary_timestamp",
+        "test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_readiness_summary_timestamp",
+        "test_kagemusha_release_bundle_verify_existing_rejects_future_dated_readiness_summary_timestamp",
         "test_kagemusha_release_bundle_verify_existing_rejects_future_dated_manifest_timestamp",
         "test_kagemusha_release_bundle_verify_existing_rejects_compact_generated_at_section_binding_drift",
         "test_kagemusha_release_bundle_rejects_noncanonical_summary_generated_at",
@@ -7252,6 +7323,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_missing_android_signed_evidence_summary_slot",
         "test_kagemusha_release_bundle_rejects_extra_android_signed_evidence_summary_slot",
         "test_kagemusha_release_bundle_rejects_all_zero_lineage_artifact",
+        "test_kagemusha_release_bundle_rejects_all_placeholder_lineage_prefixes",
         "test_kagemusha_release_bundle_rejects_placeholder_compact_artifact",
         "test_kagemusha_release_bundle_rejects_all_placeholder_compact_prefixes",
         "test_kagemusha_release_bundle_rejects_all_zero_compact_artifact",
@@ -7420,6 +7492,8 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_rejects_artifact_symlink_swap_after_preflight",
         "test_lineage_proof_evidence_helper_rejects_missing_artifact",
         "test_lineage_proof_evidence_helper_rejects_empty_artifact",
+        "test_lineage_proof_evidence_helper_rejects_placeholder_artifact",
+        "test_lineage_proof_evidence_helper_rejects_all_placeholder_prefixes",
         "test_lineage_proof_evidence_helper_rejects_all_zero_artifact",
         "test_lineage_proof_evidence_helper_placeholder_check_uses_hashed_prefix",
         "test_lineage_proof_evidence_helper_rejects_symlinked_artifact",
@@ -7682,6 +7756,14 @@ TEXT_REQUIREMENTS = {
         "Deriving {} Reserved-lineage proving key archive for `{}` opening_len={}",
         "Writing {} Reserved-lineage proving key archive to {}",
         "Writing {} Reserved-lineage key package to {}",
+        "parse_exact_lower_hex32",
+        "envelope_hash_hex must be provided",
+        "att.structural_error()",
+        "build_proof_attachment_from_json_rejects_zero_vk_commitment",
+        "build_proof_attachment_from_json_rejects_missing_envelope_hash",
+        "build_proof_attachment_from_json_rejects_forged_envelope_hash",
+        "build_proof_attachment_from_json_rejects_noncanonical_envelope_hash_hex",
+        "build_proof_attachment_from_json_rejects_empty_proof_bytes",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
@@ -7701,6 +7783,14 @@ TEXT_REQUIREMENTS = {
         "if is_kagemusha_recursive_compact_unavailable_error(&err) {\n                    BridgeError::KagemushaRecursiveCompactUnavailable\n                } else {",
         "*out_valid = 0",
         "connect_norito_kagemusha_recursive_spend_redeem",
+        "decode_exact_lower_hex_array",
+        "attachment.envelope_hash = Some(decode_exact_lower_hex_array(envelope_hex)?);",
+        "attachment.structural_error().is_some()",
+        "proof_attachment_json_rejects_missing_envelope_hash",
+        "proof_attachment_json_rejects_forged_envelope_hash",
+        "proof_attachment_json_rejects_noncanonical_envelope_hash_hex",
+        "proof_attachment_json_rejects_zero_vk_commitment",
+        "proof_attachment_json_rejects_empty_proof_bytes",
     ),
     "crates/iroha_js_host/src/lib.rs": (
         "connect_norito_bridge_abi_version() -> u32",
@@ -7867,6 +7957,14 @@ FORBIDDEN_SNIPPETS = {
         "stdout=subprocess.PIPE",
         "process.stdout.read",
         "sys.stdout.buffer",
+    ),
+    "crates/iroha_cli/src/zk.rs": (
+        "Hash::new(&proof_att.proof.bytes)",
+        "envelope_hash missing; deriving placeholder",
+    ),
+    "crates/connect_norito_bridge/src/lib.rs": (
+        'hex_str.trim().trim_start_matches("0x")',
+        'if let Some(envelope_hex) = value.get("envelope_hash_hex").and_then(JsonValue::as_str)',
     ),
 }
 
@@ -8036,6 +8134,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-android-serial-env-scrub",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-non-disruptive-commands",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-command-gate-casefold",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness",
@@ -8313,6 +8412,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-path-before-openssl",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-path-before-openssl",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-key-path-before-openssl",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-openssl-env-scrub",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-public-pair-preserves-key-path-errors",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-path-whitespace",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-secret-paths",
@@ -8447,6 +8548,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-value-closed-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-slot-binding-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-matrix-coverage",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-cli-external-blockers",
@@ -8526,6 +8628,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-duplicate-archive",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-tooling",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-release-tooling",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-cli-proof-attachment-envelope-hash",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-connect-proof-attachment-envelope-hash",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-non-utf8-read",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence",
@@ -8678,6 +8782,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-iroha-bin-validation",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-runtime-keygen-env-scrub",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256",
@@ -8686,7 +8791,9 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-elapsed-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-artifact-content",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-artifact-prefix",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-exit-file-path-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-finalizer-exit-file-path-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-staged-elapsed-file-path-shape",
@@ -8750,6 +8857,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-placeholder-artifacts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-digest-binding",
@@ -8759,6 +8867,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-root-default-wording",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-timestamp-bound",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-fixture-manifest-digest-binding",
@@ -11037,6 +11146,17 @@ if mode == "--negative-control-android-device-lab-capture-adb-preflight-call":
             "scripts/kagemusha_android_device_lab_capture.py",
             "errors = _run_adb_visibility_preflight_with_wait(args, env=env, runner=runner)",
             "errors = []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-android-serial-env-scrub":
+    run_negative_control(
+        "Android capture wrapper inherited ANDROID_SERIAL scrub",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "        env.pop(key, None)",
+            "        env.get(key)",
         ),
     )
     raise SystemExit(0)
@@ -14199,8 +14319,8 @@ if mode == "--negative-control-android-device-lab-public-key-hardlink-metadata-f
         "Android device-lab public key hardlink metadata failure gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    try:\n        link_count = public_key_path.stat().st_nlink\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return False\n',
-            "    link_count = public_key_path.stat().st_nlink\n",
+            '    try:\n        public_key_stat = public_key_path.stat()\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return False\n',
+            "    public_key_stat = public_key_path.stat()\n",
         ),
     )
     raise SystemExit(0)
@@ -14243,8 +14363,8 @@ if mode == "--negative-control-android-device-lab-private-key-hardlink-metadata-
         "Android device-lab private key hardlink metadata failure gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            '    try:\n        link_count = private_key_path.stat().st_nlink\n    except OSError:\n        errors.append("private key hardlink metadata could not be read")\n        return None\n',
-            "    link_count = private_key_path.stat().st_nlink\n",
+            '    try:\n        private_key_stat = private_key_path.stat()\n    except OSError:\n        errors.append("private key hardlink metadata could not be read")\n        return None\n',
+            "    private_key_stat = private_key_path.stat()\n",
         ),
     )
     raise SystemExit(0)
@@ -14287,8 +14407,8 @@ if mode == "--negative-control-android-device-lab-public-key-path-before-openssl
         "Android device-lab public key path-before-OpenSSL gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    try:\n        public_key_bytes = public_key_path.read_bytes()\n    except OSError:\n        errors.append(f"{label} file could not be read")\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n    openssl = _require_openssl(errors)\n',
-            '    openssl = _require_openssl(errors)\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    try:\n        public_key_bytes = public_key_path.read_bytes()\n    except OSError:\n        errors.append(f"{label} file could not be read")\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n',
+            '    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    public_key_bytes = _read_bounded_public_key_bytes(\n        public_key_path,\n        errors=errors,\n        label=label,\n    )\n    if public_key_bytes is None:\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n    openssl = _require_openssl(errors)\n',
+            '    openssl = _require_openssl(errors)\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    public_key_bytes = _read_bounded_public_key_bytes(\n        public_key_path,\n        errors=errors,\n        label=label,\n    )\n    if public_key_bytes is None:\n        return None\n    if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):\n        errors.append(f"{label} must contain public key material, not a private key")\n        return None\n',
         ),
     )
     raise SystemExit(0)
@@ -14312,6 +14432,48 @@ if mode == "--negative-control-android-device-lab-signature-verify-key-path-befo
             'def _verify_ed25519_signature(\n    *,\n    public_key_path: Path,\n    payload: bytes,\n    signature: bytes,\n    errors: list[str],\n    label: str = "trusted signer public key",\n) -> None:\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return\n    openssl = _require_openssl(errors)\n',
             'def _verify_ed25519_signature(\n    *,\n    public_key_path: Path,\n    payload: bytes,\n    signature: bytes,\n    errors: list[str],\n    label: str = "trusted signer public key",\n) -> None:\n    openssl = _require_openssl(errors)\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return\n',
         ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-openssl-env-scrub":
+    run_negative_control(
+        "Android device-lab OpenSSL child environment scrub",
+        lambda: (
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                '"LD_PRELOAD"',
+                '"LD_PRELOAD_DISABLED"',
+            ),
+            override_text(
+                "scripts/check_android_device_lab_slot.py",
+                "        env.pop(key, None)",
+                "        env.get(key)",
+            ),
+            override_text(
+                "scripts/sign_android_device_lab_evidence.py",
+                "                    env=device_lab._openssl_child_env(),",
+                "                    env=os.environ.copy(),",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signer-key-size-limit":
+    def mutate_android_device_lab_signer_key_size_limit() -> None:
+        override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "if public_key_stat.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+            "if False and public_key_stat.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+        )
+        override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "if private_key_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+            "if False and private_key_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:",
+        )
+
+    run_negative_control(
+        "Android device-lab signer key size limit",
+        mutate_android_device_lab_signer_key_size_limit,
     )
     raise SystemExit(0)
 
@@ -15912,6 +16074,25 @@ if mode == "--negative-control-android-signed-evidence-freshness-report":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-signed-evidence-freshness-matrix-coverage":
+    run_negative_control(
+        "Android signed-evidence freshness matrix coverage admission",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "matrix_reports = [\n"
+            "        report\n"
+            "        for report in reports\n"
+            "        if _android_report_signed_evidence_is_fresh(\n"
+            "            report,\n"
+            "            min_signed_at,\n"
+            "            max_signed_at,\n"
+            "        )\n"
+            "    ]",
+            "matrix_reports = reports",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-kagemusha-readiness-rollup":
     run_negative_control(
         "Kagemusha production readiness evidence rollup",
@@ -16450,6 +16631,44 @@ if mode == "--negative-control-compact-key-release-tooling":
             "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
             "write_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled",
         ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-cli-proof-attachment-envelope-hash":
+    def weaken_cli_proof_attachment_envelope_hash() -> None:
+        override_text(
+            "crates/iroha_cli/src/zk.rs",
+            "envelope_hash_hex must be provided",
+            "envelope_hash_hex may be omitted",
+        )
+        override_text(
+            "crates/iroha_cli/src/zk.rs",
+            "att.structural_error()",
+            "None",
+        )
+
+    run_negative_control(
+        "CLI proof attachment envelope hash and structural gate",
+        weaken_cli_proof_attachment_envelope_hash,
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-connect-proof-attachment-envelope-hash":
+    def weaken_connect_proof_attachment_envelope_hash() -> None:
+        override_text(
+            "crates/connect_norito_bridge/src/lib.rs",
+            "decode_exact_lower_hex_array",
+            "decode_lenient_hex_array",
+        )
+        override_text(
+            "crates/connect_norito_bridge/src/lib.rs",
+            "attachment.structural_error().is_some()",
+            "false",
+        )
+
+    run_negative_control(
+        "Connect bridge proof attachment envelope hash and structural gate",
+        weaken_connect_proof_attachment_envelope_hash,
     )
     raise SystemExit(0)
 
@@ -17169,6 +17388,17 @@ if mode == "--negative-control-release-bundle-summary-drift":
             )
         )""",
             "pass",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-manifest-timestamp-bound":
+    run_negative_control(
+        "Kagemusha release bundle manifest timestamp evidence bound",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "        and bundle_generated_at_timestamp < evidence_generated_at_timestamp",
+            "        and False",
         ),
     )
     raise SystemExit(0)
@@ -20297,6 +20527,24 @@ if mode == "--negative-control-staged-runner-iroha-bin-validation":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-staged-runner-runtime-keygen-env-scrub":
+    run_negative_control(
+        "Kagemusha staged runner runtime-keygen environment scrub",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "        env.pop(key, None)",
+                "        env.get(key)",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "        env.pop(key, None)",
+                "        env.get(key)",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-staged-runner-heartbeat":
     run_negative_control(
         "Reserved-lineage proof staged runner heartbeat observability",
@@ -20399,6 +20647,17 @@ if mode == "--negative-control-lineage-proof-staged-runner-resume-replace-confli
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-staged-runner-resume-artifact-content":
+    run_negative_control(
+        "Reserved-lineage proof staged runner resume artifact-content gate",
+        lambda: override_text(
+            "scripts/kagemusha_run_lineage_proof_staged.py",
+            "return readiness.validate_lineage_artifact_content(path, artifact)",
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-staged-runner-resume-replace-conflict":
     run_negative_control(
         "ABI-7 recursive compact key staged runner resume/replace conflict gate",
@@ -20406,6 +20665,17 @@ if mode == "--negative-control-compact-key-staged-runner-resume-replace-conflict
             "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
             "--replace and --resume-keygen cannot be combined",
             "--replace and --resume-keygen may be combined",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-resume-artifact-prefix":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner resume artifact-prefix gate",
+        lambda: override_text(
+            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+            "content_errors = readiness.validate_compact_key_artifact_prefix(prefix, artifact)",
+            "content_errors = []",
         ),
     )
     raise SystemExit(0)
@@ -20516,6 +20786,17 @@ if mode == "--negative-control-compact-key-readiness-artifact-open-path-binding"
             "scripts/kagemusha_production_readiness.py",
             "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
             "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-placeholder-artifacts":
+    run_negative_control(
+        "Reserved-lineage placeholder artifact gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "must be generated lineage material, not a placeholder fixture",
+            "may use placeholder fixture material",
         ),
     )
     raise SystemExit(0)
