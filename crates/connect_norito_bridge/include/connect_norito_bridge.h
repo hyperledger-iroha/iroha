@@ -1085,6 +1085,13 @@ int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+int32_t connect_norito_encode_transfer_instruction_box(
+    const char* authority, unsigned long authority_len,
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* quantity, unsigned long quantity_len,
+    const char* destination, unsigned long destination_len,
+    uint8_t** out_instruction_ptr, unsigned long* out_instruction_len);
+
 int32_t connect_norito_encode_validation_fee_transfer_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,

@@ -47,9 +47,8 @@ impl WalletSignatureV1 {
     /// Construct an Ed25519 signature from raw bytes.
     #[must_use]
     pub fn from_ed25519_bytes(bytes: &[u8]) -> Option<Self> {
-        (bytes.len() == 64)
-            .then(|| Signature::try_from_bytes(bytes).ok())
-            .flatten()
+        (bytes.len() == 64 && bytes.iter().any(|byte| *byte != 0))
+            .then(|| Signature::from_bytes(bytes))
             .map(|signature| Self::new(Algorithm::Ed25519, signature))
     }
 }

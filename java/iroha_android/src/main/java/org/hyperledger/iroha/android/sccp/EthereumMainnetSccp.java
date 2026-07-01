@@ -1408,23 +1408,8 @@ public final class EthereumMainnetSccp {
           strictFirstPresent(
               beaconFinality,
               "beaconFinality.syncCommitteeRoot",
-          "syncCommitteeRoot",
-          "sync_committee_root");
-
-  private static void requireEvmReceiptLogNotRemoved(
-      final Map<String, Object> log, final String label, final String removedMessage) {
-    if (!log.containsKey("removed")) {
-      return;
-    }
-    final Object removed = log.get("removed");
-    if (Boolean.FALSE.equals(removed)) {
-      return;
-    }
-    if (Boolean.TRUE.equals(removed)) {
-      throw new IllegalArgumentException(removedMessage);
-    }
-    throw new IllegalArgumentException(label + ".removed must be a boolean");
-  }
+              "syncCommitteeRoot",
+              "sync_committee_root");
       if (finalitySyncCommitteeRootInput != null) {
         final String finalitySyncCommitteeRoot =
             normalizeRpcHex(
@@ -1466,6 +1451,21 @@ public final class EthereumMainnetSccp {
             "receiptProof.sourceEventDigest must match receipt source event");
       }
     }
+  }
+
+  private static void requireEvmReceiptLogNotRemoved(
+      final Map<String, Object> log, final String label, final String removedMessage) {
+    if (!log.containsKey("removed")) {
+      return;
+    }
+    final Object removed = log.get("removed");
+    if (Boolean.FALSE.equals(removed)) {
+      return;
+    }
+    if (Boolean.TRUE.equals(removed)) {
+      throw new IllegalArgumentException(removedMessage);
+    }
+    throw new IllegalArgumentException(label + ".removed must be a boolean");
   }
 
   private static InboundEvidence callbackEvidenceSnapshot(final InboundEvidence evidence) {

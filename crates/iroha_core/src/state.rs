@@ -84,11 +84,12 @@ use iroha_data_model::{
         AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
         AxtReplayRecord, DataSpaceCatalog, DataSpaceId, DomainCommittee, DomainEndorsement,
         DomainEndorsementPolicy, DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId, LaneRelayEmergencyValidatorSet,
-        LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord,
-        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
-        VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
+        FeeSponsorRule, FeeSponsorRuleEffect, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
+        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneUnbonding,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
+        lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -1147,6 +1148,15 @@ pub(crate) fn dataspace_fee_sponsor_policy_from_config(
         )));
     };
     Ok(Some(FeeSponsorPolicyId::new(sponsor, policy)))
+}
+
+fn default_allow_fee_sponsor_policy(id: FeeSponsorPolicyId) -> FeeSponsorPolicy {
+    let mut policy = FeeSponsorPolicy::new(id);
+    policy.enabled = true;
+    policy
+        .rules
+        .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Allow));
+    policy
 }
 
 impl AccountPermissionSummary {
@@ -25669,6 +25679,22 @@ impl State {
                 ));
             }
         }
+        let configured_fee_sponsor_policy_ids: BTreeSet<_> = nexus
+            .dataspace_fee_sponsors
+            .keys()
+            .filter_map(|dataspace_id| {
+                let world_view = self.world.view();
+                dataspace_fee_sponsor_policy_from_config(
+                    &world_view,
+                    &nexus.dataspace_catalog,
+                    &nexus.dataspace_fee_sponsors,
+                    &nexus.dataspace_fee_sponsor_policies,
+                    *dataspace_id,
+                )
+                .ok()
+                .flatten()
+            })
+            .collect();
         if !nexus.enabled
             && (nexus.lane_catalog != LaneCatalog::default()
                 || nexus.dataspace_catalog != DataSpaceCatalog::default()
@@ -25733,6 +25759,20 @@ impl State {
         let active_reset_lanes = Self::active_reset_lanes(&lanes_to_reset, &nexus.lane_config);
         let reset_height = self.block_hashes.view().len() as u64;
         *self.nexus.write() = nexus;
+        for policy_id in configured_fee_sponsor_policy_ids {
+            if self
+                .world
+                .fee_sponsor_policies
+                .view()
+                .get(&policy_id)
+                .is_none()
+            {
+                let policy = default_allow_fee_sponsor_policy(policy_id);
+                self.world
+                    .fee_sponsor_policies
+                    .insert(policy.id.clone(), policy);
+            }
+        }
         crate::sns::sync_default_namespace_policy_payment_asset(
             &mut self.world,
             &configured_fee_asset_id,
@@ -57045,6 +57085,48 @@ mod tests {
                 .as_deref(),
             Some("default")
         );
+    }
+
+    #[test]
+    fn set_nexus_seeds_configured_default_fee_sponsor_policy() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let sponsor = AccountId::new(crate::state::checked_keypair().public_key().clone());
+
+        let mut fees = iroha_config::parameters::actual::NexusFees::default();
+        fees.sponsorship_enabled = true;
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            fees,
+            dataspace_fee_sponsors: BTreeMap::from([(DataSpaceId::UNIVERSAL, sponsor.to_string())]),
+            dataspace_fee_sponsor_policies: BTreeMap::from([(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            )]),
+            ..Default::default()
+        };
+
+        state
+            .set_nexus(nexus)
+            .expect("configured fee sponsor policy should be seeded");
+
+        let policy_id = FeeSponsorPolicyId::new(
+            sponsor,
+            "default".parse().expect("default fee sponsor policy"),
+        );
+        let policy_view = state.world.fee_sponsor_policies.view();
+        let policy = policy_view
+            .get(&policy_id)
+            .expect("configured default fee sponsor policy should exist");
+        assert!(policy.enabled);
+        assert!(policy.max_fee.is_none());
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(policy.rules[0].effect, FeeSponsorRuleEffect::Allow);
+        assert!(policy.rules[0].dataspaces.is_empty());
+        assert!(policy.rules[0].executable_kinds.is_empty());
+        assert!(policy.rules[0].instruction_wire_ids.is_empty());
+        assert!(policy.rules[0].contract_selectors.is_empty());
     }
 
     #[test]
