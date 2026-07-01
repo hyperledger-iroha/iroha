@@ -639,6 +639,7 @@ export {
   sccpTonSubmissionQueryId,
   canonicalSccpTonSubmissionMetadataBytes,
   buildSccpTonMessageBodyBoc,
+  buildSccpTonMessageBodyBocFromBytes,
   tonConfigValidatorSetPayloadFromProofBoc,
   tonConfigValidatorSetPayloadHashFromProofBoc,
   tonHashmapEProofRootHash,

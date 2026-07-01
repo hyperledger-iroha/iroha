@@ -2346,15 +2346,15 @@ and completed history lives in [`status.md`](./status.md).
   - C# source-level shared ABI-7 archive fixture assertions now pin the
     regenerated current `64x4` profile hashes:
     append-bundle
-    `107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5`,
+    `e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0`,
     verify-request
-    `ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d`,
+    `d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43`,
     verify-result
     `67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
     redeem-request
-    `f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250`,
+    `f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d`,
     and redeem-instruction
-    `d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838`.
+    `69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6`.
   - The matrix must keep the C# managed decoder and typed preflight coverage for
     non-canonical compact lengths, invalid UTF-8 circuit ids, unsupported proof
     circuit/backend values, empty proof bytes, invalid accumulator domains and

@@ -23,6 +23,7 @@ const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";
 const DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV =
   "SCCP_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY";
 const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
+const DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT = 2_000_000;
 const DEFAULT_ROUTE_MANIFEST_OUT =
   "artifacts/sccp-ton/testnet-taira-xor-route.manifest.json";
 const DEFAULT_ROUTE_MANIFEST_ISI_OUT =
@@ -40,13 +41,13 @@ const TON_COUNTERPARTY_ACCOUNT_CODEC_KEY = "ton_raw";
 const TON_VERIFIER_TARGET = "TonContract";
 const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const TAIRA_BURN_RECORD_VK_BACKEND = "halo2/ipa";
-const TAIRA_BURN_RECORD_VK_NAME = "taira_xor_burn_record_v1";
+const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const TAIRA_BURN_RECORD_GAS_LIMIT = 2_000_000;
 
 function usage(command = "") {
   const common = `Usage:
-  node scripts/sccp_ton_taira_xor_deploy.mjs route-manifest --token <0:...> --bridge <0:...> --source-bridge <0:...> --verifier <0:...> --verifier-code-hash <0x...> --verifier-key-hash <0x...> --proof-artifact-hash <0x...> --proving-key-hash <0x...> --deployment-evidence <public-json> --source-verifier-material <public-json> --source-adapter-engine-deployment <public-json> --destination-browser-prover-manifest <public-json> --source-browser-prover-manifest <public-json> --taira-contract <public-json> --post-deploy-source-bridge-config-hash <0x...> --post-deploy-source-event-transaction-id <0x...> --post-deploy-route-canary-evidence-hash <0x...> --post-deploy-route-canary-transaction-id <0x...> --offline-full-toml-evidence <public-json-or-toml> [--ton-finalize-message-value-nano ${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
-  node scripts/sccp_ton_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --authority <taira-route-manifest-manager-account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${TAIRA_CHAIN_ID}] [--wait-for-commit true|false] [--commit-timeout-ms ${DEFAULT_COMMIT_TIMEOUT_MS}]
+  node scripts/sccp_ton_taira_xor_deploy.mjs route-manifest --token <0:...> --bridge <0:...> --source-bridge <0:...> --verifier <0:...> --verifier-code-hash <0x...> --verifier-key-hash <0x...> --proof-artifact-hash <0x...> --proving-key-hash <0x...> --deployment-evidence <public-json> --source-verifier-material <public-json> --source-adapter-engine-deployment <public-json> --destination-browser-prover-manifest <public-json> --source-browser-prover-manifest <public-json> --taira-contract <public-json> --post-deploy-source-bridge-config-hash <0x...> --post-deploy-source-event-transaction-id <0x...> --post-deploy-route-canary-evidence-hash <0x...> --post-deploy-route-canary-transaction-id <0x...> --offline-full-toml-evidence <public-json-or-toml> [--vk-name ${DEFAULT_TAIRA_BURN_RECORD_VK_NAME}] [--ton-finalize-message-value-nano ${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_ton_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --authority <taira-route-manifest-manager-account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${TAIRA_CHAIN_ID}] [--gas-asset-id ${TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID}] [--gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms ${DEFAULT_COMMIT_TIMEOUT_MS}]
 
 Commands:
   route-manifest          Render a production TON testnet route manifest draft.
@@ -446,7 +447,15 @@ function normalizePublicJsonRecord(value, label) {
   return stableJsonValue(record);
 }
 
-function normalizeTairaContractMaterial(raw) {
+function normalizeTairaBurnRecordVkName(value) {
+  const normalized = String(value ?? DEFAULT_TAIRA_BURN_RECORD_VK_NAME).trim();
+  if (!normalized || !/^[A-Za-z0-9._:-]{1,128}$/u.test(normalized)) {
+    throw new Error("--vk-name must be 1-128 verifier-key identifier characters.");
+  }
+  return normalized;
+}
+
+function normalizeTairaContractMaterial(raw, { vkName: expectedVkName } = {}) {
   const record = requireRecord(raw, "TAIRA burn-record contract");
   const contract =
     firstRecord(record, "tairaXorBurnRecord", "taira_xor_burn_record") ??
@@ -492,9 +501,9 @@ function normalizeTairaContractMaterial(raw) {
       `TAIRA burn-record VK backend must be ${TAIRA_BURN_RECORD_VK_BACKEND}.`,
     );
   }
-  if (vkName !== TAIRA_BURN_RECORD_VK_NAME) {
+  if (vkName !== expectedVkName) {
     throw new Error(
-      `TAIRA burn-record VK name must be ${TAIRA_BURN_RECORD_VK_NAME}.`,
+      `TAIRA burn-record VK name must be ${expectedVkName}.`,
     );
   }
   const gasLimit = normalizePositiveInteger(
@@ -668,7 +677,9 @@ function normalizeTonRouteManifestForPublication(input) {
     "TAIRA burn-record code hash",
   );
   manifest.taira_burn_record_vk_backend = TAIRA_BURN_RECORD_VK_BACKEND;
-  manifest.taira_burn_record_vk_name = TAIRA_BURN_RECORD_VK_NAME;
+  manifest.taira_burn_record_vk_name = normalizeTairaBurnRecordVkName(
+    manifest.taira_burn_record_vk_name,
+  );
   manifest.taira_burn_record_gas_limit = TAIRA_BURN_RECORD_GAS_LIMIT;
   if (manifest.production_ready !== true) {
     throw new Error("TON route manifest production_ready must be true.");
@@ -729,11 +740,13 @@ async function commandRouteManifest(options) {
     requireOption(options, "proof-artifact-hash"),
     "--proof-artifact-hash",
   );
+  const vkName = normalizeTairaBurnRecordVkName(options["vk-name"]);
   const tairaContract = normalizeTairaContractMaterial(
     await readJson(
       requireOption(options, "taira-contract"),
       "TAIRA burn-record contract",
     ),
+    { vkName },
   );
   const sourceVerifierMaterial = normalizePublicJsonRecord(
     await readJson(
@@ -765,6 +778,39 @@ async function commandRouteManifest(options) {
     "source_browser_prover",
     proofArtifactHash,
   );
+  const tonFinalizeMessageValueNano = normalizePositiveDecimalString(
+    options["ton-finalize-message-value-nano"],
+    "--ton-finalize-message-value-nano",
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
+  const tokenAddress = normalizeTonRawAddress(
+    requireOption(options, "token"),
+    "--token",
+  );
+  const bridgeAddress = normalizeTonRawAddress(
+    requireOption(options, "bridge"),
+    "--bridge",
+  );
+  const sourceBridgeAddress = normalizeTonRawAddress(
+    requireOption(options, "source-bridge"),
+    "--source-bridge",
+  );
+  const verifierAddress = normalizeTonRawAddress(
+    requireOption(options, "verifier"),
+    "--verifier",
+  );
+  const verifierCodeHash = normalizeHex32(
+    requireOption(options, "verifier-code-hash"),
+    "--verifier-code-hash",
+  );
+  const verifierKeyHash = normalizeHex32(
+    requireOption(options, "verifier-key-hash"),
+    "--verifier-key-hash",
+  );
+  const provingKeyHash = normalizeHex32(
+    requireOption(options, "proving-key-hash"),
+    "--proving-key-hash",
+  );
   const manifest = normalizeTonRouteManifestForPublication({
     schema: ROUTE_MANIFEST_SCHEMA,
     version: 1,
@@ -783,40 +829,34 @@ async function commandRouteManifest(options) {
     verifier_target: TON_VERIFIER_TARGET,
     production_ready: true,
     network_id_hex: TON_TESTNET_CHAIN_ID_HEX,
-    taira_xor_token_address: normalizeTonRawAddress(
-      requireOption(options, "token"),
-      "--token",
-    ),
-    taira_xor_bridge_address: normalizeTonRawAddress(
-      requireOption(options, "bridge"),
-      "--bridge",
-    ),
-    source_bridge_address: normalizeTonRawAddress(
-      requireOption(options, "source-bridge"),
-      "--source-bridge",
-    ),
-    destination_verifier_address: normalizeTonRawAddress(
-      requireOption(options, "verifier"),
-      "--verifier",
-    ),
-    ton_finalize_message_value_nano: normalizePositiveDecimalString(
-      options["ton-finalize-message-value-nano"],
-      "--ton-finalize-message-value-nano",
-      DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
-    ),
-    verifier_code_hash: normalizeHex32(
-      requireOption(options, "verifier-code-hash"),
-      "--verifier-code-hash",
-    ),
-    verifier_key_hash: normalizeHex32(
-      requireOption(options, "verifier-key-hash"),
-      "--verifier-key-hash",
-    ),
+    taira_xor_token_address: tokenAddress,
+    taira_xor_bridge_address: bridgeAddress,
+    source_bridge_address: sourceBridgeAddress,
+    destination_verifier_address: verifierAddress,
+    ton_finalize_message_value_nano: tonFinalizeMessageValueNano,
+    verifier_code_hash: verifierCodeHash,
+    verifier_key_hash: verifierKeyHash,
     proof_artifact_hash: proofArtifactHash,
-    proving_key_hash: normalizeHex32(
-      requireOption(options, "proving-key-hash"),
-      "--proving-key-hash",
-    ),
+    proving_key_hash: provingKeyHash,
+    destination_rollout: {
+      version: 1,
+      destination_network_id: TON_TESTNET_CHAIN_ID_HEX,
+      source_domain: 0,
+      target_domain: TON_COUNTERPARTY_DOMAIN,
+      verifier_identity: verifierAddress,
+      verifier_backend: "ton-contract-v1",
+      proof_family: "stark-fri-v1",
+      verifier_code_hash: verifierCodeHash,
+      verifier_key_hash: verifierKeyHash,
+      proof_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      destination_bridge_address: bridgeAddress,
+      source_bridge_address: sourceBridgeAddress,
+      destination_binding_hash: TON_DESTINATION_BINDING_HASH,
+      destination_binding_key: TON_DESTINATION_BINDING_KEY,
+      finalize_message_value_nano: tonFinalizeMessageValueNano,
+      ton_finalize_message_value_nano: tonFinalizeMessageValueNano,
+    },
     source_verifier_material: sourceVerifierMaterial,
     source_adapter_engine_deployment: sourceAdapterEngineDeployment,
     destination_browser_prover: destinationBrowserProver,
@@ -893,6 +933,18 @@ async function commandPublishRouteManifest(options) {
   const manifestEnvelope = await readJson(manifestPath, "TON route manifest");
   const manifest = normalizeTonRouteManifestForPublication(manifestEnvelope);
   const instructionManifest = bridgeRouteManifestForInstruction(manifest);
+  const gasAssetId =
+    options["gas-asset-id"] === undefined || options["gas-asset-id"] === null
+      ? TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
+      : normalizeCanonicalAssetDefinitionId(
+          options["gas-asset-id"],
+          "--gas-asset-id",
+        );
+  const gasLimit = normalizePositiveInteger(
+    options["gas-limit"],
+    "--gas-limit",
+    DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+  );
   const instruction = {
     UpsertSccpRouteManifest: {
       manifest: instructionManifest,
@@ -918,6 +970,8 @@ async function commandPublishRouteManifest(options) {
       manifest.destination_browser_prover.manifest_hash,
     sourceBrowserProverManifestHash:
       manifest.source_browser_prover.manifest_hash,
+    gasAssetId,
+    gasLimit,
   };
   const outPath = options.out ?? DEFAULT_ROUTE_MANIFEST_ISI_OUT;
   if (!optionEnabled(options, "submit", false)) {
@@ -974,6 +1028,8 @@ async function commandPublishRouteManifest(options) {
       route_id: manifest.route_id,
       asset_key: manifest.asset_key,
       action: "publish_sccp_ton_route_manifest",
+      gas_asset_id: gasAssetId,
+      gas_limit: gasLimit,
     },
     privateKey,
   });
@@ -994,6 +1050,8 @@ async function commandPublishRouteManifest(options) {
     waitForCommit,
     commitTimeoutMs: timeoutMs,
     status,
+    gasAssetId,
+    gasLimit,
   };
   const out = await writeJsonNoSecrets(outPath, {
     ...artifact,
@@ -1008,6 +1066,8 @@ async function commandPublishRouteManifest(options) {
     authority,
     hash,
     waitForCommit,
+    gasAssetId,
+    gasLimit,
     routeId: manifest.route_id,
     assetKey: manifest.asset_key,
   };

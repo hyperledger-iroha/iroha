@@ -4361,6 +4361,23 @@ export interface TonSccpMessageBodyInputBase extends TonSccpProofRequestInput {
   query_id?: string | number | bigint;
 }
 
+export interface TonSccpMessageBodyBytesInput {
+  publicInputsBytes?: BinaryLike;
+  public_inputs_bytes?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  metadataBytes?: BinaryLike;
+  metadata_bytes?: BinaryLike;
+  queryId?: string | number | bigint;
+  query_id?: string | number | bigint;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+}
+
 export type TonSccpMessageBodyInput = TonSccpMessageBodyInputBase &
   (
     | {
@@ -7294,6 +7311,9 @@ export function canonicalSccpTonSubmissionMetadataBytes(
 ): Uint8Array;
 export function buildSccpTonMessageBodyBoc(
   input: TonSccpMessageBodyInput,
+): Uint8Array;
+export function buildSccpTonMessageBodyBocFromBytes(
+  input: TonSccpMessageBodyBytesInput,
 ): Uint8Array;
 export function tonConfigValidatorSetPayloadFromProofBoc(
   input: BinaryLike,
@@ -13902,7 +13922,7 @@ export type ToriiSccpPlatformSubmissionPayload =
       kind: "ton_internal_message";
       value: {
         messageBodyBoc: string;
-        queryId: number;
+        queryId: string;
         destinationBinding: ToriiSccpDestinationBinding;
         destinationBindingHash: string;
         proofBytes: string;

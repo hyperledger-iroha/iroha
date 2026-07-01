@@ -7606,8 +7606,8 @@ export const tonShardAccountsLastTransactionHash = (boc, key, keyBitLen) => {
   return transaction?.hash ?? null;
 };
 
-const pushTonSnakeCells = (cells, bytes) => {
-  const data = toBytes(bytes, "TON snake bytes");
+const pushTonBlobCells = (cells, bytes) => {
+  const data = toBytes(bytes, "TON blob bytes");
   const start = cells.length;
   if (data.length === 0) {
     if (cells.length + 1 > SCCP_TON_MAX_BOC_CELLS) {
@@ -7617,21 +7617,36 @@ const pushTonSnakeCells = (cells, bytes) => {
     return start;
   }
   const chunkCount = Math.ceil(data.length / SCCP_TON_MAX_CELL_DATA_BYTES);
-  if (cells.length + chunkCount > SCCP_TON_MAX_BOC_CELLS) {
+  const maxInternalCells = Math.ceil((chunkCount - 1) / (SCCP_TON_MAX_REFS - 1));
+  if (cells.length + chunkCount + maxInternalCells > SCCP_TON_MAX_BOC_CELLS) {
     throw new RangeError("TON BOC contains too many cells");
   }
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunkStart = index * SCCP_TON_MAX_CELL_DATA_BYTES;
-    const chunk = data.subarray(
-      chunkStart,
-      Math.min(chunkStart + SCCP_TON_MAX_CELL_DATA_BYTES, data.length),
-    );
-    cells.push({
-      data: chunk,
-      refs: index + 1 === chunkCount ? [] : [start + index + 1],
-    });
-  }
-  return start;
+  const pushNode = (chunkStartIndex, chunkEndIndex) => {
+    const nodeIndex = cells.length;
+    cells.push({ data: new Uint8Array(), refs: [] });
+    const nodeChunkCount = chunkEndIndex - chunkStartIndex;
+    if (nodeChunkCount === 1) {
+      const offset = chunkStartIndex * SCCP_TON_MAX_CELL_DATA_BYTES;
+      cells[nodeIndex].data = data.subarray(
+        offset,
+        Math.min(offset + SCCP_TON_MAX_CELL_DATA_BYTES, data.length),
+      );
+      return nodeIndex;
+    }
+    const groupCount = Math.min(SCCP_TON_MAX_REFS, nodeChunkCount);
+    const refs = [];
+    for (let group = 0; group < groupCount; group += 1) {
+      const childStart =
+        chunkStartIndex + Math.floor((nodeChunkCount * group) / groupCount);
+      const childEnd =
+        chunkStartIndex +
+        Math.floor((nodeChunkCount * (group + 1)) / groupCount);
+      refs.push(pushNode(childStart, childEnd));
+    }
+    cells[nodeIndex].refs = refs;
+    return nodeIndex;
+  };
+  return pushNode(0, chunkCount);
 };
 
 const enumCode = (value, table, label) => {
@@ -8449,9 +8464,82 @@ export const buildSccpTonMessageBodyBoc = (input) => {
     queryIdInput === SCCP_OPTIONAL_FIELD_MISSING
       ? sccpTonSubmissionQueryId(publicInputs)
       : queryIdInput;
+  return buildSccpTonMessageBodyBocFromBytes({
+    publicInputsBytes,
+    proofBytes,
+    bundleBytes,
+    metadataBytes,
+    queryId,
+    statementHash,
+    destinationBindingHash,
+  });
+};
+
+export const buildSccpTonMessageBodyBocFromBytes = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP message body input must be an object");
+  }
+  const publicInputsBytes = toBytes(
+    strictResultField(
+      input,
+      "publicInputsBytes",
+      "publicInputsBytes",
+      "public_inputs_bytes",
+    ),
+    "publicInputsBytes",
+  );
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      strictResultField(input, "proofBytes", "proofBytes", "proof_bytes"),
+      "proofBytes",
+    ),
+    "proofBytes",
+  );
+  const bundleBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      strictResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes"),
+      "bundleBytes",
+    ),
+    "bundleBytes",
+  );
+  const metadataInput = strictOptionalResultField(
+    input,
+    "metadataBytes",
+    "metadataBytes",
+    "metadata_bytes",
+  );
+  const metadataBytes =
+    metadataInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? new Uint8Array()
+      : toBytes(metadataInput, "metadataBytes");
+  const queryIdInput = strictResultField(
+    input,
+    "queryId",
+    "queryId",
+    "query_id",
+  );
+  const statementHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "statementHash",
+      "statementHash",
+      "statement_hash",
+    ),
+    "statementHash",
+  );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
+    "destinationBindingHash",
+  );
+
   let rootData = new Uint8Array();
   rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_OP_V1);
-  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU64Be(rootData, queryIdInput);
   rootData = writeU16Be(rootData, SCCP_TON_MESSAGE_SCHEMA_VERSION_V1);
   rootData = concatBytes(
     rootData,
@@ -8461,12 +8549,11 @@ export const buildSccpTonMessageBodyBoc = (input) => {
     rootData,
     hexToBytes(destinationBindingHash, "destinationBindingHash", 32),
   );
-
   const cells = [{ data: rootData, refs: [] }];
-  const publicInputsRoot = pushTonSnakeCells(cells, publicInputsBytes);
-  const proofRoot = pushTonSnakeCells(cells, proofBytes);
-  const bundleRoot = pushTonSnakeCells(cells, bundleBytes);
-  const metadataRoot = pushTonSnakeCells(cells, metadataBytes);
+  const publicInputsRoot = pushTonBlobCells(cells, publicInputsBytes);
+  const proofRoot = pushTonBlobCells(cells, proofBytes);
+  const bundleRoot = pushTonBlobCells(cells, bundleBytes);
+  const metadataRoot = pushTonBlobCells(cells, metadataBytes);
   cells[0].refs = [publicInputsRoot, proofRoot, bundleRoot, metadataRoot];
   return encodeTonBocSingleRoot(cells, 0);
 };
