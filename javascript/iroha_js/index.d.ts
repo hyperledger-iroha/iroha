@@ -841,6 +841,7 @@ export const SCCP_TAIRA_CHAIN_ID_V1: "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1: 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
 export const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1: "taira_bsc_xor";
+export const SCCP_TAIRA_TON_XOR_ROUTE_ID_V1: "taira_ton_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
 export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1: 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
@@ -912,6 +913,14 @@ export interface TairaXorBscTransferPayloadInput
   bsc_recipient?: string;
   evmRecipient?: string;
   evm_recipient?: string;
+}
+
+export interface TairaXorTonTransferPayloadInput
+  extends TairaXorTransferPayloadInput {
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonRecipient?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_recipient?: string;
 }
 
 export interface TairaXorTronToTairaTransferPayloadInput {
@@ -1262,6 +1271,14 @@ export interface TairaXorBscSccpRecordDescriptorInput
   evm_recipient?: string;
 }
 
+export interface TairaXorTonSccpRecordDescriptorInput
+  extends TairaXorSccpRecordDescriptorInput {
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonRecipient?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_recipient?: string;
+}
+
 export interface TairaXorSccpRecordDescriptor {
   readonly version: 1;
   readonly kind: "TairaXorSccpRecordDescriptor";
@@ -1299,6 +1316,11 @@ export interface TairaXorBscSccpRecordDescriptor
   readonly route_id: "taira_bsc_xor";
 }
 
+export interface TairaXorTonSccpRecordDescriptor
+  extends Omit<TairaXorSccpRecordDescriptor, "route_id"> {
+  readonly route_id: "taira_ton_xor";
+}
+
 export interface TairaXorSccpBurnRecordInput
   extends TairaXorSccpRecordDescriptorInput {
   descriptor?: TairaXorSccpRecordDescriptor;
@@ -1331,6 +1353,22 @@ export interface TairaXorBscSccpBurnRecordInput
   authority?: string;
 }
 
+export interface TairaXorTonSccpBurnRecordInput
+  extends TairaXorTonSccpRecordDescriptorInput {
+  descriptor?: TairaXorTonSccpRecordDescriptor;
+  recordDescriptor?: TairaXorTonSccpRecordDescriptor;
+  record_descriptor?: TairaXorTonSccpRecordDescriptor;
+  settlementAssetDefinitionId?: string;
+  settlement_asset_definition_id?: string;
+  settlementAsset?: string;
+  settlement_asset?: string;
+  settlementAmount?: string;
+  settlement_amount?: string;
+  burnAmount?: string;
+  burn_amount?: string;
+  authority?: string;
+}
+
 export interface TairaXorSccpBurnRecordContractPayload {
   readonly version: 1;
   readonly entrypoint: "burn_and_record";
@@ -1347,6 +1385,11 @@ export interface TairaXorSccpBurnRecordContractPayload {
 export interface TairaXorBscSccpBurnRecordContractPayload
   extends Omit<TairaXorSccpBurnRecordContractPayload, "descriptor"> {
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
+}
+
+export interface TairaXorTonSccpBurnRecordContractPayload
+  extends Omit<TairaXorSccpBurnRecordContractPayload, "descriptor"> {
+  readonly descriptor: Readonly<TairaXorTonSccpRecordDescriptor>;
 }
 
 export interface TairaXorSccpBurnRecordZkIvmRequestInput
@@ -1395,6 +1438,29 @@ export interface TairaXorBscSccpBurnRecordZkIvmRequestInput
   metadata?: Record<string, JsonValue>;
 }
 
+export interface TairaXorTonSccpBurnRecordZkIvmRequestInput
+  extends TairaXorTonSccpBurnRecordInput {
+  vkRef?: { backend?: string; name?: string };
+  vk_ref?: { backend?: string; name?: string };
+  bytecode?: string;
+  artifactB64?: string;
+  artifact_b64?: string;
+  contractArtifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
+  contract_artifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
+  artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  gasLimit?: string | number | bigint;
+  gas_limit?: string | number | bigint;
+  metadata?: Record<string, JsonValue>;
+}
+
 export interface TairaXorSccpBurnRecordZkIvmRequest {
   readonly version: 1;
   readonly route_id: "taira_tron_xor";
@@ -1417,6 +1483,16 @@ export interface TairaXorBscSccpBurnRecordZkIvmRequest
   readonly route_id: "taira_bsc_xor";
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
   readonly contract: Readonly<TairaXorBscSccpBurnRecordContractPayload>;
+}
+
+export interface TairaXorTonSccpBurnRecordZkIvmRequest
+  extends Omit<
+    TairaXorSccpBurnRecordZkIvmRequest,
+    "route_id" | "descriptor" | "contract"
+  > {
+  readonly route_id: "taira_ton_xor";
+  readonly descriptor: Readonly<TairaXorTonSccpRecordDescriptor>;
+  readonly contract: Readonly<TairaXorTonSccpBurnRecordContractPayload>;
 }
 
 export interface SccpTokenAddPayload {
@@ -8104,12 +8180,16 @@ export interface TairaXorBscBurnToTairaAccountCallDataInput
 
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorBscRouteIdHash(routeId?: string): string;
+export function tairaXorTonRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(
   input: TairaXorTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
 export function buildTairaXorBscTransferPayload(
   input: TairaXorBscTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
+export function buildTairaXorTonTransferPayload(
+  input: TairaXorTonTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
 export function buildTairaXorTronToTairaTransferPayload(
   input: TairaXorTronToTairaTransferPayloadInput,
@@ -8123,6 +8203,9 @@ export function buildTairaXorSccpRecordDescriptor(
 export function buildTairaXorBscSccpRecordDescriptor(
   input: TairaXorBscSccpRecordDescriptorInput,
 ): Readonly<TairaXorBscSccpRecordDescriptor>;
+export function buildTairaXorTonSccpRecordDescriptor(
+  input: TairaXorTonSccpRecordDescriptorInput,
+): Readonly<TairaXorTonSccpRecordDescriptor>;
 export function buildRecordSccpMessageInstructionBytes(
   payloadBytes: BinaryLike | number[],
 ): Uint8Array;
@@ -8132,12 +8215,18 @@ export function buildTairaXorSccpBurnRecordContractPayload(
 export function buildTairaXorBscSccpBurnRecordContractPayload(
   input: TairaXorBscSccpBurnRecordInput,
 ): Readonly<TairaXorBscSccpBurnRecordContractPayload>;
+export function buildTairaXorTonSccpBurnRecordContractPayload(
+  input: TairaXorTonSccpBurnRecordInput,
+): Readonly<TairaXorTonSccpBurnRecordContractPayload>;
 export function buildTairaXorSccpBurnRecordZkIvmRequest(
   input: TairaXorSccpBurnRecordZkIvmRequestInput,
 ): Readonly<TairaXorSccpBurnRecordZkIvmRequest>;
 export function buildTairaXorBscSccpBurnRecordZkIvmRequest(
   input: TairaXorBscSccpBurnRecordZkIvmRequestInput,
 ): Readonly<TairaXorBscSccpBurnRecordZkIvmRequest>;
+export function buildTairaXorTonSccpBurnRecordZkIvmRequest(
+  input: TairaXorTonSccpBurnRecordZkIvmRequestInput,
+): Readonly<TairaXorTonSccpBurnRecordZkIvmRequest>;
 export function tairaXorCanonicalTransferPayloadBytes(
   input: TairaXorTransferPayloadInput,
 ): Uint8Array;
@@ -8150,6 +8239,13 @@ export function tairaXorBscCanonicalTransferPayloadBytes(
 ): Uint8Array;
 export function tairaXorBscTransferMessageId(
   input: TairaXorBscTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorTonCanonicalTransferPayloadBytes(
+  input: TairaXorTonTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTonTransferMessageId(
+  input: TairaXorTonTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
 export function tairaXorBscToTairaCanonicalTransferPayloadBytes(

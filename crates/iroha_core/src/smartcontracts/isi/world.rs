@@ -9521,6 +9521,23 @@ pub mod isi {
                 ));
             }
         }
+        if actual.production_ready && actual.counterparty_domain == iroha_sccp::SCCP_DOMAIN_TON {
+            if actual.route_id != "taira_ton_xor" || actual.asset_key != "xor" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production TON SCCP route manifest must target taira_ton_xor/xor".into(),
+                    ),
+                ));
+            }
+            if actual.verifier_target != "TonContract" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production TON SCCP route manifest verifier_target must be TonContract"
+                            .into(),
+                    ),
+                ));
+            }
+        }
         Ok(actual)
     }
 
