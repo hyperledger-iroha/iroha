@@ -582,10 +582,7 @@ unsafe fn parse_optional_string_bridge(
     unsafe { read_string_bridge(ptr, len) }.map(Some)
 }
 
-unsafe fn parse_metadata_object_bridge(
-    ptr: *const c_char,
-    len: c_ulong,
-) -> BridgeResult<Metadata> {
+unsafe fn parse_metadata_object_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<Metadata> {
     let mut metadata = Metadata::default();
     if ptr.is_null() || len == 0 {
         return Ok(metadata);
@@ -630,10 +627,10 @@ fn build_validation_fee_metadata(
         );
     }
     if let Some(memo) = memo {
-        metadata.insert(
-            Name::from_str("memo").expect("static metadata key"),
-            Json::new(memo),
-        );
+        let memo_key = Name::from_str("memo").expect("static metadata key");
+        if metadata.get(&memo_key).is_none() {
+            metadata.insert(memo_key, Json::new(memo));
+        }
     }
     Ok(metadata)
 }
@@ -15484,8 +15481,11 @@ pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_tr
 
         let principal_asset_id =
             AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
-        let fee_asset_id =
-            AssetId::with_scope(fee_asset_definition.clone(), authority.clone(), fee_asset_scope);
+        let fee_asset_id = AssetId::with_scope(
+            fee_asset_definition.clone(),
+            authority.clone(),
+            fee_asset_scope,
+        );
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
@@ -18901,6 +18901,41 @@ mod accel_tests {
         unsafe {
             free(out_signed_ptr as *mut _);
         }
+    }
+
+    #[test]
+    fn validation_fee_metadata_preserves_explicit_memo() {
+        let memo_key = Name::from_str("memo").expect("metadata key");
+        let mut metadata = Metadata::default();
+        metadata.insert(memo_key.clone(), Json::new("explicit memo"));
+
+        let metadata = build_validation_fee_metadata(
+            metadata,
+            7,
+            "ab".repeat(32),
+            1,
+            None,
+            Some("fallback memo".to_owned()),
+        )
+        .expect("validation fee metadata");
+
+        assert_eq!(metadata.get(&memo_key), Some(&Json::new("explicit memo")));
+    }
+
+    #[test]
+    fn validation_fee_metadata_inserts_fallback_memo_when_missing() {
+        let metadata = build_validation_fee_metadata(
+            Metadata::default(),
+            7,
+            "ab".repeat(32),
+            1,
+            None,
+            Some("fallback memo".to_owned()),
+        )
+        .expect("validation fee metadata");
+
+        let memo_key = Name::from_str("memo").expect("metadata key");
+        assert_eq!(metadata.get(&memo_key), Some(&Json::new("fallback memo")));
     }
 
     #[test]
