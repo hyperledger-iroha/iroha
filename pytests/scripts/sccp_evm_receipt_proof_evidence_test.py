@@ -963,6 +963,67 @@ def test_collect_receipt_proof_rejects_duplicate_source_event_logs():
         raise AssertionError("duplicate SCCP source event logs were accepted")
 
 
+def test_receipt_trie_builder_rejects_non_boolean_removed_log_flags():
+    module = load_module()
+
+    for removed, expected_message in (
+        (True, "receipt.logs[0] must not be removed"),
+        (None, "receipt.logs[0].removed must be a boolean"),
+        ("secret-token-removed", "receipt.logs[0].removed must be a boolean"),
+        (1, "receipt.logs[0].removed must be a boolean"),
+    ):
+        receipts = block_receipts(
+            module,
+            source_log_overrides={"removed": removed},
+        )
+
+        try:
+            module.build_receipt_trie_proof_from_receipts(
+                receipts,
+                transaction_index=0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                f"receipt trie builder accepted removed log flag {removed!r}"
+            )
+
+
+def test_source_event_digest_rejects_non_boolean_removed_log_flags_directly():
+    module = load_module()
+
+    for removed, expected_message in (
+        (True, "receipt.logs[0] must not be removed"),
+        (None, "receipt.logs[0].removed must be a boolean"),
+        ("secret-token-removed", "receipt.logs[0].removed must be a boolean"),
+        (1, "receipt.logs[0].removed must be a boolean"),
+    ):
+        try:
+            module._source_event_digest_from_receipt(
+                receipt(
+                    module,
+                    index=0,
+                    tx_byte=0x11,
+                    logs=source_log(module, removed=removed),
+                ),
+                source_bridge_address=bytes.fromhex("33" * 20),
+                transaction_hash=bytes.fromhex("11" * 32),
+                block_hash=bytes.fromhex("aa" * 32),
+                block_number=0x1234,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                f"source event digest accepted removed log flag {removed!r}"
+            )
+
+
 def test_collect_receipt_proof_rejects_source_event_missing_context_fields():
     module = load_module()
 

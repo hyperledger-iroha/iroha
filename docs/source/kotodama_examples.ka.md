@@ -57,7 +57,7 @@ seiyaku TransferDemo {
 ```
 
 რუკების შედგენა (pointer-ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, შემდეგ `SCALL 0x24`
+- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, შემდეგ `SCALL 0x2C`
 
 ## NFT შექმნა + გადაცემა
 

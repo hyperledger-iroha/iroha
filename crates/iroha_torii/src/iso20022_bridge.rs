@@ -4353,6 +4353,9 @@ fn ensure_no_xml_signature_carrier_outside_span(
 }
 
 fn decode_p256_xmldsig_signature(signature_value: &[u8]) -> Result<P256Signature, MsgError> {
+    if !signature_value.is_empty() && signature_value.iter().all(|byte| *byte == 0) {
+        return Err(MsgError::ValidationFailed);
+    }
     let signature = if signature_value.len() == P256_XMLDSIG_SIGNATURE_LEN {
         P256Signature::from_slice(signature_value).map_err(|_| MsgError::ValidationFailed)
     } else {
@@ -4362,6 +4365,13 @@ fn decode_p256_xmldsig_signature(signature_value: &[u8]) -> Result<P256Signature
         return Err(MsgError::ValidationFailed);
     }
     Ok(signature)
+}
+
+fn decode_p256_der_signature(signature_value: &[u8]) -> Result<P256Signature, MsgError> {
+    if !signature_value.is_empty() && signature_value.iter().all(|byte| *byte == 0) {
+        return Err(MsgError::ValidationFailed);
+    }
+    P256Signature::from_der(signature_value).map_err(|_| MsgError::ValidationFailed)
 }
 
 #[derive(Debug)]
@@ -6578,8 +6588,7 @@ fn verify_ocsp_signature_with_certificate(
     let public_key = signer.public_key().subject_public_key.data.to_vec();
     let verifying_key =
         P256VerifyingKey::from_sec1_bytes(&public_key).map_err(|_| MsgError::ValidationFailed)?;
-    let signature = P256Signature::from_der(response.signature_value)
-        .map_err(|_| MsgError::ValidationFailed)?;
+    let signature = decode_p256_der_signature(response.signature_value)?;
     verifying_key
         .verify(response.tbs_response_data, &signature)
         .map_err(|_| MsgError::ValidationFailed)
@@ -7205,8 +7214,7 @@ fn verify_x509_certificate_signature(
     let issuer_public_key = issuer.public_key().subject_public_key.data.to_vec();
     let verifying_key = P256VerifyingKey::from_sec1_bytes(&issuer_public_key)
         .map_err(|_| MsgError::ValidationFailed)?;
-    let signature = P256Signature::from_der(&certificate.signature_value.data)
-        .map_err(|_| MsgError::ValidationFailed)?;
+    let signature = decode_p256_der_signature(&certificate.signature_value.data)?;
     verifying_key
         .verify(certificate.tbs_certificate.as_ref(), &signature)
         .map_err(|_| MsgError::ValidationFailed)
@@ -7224,8 +7232,7 @@ fn verify_x509_crl_signature(
     let issuer_public_key = issuer.public_key().subject_public_key.data.to_vec();
     let verifying_key = P256VerifyingKey::from_sec1_bytes(&issuer_public_key)
         .map_err(|_| MsgError::ValidationFailed)?;
-    let signature = P256Signature::from_der(&crl.signature_value.data)
-        .map_err(|_| MsgError::ValidationFailed)?;
+    let signature = decode_p256_der_signature(&crl.signature_value.data)?;
     verifying_key
         .verify(crl.tbs_cert_list.as_ref(), &signature)
         .map_err(|_| MsgError::ValidationFailed)
@@ -15337,6 +15344,22 @@ mod tests {
 
             assert!(matches!(err, MsgError::ValidationFailed));
         }
+    }
+
+    #[test]
+    fn supported_xml_p256_signature_rejects_all_zero_signature_material() {
+        let err = decode_p256_xmldsig_signature(&[0_u8; P256_XMLDSIG_SIGNATURE_LEN])
+            .expect_err("all-zero fixed-width P-256 signatures must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_xml_p256_der_signature_rejects_all_zero_signature_material() {
+        let err = decode_p256_der_signature(&[0_u8; 72])
+            .expect_err("all-zero DER P-256 signatures must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     #[test]

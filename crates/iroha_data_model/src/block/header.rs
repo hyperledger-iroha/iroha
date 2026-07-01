@@ -78,7 +78,7 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
-        /// Optional SCCP commitment root finalized in this block.
+        /// Optional SCCP commitment root finalized after transaction execution in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub sccp_commitment_root: Option<[u8; 32]>,
         /// Creation timestamp as Unix time in milliseconds.
@@ -632,17 +632,18 @@ impl BlockHeader {
         Duration::from_millis(self.creation_time_ms)
     }
 
-    /// Returns the consensus-level hash of the block header,
-    /// excluding the `result_merkle_root` field.
+    /// Returns the consensus-level hash of the block header, excluding
+    /// post-execution roots which are validated after transaction execution.
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
-        self.hash_without_results()
+        self.hash_without_execution_results()
     }
 
-    /// Computes the header hash without including `result_merkle_root`.
+    /// Computes the header hash without including post-execution roots.
     #[inline]
-    fn hash_without_results(&self) -> HashOf<BlockHeader> {
-        let legacy = BlockHeaderForConsensusLegacy::from(self);
+    fn hash_without_execution_results(&self) -> HashOf<BlockHeader> {
+        let mut legacy = BlockHeaderForConsensusLegacy::from(self);
+        legacy.sccp_commitment_root = None;
         if let Some(npos_effects_hash) = self.npos_effects_hash {
             let header = BlockHeaderForConsensusWithNposEffects {
                 height: legacy.height,
@@ -773,6 +774,35 @@ mod tests {
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked block-header fixture keypair")
+    }
+
+    fn sample_execution_context_hash() -> HashOf<BlockExecutionContextBundle> {
+        let context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                [0xC7; Hash::LENGTH],
+            )),
+            crate::nexus::LaneId::new(1),
+            crate::nexus::DataSpaceId::new(2),
+        )]);
+        HashOf::new(&context)
+    }
+
+    fn assert_sccp_commitment_root_ignored_by_hash(mut header: BlockHeader) {
+        let base = header.hash();
+
+        header.set_sccp_commitment_root(Some([0x42; 32]));
+        assert_eq!(
+            base,
+            header.hash(),
+            "SCCP commitment root is a post-execution root and must not affect consensus hash"
+        );
+
+        header.set_sccp_commitment_root(Some([0x7A; 32]));
+        assert_eq!(
+            base,
+            header.hash(),
+            "changing SCCP commitment root must not affect consensus hash"
+        );
     }
 
     #[test]
@@ -1028,14 +1058,7 @@ mod tests {
     fn header_hash_captures_execution_context_hash_and_preserves_legacy_none_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
         let base = header.hash();
-        let context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
-                [0xC7; Hash::LENGTH],
-            )),
-            crate::nexus::LaneId::new(1),
-            crate::nexus::DataSpaceId::new(2),
-        )]);
-        header.set_execution_context_hash(Some(HashOf::new(&context)));
+        header.set_execution_context_hash(Some(sample_execution_context_hash()));
         let with_context = header.hash();
         assert_ne!(
             base, with_context,
@@ -1048,6 +1071,27 @@ mod tests {
             header.hash(),
             "omitting execution context must preserve the legacy header hash"
         );
+    }
+
+    #[test]
+    fn header_hash_ignores_sccp_commitment_root_for_all_consensus_hash_branches() {
+        assert_sccp_commitment_root_ignored_by_hash(BlockHeader::new(
+            nonzero!(7_u64),
+            None,
+            None,
+            None,
+            123,
+            0,
+        ));
+
+        let mut with_context = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
+        with_context.set_execution_context_hash(Some(sample_execution_context_hash()));
+        assert_sccp_commitment_root_ignored_by_hash(with_context);
+
+        let mut with_npos = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
+        with_npos.set_execution_context_hash(Some(sample_execution_context_hash()));
+        with_npos.set_npos_effects_hash(Some(HashOf::new(&NposConsensusEffects::default())));
+        assert_sccp_commitment_root_ignored_by_hash(with_npos);
     }
 
     #[test]

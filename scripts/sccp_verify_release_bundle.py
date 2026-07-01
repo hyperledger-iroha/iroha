@@ -407,6 +407,14 @@ ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
 ACTIVE_LAUNCH_CHAIN = "eth"
 ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
 ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
+SCCP_DOMAIN_CONSTANT_NAME_BY_DOMAIN = {
+    SCCP_DOMAIN_SORA: "SCCP_DOMAIN_SORA",
+    SCCP_DOMAIN_ETH: "SCCP_DOMAIN_ETH",
+    SCCP_DOMAIN_BSC: "SCCP_DOMAIN_BSC",
+    SCCP_DOMAIN_SOL: "SCCP_DOMAIN_SOL",
+    SCCP_DOMAIN_TON: "SCCP_DOMAIN_TON",
+    SCCP_DOMAIN_TRON: "SCCP_DOMAIN_TRON",
+}
 ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE = "evm_message_proof_accepted_transaction"
 ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
@@ -428,6 +436,19 @@ SCCP_NOT_REMAINING_WORK_SCOPE_NOTE = (
     "fixtures, SDK helpers, or public discovery routes as remaining SCCP launch "
     "work in this cycle."
 )
+
+
+def _sccp_domain_constant_label(domain: Any) -> str:
+    """Return a public SCCP domain label with the named constant when known."""
+
+    if type(domain) is not int:
+        return "non-integer domain"
+    name = SCCP_DOMAIN_CONSTANT_NAME_BY_DOMAIN.get(domain)
+    if name is None:
+        return f"domain {domain}"
+    return f"{name} ({domain})"
+
+
 SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     (
         "crates/iroha_sccp/src/lib.rs",
@@ -463,7 +484,7 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     (
         "scripts/sccp_release_readiness_report.py",
         (
-            "ACTIVE_LAUNCH_DOMAIN = 1",
+            "ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH",
             'ACTIVE_LAUNCH_CHAIN = "eth"',
             'ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"',
             'ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"',
@@ -692,6 +713,10 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "emitted after `cargo build -p connect_norito_bridge`",
     "dotnet restore Hyperledger.Iroha.Sdk.sln",
     "before the strict `dotnet test` command",
+    "that strict `dotnet test` command carrying",
+    "`--artifacts-path <bridge-target>/dotnet-artifacts`",
+    "`-p:ProduceReferenceAssembly=false`",
+    "`--nologo`",
     "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command",
     "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)",
     "SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx",
@@ -1259,6 +1284,8 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "/source event log data must be 0x/u",
             "/source event digest must not be zero/u",
             "/removed logs/u",
+            "/receipt\\.logs\\[0\\]\\.removed must be a boolean/u",
+            "secret-token-removed",
             'for (const missingField of ["transactionHash", "blockHash", "blockNumber"])',
             '["transaction_hash", hex32("ab"), "receipt.logs[0].transactionHash"]',
             '["block_hash", hex32("ac"), "receipt.logs[0].blockHash"]',
@@ -1383,6 +1410,9 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "duplicateLogReceipt",
             "removedLogReceipt",
             'invalidPublicInputs("receipt.logs")',
+            'invalidPublicInputs("receipt.logs[0].removed")',
+            '.invalidRlp("receipt.logs[0].removed")',
+            "secret-token-removed",
             'for missingField in ["transactionHash", "blockHash", "blockNumber"]',
             "EthereumMainnetInboundEvidence(receiptProofHash: receiptProofHash)",
             'String(repeating: "00", count: 32)',
@@ -1453,6 +1483,8 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             '"data" to "0x01"',
             '"0x" + "00".repeat(32)',
             'sourceEventLog + ("removed" to true)',
+            '"receipt.logs[0].removed must be a boolean"',
+            '"secret-token-removed"',
             "SccpEthereumMainnet.sourceEventTopic()",
             "receiptProof.executionReceiptsRoot",
             'for (missingField in listOf("transactionHash", "blockHash", "blockNumber"))',
@@ -1506,6 +1538,9 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "Ethereum source-event validation must reject non-empty source-event data",
             "Ethereum source-event validation must reject zero source-event digest",
             "Ethereum source-event validation must reject removed logs",
+            "source-event validation must reject non-boolean removed flags",
+            "receipt.logs[0].removed must be a boolean",
+            "secret-token-removed",
             "EthereumMainnetSccp.sourceEventTopic()",
             'Arrays.asList("transactionHash", "blockHash", "blockNumber")',
             "hash-only receiptProofHash evidence",
@@ -2438,6 +2473,8 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
             '"evidence_mode": (',
             '"source_event_validated": source_event_digest is not None',
             '"receipt_only_evidence": source_event_digest is None',
+            "def _require_log_not_removed(",
+            "raise RuntimeError(f\"{label}.removed must be a boolean\")",
         ),
     ),
     (
@@ -2449,6 +2486,9 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
             "malformed receipt-only flag reached RPC",
             "test_cli_requires_source_bridge_or_explicit_receipt_only_mode",
             "test_cli_exposes_explicit_receipt_only_mode",
+            "test_receipt_trie_builder_rejects_non_boolean_removed_log_flags",
+            "test_source_event_digest_rejects_non_boolean_removed_log_flags_directly",
+            "secret-token-removed",
         ),
     ),
     (
@@ -4187,6 +4227,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "+ json.dumps(_hex(args.deployment_transaction_input_sha256))",
             "def _require_canonical_adapter_verifier_vk_hash(",
             "def _require_source_role_hash_separation(",
+            "SCCP_DOMAIN_ETH ({SCCP_DOMAIN_ETH})",
+            "SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})",
             "ETH source-adapter verifier profile",
         ),
     ),
@@ -4197,8 +4239,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_eth_direct_record_hashes_reject_zero_production_inputs",
             "test_eth_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_eth_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "test_eth_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "ETH material hash accepted zero {field}",
             "ETH deployment hash accepted zero {field}",
+            "ETH source evidence accepted non-ETH source domain",
+            "ETH source evidence accepted non-SORA target domain",
             "ETH TOML accepted reused source-adapter role hashes",
             "ETH material hash accepted reused role hashes",
             "ETH deployment hash accepted reused role hashes",
@@ -4218,6 +4263,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "+ json.dumps(_hex(args.deployment_transaction_input_sha256))",
             "def _require_canonical_adapter_verifier_vk_hash(",
             "def _require_source_role_hash_separation(",
+            "source_domain = SCCP_DOMAIN_BSC",
+            "target_domain = SCCP_DOMAIN_SORA",
             "BSC source-adapter verifier profile",
         ),
     ),
@@ -4228,8 +4275,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_bsc_direct_record_hashes_reject_zero_production_inputs",
             "test_bsc_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_bsc_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "test_bsc_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "BSC material hash accepted zero {field}",
             "BSC deployment hash accepted zero {field}",
+            "BSC source evidence accepted non-BSC source domain",
+            "BSC source evidence accepted non-SORA target domain",
             "BSC TOML accepted reused source-adapter role hashes",
             "BSC material hash accepted reused role hashes",
             "BSC deployment hash accepted reused role hashes",
@@ -4252,6 +4302,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def _require_source_role_hash_separation(",
             "def _require_light_client_evidence_role_separation(",
             "def _require_canonical_adapter_verifier_vk_hash(",
+            "SCCP_DOMAIN_SOL ({SCCP_DOMAIN_SOL})",
+            "SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})",
             "Solana full-light-client verifier hashes must be role-separated",
         ),
     ),
@@ -4262,9 +4314,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_direct_record_hashes_reject_zero_component_hashes",
             "test_solana_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_solana_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "test_solana_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_solana_cli_rejects_duplicate_full_light_client_audit_hashes",
             "Solana material hash accepted zero {field}",
             "Solana deployment hash accepted zero {field}",
+            "Solana source evidence accepted non-Solana source domain",
+            "Solana source evidence accepted non-SORA target domain",
             "Solana audit gate accepted zero {field}",
             "Solana TOML accepted reused source-adapter role hashes",
             "Solana material hash accepted reused role hashes",
@@ -4310,6 +4365,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def _require_source_role_hash_separation(",
             "def _require_light_client_evidence_role_separation(",
             "def _require_canonical_adapter_verifier_vk_hash(",
+            "SCCP_DOMAIN_TON ({SCCP_DOMAIN_TON})",
+            "SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})",
             "TON full-light-client verifier hashes must be role-separated",
         ),
     ),
@@ -4320,9 +4377,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_ton_direct_record_hashes_reject_zero_production_hashes",
             "test_ton_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_ton_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
+            "test_ton_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_ton_toml_rendering_rejects_reused_audit_role_hashes",
             "TON material hash accepted zero {field}",
             "TON deployment hash accepted zero {field}",
+            "TON source evidence accepted non-TON source domain",
+            "TON source evidence accepted non-SORA target domain",
             "TON TOML accepted reused source-adapter role hashes",
             "TON material hash accepted reused role hashes",
             "TON deployment hash accepted reused role hashes",
@@ -4344,6 +4404,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON accountStates account address must be a canonical raw address",
             "TON verifier account code_boc is invalid",
             "TON live code BoC base64 metadata is invalid",
+            "def _exact_live_string(",
+            "label=\"verifier_contract_address\"",
+            "label=\"account_state_hash\"",
             "def _reject_runtime_file_symlink_path(",
             "def _read_runtime_text_file(",
             "if not path.is_file():\n        raise ValueError(error_message) from None",
@@ -4431,6 +4494,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_live_ton_evidence_rejects_noncanonical_remote_hash_hex",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
+            "def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringifying",
+            "secret-token imported TON metadata was stringified",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "secret-token-ton-error",
             "secret-token invalid TON accountStates payload",
@@ -4460,6 +4525,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def _require_fixed_bytes(",
             "def apply_source_adapter_verifier_vk_hash(",
             "def _require_source_role_hash_separation(",
+            "SCCP_DOMAIN_TRON ({SCCP_DOMAIN_TRON})",
+            "SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})",
             "TRON source-adapter verifier profile",
         ),
     ),
@@ -4478,9 +4545,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_tron_direct_record_hashes_reject_zero_production_inputs",
             "test_tron_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_toml_rendering_rejects_reused_source_role_hashes",
+            "test_toml_rendering_rejects_wrong_source_lane_with_named_constants",
             "test_cli_rejects_adapter_verifier_vk_hash_mismatch",
             "TRON material hash accepted zero {field}",
             "TRON deployment hash accepted zero {field}",
+            "source_domain = SCCP_DOMAIN_TRON (5)",
+            "target_domain = SCCP_DOMAIN_SORA (0)",
             "TRON TOML accepted reused source-adapter role hashes",
             "TRON material hash accepted reused role hashes",
             "TRON deployment hash accepted reused role hashes",
@@ -4523,6 +4593,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "include_contract_metadata must be a boolean",
             "type(allow_expected_mismatch) is not bool",
             "allow_expected_mismatch must be a boolean",
+            "def _exact_summary_string(",
+            "label=\"source bridge network id\"",
+            "label=\"source adapter engine deployment hash\"",
             "generated offline full TOML arguments are invalid",
             "raise ValueError(destination_error) from None",
             'f"/wallet/getcontract returned malformed {label} bytecode"',
@@ -4780,6 +4853,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "EVM-family source material constructors must reject all-zero role hashes",
             "EVM-family source material constructors must reject reused role hashes",
             "source_verifier_material_production_gate_rejects_builtin_placeholder_role_replay",
+            "BSC deployed source material must include governed source bridge config binding",
+            "BSC deployed source material must bind the source bridge network id",
+            "BSC deployed source material must bind the source bridge owner",
+            "BSC deployed source material must bind the source bridge config hash",
             "source_trust_anchor_id",
             "source_bridge_emitter_code_hash",
             "source_bridge_network_id",
@@ -4819,6 +4896,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "BSC source-adapter preflight must reject transition headers whose Parlia payload does not match the advertised next set",
             "BSC source-adapter preflight must reject next-validator-set hash drift from the decoded payload",
             "Solana source-adapter preflight must reject all-zero nested proof capsules",
+            "Solana audit transcripts must reject opaque nested AccountsLtHash proof bytes",
             "Solana source-adapter preflight must reject opaque nested proof capsules",
             "Solana source-adapter preflight must reject all-zero audit role proof capsules",
             "Solana production proofs must not pass without the Tower replay verifier capsule",
@@ -4827,6 +4905,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "Solana bank/fork-choice verifier capsule must be role-separated from full AccountsDB lattice",
             "Solana bank/fork-choice verifier capsule bytes must be cryptographically checked",
             "TON source-adapter preflight must reject all-zero shard-state proof capsules",
+            "TON audit transcripts must reject opaque shard-state source proof bytes",
             "TON source-adapter preflight must reject opaque shard-state proof capsules",
             "TON source-adapter preflight must reject all-zero audit role proof capsules",
             "TON production proofs must not pass without the masterchain config verifier capsule",
@@ -4835,6 +4914,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON shard-state proof builder must not package template source-state verifier material",
             "TON validator-set transition verifier capsule must be role-separated from masterchain config",
             "TON shard-accounts verifier capsule bytes must be cryptographically checked",
+            "TRON source gate hash must explicitly bind deployment receipts",
+            "Solana source gate hash must explicitly bind deployment receipts",
+            "TON source gate hash must explicitly bind deployment receipts",
             "adapter verifier commitment helper must reject wrong outer proof versions",
             "adapter verifier commitment helper must reject wrong proof families",
             "adapter verifier commitment helper must reject wrong outer circuit ids",
@@ -5232,6 +5314,9 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "source adapter engine deployment hash metadata must match canonical inputs",
             "expected source verifier material hash argument must match ",
             "expected source adapter engine deployment hash argument must match ",
+            "def _validate_copied_source_summary_metadata(",
+            "label=\"expected source bridge code hash\"",
+            "label=\"deployment receipt finalized block hash\"",
             "JSON-RPC returned duplicate JSON keys",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
@@ -5268,6 +5353,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures",
             "test_evm_source_live_receipt_ready_predicate_uses_guarded_receipt_hash_parse",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
+            "test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying",
+            "secret-token imported EVM source live metadata was stringified",
             "expected source RPC chain id",
             "test_evm_source_live_toml_requires_independent_pins",
             "test_evm_source_live_cli_redacts_top_level_exception_details",
@@ -5313,6 +5400,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
             "def test_all_lanes_redacts_evm_runtime_bytecode_parser_failures",
+            "test_all_lanes_accepts_verified_evm_source_live_toml_for_eth_and_bsc",
+            "BSC source-live all-lanes evidence must use the canonical BSC profile",
         ),
     ),
     (
@@ -5405,6 +5494,9 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "JSON-RPC {method} returned error response",
             "EVM bridge runtime bytecode metadata is invalid",
             "EVM verifier runtime bytecode metadata is invalid",
+            "def _validate_copied_route_summary_metadata(",
+            "label=\"source verifier material hash\"",
+            "label=\"route canary evidence hash\"",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ),
@@ -5416,12 +5508,17 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
             "test_live_evm_full_toml_redacts_generated_parser_exception_cause",
             "test_live_evm_full_toml_revalidates_imported_summary_metadata",
+            "test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying",
+            "test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying",
+            "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
             '("expected_rpc_chain_id", True, "expected RPC chain id")',
             '("source_domain", False, "source domain")',
             '("target_domain", True, "target domain")',
             "test_live_evm_route_allowlist_rejects_non_boolean_canary_gate",
             "non-boolean EVM route canary inclusion gate was accepted",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
+            "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
+            "finality_policy",
             "route_canary_call_data_mutator",
             "test_live_evm_cli_defaults_eth_to_finalized_and_bsc_to_latest",
             "test_live_evm_default_block_tag_rejects_boolean_domain",
@@ -5504,6 +5601,13 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             '("11" * 20, "canonical lowercase 0x hex")',
             '("33" * 32, "canonical lowercase 0x hex")',
             '("6080604052", "canonical lowercase 0x hex")',
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "test_all_lanes_accepts_verified_evm_live_toml_for_eth_and_bsc",
+            "BSC destination-live all-lanes evidence must use the canonical BSC profile",
         ),
     ),
     (
@@ -5601,7 +5705,8 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
             "receipt_block_finalized=False",
             "transaction to does not match destination bridge",
             'block_tag="finalized" if finality_expected else "latest"',
-            "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
+            "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
+            "finality_policy",
             "receipt block is newer than the finalized execution block",
             "receipt block hash does not match the finalized execution block",
         ),
@@ -5718,6 +5823,8 @@ ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
             "EVM live RPC chain-id must be canonical for {profile.chain}",
             "Ethereum source live block-tag metadata must be finalized",
             "Ethereum destination live block-tag metadata must be finalized",
+            "BSC source live block-tag metadata must be latest",
+            "BSC destination live block-tag metadata must be latest",
         ),
     ),
     (
@@ -5755,7 +5862,8 @@ ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
     (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
-            "test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata",
+            "test_all_lanes_rejects_evm_live_block_tag_drift",
+            "BSC EVM live metadata must reject non-latest source and destination block tags",
             '# sccp_evm_source_block_tag = "finalized"',
             '# sccp_evm_block_tag = "finalized"',
         ),
@@ -5813,7 +5921,9 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
         (
             "fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(",
             "fn source_adapter_engine_readiness_with_deployed_material_still_requires_external_engines",
-            "deployed source material must not by itself stand in for external chain verifier engines",
+            "domain {domain} deployed source material must not stand in for external chain verifier engines",
+            "domain {domain} expected blocker `{expected_blocker}`",
+            "domain {domain} material must not satisfy wrong-domain {wrong_domain} readiness",
             "fn source_adapter_engine_readiness_with_deployment_opens_source_adapter",
             "deployment.source_bridge_network_id == material.source_bridge_network_id",
             "deployment.source_bridge_config_hash == material.source_bridge_config_hash",
@@ -5822,11 +5932,40 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "source adapter deployment receipts must not reuse source verifier role hashes",
             "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
             "source-adapter deployments must stay on the V1 descriptor schema",
+            "source-adapter deployments must keep the governed source domain",
             "source-adapter deployments must keep the governed source-chain label",
             "source-adapter deployments must keep the governed source-proof plan",
             "source-adapter deployments must keep the governed finality model",
             "source-adapter deployments must keep the canonical adapter proof family",
             "source-adapter deployments must keep the governed adapter circuit id",
+            "source-adapter deployments must keep the canonical adapter verifier hash",
+            "source-adapter deployments must keep a non-zero deployment receipt hash",
+            "source-adapter deployments must keep the governed source trust-anchor id",
+            "source-adapter deployments must keep the governed source trust-anchor hash",
+            "source-adapter deployments must keep the governed consensus verifier id",
+            "source-adapter deployments must keep the governed consensus verifier hash",
+            "source-adapter deployments must keep the governed message-inclusion verifier id",
+            "source-adapter deployments must keep the governed message-inclusion verifier hash",
+            "source-adapter deployments must keep the governed finality policy id",
+            "source-adapter deployments must keep the governed finality policy hash",
+            "source-adapter deployments must keep the governed source-state verifier id",
+            "source-adapter deployments must keep the governed source-state verifier hash",
+            "source-adapter deployments must keep the governed source-bridge emitter id",
+            "source-adapter deployments must keep the governed source-bridge emitter address",
+            "source-adapter deployments must keep the governed source-bridge emitter code hash",
+            "source-adapter deployments must keep the governed source-bridge network id",
+            "source-adapter deployments must keep the governed source-bridge owner address",
+            "source-adapter deployments must keep the governed source-bridge config hash",
+            "fn sccp_governed_solana_full_light_client_audit_hashes_v1() -> [H256; 3]",
+            "fn sccp_source_adapter_deployment_solana_full_light_client_audit_is_governed(",
+            "fn sccp_governed_ton_full_light_client_audit_hashes_v1() -> [H256; 3]",
+            "fn sccp_source_adapter_deployment_ton_full_light_client_audit_is_governed(",
+            "source-adapter deployments must keep the governed Solana Tower replay audit hash",
+            "source-adapter deployments must keep the governed Solana full AccountsDB lattice audit hash",
+            "source-adapter deployments must keep the governed Solana bank fork-choice audit hash",
+            "source-adapter deployments must keep the governed TON masterchain config audit hash",
+            "source-adapter deployments must keep the governed TON validator-set transition audit hash",
+            "source-adapter deployments must keep the governed TON shard-accounts dictionary audit hash",
             "wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();",
             "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
             "wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();",
@@ -6566,7 +6705,12 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "must be printable ASCII",
             "function canonicalRecordString(value, label)",
             "function normalizeCanonicalManifestText(value, label)",
+            "function readFirstValue(record, ...keys)",
+            "if (value !== undefined) {",
+            "function readConsistentBoolean(record, keys, label)",
             "function readOptionalCanonicalManifestText(",
+            "function collectStringEntries(record, keys, pathName, { allowNull = false } = {})",
+            "rawValue === null && allowNull",
             "function normalizeCanonicalHex32(value, label = \"value\")",
             "function normalizeCanonicalEvmAddress(value, label = \"address\")",
             "[\"moduleHash\", \"module_hash\", \"moduleSha256\", \"module_sha256\", \"sha256\"]",
@@ -6583,6 +6727,9 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "function assertBscCompiledCodeHashesMatchReadback({",
             "const submit = optionEnabled(options, \"submit\", false);",
             "const waitForCommit = submit",
+            "async function submitSignedTransactionRawToTairaPipeline(",
+            "error?.name === \"ToriiHttpError\"",
+            "HTTP ${error.status} while submitting raw signed transaction",
             "function productionHandoffPlaceholderReason(",
             "contains production handoff placeholder material at",
             "function bscDeploymentEvidenceHashSnapshot(routeEvidence)",
@@ -6626,9 +6773,17 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "BSC deploy command rejects output path collisions before verifier parsing",
             "BSC publish commands reject malformed submit booleans before writing or signing",
             "BSC publish commands reject output path collisions before writing artifacts",
+            "BSC publish-route-manifest reports raw pipeline HTTP rejection preview",
+            "routeManifestPipelineCalls(calls).length",
             "BSC route-manifest command rejects output path collisions with inputs before writing artifacts",
             "BSC route-config command rejects route output path collisions with inputs before writing artifacts",
             "BSC route-config command rejects route output path collisions before reading inputs",
+            "BSC route-config ignores accessor-backed scalar aliases before data aliases",
+            "const defineThrowingAccessors = (record, keys) => {",
+            "production_ready: false",
+            "counterparty_domain: SCCP_DOMAIN_BSC",
+            "full_toml_ready: false",
+            "counterparty_domain = 2",
             "sentinel:bsc-route-config-malformed-manifest",
             "sentinel:bsc-route-config-base-input",
             "BSC route-config command rejects offline full TOML evidence output collisions before writing artifacts",
@@ -6686,8 +6841,17 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "source browser prover manifest hash",
             "destination browser prover bound route hash",
             "source browser prover bound proof hash",
+            "destination-browser-prover-duplicate-specifier.manifest.json",
+            "module_specifier: \"@sora/sccp-bsc-destination-prover\"",
+            "destination browser prover malformed module hash alias",
+            "module_hash: null",
+            "source browser prover malformed proof hash alias",
+            "proof_hash: 7",
+            "destination browser prover manifest\\.moduleSpecifier must not use multiple aliases",
             "destinationBrowserProver\\.moduleHash must not use multiple aliases",
             "sourceBrowserProver\\.boundProofHash must not use multiple aliases",
+            "moduleHash\\.module_hash must be a non-empty canonical string",
+            "boundProofHash\\.proof_hash must be a non-empty canonical string",
             "BSC source event transaction contradictory blockers",
             "/productionReady requires empty postDeployLiveEvidence production blockers.*source_event_transaction_production_blockers: witness seal proof required/u",
             "BSC source event transaction scalar blockers",
@@ -6835,8 +6999,12 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "must be printable ASCII",
             "function normalizeBytes32(value, label)",
             "function normalizeNonEmptyText(value, label)",
+            "function ownDataPropertyDescriptor(record, key)",
+            "Object.getOwnPropertyDescriptor(record, key)",
+            "function ownDataValue(record, key)",
             "function readOptionalCanonicalManifestText(",
             "function routeManifestValue(",
+            "descriptor && descriptor.value !== undefined",
             "function routeManifestRecord(",
             "must not use multiple aliases",
             "PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN",
@@ -6868,6 +7036,12 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "TRON route-config rejects malformed or foreign route manifests",
             "TRON route-config refuses production-ready manifests with handoff placeholders",
             "TRON route-config rejects duplicate route manifest aliases",
+            "TRON route-config ignores accessor-backed route manifest aliases",
+            "const defineThrowingAccessors = (record, keys) => {",
+            "throw new Error(`${key} accessor must not be read`);",
+            "/route manifest schema is required/u",
+            "/route manifest settlement\\.mode is required/u",
+            "/route manifest tairaXorBurnRecord\\.vkRef\\.backend is required/u",
             "TRON route-config CLI rejects route output path collisions with inputs before writing artifacts",
             "TRON route-config CLI rejects route output path collisions before reading inputs",
             "sentinel:tron-route-config-malformed-manifest",
@@ -7312,6 +7486,9 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _all_lanes_summary_bundle_errors(",
             "_unknown_public_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)",
             "def _launch_domain_list_bundle_errors(",
+            "required_domains contains duplicate domains",
+            "supported_launch_domains contains duplicate domains",
+            "unsupported_launch_domains contains duplicate domains",
             "supported_launch_domains must be the supported launch remote domains",
             "unsupported_launch_domains must be the diagnostic unsupported remote domains",
             "supported_launch_domains plus",
@@ -7767,6 +7944,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "_source_adapter_gate_release_metadata_blockers(",
             "require_ready_state must be a boolean",
             ".route_allowlist.route_canary",
+            "def _public_lane_domain_duplicate_errors(",
+            'f"all-lanes summary lane domain {raw_domain} is duplicated"',
             "def _public_lanes_errors(",
             "lanes require_ready must be a boolean",
             "all-lanes summary lanes must be a list of objects",
@@ -7779,6 +7958,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "all-lanes summary lanes missing domain",
             "def _public_domain_list_errors(",
             "must not contain duplicate integers",
+            "required_domains contains duplicate domains",
+            "supported_launch_domains contains duplicate domains",
+            "unsupported_launch_domains contains duplicate domains",
             "supported_launch_domains and ",
             "unsupported_launch_domains must be disjoint",
             "supported_launch_domains plus ",
@@ -7944,8 +8126,14 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "all-lanes summary release_checklist items[0] blockers must not contain duplicate strings",
             "def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking",
             "def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking",
+            "def test_all_lanes_cli_rejects_mixed_malformed_duplicate_lane_domains_without_leaking",
+            "all-lanes summary lane domain {module.SCCP_DOMAIN_ETH} is duplicated",
+            "all-lanes summary lanes are invalid",
             "def test_all_lanes_cli_rejects_drifted_domain_lists",
             "required_domains must not contain duplicate integers",
+            "required_domains contains duplicate domains",
+            "supported_launch_domains contains duplicate domains",
+            "unsupported_launch_domains contains duplicate domains",
             "required_domains must be the production remote domains",
             "supported_launch_domains and ",
             "unsupported_launch_domains must be disjoint",
@@ -7965,6 +8153,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             'lane["route_allowlist"]["route_canary"][7] = "safe canary int-key note"',
             "def test_all_lanes_cli_rejects_copied_source_adapter_gate_drift_without_leaking",
             "def test_all_lanes_cli_rejects_copied_not_ready_source_adapter_gate_semantics",
+            "def test_all_lanes_source_gate_transcripts_bind_deployment_receipts",
+            "EVM source gate transcript receipt binding must cover ETH and BSC",
             "def test_all_lanes_cli_rejects_active_copied_source_gate_missing_fields_when_lane_not_ready",
             "def test_all_lanes_cli_rejects_copied_not_ready_active_lane_ready_drift",
             "def test_all_lanes_cli_rejects_active_copied_record_flags_missing_when_lane_not_ready",
@@ -8029,6 +8219,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "evm_live_metadata.source_rpc_chain_id must be 1",
             "evm_live_metadata.destination_rpc_chain_id must be 1",
             "evm_live_metadata.ready must be a boolean",
+            "evm_live_metadata.source_block_tag must be latest",
+            "evm_live_metadata.destination_block_tag must be latest",
             "evm_live_metadata.destination_block_tag must be finalized",
             "evm_live_metadata.destination_block_tag must be a non-empty canonical string",
             "destination_binding.destination_binding_key must be a non-empty canonical string",
@@ -8189,11 +8381,15 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "fn route_allowlist_lane_canary_builder_rejects_source_record_hash_replay",
             "fn solana_lane_route_canary_evidence_binds_live_programdata_snapshot",
             "fn bsc_lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles",
+            "fn lane_production_readiness_with_deployment_materials_rejects_cross_record_drift",
             "lane-aware canary builder must reject route allowlist/destination binding hash role reuse",
             "lane-aware canary builder must reject route allowlist/source material hash role reuse",
             "lane-aware canary builder must reject route allowlist/source deployment hash role reuse",
             "lane-aware canary builder must reject destination binding/source material hash role reuse",
             "lane-aware canary builder must reject destination binding/source deployment hash role reuse",
+            "lane readiness must reject route allowlists bound to a different source-adapter deployment receipt",
+            "lane readiness must reject drifted route-canary evidence hashes",
+            "drifted canary summary remains shape-valid so lane binding must catch it",
             "EVM route canary evidence must reject route allowlist/destination binding hash role reuse",
             "TRON route canary evidence must reject route allowlist/destination binding hash role reuse",
             "Solana route canary evidence must reject route allowlist/destination binding hash role reuse",
@@ -8611,7 +8807,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_evm_live_metadata_blockers(",
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
-            "active EVM live metadata summary is malformed",
+            "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
             "active source-record hash summary is malformed",
             "source verifier material hash must not reuse source adapter engine deployment hash",
             "_active_launch_hash_role_reuse_blockers(",
@@ -8627,10 +8823,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source adapter gate blockers must be a list of non-empty canonical strings",
             "source adapter gate blockers must not contain duplicate strings",
             "source adapter gate blockers must be empty",
-            "active EVM source adapter gate summary must be required",
-            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
-            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
-            "active EVM source adapter gate hash must match audit hash evm_source_gate_hash",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash",
             "_active_launch_route_allowlist_binding_blockers(lane_label, lane)",
             "def _active_launch_route_allowlist_blocker_container_errors(",
             'route_blockers = route_summary.get("blockers", [])',
@@ -8697,7 +8893,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "f\"{lane_label}: required record summary\"",
             "active required record summary is malformed",
             "def _active_launch_evm_live_metadata_blockers(",
-            "active EVM live metadata summary is malformed",
+            "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
             "active source-record hash summary is malformed",
             "def _active_launch_source_record_hash_role_blockers(",
             "def _active_launch_hash_role_reuse_blockers(",
@@ -8717,10 +8913,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source adapter gate blockers must be a list of non-empty canonical strings",
             "source adapter gate blockers must not contain duplicate strings",
             "source adapter gate blockers must be empty",
-            "active EVM source adapter gate summary must be required",
-            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
-            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
-            "active EVM source adapter gate hash must match audit hash evm_source_gate_hash",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash",
             "def _active_launch_route_allowlist_blocker_container_errors(",
             'route_blockers = route_summary.get("blockers", [])',
             "active route allowlist summary is malformed",
@@ -8799,7 +8995,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding",
             "def test_release_readiness_report_blocks_malformed_active_governed_deployment_metadata",
             "def test_release_readiness_report_recomputes_active_checklist_rejects_malformed_metadata_containers",
-            "active EVM live metadata summary is malformed",
+            "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
             "active source-record hash summary is malformed",
             "active destination binding summary is malformed",
             "active source adapter gate summary is malformed",
@@ -8929,7 +9125,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active required record summary is malformed",
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_deployment_containers",
-            "active EVM live metadata summary is malformed",
+            "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
             "active source-record hash summary is malformed",
             "active destination binding summary is malformed",
             "active source adapter gate summary is malformed",
@@ -9463,6 +9659,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "source-adapter deployment bindings must not be minted from partial TON audit descriptors",
             "source-adapter deployment bindings must not be minted from receipt/VK role replay",
             "source-adapter deployment bindings must not be minted from verifier-key drift",
+            "role-separated non-governed Solana audit descriptors remain structurally inspectable",
+            "source-adapter deployment bindings must not be minted from non-governed Solana audit descriptors",
+            "role-separated non-governed TON audit descriptors remain structurally inspectable",
+            "source-adapter deployment bindings must not be minted from non-governed TON audit descriptors",
             "SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1",
         ),
     ),
@@ -9485,6 +9685,11 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
             "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
             "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+            "function requireGovernedSourceAdapterDeploymentAuditForBinding(deployment)",
+            "SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "sourceAdapterDeployment requires governed Solana full-light-client audit verifier hashes",
+            "SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
             "export function sccpSourceAdapterDeploymentBindingFromDeployment",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
@@ -9513,6 +9718,11 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
             "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
             "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+            "function requireGovernedSourceAdapterDeploymentAuditForBinding(deployment)",
+            "SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "sourceAdapterDeployment requires governed Solana full-light-client audit verifier hashes",
+            "SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
             "export function sccpSourceAdapterDeploymentBindingFromDeployment",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
@@ -9551,6 +9761,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "/must both be zero or both be non-zero/",
             "/must differ from sourceAdapterDeploymentReceiptHash/",
             "sccpSourceAdapterDeploymentBindingFromDeployment(",
+            "/governed Solana full-light-client audit/",
+            "/governed TON full-light-client audit/",
             "sourceAdapterDeployment: auditedTonDeployment",
             "/sourceStateVerifierHash must match sourceAdapterDeployment/",
             "/sourceAdapterDeploymentBinding must match sourceAdapterDeployment/",
@@ -9624,6 +9836,11 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
             "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
             "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+            "def _require_governed_source_adapter_deployment_audit_for_binding",
+            "_SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "sourceAdapterDeployment requires governed Solana full-light-client audit verifier hashes",
+            "_SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
             "def sccp_source_adapter_deployment_binding_from_deployment",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
@@ -9666,6 +9883,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             'match="must both be zero or both be non-zero"',
             'match="must differ from sourceAdapterDeploymentReceiptHash"',
             "sccp_source_adapter_deployment_binding_from_deployment(",
+            'match="governed Solana full-light-client audit"',
+            'match="governed TON full-light-client audit"',
             "source_adapter_deployment=audited_ton_deployment",
             'match="sourceStateVerifierHash must match sourceAdapterDeployment"',
             'match="sourceAdapterDeploymentBinding must match sourceAdapterDeployment"',
@@ -9717,7 +9936,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "proof.proofFamily == STARK_FRI_PROOF_FAMILY_V1",
             "proof.proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
             "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES",
+            "GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "requireGovernedSourceAdapterDeploymentAuditForBinding(",
             "fun sourceAdapterDeploymentBindingFromDeployment(",
+            "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
             "data class TonSccpSourceAdapterDeploymentInput(",
@@ -9740,6 +9962,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "proofBytes must be at most",
             "sampleAuditedTonDeployment()",
             "sourceAdapterDeployment = auditedTonDeployment",
+            "governed TON full-light-client audit",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
         ),
@@ -9780,7 +10003,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "!STARK_FRI_PROOF_FAMILY_V1.equals(proof.proofFamily())",
             "proof.proofBytes().length > SOURCE_STATE_MAX_PROOF_BYTES",
             "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES",
+            "GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1",
+            "requireGovernedSourceAdapterDeploymentAuditForBinding(",
             "sourceAdapterDeploymentBindingFromDeployment(final SourceAdapterDeploymentInput input)",
+            "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
             "public record SourceAdapterDeploymentInput(",
@@ -9804,6 +10030,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "TON source-state verification proof family must be stark-fri-v1",
             "sampleAuditedTonDeployment()",
             "auditedTonDeployment",
+            "governed TON full-light-client audit",
             "sourceStateVerifierHash must match sourceAdapterDeployment",
             "sourceAdapterDeploymentBinding must match sourceAdapterDeployment",
         ),
@@ -9870,9 +10097,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "proof.proofBytes.count <= sccpSourceStateMaxProofBytes",
             "proofBytes.count <= sccpSourceStateMaxProofBytes",
             "proof.proofFamily == tonStarkFriProofFamilyV1",
+            "sccpGovernedTonFullLightClientAuditHashesV1",
+            "requireGovernedTonSourceAdapterDeploymentAuditForBinding(",
             "public struct TonSccpSourceAdapterDeploymentInput",
             "sourceAdapterDeployment: TonSccpSourceAdapterDeploymentInput?",
             "public func sccpTonSourceAdapterDeploymentBindingFromDeployment(",
+            'invalidSourceMaterial("tonGovernedFullLightClientAuditHash")',
             "sourceAdapterDeployment.sourceStateVerifierHash",
         ),
     ),
@@ -9913,6 +10143,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleAuditedTonDeployment()",
             "sourceAdapterDeployment: auditedTonDeployment",
             "sccpTonSourceAdapterDeploymentBindingFromDeployment",
+            'invalidSourceMaterial("tonGovernedFullLightClientAuditHash")',
             "sourceAdapterDeployment.sourceStateVerifierHash",
             ".invalidHex32(\"publicInputs.messageId\")",
             ".invalidHex32(\"proofResult.proofContext.statementHash\")",
@@ -10394,6 +10625,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native_sdk_artifacts[",
             "native_sdk_artifacts contains duplicate sdk",
             "native_sdk_artifacts contains unknown sdk",
+            "def _number_repeated_native_evm_sdk_name_blockers(",
+            "contains unknown sdk with sensitive name",
             "native_sdk_artifacts must match expected SDK order",
             "def _native_evm_prover_sdk_artifact_key_blocker(",
             ".sdk contains control character",
@@ -10547,6 +10780,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifact_ids",
             "native_sdk_artifacts[0].sdk must not contain surrounding whitespace",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
+            "def test_release_readiness_report_numbers_repeated_sensitive_native_evm_sdk_artifacts",
+            "native_sdk_artifacts contains unknown sdk with sensitive name #1",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
             "def test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
@@ -10560,6 +10795,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_missing_fields",
             "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_value_drift",
             "def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results",
+            "sdk_results contains unknown sdk with sensitive name #1",
             "def test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results",
             "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_result_keys",
             "def test_release_readiness_report_blocks_native_evm_fixture_public_signal_shape",
@@ -10592,6 +10828,14 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             '"remote-prover"',
             '"proverEndpoint"',
             '"prover_endpoint"',
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        (
+            "BSC native-prover-bundle rejects forged or incomplete artifact inputs",
+            "proofRemoteMarkerBytes.set(Buffer.from(\"remote_prover\", \"ascii\")",
+            "proofArtifactBytes contains forbidden prover dependency marker: remote_prover",
         ),
     ),
     (
@@ -10752,6 +10996,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_missing_fields",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_value_drift",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results",
+            "sdk_results contains unknown sdk with sensitive name #1",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape",
             "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_role_reuse",
             "def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
@@ -11105,6 +11350,9 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _node_check_command_matches(",
             "def _command_token_looks_like_python_runner(",
             "def _dotnet_sdk_command_matches(",
+            'tokens[3] == "--artifacts-path"',
+            'not tokens[4].startswith("-")',
+            'tokens[7] == "-p:ProduceReferenceAssembly=false"',
             "def _dotnet_setup_command_matches(",
             "def _dotnet_phase_block_forbidden_test_command(",
             ".NET phase ran a non-canonical dotnet test command",
@@ -11392,6 +11640,9 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _node_check_command_matches(",
             "def _command_token_looks_like_python_runner(",
             "def _dotnet_sdk_command_matches(",
+            'tokens[3] == "--artifacts-path"',
+            'not tokens[4].startswith("-")',
+            'tokens[7] == "-p:ProduceReferenceAssembly=false"',
             "def _dotnet_setup_command_matches(",
             "def _dotnet_phase_block_forbidden_test_command(",
             ".NET phase ran a non-canonical dotnet test command",
@@ -11600,7 +11851,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "validate_nonempty_path_list()",
             "no empty path-list segments before native bridge loader setup",
             'dotnet_loader_path="$bridge_library_dir"',
+            'dotnet_artifacts_path="$bridge_target_dir/dotnet-artifacts"',
             '"PATH=$dotnet_loader_path"',
+            '--artifacts-path "$dotnet_artifacts_path"',
+            "-p:ProduceReferenceAssembly=false",
             "validate_dotnet_trx_content()",
             "SCCP_DOTNET_TRX_MAX_BYTES=16777216",
             "xml.etree.ElementTree",
@@ -11773,6 +12027,9 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_sccp_production_corridor_rejects_empty_log_dir",
             "test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution",
             "test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades",
+            "--artifacts-path",
+            "-p:ProduceReferenceAssembly=false",
+            "dotnet-artifacts",
             "test_sccp_production_corridor_dotnet_phase_rejects_rid_architecture_mismatch",
             "test_sccp_production_corridor_dotnet_phase_rejects_multiline_version",
             "test_sccp_production_corridor_dotnet_phase_rejects_contradictory_os_markers",
@@ -12167,6 +12424,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_readiness_phase_command_matchers_reject_inert_option_values",
             "test_release_readiness_phase_command_matchers_reject_narrow_kotlin_selector",
             "test_release_readiness_phase_command_matchers_reject_extra_suffix_arguments",
+            "test_release_readiness_phase_command_matchers_accept_dotnet_artifacts_path",
+            "test_release_readiness_phase_command_matchers_reject_bad_dotnet_artifacts_path",
             "test_release_readiness_report_rejects_bare_phase_command_fragment",
             "test_release_readiness_report_rejects_short_circuited_phase_command_fragment",
             "test_release_readiness_report_rejects_comment_only_phase_command_fragment",
@@ -12342,6 +12601,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "for exception_type in (RuntimeError, SystemExit):",
             "f\"secret-token {exception_type.__name__} {label} detail\"",
             "test_release_bundle_phase_command_matchers_accept_corridor_dry_run",
+            "test_release_bundle_phase_command_matchers_accept_dotnet_artifacts_path",
+            "test_release_bundle_phase_command_matchers_reject_bad_dotnet_artifacts_path",
             "test_release_bundle_phase_command_matchers_reject_echoed_fragments",
             "test_release_bundle_phase_command_matchers_reject_bare_fragments",
             "test_release_bundle_phase_command_matchers_reject_comment_fragments",
@@ -12558,6 +12819,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "sdk_results sdk key must be printable ASCII",
             "sdk_results sdk key must not contain whitespace",
             "sdk_results sdk key must be a lowercase SDK id",
+            "sdk_results contains unknown sdk",
             "def _native_evm_prover_artifact_metadata_blockers(",
             "artifact metadata must be an object",
             "artifact bytes metadata is invalid",
@@ -12570,6 +12832,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "def _readiness_native_evm_validation_blockers_presence_errors(",
             "def _native_evm_sdk_name_blocker(",
             "contains {issue} sdk with sensitive name",
+            "def _number_repeated_native_evm_sdk_name_blockers(",
             "validation_status must be passed",
             "validation_blockers must be empty",
             "native EVM Groth16 prover bundle is not UTF-8 text",
@@ -12595,6 +12858,10 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "must not contain duplicate strings",
             "def _native_evm_validation_blockers_cell(",
             "native_sdk_artifacts must match expected SDK order",
+            "def _native_evm_prover_sdk_results_by_sdk(",
+            "sdk_results contains unknown sdk",
+            "def _number_repeated_native_evm_sdk_name_blockers(",
+            "contains {issue} sdk with sensitive name",
         ),
     ),
     (
@@ -12715,6 +12982,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "secret-token-sdk",
             "test_release_bundle_verifier_blocks_malformed_native_prover_blockers",
             "assert \"o\" not in native_item[\"blockers\"]",
+            "test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results",
+            "sdk_results contains unknown sdk with sensitive name #1",
             "test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results",
             "test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys",
             "test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
@@ -12759,6 +13028,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_readiness_report_blocks_native_evm_parity_fixture_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_malformed_native_prover_blockers",
             'assert "o" not in readiness["blockers"]',
+            "test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results",
+            "sdk_results contains unknown sdk with sensitive name #1",
             "test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
             "test_release_readiness_report_blocks_reused_native_evm_prover_artifact_paths",
             "role-reuse.bin",
@@ -13176,6 +13447,9 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "operator-drive-input-artifact.toml",
             "test_release_bundle_verifier_rejects_input_provenance_root_drift",
             "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
+            "test_release_bundle_verifier_rejects_mixed_malformed_duplicate_input_artifacts",
+            "readiness report input_artifacts contains duplicate path #1",
+            "readiness report input artifact 1 is not an object",
             "test_release_bundle_verifier_rejects_report_artifact_path_drift",
             "test_release_bundle_verifier_rejects_copied_input_layout_drift",
             "test_release_bundle_redacts_builder_recompute_and_renderer_errors",
@@ -13264,6 +13538,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string",
             "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string",
             "readiness report source_inventory is not an object",
+            "def _corridor_evidence_artifact_duplicate_path_errors(",
+            "readiness report corridor evidence_artifacts contains ",
         ),
     ),
     (
@@ -13277,7 +13553,13 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _safe_public_key_sort_key(",
             "key=_safe_public_key_sort_key",
             "def _readiness_report_unknown_field_blocker(",
+            "def _public_input_path_duplicate_errors(",
+            "readiness report inputs contains duplicate path",
+            "def _public_input_artifact_duplicate_path_errors(",
+            "readiness report input_artifacts contains duplicate path ",
             "def _public_input_artifact_errors(",
+            "def _public_corridor_evidence_artifact_duplicate_path_errors(",
+            "readiness report corridor evidence_artifacts contains ",
             "CORRIDOR_PUBLIC_FIELDS = frozenset",
             "CORRIDOR_PUBLIC_PHASE_STATUSES = frozenset",
             "def _public_corridor_errors(",
@@ -13305,9 +13587,14 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "readiness report source_inventory missing required gate",
             "USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS = frozenset",
             "def _public_user_prover_submission_surface_errors(",
+            "def _public_user_prover_duplicate_lane_errors(",
+            "readiness report user_prover_submission_surfaces",
+            'f"[{index}] lanes is duplicated"',
             "CRYPTOGRAPHIC_EVIDENCE_PUBLIC_FIELDS = frozenset",
             "CRYPTOGRAPHIC_EVIDENCE_HASH_FIELDS = frozenset",
             "def _public_cryptographic_evidence_errors(",
+            "def _public_cryptographic_evidence_duplicate_domain_errors(",
+            "readiness report cryptographic_evidence contains duplicate ",
             "field not in public_report_fields",
             "root_errors",
             "readiness report evidence must be an object",
@@ -13359,6 +13646,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _release_report_preflight_errors(",
             "production_ready must be true or false",
             "def _unknown_public_field_errors(",
+            "def _corridor_evidence_artifact_duplicate_path_errors(",
+            "contains duplicate path #{duplicate_count}",
             "def _source_inventory_gate_key_error(",
             "contains malformed unknown gate name",
             "contains unknown gate name with surrounding whitespace",
@@ -13404,6 +13693,10 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_preflight_rejects_malformed_ready_report",
             "test_release_bundle_rejects_malformed_copied_report_before_render",
             "test_release_bundle_rejects_unknown_copied_report_root_before_render",
+            "test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render",
+            "bundled report.corridor.evidence_artifacts contains duplicate path #1",
+            "test_release_bundle_verifier_rejects_duplicate_corridor_evidence_artifact_paths",
+            "readiness report corridor evidence_artifacts contains duplicate path #1",
             "operator|secret-token",
             "test_release_bundle_rejects_malformed_copied_source_inventory_before_render",
             "test_release_bundle_rejects_empty_copied_source_inventory_before_render",
@@ -13483,6 +13776,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_cli_rejects_empty_corridor_without_leaking",
             "def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking",
             "readiness report corridor blockers must be empty when production_ready is true",
+            "def test_release_readiness_report_cli_rejects_duplicate_corridor_evidence_artifacts_without_leaking",
+            "readiness report corridor evidence_artifacts contains duplicate path #1",
             "def test_release_readiness_report_cli_rejects_ready_release_checklist_blockers_without_leaking",
             "readiness report release_checklist items[0] blockers must be empty",
             "readiness report release_checklist items[1] ready must be true when",
@@ -13490,12 +13785,17 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "readiness report evidence must be a canonical public all-lanes summary",
             "def test_release_readiness_report_cli_rejects_empty_input_provenance_without_leaking",
             "readiness report input_artifacts must be a non-empty list of objects",
+            "def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_inputs_without_leaking",
+            "operator secret-token-input-object",
             "def test_release_readiness_report_cli_rejects_malformed_input_artifacts_without_leaking",
             '"safe artifact int-key note"',
             "readiness report input_artifacts[0] contains malformed unknown field name",
             "readiness report input_artifacts[0] path must be a canonical public path",
             "readiness report input_artifacts[1] bytes must be a positive integer",
             "readiness report input_artifacts[2] bytes must be a positive integer",
+            "def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_input_artifacts_without_leaking",
+            "readiness report input_artifacts contains duplicate path #1",
+            "operator secret-token-input-artifact",
             "def test_release_readiness_report_cli_rejects_zero_input_artifact_sha_without_leaking",
             "readiness report input_artifacts[0] sha256 must be a non-zero canonical SHA-256 hex string",
             "readiness report input_artifacts is invalid",
@@ -13515,11 +13815,17 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "readiness report user_prover_submission_surfaces[0] contains malformed",
             "readiness report user_prover_submission_surfaces[0] sdk_helper_symbols",
             "readiness report user_prover_submission_surfaces is invalid",
+            "def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_user_prover_surfaces_without_leaking",
+            "operator secret-token-user-surface",
+            "readiness report user_prover_submission_surfaces[2] lanes is duplicated",
             "def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_without_leaking",
             '"safe crypto int-key note"',
             "readiness report cryptographic_evidence[0] contains malformed unknown",
             "source_adapter_gate_audit_hashes safe_audit must be a canonical",
             "readiness report cryptographic_evidence is invalid",
+            "def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_cryptographic_evidence_without_leaking",
+            "operator secret-token-crypto-row",
+            "readiness report cryptographic_evidence contains duplicate ",
             '"secret-token-readiness-root": "secret-token-value"',
             '"operator_note": "safe note"',
             '7: "secret-token-int-key"',
@@ -13713,7 +14019,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         (
             "ALL_LANES_REQUIRED_DOMAINS = tuple(",
             "ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {",
+            'SCCP_DOMAIN_BSC: frozenset(("evm_source_gate_hash",)),',
             "ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {",
+            'SCCP_DOMAIN_BSC: "evm_source_gate_hash",',
             "ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {",
             "SNAPSHOT_ROUTE_CANARY_DOMAINS",
             "has_route_canary_evidence = _is_nonzero_hex32(",
@@ -13744,6 +14052,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "TRON route-canary public owner/signature flags must be null",
             "TRON route-canary public owner/signature flags must be null when route canary evidence is absent",
             "TRON route-canary public block metadata must be null for non-TRON lanes",
+            "readiness public crypto TRON exactness must use SCCP_DOMAIN_TRON instead of a literal domain id",
+            "readiness public crypto non-TRON cleanup must use SCCP_DOMAIN_TRON instead of a literal domain id",
             "route-canary public scalar proof context must be exact",
             "route-canary public scalar proof context must be null",
             "route-canary public transcript hashes must be non-zero bytes32",
@@ -13780,8 +14090,17 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "f\"{label}.cryptographic_evidence[{index}]\"",
             "_unknown_public_field_errors(",
             "CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,",
+            "def _verifier_exact_int_constant(",
+            "release-bundle verifier {label} must be an integer",
+            "def _verifier_int_sequence(",
+            '_verifier_int_constant("SCCP_DOMAIN_ETH")',
+            "_ALL_LANES_REQUIRED_DOMAINS = _verifier_int_sequence(",
+            "ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN key {index}",
+            '"_expected_evm_rpc_chain_id return",',
+            "def _sccp_domain_bsc(",
             "def _cryptographic_evidence_row_bundle_errors(",
             "has_route_canary_evidence = _is_nonzero_bytes32_hex_text(",
+            "evm_route_canary_domains = {_sccp_domain_eth(), _sccp_domain_bsc()}",
             "domain must be an integer",
             'errors.extend(_non_empty_string_field_errors(label, payload, "chain"))',
             "route_canary_evidence_source must be {expected_source}",
@@ -13847,11 +14166,17 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_crypto_evidence_binding_inventory_gate",
+            "test_release_bundle_verifier_domain_constant_loaders_reject_boolean_aliases",
+            'fake_verifier = type("FakeVerifier", (), {constant_name: True})',
+            '"ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN": {True: "forged"}',
+            'with pytest.raises(TypeError, match="_expected_evm_rpc_chain_id return"):',
             "test_release_bundle_rejects_unknown_copied_crypto_evidence_before_render",
             "test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
             "test_release_bundle_rejects_unbound_copied_crypto_evidence_before_render",
             "test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before_render",
             "test_release_bundle_treats_malformed_copied_crypto_route_canary_hash_as_absent_before_render",
+            "test_release_bundle_public_crypto_uses_bsc_domain_helper_for_route_canary",
+            "release bundle BSC route-canary domain membership must use _sccp_domain_bsc",
             "release bundle public crypto route-canary metadata exactness covers every message-proof launch domain",
             "release bundle public crypto route-canary EVM receipt metadata exactness covers every EVM message-proof launch domain",
             "test_release_bundle_rejects_copied_crypto_snapshot_route_canary_metadata_drift_before_render",
@@ -13951,6 +14276,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         (
             "test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_public_crypto_evidence_binding_gate",
+            "test_release_readiness_report_public_crypto_source_gate_maps_use_domain_constants",
+            "readiness public crypto BSC source-gate policy maps must use SCCP_DOMAIN_BSC",
             "test_release_readiness_report_preserves_malformed_crypto_evidence_values",
             "test_release_readiness_report_cli_rejects_empty_cryptographic_evidence_without_leaking",
             "test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_drift_without_leaking",
@@ -14980,6 +15307,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} returned error response",
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
             'raise ValueError(f"{label} must be base64") from None',
+            "def _exact_live_string(",
+            "label=\"verifier_program_id\"",
+            "label=\"programdata_metadata_blake2b256\"",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "Solana live verifier program id metadata is invalid",
             "Solana live ProgramData address metadata is invalid",
@@ -15013,6 +15343,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'error_message="--api-key-file cannot be read",',
             "TON accountStates account address must be a canonical raw address",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
+            "def _exact_live_string(",
+            "label=\"verifier_contract_address\"",
+            "label=\"account_state_hash\"",
             "{label} must use lowercase 0x prefix",
             "{label} must use lowercase hex",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
@@ -15173,6 +15506,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "parse_hex_bytes nonzero must be a boolean",
             "RPC fixed hex nonzero must be a boolean",
             "compact trie path leaf must be a boolean",
+            "def _require_log_not_removed(",
+            "raise RuntimeError(f\"{label}.removed must be a boolean\")",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "returned non-canonical lowercase 0x hex data",
@@ -15207,6 +15542,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "deployment receipt finalized block hash must be a non-zero bytes32",
             "EVM source-live RPC fixed hex nonzero must be a boolean",
             "deployment receipt block hash metadata is invalid",
+            "def _validate_copied_source_summary_metadata(",
+            "label=\"expected source bridge code hash\"",
+            "label=\"deployment receipt finalized block hash\"",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "    except (\n        argparse.ArgumentTypeError,\n        AttributeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "JSON-RPC {method} returned duplicate JSON keys",
@@ -15232,6 +15570,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "generated EVM destination TOML arguments are invalid",
+            "def _validate_copied_route_summary_metadata(",
+            "label=\"source verifier material hash\"",
+            "label=\"route canary evidence hash\"",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} returned invalid JSON",
             "def _cli_error_detail(",
@@ -15617,6 +15958,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_solana_json_rpc_redacts_transport_and_error_response_details",
             "def test_solana_json_rpc_redacts_invalid_json_parser_details",
             "def test_live_solana_evidence_redacts_imported_parser_failures",
+            "def test_live_solana_evidence_rejects_non_string_imported_metadata_without_stringifying",
             "def test_live_solana_account_data_redacts_base64_parser_causes",
             "def test_live_solana_metadata_base64_redacts_parser_causes",
             "def test_solana_live_cli_redacts_top_level_exception_details",
@@ -15644,6 +15986,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-solana-error",
             "secret-token invalid Solana JSON-RPC payload",
             "secret-token verifier_code_hash parser detail",
+            "secret-token imported Solana metadata was stringified",
             "secret-token live account base64",
             "account_exception_types = (SystemExit, RuntimeError, TypeError, ValueError)",
             "secret-token account-data decoder detail",
@@ -15662,6 +16005,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
+            "def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringifying",
             "def test_ton_live_cli_redacts_top_level_exception_details",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP TON live evidence collection failed",
@@ -15677,6 +16021,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-ton-error",
             "secret-token invalid TON accountStates payload",
             "secret-token hash base64",
+            "secret-token imported TON metadata was stringified",
             "def test_ton_live_api_key_file_rejects_unreadable_file_shapes",
             "secret-token-ton-api-key-file",
             "secret-token {label} argument detail",
@@ -15708,6 +16053,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "malformed TRON solid block txTrieRoot nonzero control accepted",
             "malformed TRON route allowlist destination-binding pin accepted",
             "malformed TRON runtime boolean default accepted",
+            "def test_live_tron_rejects_non_string_copied_hash_metadata_without_stringifying",
+            "secret-token imported TRON metadata was stringified",
             "used_message_proof must be a boolean",
             "raw_data_owner_matches_transaction must be a boolean",
             "signature_recovers_to_owner must be a boolean",
@@ -15883,6 +16230,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "malformed receipt RPC fixed-hex nonzero control was accepted",
             "def test_receipt_compact_path_leaf_control_rejects_non_booleans",
             "malformed receipt trie path leaf control was accepted",
+            "def test_receipt_trie_builder_rejects_non_boolean_removed_log_flags",
+            "def test_source_event_digest_rejects_non_boolean_removed_log_flags_directly",
+            "secret-token-removed",
             "def test_receipt_hex_parser_redacts_helper_exit_parser_causes",
             "def test_receipt_rpc_hex_data_redacts_helper_exit_parser_causes",
             "secret-token-evm-receipt-hex",
@@ -15925,6 +16275,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "0xsecret-token-source-bridge-runtime",
             "EVM source live runtime metadata context leaked",
+            "test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying",
+            "secret-token imported EVM source live metadata was stringified",
             "secret-token source bridge address parser detail",
             "secret-token {target_method} readback parser detail",
             "secret-token deployment receipt block hash metadata parser detail",
@@ -15971,6 +16323,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "helper detail",
             "0xsecret-token-destination-runtime",
             "EVM live runtime metadata context leaked",
+            "test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying",
+            "test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying",
+            "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
+            "secret-token imported EVM live metadata was stringified",
             "secret-token bridge address parser detail",
             "module.argparse.ArgumentTypeError",
             "secret-token generated EVM destination TOML ",
@@ -21233,7 +21589,7 @@ def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
 
 
 def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
-    if len(tokens) != 8 or _command_token_basename(tokens[0]) != "dotnet":
+    if len(tokens) != 11 or _command_token_basename(tokens[0]) != "dotnet":
         return False
     project_fragment = next(
         (
@@ -21256,11 +21612,15 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
     return (
         tokens[1] == "test"
         and tokens[2] == expected_project
-        and tokens[3] == "--filter"
-        and tokens[4].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
-        and tokens[5] == "--nologo"
-        and tokens[6] == "--logger"
-        and tokens[7] == "trx;LogFileName=sccp-dotnet-sdk.trx"
+        and tokens[3] == "--artifacts-path"
+        and bool(tokens[4])
+        and not tokens[4].startswith("-")
+        and tokens[5] == "--filter"
+        and tokens[6].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
+        and tokens[7] == "-p:ProduceReferenceAssembly=false"
+        and tokens[8] == "--nologo"
+        and tokens[9] == "--logger"
+        and tokens[10] == "trx;LogFileName=sccp-dotnet-sdk.trx"
     )
 
 
@@ -21613,7 +21973,7 @@ def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     if not _dotnet_sdk_command_matches(tokens):
         return False
     if fragment.startswith("FullyQualifiedName"):
-        return tokens[4].replace("\\|", "|") == fragment.replace("\\|", "|")
+        return tokens[6].replace("\\|", "|") == fragment.replace("\\|", "|")
     if fragment.startswith("dotnet test "):
         fragment_tokens = shlex.split(fragment)
         return (
@@ -21621,7 +21981,7 @@ def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
             and tuple(tokens[1 : len(fragment_tokens)]) == tuple(fragment_tokens[1:])
         )
     if fragment == "sccp-dotnet-sdk.trx":
-        return any(fragment in token for token in tokens[6:])
+        return any(fragment in token for token in tokens[9:])
     return all(part in tokens for part in shlex.split(fragment))
 
 
@@ -22965,7 +23325,7 @@ def _active_launch_evm_live_metadata_blockers(
     if not isinstance(evm_live_metadata, dict):
         if "evm_live_metadata" in lane:
             blockers.append(
-                f"{lane_label}: active EVM live metadata summary is malformed"
+                f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed"
             )
         evm_live_metadata = {}
     expected_chain_id = ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
@@ -23309,12 +23669,12 @@ def _active_launch_governed_deployment_metadata_blockers(
         blockers.append(f"{lane_label}: source adapter gate summary must be ready")
     if source_gate.get("required") is not True:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate summary must be required"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required"
         )
     gate_hash = source_gate.get("gate_hash")
     if not _is_nonzero_hex32(gate_hash):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string"
         )
     blockers.extend(
         _active_launch_hash_role_reuse_blockers(
@@ -23331,15 +23691,15 @@ def _active_launch_governed_deployment_metadata_blockers(
     audit_hashes = source_gate.get("audit_hashes")
     if not isinstance(audit_hashes, dict):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be an object"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must be an object"
         )
     elif set(audit_hashes) != {"evm_source_gate_hash"}:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash"
         )
     elif audit_hashes.get("evm_source_gate_hash") != gate_hash:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must match audit hash evm_source_gate_hash"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash"
         )
     return blockers
 
@@ -23421,7 +23781,7 @@ def _active_launch_required_record_metadata_blockers(
         or lane.get("domain") != ACTIVE_LAUNCH_DOMAIN
     ):
         blockers.append(
-            f"{lane_label}: active launch lane domain must be {ACTIVE_LAUNCH_DOMAIN}"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} launch lane domain must be {_sccp_domain_constant_label(ACTIVE_LAUNCH_DOMAIN)}"
         )
     if lane.get("chain") != ACTIVE_LAUNCH_CHAIN:
         blockers.append(
@@ -23962,6 +24322,7 @@ def _native_evm_prover_sdk_results_by_sdk(
 
     blockers: list[str] = []
     canonical_results: dict[str, Any] = {}
+    sdk_name_blockers: list[str] = []
     for sdk, result in sorted(
         sdk_results.items(),
         key=lambda item: _safe_public_key_sort_key(item[0]),
@@ -23975,13 +24336,20 @@ def _native_evm_prover_sdk_results_by_sdk(
     for sdk in sorted(
         set(canonical_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
     ):
-        blockers.append(
+        # Source-inventory marker: sdk_results contains unknown sdk
+        sdk_name_blockers.append(
             _native_evm_sdk_name_blocker(f"{prefix} sdk_results", sdk, "unknown")
         )
     for sdk in sorted(
         set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(canonical_results)
     ):
         blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
+    blockers.extend(
+        _number_repeated_native_evm_sdk_name_blockers(
+            sdk_name_blockers,
+            f"{prefix} sdk_results",
+        )
+    )
     return canonical_results, blockers
 
 
@@ -27353,7 +27721,7 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, and requires every present `UnitTestResult` `isExecuted` flag to be `true`. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, that strict `dotnet test` command carrying `--artifacts-path <bridge-target>/dotnet-artifacts`, `-p:ProduceReferenceAssembly=false`, and `--nologo`, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, and requires every present `UnitTestResult` `isExecuted` flag to be `true`. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
@@ -27371,8 +27739,8 @@ def _render_readiness_markdown(
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
-            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, browser-prover duplicate-alias rejection, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
-            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
@@ -27418,7 +27786,7 @@ def _render_readiness_markdown(
             "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
-            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
+            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, BSC proof-artifact remote-prover marker rejection, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
@@ -33554,6 +33922,11 @@ def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
     if not isinstance(corridor.get("evidence_artifacts"), dict):
         errors.append("readiness report corridor evidence_artifacts is not an object")
     errors.extend(
+        _corridor_evidence_artifact_duplicate_path_errors(
+            corridor.get("evidence_artifacts")
+        )
+    )
+    errors.extend(
         _public_blocker_list_field_errors(
             "readiness report corridor",
             corridor,
@@ -33564,6 +33937,31 @@ def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
     blockers = corridor.get("blockers")
     if isinstance(blockers, list) and blockers:
         errors.append("readiness report corridor blockers must be empty")
+    return errors
+
+
+def _corridor_evidence_artifact_duplicate_path_errors(value: Any) -> list[str]:
+    """Return duplicate-path blockers from inspectable corridor artifacts."""
+
+    if not isinstance(value, dict):
+        return []
+    seen_paths: set[str] = set()
+    duplicate_path_count = 0
+    errors: list[str] = []
+    for artifact in value.values():
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path, path_errors = _canonical_artifact_path(artifact)
+        if path_errors or artifact_path is None:
+            continue
+        if artifact_path in seen_paths:
+            duplicate_path_count += 1
+            errors.append(
+                "readiness report corridor evidence_artifacts contains "
+                f"duplicate path #{duplicate_path_count}"
+            )
+        else:
+            seen_paths.add(artifact_path)
     return errors
 
 

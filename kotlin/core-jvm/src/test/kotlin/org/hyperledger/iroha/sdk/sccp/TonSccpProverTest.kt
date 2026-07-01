@@ -2262,7 +2262,7 @@ class TonSccpProverTest {
         assertEquals(SccpTon.DOMAIN_TON, derivedBinding.sourceDomain)
         assertEquals(SccpSolana.DOMAIN_SORA, derivedBinding.targetDomain)
         assertEquals(
-            "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+            "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3",
             derivedBinding.sourceAdapterDeploymentHash,
         )
         assertEquals("0x" + "aa".repeat(32), derivedBinding.sourceAdapterDeploymentReceiptHash)
@@ -2288,6 +2288,14 @@ class TonSccpProverTest {
             )
         }
         assertTrue(partialAudit.message?.contains("TON audit verifier hashes") == true)
+        val nonGovernedAudit = assertFailsWith<IllegalArgumentException> {
+            SccpTon.sourceAdapterDeploymentBindingFromDeployment(
+                auditedTonDeployment.copy(tonMasterchainConfigVerifierHash = "0x" + "2a".repeat(32)),
+            )
+        }
+        assertTrue(
+            nonGovernedAudit.message?.contains("governed TON full-light-client audit") == true,
+        )
         val receiptVkReplay = assertFailsWith<IllegalArgumentException> {
             SccpTon.sourceAdapterDeploymentBindingFromDeployment(
                 auditedTonDeployment.copy(
@@ -2931,9 +2939,9 @@ class TonSccpProverTest {
             finalityPolicyHash = "0x" + "88".repeat(32),
             sourceStateVerifierHash = "0x" + "77".repeat(32),
             deploymentReceiptHash = "0x" + "aa".repeat(32),
-            tonMasterchainConfigVerifierHash = "0x" + "bb".repeat(32),
-            tonValidatorSetTransitionVerifierHash = "0x" + "cc".repeat(32),
-            tonShardAccountsDictionaryVerifierHash = "0x" + "dd".repeat(32),
+            tonMasterchainConfigVerifierHash = "0x" + "26".repeat(32),
+            tonValidatorSetTransitionVerifierHash = "0x" + "27".repeat(32),
+            tonShardAccountsDictionaryVerifierHash = "0x" + "28".repeat(32),
         )
 
     private fun samplePublicInputs(): TonSccpPublicInputsInput =

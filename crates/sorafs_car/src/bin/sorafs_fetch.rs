@@ -21,9 +21,6 @@
 //! and fixtures can reason about the same scheduling inputs as the orchestrator.
 
 use blake3::Hasher;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
 use hex::encode as hex_encode;
 use iroha_crypto::HybridSuite;
 use norito::{
@@ -53,7 +50,7 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AvailabilityTier, CapabilityType, ManifestV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
-    SignatureAlgorithm, TransportHintV1, TransportProtocol,
+    TransportHintV1, TransportProtocol,
     hybrid_envelope::{HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1},
     provider_admission::{
         AdmissionRecord, ProviderAdmissionEnvelopeV1, verify_advert_against_record,
@@ -1892,40 +1889,7 @@ fn decode_admission_envelope(
 }
 
 fn verify_provider_advert_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
-    if advert.signature.algorithm != SignatureAlgorithm::Ed25519 {
-        return Err(format!(
-            "unsupported signature algorithm: {:?}",
-            advert.signature.algorithm
-        ));
-    }
-    if advert.signature.public_key.len() != PUBLIC_KEY_LENGTH {
-        return Err(format!(
-            "provider advert public key must be {PUBLIC_KEY_LENGTH} bytes (found {})",
-            advert.signature.public_key.len()
-        ));
-    }
-    if advert.signature.signature.len() != SIGNATURE_LENGTH {
-        return Err(format!(
-            "provider advert signature must be {SIGNATURE_LENGTH} bytes (found {})",
-            advert.signature.signature.len()
-        ));
-    }
-
-    let mut pk = [0u8; PUBLIC_KEY_LENGTH];
-    pk.copy_from_slice(&advert.signature.public_key);
-    let verifying_key =
-        VerifyingKey::from_bytes(&pk).map_err(|err| format!("invalid advert public key: {err}"))?;
-
-    let mut sig_bytes = [0u8; SIGNATURE_LENGTH];
-    sig_bytes.copy_from_slice(&advert.signature.signature);
-    let signature = DalekSignature::from_bytes(&sig_bytes);
-
-    let body_bytes = norito::to_bytes(&advert.body)
-        .map_err(|err| format!("failed to encode advert body: {err}"))?;
-
-    verifying_key
-        .verify(&body_bytes, &signature)
-        .map_err(|err| format!("advert signature verification failed: {err}"))
+    advert.verify_signature().map_err(|err| err.to_string())
 }
 
 fn write_car_archive(
@@ -2925,7 +2889,7 @@ mod tests {
     };
 
     use assert_cmd::Command as AssertCommand;
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::to_bytes;
     use sorafs_car::{
         CarWriter,
@@ -3127,6 +3091,65 @@ mod tests {
     fn encode_gateway_manifest_envelope(envelope: &HybridPayloadEnvelopeV1) -> String {
         let bytes = to_bytes(envelope).expect("encode envelope");
         base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn verify_provider_advert_signature_rejects_all_zero_signature_material() {
+        let descriptor = chunker_registry::default_descriptor();
+        let profile_handle = format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        );
+        let advert_body = ProviderAdvertBodyV1 {
+            provider_id: [0x11; 32],
+            profile_id: profile_handle.clone(),
+            profile_aliases: Some(vec![profile_handle]),
+            stake: StakePointer {
+                pool_id: [0x22; 32],
+                stake_amount: 1_000_000,
+            },
+            qos: QosHints {
+                availability: AvailabilityTier::Hot,
+                max_retrieval_latency_ms: 500,
+                max_concurrent_streams: 5,
+            },
+            capabilities: vec![CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            }],
+            endpoints: vec![sample_endpoint()],
+            rendezvous_topics: sample_rendezvous_topics("zero-signature"),
+            path_policy: PathDiversityPolicy {
+                min_guard_weight: 10,
+                max_same_asn_per_path: 1,
+                max_same_pool_per_path: 1,
+            },
+            notes: None,
+            stream_budget: None,
+            transport_hints: None,
+        };
+        let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
+        let body_bytes = to_bytes(&advert_body).expect("serialize body");
+        let signature = signing_key.sign(&body_bytes);
+        let mut advert = ProviderAdvertV1 {
+            version: PROVIDER_ADVERT_VERSION_V1,
+            issued_at: 1_700_000_000,
+            expires_at: 1_700_003_600,
+            body: advert_body,
+            signature: AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                signature: signature.to_bytes().to_vec(),
+            },
+            signature_strict: true,
+            allow_unknown_capabilities: false,
+        };
+        advert.signature.signature.fill(0);
+
+        let err = verify_provider_advert_signature(&advert)
+            .expect_err("all-zero signature material must be rejected");
+
+        assert!(err.contains("all zero"), "unexpected error: {err}");
     }
 
     fn sample_gateway_manifest_envelope_b64() -> String {

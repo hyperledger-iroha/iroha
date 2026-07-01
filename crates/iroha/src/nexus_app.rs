@@ -493,9 +493,9 @@ where
             )?;
         }
 
-        let signed = signable
-            .builder
-            .build_with_signature(Signature::from_bytes(&signature_bytes));
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .map_err(|err| NexusAppError::InvalidSignature(err.to_string()))?;
+        let signed = signable.builder.build_with_signature(signature);
         signed
             .verify_signature()
             .map_err(|err| NexusAppError::SignatureVerification(err.to_string()))?;
@@ -1119,6 +1119,43 @@ mod tests {
             .expect_err("invalid signature");
 
         assert_eq!(error.code(), "invalid_signature");
+    }
+
+    #[test]
+    fn nexus_app_rejects_all_zero_wallet_signature_before_submission() {
+        let key_pair = checked_ed25519_keypair();
+        let account = AccountId::new(key_pair.public_key().clone());
+        let submitter = FakeSubmitter::default();
+        let client = NexusAppClient::new(
+            NexusAppConfig {
+                authority: Some(account.clone()),
+                ..NexusAppConfig::new("test-chain".into())
+            },
+            UnsupportedConnectTransport,
+            submitter.clone(),
+        );
+        let draft = client
+            .build_transfer_draft(sample_input(account))
+            .expect("draft");
+        let error = client
+            .finalize_and_submit(
+                draft.signable,
+                NexusWalletSignature {
+                    algorithm: NexusSignatureAlgorithm::Ed25519,
+                    signature: vec![0; 64],
+                },
+                NexusFinalizeOptions::default(),
+            )
+            .expect_err("all-zero signature material must reject");
+
+        assert_eq!(error.code(), "invalid_signature");
+        assert!(
+            error
+                .to_string()
+                .contains("signature payload must not be all zero"),
+            "unexpected error: {error}"
+        );
+        assert!(submitter.submitted_hashes.borrow().is_empty());
     }
 
     #[test]

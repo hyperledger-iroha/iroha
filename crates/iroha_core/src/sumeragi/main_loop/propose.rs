@@ -4,6 +4,7 @@ use super::proposals::block_payload_bytes;
 use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use crate::state::WorldReadOnly;
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
@@ -13,6 +14,7 @@ use iroha_data_model::consensus::{
 };
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
+use mv::storage::StorageReadOnly;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
@@ -3309,8 +3311,12 @@ impl Actor {
                 let npos_effects =
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
+                let world_view = self.state.world_view();
                 let sccp_messages =
-                    crate::bridge::collect_sccp_messages_from_accepted_transactions(&tx_batch);
+                    crate::bridge::collect_new_sccp_messages_from_accepted_transactions(
+                        &tx_batch,
+                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                    );
                 builder = builder.with_sccp_commitment_root(
                     crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
                 );

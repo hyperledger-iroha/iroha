@@ -7268,6 +7268,23 @@ async fn merge_committee_accepts_remote_signature() {
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
     let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
+    let inert_merge_signature = MergeCommitteeSignature {
+        epoch_id: candidate.epoch_id,
+        view: 0,
+        signer: 1,
+        message_digest,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor
+        .on_lane_relay_message(super::LaneRelayMessage::MergeSignature(
+            inert_merge_signature,
+        ))
+        .expect("inert merge signature is handled");
+    assert!(
+        actor.state.merge_ledger().latest().is_none(),
+        "inert remote signature must not satisfy merge quorum"
+    );
+
     let signature = checked_signature(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
@@ -130481,6 +130498,35 @@ fn vote_signature_valid_rejects_invalid_bls_signature() {
 }
 
 #[test]
+fn vote_signature_valid_rejects_all_zero_signature_material() {
+    let chain: ChainId = "vote-all-zero-bls".parse().expect("chain id parses");
+    let keypair = checked_bls_keypair();
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        height: 5,
+        view: 1,
+        epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: vec![0_u8; 96],
+    };
+
+    assert_eq!(
+        super::vote_signature_check(&vote, &topology, &chain, super::PERMISSIONED_TAG),
+        Err(super::VoteSignatureError::SignatureInvalid)
+    );
+}
+
+#[test]
 fn vote_signature_valid_rejects_out_of_range_signer() {
     let chain: ChainId = "vote-invalid-signer".parse().expect("chain id parses");
     let keypair = checked_bls_keypair();
@@ -179102,6 +179148,33 @@ fn rbc_ready_signature_valid_rejects_invalid_bls_signature() {
 }
 
 #[test]
+fn rbc_ready_signature_valid_rejects_all_zero_signature_material() {
+    let chain: ChainId = "rbc-ready-all-zero-bls".parse().expect("chain id parses");
+    let keypair = checked_bls_keypair();
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x2B; Hash::LENGTH]));
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash,
+        height: 7,
+        view: 2,
+        epoch: 0,
+        roster_hash: roster_hash(topology.as_ref()),
+        chunk_root: Hash::prehashed([0xAC; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0_u8; 96],
+    };
+
+    assert!(!super::rbc::rbc_ready_signature_valid(
+        &ready,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG
+    ));
+}
+
+#[test]
 fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
     let chain: ChainId = "rbc-deliver-invalid".parse().expect("chain id parses");
     let keypair = deterministic_keypair(b"rbc-deliver-out-of-range", Algorithm::Ed25519);
@@ -179159,6 +179232,34 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
         .to_vec();
     signature[0] ^= 0xFF;
     deliver.signature = signature;
+
+    assert!(!super::rbc::rbc_deliver_signature_valid(
+        &deliver,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG
+    ));
+}
+
+#[test]
+fn rbc_deliver_signature_valid_rejects_all_zero_signature_material() {
+    let chain: ChainId = "rbc-deliver-all-zero-bls".parse().expect("chain id parses");
+    let keypair = checked_bls_keypair();
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash,
+        height: 4,
+        view: 1,
+        epoch: 0,
+        roster_hash: roster_hash(topology.as_ref()),
+        chunk_root: Hash::prehashed([0xBD; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0_u8; 96],
+        ready_signatures: Vec::new(),
+    };
 
     assert!(!super::rbc::rbc_deliver_signature_valid(
         &deliver,

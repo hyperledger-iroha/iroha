@@ -440,21 +440,31 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Literal-gated exactness helper wrappers must not hide zero-arity helper aliases",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Literal-gated zero-arity helper alias checks recurse through nested identity gates",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Literal-gated exactness helper wrappers must not hide negated helper operands",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Literal-gated negated helper operand checks recurse through nested identity gates",
         f"Sumeragi formal README {readme} is missing required text: "
         "Compound exactness helper operands must not hide repeated helper conjuncts",
         f"Sumeragi formal README {readme} is missing required text: "
         "Helper conjunct repetition checks traverse unary-temporal wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Repeated helper same-polarity checks split top-level boolean operands before peeling temporal or negated wrappers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Transitive exactness predicate chains must not hide repeated helper operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Helper operand repetition checks traverse unary-temporal wrappers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Repeated helper operand checks include chained implication and equivalence operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Transitive exactness predicate chains must not hide contradictory helper operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Transitive exactness predicate chains must not hide excluded-middle helper operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Transitive exactness predicate chains must not hide complementary-equivalence helper operands",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Complementary-equivalence checks include chained equivalence operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Helper operand polarity checks traverse unary-temporal wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -463,6 +473,54 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Transitive exactness predicate chains must not hide undefined helpers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified exactness helper formulas must not hide undefined helpers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve quantified binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve tuple-pattern quantifier domains",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve LET binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve parameterized LET operator scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve CHOOSE binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve LAMBDA binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve standard TLA set/operator identifiers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve CASE branch scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve relation operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve operator-call argument scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve arithmetic/set infix operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve explicit set literal element scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve unary set-operator operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve set-comprehension binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve set-comprehension outer enclosure scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve function-constructor binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve function-set domain and range scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record set field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record update field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record selector field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve comma-shared set/function binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve operator parameter scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified exactness helper formulas must not be vacuous",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -474,19 +532,35 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper restatement checks propagate known truth values",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified formula prefix scans preserve escaped string literal colons",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified bound identifier scans preserve escaped string literal domains",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper bound-domain checks preserve escaped string literal domains",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper bound-domain checks include comma-shared bindings",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper bound-domain checks skip tuple-pattern component domains",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper singleton-domain checks preserve tuple literal elements",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Line comment scans preserve escaped string literal comment markers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Static outer wrapper scans preserve escaped string literal parentheses",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Semantic identifier scans ignore escaped string literal contents",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Top-level relation and boolean scans preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level boolean scans preserve escaped string literal operators",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level boolean/equality detector helpers preserve tuple literal operators",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level keyword scans preserve tuple literal keywords",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level CASE branch scans preserve tuple literal arms and conditions",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level keyword and CASE branch scans preserve escaped string literal delimiters",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -566,7 +640,7 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal exactness helper wrappers must not hide quantified formulas",
         f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal quantified and control-flow checks split top-level boolean operands before peeling temporal wrappers",
+        "Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -592,6 +666,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Static IF literal exactness helpers count as literal helpers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Static temporal literal checks split top-level boolean operands before peeling temporal or negated wrappers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Negated unary-temporal boolean-only helper wrappers count as literal helpers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Compound boolean-only temporal helper wrappers count as literal helpers",
@@ -604,9 +680,15 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "LET binding scans preserve tuple literal definition bodies",
         f"Sumeragi formal README {readme} is missing required text: "
+        "LET binding scans preserve escaped string literal definition bodies",
+        f"Sumeragi formal README {readme} is missing required text: "
         "LET helper alias unwrapping resolves chained one-line bindings",
         f"Sumeragi formal README {readme} is missing required text: "
         "LET alias substitution respects later quantified binding groups",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "LET alias substitution respects escaped string literal domain binding groups",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "LET alias substitution preserves escaped string literal result bodies",
         f"Sumeragi formal README {readme} is missing required text: "
         "LET helper alias unwrapping substitutes simple chained binding references",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -636,6 +718,54 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified temporal helper formulas must not hide undefined helpers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve quantified binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve tuple-pattern quantifier domains",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve LET binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve parameterized LET operator scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve CHOOSE binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve LAMBDA binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve standard TLA set/operator identifiers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve CASE branch scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve relation operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve operator-call argument scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve arithmetic/set infix operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve explicit set literal element scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve unary set-operator operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve set-comprehension binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve set-comprehension outer enclosure scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve function-constructor binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve function-set domain and range scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record set field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record update field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve record selector field label scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve comma-shared set/function binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve operator parameter scope",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified temporal helper formulas must not be vacuous",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
@@ -646,11 +776,23 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper restatement checks propagate known truth values",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified formula prefix scans preserve escaped string literal colons",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified bound identifier scans preserve escaped string literal domains",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper bound-domain checks preserve escaped string literal domains",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper bound-domain checks include comma-shared bindings",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper bound-domain checks skip tuple-pattern component domains",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper singleton-domain checks preserve tuple literal elements",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Line comment scans preserve escaped string literal comment markers",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Static outer wrapper scans preserve escaped string literal parentheses",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Semantic identifier scans ignore escaped string literal contents",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level relation and boolean scans preserve tuple literal operators",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -3076,6 +3218,50 @@ def test_tla_literal_operator_definitions_parse_top_level_literals(
     }
 
 
+def test_tla_line_comments_preserve_escaped_string_comment_markers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.tla_line_without_comment(
+            'Value == "left \\* not comment" \\* real comment'
+        )
+        == 'Value == "left \\* not comment" '
+    )
+    assert (
+        module.tla_line_without_comment(
+            'Value == "left \\" \\* still string" \\* real comment'
+        )
+        == 'Value == "left \\" \\* still string" '
+    )
+
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                'StringPredicate == checked = "ready \\* text" \\* real comment',
+                "MultilineString ==",
+                '  /\\ checked = "line \\* still literal" \\* real comment',
+                "  /\\ ConcretePredicate",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert definitions["StringPredicate"] == (
+        2,
+        'checked = "ready \\* text"',
+    )
+    assert definitions["MultilineString"] == (
+        4,
+        '/\\ checked = "line \\* still literal" /\\ ConcretePredicate',
+    )
+
+
 def test_tla_type_invariant_alias_definitions_parse_top_level_aliases(
     tmp_path: Path,
 ) -> None:
@@ -3127,6 +3313,12 @@ def test_tla_static_temporal_boolean_literal_evaluates_unary_wrappers() -> None:
     assert module.tla_static_temporal_boolean_literal("[] (TRUE /\\ Safety)") is None
     assert module.tla_static_temporal_boolean_literal("~([] FALSE)") == "TRUE"
     assert module.tla_static_temporal_boolean_literal("~(<> TRUE)") == "FALSE"
+    assert module.tla_static_temporal_boolean_literal("~[] FALSE /\\ FALSE") == "FALSE"
+    assert module.tla_static_temporal_boolean_literal("~([] FALSE) /\\ FALSE") == "FALSE"
+    assert module.tla_static_temporal_boolean_literal("~([] FALSE /\\ FALSE)") == "TRUE"
+    assert module.tla_static_temporal_boolean_literal("~[] TRUE \\/ TRUE") == "TRUE"
+    assert module.tla_static_temporal_boolean_literal("~([] TRUE) \\/ TRUE") == "TRUE"
+    assert module.tla_static_temporal_boolean_literal("~([] TRUE \\/ TRUE)") == "FALSE"
     assert module.tla_static_temporal_boolean_literal("[] (TRUE => TRUE)") == "TRUE"
     assert module.tla_static_temporal_boolean_literal("[] (TRUE <=> FALSE)") == "FALSE"
     assert module.tla_static_temporal_boolean_literal("[] ([] TRUE /\\ <> TRUE)") == "TRUE"
@@ -3473,11 +3665,26 @@ def test_helper_reference_traversal_unwraps_one_line_let_aliases() -> None:
         "LET selected == <<left == right, tail>> IN selected"
     ) == "<<left == right, tail>>"
     assert module.tla_static_let_alias_operand(
+        'LET selected == "left \\" == right" IN selected'
+    ) == '"left \\" == right"'
+    assert module.tla_static_let_alias_operand(
+        'LET first == TRUE second == "left \\" == right" IN first'
+    ) == "TRUE"
+    assert module.tla_static_let_alias_operand(
         "LET snapshot == <<left == right, tail>> selected == HiddenLiteral IN [] selected"
     ) == "[] (HiddenLiteral)"
     later_bound_alias = "\\A c \\in Cases, selected \\in Other: Predicate(selected)"
     assert module.tla_quantified_bound_identifiers(later_bound_alias) == {
         "c",
+        "selected",
+    }
+    string_domain_bound_alias = (
+        '\\A selected \\in "left \\" : right": Predicate(selected)'
+    )
+    assert module.tla_quantifier_prefixes(
+        '"literal \\\\A hidden \\\\in Cases: Hidden" /\\ ' + later_bound_alias
+    ) == [later_bound_alias.rsplit(":", 1)[0]]
+    assert module.tla_quantified_bound_identifiers(string_domain_bound_alias) == {
         "selected",
     }
     assert (
@@ -3488,8 +3695,21 @@ def test_helper_reference_traversal_unwraps_one_line_let_aliases() -> None:
         is None
     )
     assert (
+        module.tla_static_substitute_let_alias_references(
+            string_domain_bound_alias,
+            [("selected", "HiddenLiteral")],
+        )
+        is None
+    )
+    assert (
         module.tla_static_let_alias_operand(
             "LET selected == HiddenLiteral IN " + later_bound_alias
+        )
+        is None
+    )
+    assert (
+        module.tla_static_let_alias_operand(
+            "LET selected == HiddenLiteral IN " + string_domain_bound_alias
         )
         is None
     )
@@ -3505,6 +3725,16 @@ def test_helper_reference_traversal_unwraps_one_line_let_aliases() -> None:
     assert module.tla_static_let_alias_operand(
         "LET first == HiddenLiteral second == \"first\" IN second"
     ) == '"first"'
+    assert (
+        module.tla_static_substitute_let_alias_references(
+            '"selected \\" selected"',
+            [("selected", "HiddenLiteral")],
+        )
+        is None
+    )
+    assert module.tla_static_let_alias_operand(
+        'LET selected == HiddenLiteral wrapped == "selected \\" selected" IN wrapped'
+    ) == '"selected \\" selected"'
     assert module.exactness_helper_references(
         "ConcretePredicate /\\ (LET selected == HiddenLiteral IN selected)"
     ) == ["ConcretePredicate", "HiddenLiteral"]
@@ -3551,6 +3781,12 @@ def test_zero_arity_polarity_conflicts_descend_into_unary_temporal_operands() ->
     ) == ["Leaf"]
     assert module.complementary_equivalence_zero_arity_references(
         "Leaf <=> [] ~Leaf"
+    ) == ["Leaf"]
+    assert module.complementary_equivalence_zero_arity_references(
+        "Leaf <=> Other <=> ~Leaf"
+    ) == ["Leaf"]
+    assert module.complementary_equivalence_zero_arity_references(
+        "Leaf <=> ~Leaf <=> Other"
     ) == ["Leaf"]
 
 
@@ -3676,7 +3912,35 @@ def test_literal_gated_zero_arity_helper_alias_detection_unwraps_static_wrappers
         == "Leaf"
     )
     assert (
+        module.literal_gated_zero_arity_helper_alias(
+            "TRUE => TRUE => Leaf",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_zero_arity_helper_alias(
+            "TRUE => (TRUE => Leaf)",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
         module.literal_gated_zero_arity_helper_alias("TRUE <=> Leaf", definitions)
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_zero_arity_helper_alias(
+            "TRUE <=> TRUE <=> Leaf",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_zero_arity_helper_alias(
+            "TRUE <=> (TRUE <=> Leaf)",
+            definitions,
+        )
         == "Leaf"
     )
     assert (
@@ -3709,7 +3973,83 @@ def test_literal_gated_zero_arity_helper_alias_detection_unwraps_static_wrappers
     )
     assert (
         module.literal_gated_zero_arity_helper_alias(
+            "TRUE => FALSE => Leaf",
+            definitions,
+        )
+        is None
+    )
+    assert (
+        module.literal_gated_zero_arity_helper_alias(
+            "TRUE <=> FALSE <=> Leaf",
+            definitions,
+        )
+        is None
+    )
+    assert (
+        module.literal_gated_zero_arity_helper_alias(
             "Leaf \\/ OtherLeaf",
+            definitions,
+        )
+        is None
+    )
+
+
+def test_literal_gated_negated_helper_operand_detection_recurses_identity_gates() -> None:
+    module = load_coverage_module()
+    definitions = {"Leaf": (1, "checked = ready")}
+
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE /\\ ~Leaf",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE /\\ (TRUE /\\ ~Leaf)",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE => TRUE => ~Leaf",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE => (TRUE => ~Leaf)",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE <=> TRUE <=> ~Leaf",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE <=> (TRUE <=> ~Leaf)",
+            definitions,
+        )
+        == "Leaf"
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE => FALSE => ~Leaf",
+            definitions,
+        )
+        is None
+    )
+    assert (
+        module.literal_gated_negated_zero_arity_helper_operand(
+            "TRUE <=> FALSE <=> ~Leaf",
             definitions,
         )
         is None
@@ -3727,6 +4067,19 @@ def test_repeated_zero_arity_conjuncts_descend_into_unary_temporal_operands() ->
     ) == ["Leaf"]
     assert module.duplicate_zero_arity_wrapped_conjunct_references(
         "Leaf /\\ ~[] ~Leaf"
+    ) == ["Leaf"]
+    assert (
+        module.duplicate_zero_arity_wrapped_conjunct_references("~[] Leaf /\\ Leaf")
+        == []
+    )
+    assert (
+        module.duplicate_zero_arity_wrapped_conjunct_references(
+            "~([] Leaf) /\\ Leaf"
+        )
+        == []
+    )
+    assert module.duplicate_zero_arity_wrapped_conjunct_references(
+        "~([] Leaf /\\ Leaf)"
     ) == ["Leaf"]
     assert (
         module.duplicate_zero_arity_wrapped_conjunct_references(
@@ -3750,6 +4103,47 @@ def test_repeated_zero_arity_operands_descend_into_unary_temporal_operands() -> 
     ) == ["Leaf"]
     assert module.duplicate_zero_arity_boolean_operand_references(
         "Leaf <=> ~[] ~Leaf"
+    ) == ["Leaf"]
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "Leaf => Leaf => Other"
+    ) == ["Leaf"]
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "Leaf => Other => Leaf"
+    ) == ["Leaf"]
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "Leaf <=> Leaf <=> Other"
+    ) == ["Leaf"]
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "Leaf <=> Other <=> Leaf"
+    ) == ["Leaf"]
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "Leaf <=> [] Leaf <=> Other"
+    ) == ["Leaf"]
+    assert (
+        module.duplicate_zero_arity_boolean_operand_references("~[] Leaf \\/ Leaf")
+        == []
+    )
+    assert (
+        module.duplicate_zero_arity_boolean_operand_references(
+            "~([] Leaf) \\/ Leaf"
+        )
+        == []
+    )
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "~([] Leaf \\/ Leaf)"
+    ) == ["Leaf"]
+    assert (
+        module.duplicate_zero_arity_boolean_operand_references("~[] Leaf <=> Leaf")
+        == []
+    )
+    assert (
+        module.duplicate_zero_arity_boolean_operand_references(
+            "~([] Leaf) <=> Leaf"
+        )
+        == []
+    )
+    assert module.duplicate_zero_arity_boolean_operand_references(
+        "~([] Leaf <=> Leaf)"
     ) == ["Leaf"]
     assert (
         module.duplicate_zero_arity_boolean_operand_references("Leaf \\/ [] ~Leaf")
@@ -3886,12 +4280,47 @@ def test_unused_bound_quantified_helper_formulas_require_body_use() -> None:
     assert module.quantified_formula_bound_domains(
         "\\A c \\in Cases, d, e \\in Other: Predicate(c, d, e)"
     ) == {"c": "Cases", "d": "Other", "e": "Other"}
+    assert module.quantified_formula_prefix_and_body(
+        '\\A c \\in {"left \\" : right"}: Predicate(c)'
+    ) == ('\\A c \\in {"left \\" : right"}', "Predicate(c)")
+    assert module.quantified_formula_bound_domains(
+        '\\A c \\in {"left \\" : right"}: Predicate(c)'
+    ) == {"c": '{"left \\" : right"}'}
+    assert not module.quantified_formula_has_empty_bound_domain(
+        '\\A c \\in {"left \\" : right"}: Predicate(c)'
+    )
+    assert module.tla_quantifier_prefixes(
+        '\\A c \\in "left \\" : right": Predicate(c)'
+    ) == ['\\A c \\in "left \\" : right"']
+    assert module.tla_quantified_bound_identifiers(
+        '\\A c \\in "left \\" : right": Predicate(c)'
+    ) == {"c"}
+    assert module.quantified_formula_bound_identifiers(
+        '\\A c \\in "left \\" : right": Predicate(c)'
+    ) == {"c"}
+    assert module.quantified_formula_bound_domains(
+        '\\A c \\in "left \\" : right": Predicate(c)'
+    ) == {"c": '"left \\" : right"'}
+    assert module.unused_bound_quantified_helper_formulas(
+        '\\A c \\in "left \\" : right": Predicate(c)'
+    ) == []
+    assert module.unused_bound_quantified_helper_formulas(
+        '\\A c \\in "left \\" : right": ConcretePredicate'
+    ) == [
+        '\\A c \\in "left \\" : right": ConcretePredicate omits bound c',
+    ]
     assert module.quantified_formula_bound_domains(
         "\\A <<c, d>> \\in Pairs: Predicate(c, d)"
     ) == {}
+    assert module.quantified_formula_domain_expressions(
+        "\\A <<c, d>> \\in Pairs: Predicate(c, d)"
+    ) == ["Pairs"]
     assert module.quantified_formula_bound_identifiers(
         "\\A <<c, d>> \\in Pairs: Predicate(c, d)"
     ) == {"c", "d"}
+    assert module.quantified_formula_domain_expressions(
+        "\\A c \\in Cases, <<d, e>> \\in Pairs: Predicate(c, d, e)"
+    ) == ["Cases", "Pairs"]
     assert module.quantified_formula_bound_identifiers(
         "\\A c \\in Cases, <<d, e>> \\in Pairs: Predicate(c, d, e)"
     ) == {"c", "d", "e"}
@@ -4022,8 +4451,15 @@ def test_nested_control_flow_helper_formulas_require_named_helper_references() -
         "FallbackPredicate",
     ]
     assert module.tla_top_level_case_result_branches(
+        'CASE ready -> "Left \\" [] Right" [] OTHER -> FallbackPredicate'
+    ) == ['"Left \\" [] Right"', "FallbackPredicate"]
+    assert module.tla_top_level_case_result_branches(
         "CASE <<CASE nested -> LeftPredicate [] OTHER -> RightPredicate, "
         "tail>> = expected -> BranchPredicate [] OTHER -> FallbackPredicate"
+    ) == ["BranchPredicate", "FallbackPredicate"]
+    assert module.tla_top_level_case_result_branches(
+        'CASE "ready \\" -> text" = expected -> BranchPredicate [] '
+        "OTHER -> FallbackPredicate"
     ) == ["BranchPredicate", "FallbackPredicate"]
     assert module.control_flow_named_helper_branch_operands(
         "CASE <<CASE nested -> LeftPredicate [] OTHER -> RightPredicate, "
@@ -4080,6 +4516,22 @@ def test_nested_control_flow_helper_formulas_require_named_helper_references() -
         "ConcretePredicate /\\ (CHOOSE c \\in Cases: LeftPredicate)",
         definitions,
     ) == [("CHOOSE", "CHOOSE c \\in Cases: LeftPredicate")]
+    assert module.control_flow_named_helper_branch_operands(
+        'ENABLED "LeftPredicate"',
+        definitions,
+    ) == []
+    assert module.control_flow_named_helper_branch_operands(
+        'ENABLED (LeftPredicate /\\ "RightPredicate")',
+        definitions,
+    ) == ["LeftPredicate"]
+    assert module.control_flow_named_helper_branch_operands(
+        'CHOOSE c \\in Cases: "LeftPredicate"',
+        definitions,
+    ) == []
+    assert module.control_flow_named_helper_branch_operands(
+        'CHOOSE c \\in Cases: LeftPredicate /\\ "RightPredicate"',
+        definitions,
+    ) == ["LeftPredicate"]
     assert module.nested_control_flow_helper_formulas(
         "ConcretePredicate /\\ (IF ready THEN LET selected == LeftPredicate IN "
         "[] selected ELSE LET fallback == RightPredicate IN <> fallback)",
@@ -4242,17 +4694,51 @@ def test_direct_operator_call_name_accepts_expression_arguments() -> None:
     assert module.tla_top_level_conjuncts("<<Left /\\ Right, Tail>>") == [
         "<<Left /\\ Right, Tail>>"
     ]
+    assert module.tla_top_level_conjuncts('"Left \\" /\\ Right" /\\ Tail') == [
+        '"Left \\" /\\ Right"',
+        "Tail",
+    ]
     assert module.tla_top_level_disjuncts("<<Left \\/ Right, Tail>>") == [
         "<<Left \\/ Right, Tail>>"
+    ]
+    assert module.tla_top_level_disjuncts('"Left \\" \\/ Right" \\/ Tail') == [
+        '"Left \\" \\/ Right"',
+        "Tail",
     ]
     assert not module.tla_has_top_level_disjunction("<<Left \\/ Right, Tail>>")
     assert module.tla_top_level_implication_operands(
         "<<Left => Right, Tail>>"
     ) == ["<<Left => Right, Tail>>"]
+    assert module.tla_top_level_implication_operands(
+        '"Left \\" => Right" => Tail'
+    ) == ['"Left \\" => Right"', "Tail"]
+    assert module.tla_top_level_implication_chain_operands(
+        "<<Left => Right, Tail>>"
+    ) == ["<<Left => Right, Tail>>"]
+    assert module.tla_top_level_implication_chain_operands("Left => Right => Tail") == [
+        "Left",
+        "Right",
+        "Tail",
+    ]
+    assert module.tla_top_level_implication_chain_operands(
+        '"Left \\" => Right" => Tail => Done'
+    ) == ['"Left \\" => Right"', "Tail", "Done"]
     assert not module.tla_has_top_level_implication("<<Left => Right, Tail>>")
     assert module.tla_top_level_equivalence_operands(
         "<<Left <=> Right, Tail>>"
     ) == ["<<Left <=> Right, Tail>>"]
+    assert module.tla_top_level_equivalence_operands(
+        '"Left \\" <=> Right" <=> Tail'
+    ) == ['"Left \\" <=> Right"', "Tail"]
+    assert module.tla_top_level_equivalence_chain_operands(
+        "<<Left <=> Right, Tail>>"
+    ) == ["<<Left <=> Right, Tail>>"]
+    assert module.tla_top_level_equivalence_chain_operands(
+        "Left <=> Right <=> Tail"
+    ) == ["Left", "Right", "Tail"]
+    assert module.tla_top_level_equivalence_chain_operands(
+        '"Left \\" <=> Right" <=> Tail <=> Done'
+    ) == ['"Left \\" <=> Right"', "Tail", "Done"]
     assert module.tla_top_level_conjuncts("Guard /\\ <<Left /\\ Right, Tail>>") == [
         "Guard",
         "<<Left /\\ Right, Tail>>",
@@ -4261,15 +4747,50 @@ def test_direct_operator_call_name_accepts_expression_arguments() -> None:
     assert (
         module.tla_top_level_equality_relation_parts("<<c = c, tail>>") is None
     )
+    assert module.tla_top_level_order_relation_parts("Left => Right") is None
+    assert module.tla_top_level_order_relation_parts("Left <=> Right") is None
+    assert module.tla_top_level_order_relation_parts("<<c < d, tail>>") is None
+    assert module.tla_top_level_static_infix_operands("Left + Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands(
+        "Left \\cup {Right, Tail}"
+    ) == ["Left", "{Right, Tail}"]
+    assert module.tla_top_level_static_infix_operands(
+        "<<Left + Right, Tail>>"
+    ) is None
+    assert module.tla_top_level_static_infix_operands("-Left") is None
+    assert module.tla_top_level_static_infix_operands("Left -> Right") is None
     assert not module.tla_has_top_level_equality("<<c = c, tail>>")
     assert module.tla_has_top_level_disjunction("Left \\/ Right")
     assert module.tla_has_top_level_implication("Left => Right")
     assert module.tla_has_top_level_equality("left = right")
+    assert (
+        module.strip_static_outer_parentheses('("left \\" ) right")')
+        == '"left \\" ) right"'
+    )
+    assert (
+        module.strip_static_outer_parentheses('("left ( right")')
+        == '"left ( right"'
+    )
+    assert (
+        module.tla_static_let_alias_operand(
+            'LET selected == ("left \\" ) right") IN selected'
+        )
+        == '"left \\" ) right"'
+    )
     assert module.tla_explicit_set_elements("{<<1, 2>>}") == ["<<1, 2>>"]
     assert module.tla_explicit_singleton_set_element("{<<1, 2>>}") == "<<1, 2>>"
     assert module.tla_top_level_if_parts(
         "IF ready THEN <<left ELSE right, tail>> ELSE fallback"
     ) == ("ready", "<<left ELSE right, tail>>", "fallback")
+    assert module.tla_top_level_if_parts(
+        'IF ready THEN "left \\" ELSE right" ELSE fallback'
+    ) == ("ready", '"left \\" ELSE right"', "fallback")
+    assert module.tla_top_level_if_parts(
+        'IF "guard \\" THEN text" THEN left ELSE right'
+    ) == ('"guard \\" THEN text"', "left", "right")
     assert (
         module.tla_static_let_alias_operand(
             "LET selected == <<left IN right, tail>> IN selected"
@@ -6587,6 +7108,50 @@ def test_cfg_correctness_envelope_shape_errors_accepts_exactness_envelope(
     )
 
 
+def test_cfg_correctness_envelope_shape_errors_ignore_string_literal_identifiers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStringIdentifierEnvelope.tla"
+    cfg = tmp_path / "SumeragiStringIdentifierEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStringIdentifierEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                'ConcreteStringPredicate == label = "TypeInvariant"',
+                "StringIdentifierExactness ==",
+                "  /\\ ConcreteStringPredicate",
+                "StringIdentifierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StringIdentifierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StringIdentifierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_correctness_envelope_shape_errors(
+            "string-identifier-envelope-fast", tla, cfg, "TLC"
+        )
+        == []
+    )
+
+
 def test_cfg_correctness_envelope_shape_errors_has_no_legacy_exactness_debt(
 ) -> None:
     module = load_coverage_module()
@@ -7521,6 +8086,12 @@ def test_unary_temporal_parameterized_calls_unwrap_let_aliases() -> None:
     assert module.unary_temporal_parameterized_calls(
         "ConcretePredicate /\\ (LET selected == Predicate(Cases) IN [] selected)"
     ) == ["Predicate(Cases)"]
+    assert module.unary_temporal_parameterized_calls(
+        "[] Predicate(Cases) /\\ OtherPredicate(Cases)"
+    ) == ["Predicate(Cases)"]
+    assert module.unary_temporal_parameterized_calls(
+        "[](Predicate(Cases) /\\ OtherPredicate(Cases))"
+    ) == ["Predicate(Cases)", "OtherPredicate(Cases)"]
     assert module.unary_temporal_parameterized_calls("Predicate(Cases)") == []
 
 
@@ -10127,17 +10698,25 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
                 "CONSTANT Cases",
                 "Known(Case) == checked = Case",
                 "Bits(Case) == <<>>",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "OtherRecord == [Present |-> TRUE]",
+                "ParamHelper(MissingHelper) == Known(MissingHelper) /\\ MissingHelper",
+                "ParamFree(Alias) == Alias /\\ FreeMissing",
                 "====",
             ]
         ),
         encoding="utf-8",
     )
     definitions = module.tla_single_expression_operator_definitions(tla)
+    parameter_names = module.tla_operator_parameter_names(tla)
     formula = (
         '\\A Case \\in Cases: /\\ Known(Case) /\\ Len(Bits(Case)) >= 0 '
         '/\\ label = "MissingInString" /\\ MissingHelper'
     )
 
+    assert parameter_names["Known"] == frozenset({"Case"})
+    assert parameter_names["ParamHelper"] == frozenset({"MissingHelper"})
+    assert parameter_names["ParamFree"] == frozenset({"Alias"})
     assert module.tla_quantified_bound_identifiers(formula) == {"Case"}
     assert "MissingInString" not in module.tla_static_identifiers(
         module.tla_without_string_literals(formula)
@@ -10149,6 +10728,1336 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
         current="Known",
         exactness_operator="IdentifierScanExactness",
     ) == ["MissingHelper"]
+
+    standard_tla_string_set = "Known(Case) /\\ Case \\in STRING"
+    assert module.tla_free_static_identifiers(standard_tla_string_set) == {
+        "Case",
+        "Known",
+        "STRING",
+    }
+    assert module.undefined_static_helper_identifiers(
+        standard_tla_string_set,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+        local_bound=frozenset({"Case"}),
+    ) == []
+
+    standard_tla_operator_mix = (
+        "MissingHelper \\in STRING /\\ Known \\in BOOLEAN /\\ "
+        "Cardinality(SUBSET Cases) >= Len(Seq(Known))"
+    )
+    assert module.undefined_static_helper_identifiers(
+        standard_tla_operator_mix,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    enabled_selector_field_bound_only = "ENABLED (Known.MissingField)"
+    assert module.tla_unary_action_operand(enabled_selector_field_bound_only) == (
+        "Known.MissingField"
+    )
+    assert module.tla_free_static_identifiers(enabled_selector_field_bound_only) == {
+        "Known"
+    }
+    assert module.undefined_static_helper_identifiers(
+        enabled_selector_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    enabled_selector_body_free = (
+        "ENABLED (Known.MissingField /\\ FreeMissing)"
+    )
+    assert module.tla_free_static_identifiers(enabled_selector_body_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        enabled_selector_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    unchanged_tuple_field_bound_only = "UNCHANGED <<Known.MissingField>>"
+    assert module.tla_unary_action_operand(unchanged_tuple_field_bound_only) == (
+        "<<Known.MissingField>>"
+    )
+    assert module.tla_tuple_literal_values("<<Known.MissingField>>") == [
+        "Known.MissingField"
+    ]
+    assert module.tla_free_static_identifiers(
+        unchanged_tuple_field_bound_only
+    ) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        unchanged_tuple_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    unchanged_tuple_body_free = (
+        "UNCHANGED <<Known.MissingField, FreeMissing>>"
+    )
+    assert module.tla_tuple_literal_values(
+        "<<Known.MissingField, FreeMissing>>"
+    ) == ["Known.MissingField", "FreeMissing"]
+    assert module.tla_free_static_identifiers(unchanged_tuple_body_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        unchanged_tuple_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    case_selector_field_bound_only = (
+        "CASE Known -> Known.MissingField [] OTHER -> Known"
+    )
+    assert module.tla_top_level_case_condition_result_branches(
+        case_selector_field_bound_only
+    ) == [
+        ("Known", "Known.MissingField"),
+        ("OTHER", "Known"),
+    ]
+    assert module.tla_free_static_identifiers(case_selector_field_bound_only) == {
+        "Known"
+    }
+    assert module.undefined_static_helper_identifiers(
+        case_selector_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    case_branch_body_free = (
+        "CASE Known -> Known.MissingField /\\ FreeMissing [] OTHER -> Known"
+    )
+    assert module.tla_top_level_case_result_branches(case_branch_body_free) == [
+        "Known.MissingField /\\ FreeMissing",
+        "Known",
+    ]
+    assert module.tla_free_static_identifiers(case_branch_body_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        case_branch_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    case_record_field_bound_only = (
+        "CASE Known -> [MissingField |-> Known] "
+        "[] OTHER -> [OtherField |-> FreeMissing]"
+    )
+    assert module.tla_free_static_identifiers(case_record_field_bound_only) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        case_record_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    relation_selector_field_bound_only = "ConcreteRecord.MissingField = TRUE"
+    assert module.tla_top_level_relation_parts(
+        relation_selector_field_bound_only
+    ) == ("ConcreteRecord.MissingField", "=", "TRUE")
+    assert module.tla_free_static_identifiers(
+        relation_selector_field_bound_only
+    ) == {"ConcreteRecord"}
+    assert module.undefined_static_helper_identifiers(
+        relation_selector_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    relation_selector_body_free = "ConcreteRecord.MissingField # FreeMissing"
+    assert module.tla_top_level_relation_parts(relation_selector_body_free) == (
+        "ConcreteRecord.MissingField",
+        "#",
+        "FreeMissing",
+    )
+    assert module.tla_free_static_identifiers(relation_selector_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        relation_selector_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    relation_order_field_bound_only = "ConcreteRecord.MissingField < 1"
+    assert module.tla_top_level_relation_parts(
+        relation_order_field_bound_only
+    ) == ("ConcreteRecord.MissingField", "<", "1")
+    assert module.tla_free_static_identifiers(
+        relation_order_field_bound_only
+    ) == {"ConcreteRecord"}
+    assert module.undefined_static_helper_identifiers(
+        relation_order_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    call_argument_field_bound_only = "Known(ConcreteRecord.MissingField)"
+    assert module.tla_free_static_identifiers(call_argument_field_bound_only) == {
+        "ConcreteRecord",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        call_argument_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    call_argument_body_free = (
+        "Known([MissingField |-> ConcreteRecord.MissingField]) /\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(call_argument_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        call_argument_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    missing_call_argument_field_bound_only = (
+        "MissingHelper(ConcreteRecord.MissingField)"
+    )
+    assert module.tla_free_static_identifiers(
+        missing_call_argument_field_bound_only
+    ) == {"ConcreteRecord", "MissingHelper"}
+    assert module.undefined_static_helper_identifiers(
+        missing_call_argument_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    arithmetic_infix_field_bound_only = "ConcreteRecord.MissingField + 1"
+    assert module.tla_top_level_static_infix_operands(
+        arithmetic_infix_field_bound_only
+    ) == ["ConcreteRecord.MissingField", "1"]
+    assert module.tla_free_static_identifiers(arithmetic_infix_field_bound_only) == {
+        "ConcreteRecord"
+    }
+    assert module.undefined_static_helper_identifiers(
+        arithmetic_infix_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    arithmetic_infix_body_free = (
+        "ConcreteRecord.MissingField + OtherRecord.OtherField + FreeMissing"
+    )
+    assert module.tla_top_level_static_infix_operands(
+        arithmetic_infix_body_free
+    ) == [
+        "ConcreteRecord.MissingField",
+        "OtherRecord.OtherField",
+        "FreeMissing",
+    ]
+    assert module.tla_free_static_identifiers(arithmetic_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+        "OtherRecord",
+    }
+    assert module.undefined_static_helper_identifiers(
+        arithmetic_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    set_infix_body_free = "ConcreteRecord.MissingField \\cup {FreeMissing}"
+    assert module.tla_top_level_static_infix_operands(set_infix_body_free) == [
+        "ConcreteRecord.MissingField",
+        "{FreeMissing}",
+    ]
+    assert module.tla_free_static_identifiers(set_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    call_argument_infix_body_free = (
+        "Known(ConcreteRecord.MissingField + FreeMissing)"
+    )
+    assert module.tla_free_static_identifiers(call_argument_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        call_argument_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    _, param_bound_body = definitions["ParamHelper"]
+    assert module.undefined_static_helper_identifiers(
+        param_bound_body,
+        definitions,
+        tla,
+        current="ParamHelper",
+        exactness_operator="IdentifierScanExactness",
+        local_bound=parameter_names["ParamHelper"],
+    ) == []
+
+    _, param_free_body = definitions["ParamFree"]
+    assert module.undefined_static_helper_identifiers(
+        param_free_body,
+        definitions,
+        tla,
+        current="ParamFree",
+        exactness_operator="IdentifierScanExactness",
+        local_bound=parameter_names["ParamFree"],
+    ) == ["FreeMissing"]
+
+    nested_bound_only = (
+        "\\A Case \\in Cases: \\A MissingHelper \\in Cases: Known(MissingHelper)"
+    )
+    assert module.undefined_static_helper_identifiers(
+        nested_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    nested_shadowed_free = (
+        "\\A Case \\in Cases: "
+        "(\\A MissingHelper \\in Cases: Known(MissingHelper)) /\\ MissingHelper"
+    )
+    assert module.undefined_static_helper_identifiers(
+        nested_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    tuple_pattern_domain_free = (
+        "\\A <<MissingLeft, MissingRight>> \\in MissingDomain: "
+        "Known /\\ MissingLeft /\\ MissingRight"
+    )
+    assert module.tla_free_static_identifiers(tuple_pattern_domain_free) == {
+        "Known",
+        "MissingDomain",
+    }
+    assert module.undefined_static_helper_identifiers(
+        tuple_pattern_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingDomain"]
+
+    let_bound_only = "LET MissingHelper == Known IN MissingHelper"
+    assert module.tla_free_static_identifiers(let_bound_only) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        let_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    let_shadowed_free = "LET MissingHelper == Known IN MissingHelper /\\ FreeMissing"
+    assert module.tla_free_static_identifiers(let_shadowed_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        let_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    let_operand_free = "LET Alias == MissingHelper IN Alias"
+    assert module.tla_free_static_identifiers(let_operand_free) == {
+        "MissingHelper"
+    }
+    assert module.undefined_static_helper_identifiers(
+        let_operand_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    let_parameterized_bound_only = (
+        "LET LocalHelper(MissingParam) == Known /\\ MissingParam "
+        "IN LocalHelper(1)"
+    )
+    let_parameterized_entries = module.tla_static_let_binding_entries(
+        "LocalHelper(MissingParam) == Known /\\ MissingParam"
+    )
+    assert len(let_parameterized_entries) == 1
+    assert let_parameterized_entries[0].name == "LocalHelper"
+    assert let_parameterized_entries[0].params == frozenset({"MissingParam"})
+    assert module.tla_static_let_binding_definitions(
+        "LocalHelper(MissingParam) == Known /\\ MissingParam"
+    ) is None
+    assert module.tla_free_static_identifiers(let_parameterized_bound_only) == {
+        "Known"
+    }
+    assert module.undefined_static_helper_identifiers(
+        let_parameterized_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    let_parameterized_body_free = (
+        "LET LocalHelper(MissingParam) == Known /\\ MissingParam /\\ FreeMissing "
+        "IN LocalHelper(1)"
+    )
+    assert module.tla_free_static_identifiers(let_parameterized_body_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        let_parameterized_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    let_parameterized_argument_free = (
+        "LET LocalHelper(MissingParam) == Known /\\ MissingParam "
+        "IN LocalHelper(ResultMissing)"
+    )
+    assert module.tla_free_static_identifiers(let_parameterized_argument_free) == {
+        "Known",
+        "ResultMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        let_parameterized_argument_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["ResultMissing"]
+
+    lambda_bound_only = "LAMBDA MissingHelper \\in Cases: Known /\\ MissingHelper"
+    assert module.tla_lambda_scope(lambda_bound_only) == (
+        ["Cases"],
+        "Known /\\ MissingHelper",
+        {"MissingHelper"},
+    )
+    assert module.tla_free_static_identifiers(lambda_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    lambda_comma_bound_only = (
+        "LAMBDA MissingLeft, MissingRight \\in Cases: "
+        "Known /\\ MissingLeft /\\ MissingRight"
+    )
+    assert module.tla_lambda_scope(lambda_comma_bound_only) == (
+        ["Cases"],
+        "Known /\\ MissingLeft /\\ MissingRight",
+        {"MissingLeft", "MissingRight"},
+    )
+    assert module.tla_free_static_identifiers(lambda_comma_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_comma_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    lambda_tuple_bound_only = (
+        "LAMBDA <<MissingLeft, MissingRight>> \\in Cases: "
+        "Known /\\ MissingLeft /\\ MissingRight"
+    )
+    assert module.tla_lambda_scope(lambda_tuple_bound_only) == (
+        ["Cases"],
+        "Known /\\ MissingLeft /\\ MissingRight",
+        {"MissingLeft", "MissingRight"},
+    )
+    assert module.tla_free_static_identifiers(lambda_tuple_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_tuple_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    lambda_domain_free = "LAMBDA Alias \\in MissingDomain: Alias"
+    assert module.tla_lambda_scope(lambda_domain_free) == (
+        ["MissingDomain"],
+        "Alias",
+        {"Alias"},
+    )
+    assert module.tla_free_static_identifiers(lambda_domain_free) == {
+        "MissingDomain"
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingDomain"]
+
+    lambda_body_free = (
+        "LAMBDA MissingHelper \\in Cases: MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(lambda_body_free) == {
+        "Cases",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    lambda_plain_bound_free = "LAMBDA MissingHelper: MissingHelper /\\ FreeMissing"
+    assert module.tla_lambda_scope(lambda_plain_bound_free) == (
+        [],
+        "MissingHelper /\\ FreeMissing",
+        {"MissingHelper"},
+    )
+    assert module.tla_free_static_identifiers(lambda_plain_bound_free) == {
+        "FreeMissing"
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_plain_bound_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    lambda_application_argument_free = (
+        "(LAMBDA MissingHelper \\in Cases: MissingHelper)[Known]"
+    )
+    assert module.tla_lambda_scope(lambda_application_argument_free) is None
+    assert module.tla_free_static_identifiers(lambda_application_argument_free) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_application_argument_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    choose_bound_only = "CHOOSE MissingHelper \\in Cases: Known /\\ MissingHelper"
+    assert module.tla_free_static_identifiers(choose_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        choose_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    choose_shadowed_free = (
+        "(CHOOSE MissingHelper \\in Cases: Known /\\ MissingHelper) "
+        "/\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(choose_shadowed_free) == {
+        "Cases",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        choose_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    choose_domain_free = "CHOOSE Alias \\in MissingHelper: Alias"
+    assert module.tla_free_static_identifiers(choose_domain_free) == {
+        "MissingHelper"
+    }
+    assert module.undefined_static_helper_identifiers(
+        choose_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    set_bound_only = "{MissingHelper \\in Cases: Known /\\ MissingHelper}"
+    assert module.tla_free_static_identifiers(set_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    set_compound_bound_only = (
+        "{MissingHelper \\in Cases: Known /\\ MissingHelper} /\\ "
+        "{OtherMissing \\in Cases: OtherMissing}"
+    )
+    assert module.tla_set_comprehension_scope(set_compound_bound_only) is None
+    assert module.tla_explicit_set_elements(set_compound_bound_only) is None
+    assert module.tla_free_static_identifiers(set_compound_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_compound_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    set_compound_body_free = (
+        "{MissingHelper \\in Cases: Known /\\ MissingHelper} /\\ "
+        "{OtherMissing \\in Cases: OtherMissing} /\\ FreeMissing"
+    )
+    assert module.tla_set_comprehension_scope(set_compound_body_free) is None
+    assert module.tla_free_static_identifiers(set_compound_body_free) == {
+        "Cases",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_compound_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    set_shadowed_free = (
+        "{MissingHelper \\in Cases: Known /\\ MissingHelper} /\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(set_shadowed_free) == {
+        "Cases",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    set_domain_free = "{Alias \\in MissingHelper: Alias}"
+    assert module.tla_free_static_identifiers(set_domain_free) == {
+        "MissingHelper"
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    set_comma_bound_only = (
+        "{MissingLeft, MissingRight \\in Cases: "
+        "Known /\\ MissingLeft /\\ MissingRight}"
+    )
+    assert module.tla_free_static_identifiers(set_comma_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_comma_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    set_comma_shadowed_free = (
+        "{MissingLeft, MissingRight \\in Cases: "
+        "Known /\\ MissingLeft /\\ MissingRight} /\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(set_comma_shadowed_free) == {
+        "Cases",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_comma_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    explicit_set_record_field_bound_only = "{[MissingField |-> Known]}"
+    assert module.tla_explicit_set_elements(
+        explicit_set_record_field_bound_only
+    ) == ["[MissingField |-> Known]"]
+    assert module.tla_free_static_identifiers(
+        explicit_set_record_field_bound_only
+    ) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        explicit_set_record_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    explicit_set_selector_body_free = "{ConcreteRecord.MissingField, FreeMissing}"
+    assert module.tla_explicit_set_elements(explicit_set_selector_body_free) == [
+        "ConcreteRecord.MissingField",
+        "FreeMissing",
+    ]
+    assert module.tla_free_static_identifiers(explicit_set_selector_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        explicit_set_selector_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    unary_domain_record_field_bound_only = "DOMAIN [MissingField |-> Known]"
+    assert module.tla_unary_set_operator_operand(
+        unary_domain_record_field_bound_only
+    ) == "[MissingField |-> Known]"
+    assert module.tla_free_static_identifiers(
+        unary_domain_record_field_bound_only
+    ) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        unary_domain_record_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    unary_subset_record_set_field_bound_only = "SUBSET [MissingField: Known]"
+    assert module.tla_unary_set_operator_operand(
+        unary_subset_record_set_field_bound_only
+    ) == "[MissingField: Known]"
+    assert module.tla_free_static_identifiers(
+        unary_subset_record_set_field_bound_only
+    ) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        unary_subset_record_set_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    unary_subset_comprehension_bound_only = (
+        "SUBSET {MissingHelper \\in Cases: Known /\\ MissingHelper}"
+    )
+    assert module.tla_free_static_identifiers(
+        unary_subset_comprehension_bound_only
+    ) == {"Cases", "Known"}
+    assert module.undefined_static_helper_identifiers(
+        unary_subset_comprehension_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    unary_union_literal_body_free = "UNION {[MissingField |-> FreeMissing]}"
+    assert module.tla_unary_set_operator_operand(
+        unary_union_literal_body_free
+    ) == "{[MissingField |-> FreeMissing]}"
+    assert module.tla_free_static_identifiers(unary_union_literal_body_free) == {
+        "FreeMissing"
+    }
+    assert module.undefined_static_helper_identifiers(
+        unary_union_literal_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    function_bound_only = "[MissingHelper \\in Cases |-> Known /\\ MissingHelper]"
+    assert module.tla_free_static_identifiers(function_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    function_shadowed_free = (
+        "[MissingHelper \\in Cases |-> Known /\\ MissingHelper] /\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(function_shadowed_free) == {
+        "Cases",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    function_domain_free = "[Alias \\in MissingHelper |-> Alias]"
+    assert module.tla_free_static_identifiers(function_domain_free) == {
+        "MissingHelper"
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingHelper"]
+
+    function_set_record_range_bound_only = "[Cases -> [MissingField |-> Known]]"
+    assert module.tla_function_set_scope(function_set_record_range_bound_only) == (
+        "Cases",
+        "[MissingField |-> Known]",
+    )
+    assert module.tla_function_set_scope("[MissingField |-> Known]") is None
+    assert module.tla_free_static_identifiers(
+        function_set_record_range_bound_only
+    ) == {"Cases", "Known"}
+    assert module.undefined_static_helper_identifiers(
+        function_set_record_range_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    function_set_domain_free = "[MissingDomain -> [MissingField |-> Known]]"
+    assert module.tla_free_static_identifiers(function_set_domain_free) == {
+        "Known",
+        "MissingDomain",
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_set_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingDomain"]
+
+    function_set_range_free = "[Cases -> [MissingField |-> FreeMissing]]"
+    assert module.tla_free_static_identifiers(function_set_range_free) == {
+        "Cases",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_set_range_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    function_set_constructor_range_bound_only = (
+        "[Cases -> [MissingHelper \\in Cases |-> MissingHelper]]"
+    )
+    assert module.tla_free_static_identifiers(
+        function_set_constructor_range_bound_only
+    ) == {"Cases"}
+    assert module.undefined_static_helper_identifiers(
+        function_set_constructor_range_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    function_set_unary_set_range_free = (
+        "[Cases -> DOMAIN [MissingField |-> FreeMissing]]"
+    )
+    assert module.tla_free_static_identifiers(
+        function_set_unary_set_range_free
+    ) == {"Cases", "FreeMissing"}
+    assert module.undefined_static_helper_identifiers(
+        function_set_unary_set_range_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    record_field_bound_only = "[MissingField |-> Known]"
+    assert module.tla_record_literal_values(record_field_bound_only) == ["Known"]
+    assert module.tla_free_static_identifiers(record_field_bound_only) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        record_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    record_value_free = "[MissingField |-> Known, OtherField |-> FreeMissing]"
+    assert module.tla_record_literal_values(record_value_free) == [
+        "Known",
+        "FreeMissing",
+    ]
+    assert module.tla_free_static_identifiers(record_value_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_value_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    record_set_field_bound_only = "[MissingField: Known]"
+    assert module.tla_record_set_field_domains(record_set_field_bound_only) == ["Known"]
+    assert module.tla_free_static_identifiers(record_set_field_bound_only) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        record_set_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    record_set_domain_free = "[MissingField: FreeMissing, OtherField: Known]"
+    assert module.tla_record_set_field_domains(record_set_domain_free) == [
+        "FreeMissing",
+        "Known",
+    ]
+    assert module.tla_free_static_identifiers(record_set_domain_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_set_domain_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    record_update_field_bound_only = "[Known EXCEPT !.MissingField = TRUE]"
+    assert module.tla_record_update_scope(record_update_field_bound_only) == (
+        "Known",
+        [],
+        ["TRUE"],
+    )
+    assert module.tla_free_static_identifiers(record_update_field_bound_only) == {
+        "Known"
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_update_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    record_update_value_free = "[Known EXCEPT !.MissingField = FreeMissing]"
+    assert module.tla_record_update_scope(record_update_value_free) == (
+        "Known",
+        [],
+        ["FreeMissing"],
+    )
+    assert module.tla_free_static_identifiers(record_update_value_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_update_value_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    record_update_index_free = (
+        "[Known EXCEPT ![MissingIndex].MissingField = FreeMissing]"
+    )
+    assert module.tla_record_update_scope(record_update_index_free) == (
+        "Known",
+        ["MissingIndex"],
+        ["FreeMissing"],
+    )
+    assert module.tla_free_static_identifiers(record_update_index_free) == {
+        "FreeMissing",
+        "Known",
+        "MissingIndex",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_update_index_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingIndex"]
+
+    record_update_at_value = "[Known EXCEPT !.MissingField = @]"
+    assert module.tla_record_update_scope(record_update_at_value) == (
+        "Known",
+        [],
+        ["@"],
+    )
+    assert module.tla_free_static_identifiers(record_update_at_value) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        record_update_at_value,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    record_selector_field_bound_only = "Known.MissingField"
+    assert module.tla_selector_scope(record_selector_field_bound_only) == (
+        "Known",
+        [],
+    )
+    assert module.tla_free_static_identifiers(record_selector_field_bound_only) == {
+        "Known"
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_selector_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    record_selector_chained_fields = "Known.MissingField.OtherField"
+    assert module.tla_selector_scope(record_selector_chained_fields) == (
+        "Known",
+        [],
+    )
+    assert module.tla_free_static_identifiers(record_selector_chained_fields) == {
+        "Known"
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_selector_chained_fields,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    record_selector_index_free = "Known[MissingIndex].MissingField"
+    assert module.tla_selector_scope(record_selector_index_free) == (
+        "Known",
+        ["MissingIndex"],
+    )
+    assert module.tla_free_static_identifiers(record_selector_index_free) == {
+        "Known",
+        "MissingIndex",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_selector_index_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingIndex"]
+
+    record_selector_field_then_index_free = "Known.MissingField[MissingIndex]"
+    assert module.tla_selector_scope(record_selector_field_then_index_free) == (
+        "Known",
+        ["MissingIndex"],
+    )
+    assert module.tla_free_static_identifiers(
+        record_selector_field_then_index_free
+    ) == {"Known", "MissingIndex"}
+    assert module.undefined_static_helper_identifiers(
+        record_selector_field_then_index_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingIndex"]
+
+    record_selector_nested_index_field = "Known[MissingRecord.MissingField]"
+    assert module.tla_selector_scope(record_selector_nested_index_field) == (
+        "Known",
+        ["MissingRecord.MissingField"],
+    )
+    assert module.tla_free_static_identifiers(record_selector_nested_index_field) == {
+        "Known",
+        "MissingRecord",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_selector_nested_index_field,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["MissingRecord"]
+
+    record_selector_shadowed_free = "Known.MissingField /\\ FreeMissing"
+    assert module.tla_selector_scope(record_selector_shadowed_free) is None
+    assert module.tla_free_static_identifiers(record_selector_shadowed_free) == {
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        record_selector_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    function_comma_bound_only = (
+        "[MissingLeft, MissingRight \\in Cases |-> "
+        "Known /\\ MissingLeft /\\ MissingRight]"
+    )
+    assert module.tla_free_static_identifiers(function_comma_bound_only) == {
+        "Cases",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_comma_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    function_comma_shadowed_free = (
+        "[MissingLeft, MissingRight \\in Cases |-> "
+        "Known /\\ MissingLeft /\\ MissingRight] /\\ FreeMissing"
+    )
+    assert module.tla_free_static_identifiers(function_comma_shadowed_free) == {
+        "Cases",
+        "FreeMissing",
+        "Known",
+    }
+    assert module.undefined_static_helper_identifiers(
+        function_comma_shadowed_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+
+def test_transitive_undefined_exactness_conjuncts_preserve_operator_parameter_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParameterizedUndefinedEnvelope.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParameterizedUndefinedEnvelope ----",
+                "ParamHelper(MissingHelper) == MissingHelper",
+                "Root == ParamHelper",
+                "ParameterizedExactness ==",
+                "  /\\ Root",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    assert module.transitive_undefined_exactness_conjuncts(
+        "ParameterizedExactness",
+        "/\\ Root",
+        definitions,
+        tla,
+    ) == []
+    assert module.transitive_nonzero_arity_exactness_conjuncts(
+        "ParameterizedExactness",
+        "/\\ Root",
+        definitions,
+        signatures,
+        tla,
+    ) == [f"Root reaches Root -> ParamHelper at {tla}:2 with arity 1"]
+
+
+def test_transitive_undefined_quantified_exactness_preserves_operator_parameter_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParameterizedQuantifiedUndefinedEnvelope.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParameterizedQuantifiedUndefinedEnvelope ----",
+                "CONSTANT Cases",
+                "ParamHelper(MissingHelper) == \\A Case \\in Cases: MissingHelper",
+                "Root == ParamHelper",
+                "ParameterizedExactness ==",
+                "  /\\ Root",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "ParameterizedExactness",
+        "/\\ Root",
+        definitions,
+        tla,
+    ) == []
+
+
+def test_transitive_undefined_temporal_conjuncts_preserve_operator_parameter_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParameterizedTemporalUndefinedEnvelope.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParameterizedTemporalUndefinedEnvelope ----",
+                "ParamTemporal(MissingTemporalPredicate) == MissingTemporalPredicate",
+                "TemporalWrapper == ParamTemporal",
+                "TemporalSafety == [] TemporalWrapper",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    signatures = module.tla_operator_signatures(tla)
+    assert module.transitive_undefined_temporal_extra_conjuncts(
+        "TemporalSafety",
+        "[] TemporalWrapper",
+        definitions,
+        tla,
+        4,
+    ) == []
+    assert module.nonzero_arity_temporal_helper_references(
+        "TemporalSafety",
+        "[] TemporalWrapper",
+        signatures,
+        definitions,
+        tla,
+    ) == [
+        "TemporalWrapper reaches TemporalWrapper -> ParamTemporal at "
+        f"{tla}:2 with arity 1"
+    ]
+
+
+def test_transitive_undefined_quantified_temporal_preserves_operator_parameter_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParameterizedQuantifiedTemporalUndefinedEnvelope.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParameterizedQuantifiedTemporalUndefinedEnvelope ----",
+                "CONSTANT Cases",
+                "ParamTemporal(MissingTemporalPredicate) == "
+                "\\A Case \\in Cases: MissingTemporalPredicate",
+                "TemporalWrapper == ParamTemporal",
+                "TemporalSafety == [] TemporalWrapper",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_temporal_extra_conjuncts(
+        "TemporalSafety",
+        "[] TemporalWrapper",
+        definitions,
+        tla,
+        5,
+    ) == []
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_quantified_undefined_exactness_helper(
@@ -10201,6 +12110,739 @@ def test_cfg_correctness_envelope_shape_errors_rejects_quantified_undefined_exac
         f"QuantifiedLeaf reaches MissingHelper through QuantifiedLeaf at "
         f"{tla}:6; define named concrete model predicates before composing "
         "exactness predicate chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_shadowed_quantified_undefined_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiShadowedQuantifiedUndefinedEnvelope.tla"
+    cfg = tmp_path / "SumeragiShadowedQuantifiedUndefinedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiShadowedQuantifiedUndefinedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ (\\A MissingHelper \\in Cases: ConcretePredicate)",
+                "    /\\ MissingHelper",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT QuantifiedUndefinedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "shadowed-quantified-undefined-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        f"shadowed-quantified-undefined-envelope-fast: TLC cfg {cfg}:4 "
+        "references correctness envelope QuantifiedUndefinedCorrectnessEnvelope, "
+        "but exactness conjunct QuantifiedUndefinedExactness at "
+        f"{tla}:12 contains transitive exactness predicate chain with "
+        "undefined quantified helper QuantifiedLeaf reaches MissingHelper "
+        f"through QuantifiedLeaf at {tla}:8; define named concrete model "
+        "predicates before composing exactness predicate chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_let_shadowed_quantified_undefined_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiLetShadowedQuantifiedUndefinedEnvelope.tla"
+    cfg = tmp_path / "SumeragiLetShadowedQuantifiedUndefinedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiLetShadowedQuantifiedUndefinedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    LET MissingHelper == ConcretePredicate IN",
+                "      /\\ MissingHelper",
+                "      /\\ FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT QuantifiedUndefinedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "let-shadowed-quantified-undefined-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        f"let-shadowed-quantified-undefined-envelope-fast: TLC cfg {cfg}:4 "
+        "references correctness envelope QuantifiedUndefinedCorrectnessEnvelope, "
+        "but exactness conjunct QuantifiedUndefinedExactness at "
+        f"{tla}:13 contains transitive exactness predicate chain with "
+        "undefined quantified helper QuantifiedLeaf reaches FreeMissing "
+        f"through QuantifiedLeaf at {tla}:8; define named concrete model "
+        "predicates before composing exactness predicate chains"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_parameterized_let_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParameterizedLetShadowedQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParameterizedLetShadowedQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    LET LocalHelper(MissingParam) == "
+                "ConcretePredicate /\\ MissingParam IN",
+                "      /\\ LocalHelper(Case)",
+                "      /\\ FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_lambda_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiLambdaShadowedQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiLambdaShadowedQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    (LAMBDA MissingHelper \\in Cases:",
+                "      ConcretePredicate /\\ MissingHelper /\\ FreeMissing)[Case]",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_set_comprehension_enclosure_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiSetEnclosureQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSetEnclosureQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    {MissingHelper \\in Cases: ConcretePredicate /\\ MissingHelper} /\\",
+                "    {OtherMissing \\in Cases: OtherMissing} /\\ FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_action_wrapper_operand_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiActionWrapperQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiActionWrapperQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ ENABLED (ConcreteRecord.MissingField)",
+                "    /\\ UNCHANGED <<ConcreteRecord.MissingField, FreeMissing>>",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_case_branch_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiCaseBranchQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiCaseBranchQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    CASE ConcreteRecord.MissingField ->",
+                "      [MissingField |-> ConcreteRecord.MissingField]",
+                "    [] OTHER -> FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_relation_and_call_argument_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiRelationCallQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiRelationCallQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "ConcretePredicate(Value) == Value = Value",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ ConcretePredicate(ConcreteRecord.MissingField)",
+                "    /\\ ConcreteRecord.MissingField = TRUE",
+                "    /\\ FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:9"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_arithmetic_and_set_infix_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiInfixQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInfixQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "OtherRecord == [Present |-> TRUE]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ ConcreteRecord.MissingField + OtherRecord.OtherField",
+                "    /\\ ConcreteRecord.MissingField \\cup {FreeMissing}",
+                "    /\\ Known(ConcreteRecord.MissingField + FreeMissing)",
+                "Known(Value) == Value = Value",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:9"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_set_literal_and_unary_set_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiSetLiteralUnarySetQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSetLiteralUnarySetQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ {[MissingField |-> ConcreteRecord.MissingField]}",
+                "    /\\ DOMAIN [OtherField |-> ConcreteRecord.MissingField]",
+                "    /\\ SUBSET {MissingHelper \\in Cases: "
+                "ConcreteRecord.MissingField /\\ MissingHelper}",
+                "    /\\ UNION {[UnionField |-> FreeMissing]}",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_function_set_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFunctionSetQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFunctionSetQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ [Cases -> [MissingField |-> ConcreteRecord.MissingField]]",
+                "    /\\ [Cases -> [MissingHelper \\in Cases |-> MissingHelper]]",
+                "    /\\ [Cases -> DOMAIN [OtherField |-> FreeMissing]]",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_tuple_pattern_domain_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiTupleDomainQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTupleDomainQuantifiedUndefined ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A <<Case, OtherCase>> \\in MissingDomain:",
+                "    ConcretePredicate /\\ Case /\\ OtherCase",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches MissingDomain through QuantifiedLeaf at {tla}:7"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_record_field_labels(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiRecordFieldQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiRecordFieldQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    [MissingField |-> ConcretePredicate, OtherField |-> FreeMissing]",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_record_set_and_update_field_labels(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiRecordSetUpdateQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiRecordSetUpdateQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "ConcreteRecord == [Field |-> ConcretePredicate]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    [MissingField: FreeMissing] /\\",
+                "      [ConcreteRecord EXCEPT ![IndexMissing].OtherField = FreeMissingValue]",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:9",
+        f"QuantifiedLeaf reaches FreeMissingValue through QuantifiedLeaf at {tla}:9",
+        f"QuantifiedLeaf reaches IndexMissing through QuantifiedLeaf at {tla}:9",
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_record_selector_field_labels(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiRecordSelectorQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiRecordSelectorQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "ConcreteRecord == [Field |-> ConcretePredicate]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    ConcreteRecord.MissingField /\\",
+                "      ConcreteRecord[IndexMissing].OtherField /\\",
+                "      ConcreteRecord.MissingField[ValueMissing]",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches IndexMissing through QuantifiedLeaf at {tla}:9",
+        f"QuantifiedLeaf reaches ValueMissing through QuantifiedLeaf at {tla}:9",
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_choose_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiChooseShadowedQuantifiedUndefinedEnvelope.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiChooseShadowedQuantifiedUndefinedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ (CHOOSE MissingHelper \\in Cases: ConcretePredicate /\\ MissingHelper)",
+                "    /\\ FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_set_and_function_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiSetFunctionShadowedQuantifiedUndefinedEnvelope.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSetFunctionShadowedQuantifiedUndefinedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == checked = ready",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ {MissingHelper \\in Cases: ConcretePredicate /\\ MissingHelper}",
+                "    /\\ [FunctionMissing \\in Cases |-> ConcretePredicate /\\ FunctionMissing]",
+                "    /\\ {MissingLeft, MissingRight \\in Cases: ConcretePredicate /\\ MissingLeft /\\ MissingRight}",
+                "    /\\ [FunctionLeft, FunctionRight \\in Cases |-> ConcretePredicate /\\ FunctionLeft /\\ FunctionRight]",
+                "    /\\ FreeMissing",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:8"
     ]
 
 
@@ -12675,6 +15317,57 @@ def test_cfg_correctness_envelope_shape_errors_accepts_top_level_temporal_extras
     assert module.cfg_correctness_envelope_shape_errors(
         "fast", tla, cfg, "TLC"
     ) == []
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_string_only_temporal_extra(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                'EventuallyCommit == "ConcreteTemporalPredicate"',
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 has no "
+        "static model identifiers; temporal correctness-envelope exceptions "
+        "must name concrete model obligations"
+    ]
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_self_equality_temporal_extra(
@@ -17213,6 +19906,50 @@ def test_cfg_direct_exactness_envelope_pairing_errors_rejects_unpaired_exactness
         "unpaired-exactness-fast", tla, cfg, "Apalache"
     ) == [
         f"unpaired-exactness-fast: Apalache cfg {cfg}:4 references direct "
+        "exactness check UnpairedExactness, but no checked correctness envelope "
+        "in that CFG composes it"
+    ]
+
+
+def test_cfg_direct_exactness_envelope_pairing_errors_ignores_string_literal_exactness_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStringExactnessName.tla"
+    cfg = tmp_path / "SumeragiStringExactnessName_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStringExactnessName ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "UnpairedExactness ==",
+                "  /\\ ModelPredicate",
+                "ModelPredicate == checked = ready",
+                'StringMentionCorrectnessEnvelope == TypeInvariant /\\ "UnpairedExactness"',
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT UnpairedExactness",
+                "INVARIANT StringMentionCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_envelope_pairing_errors(
+        "string-exactness-name-fast", tla, cfg, "Apalache"
+    ) == [
+        f"string-exactness-name-fast: Apalache cfg {cfg}:4 references direct "
         "exactness check UnpairedExactness, but no checked correctness envelope "
         "in that CFG composes it"
     ]

@@ -619,6 +619,31 @@ fn key_tx_sequence(account: &AccountId) -> AccessKey {
     format!("tx.sequence:{account}")
 }
 
+fn key_sccp_outbound_message(key: &iroha_data_model::bridge::SccpOutboundMessageKey) -> AccessKey {
+    let mut out = format!("sccp.outbound:{}:{}:", key.source_domain, key.target_domain);
+    for byte in key.message_id {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn derive_sccp_outbound_message_access(
+    record: &iroha_data_model::isi::bridge::RecordSccpMessage,
+) -> AccessSet {
+    let Some(payload) = crate::bridge::decode_recorded_sccp_payload_bytes(&record.payload_bytes)
+    else {
+        return AccessSet::global();
+    };
+    if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+        return AccessSet::global();
+    }
+    let mut set = AccessSet::new();
+    set.add_write(key_sccp_outbound_message(
+        &crate::bridge::sccp_outbound_message_key(&payload),
+    ));
+    set
+}
+
 fn with_stateful_admission_keys(
     tx: &SignedTransaction,
     mut set: AccessSet,
@@ -1315,11 +1340,8 @@ where
     if any.downcast_ref::<Log>().is_some() {
         return set;
     }
-    if any
-        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
-        .is_some()
-    {
-        return set;
+    if let Some(record) = any.downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>() {
+        return derive_sccp_outbound_message_access(record);
     }
 
     // Transfers
@@ -2007,6 +2029,29 @@ mod tests {
         );
     }
 
+    fn sccp_transfer_payload(
+        nonce: u64,
+        source_domain: u32,
+        target_domain: u32,
+    ) -> iroha_sccp::SccpPayloadV1 {
+        iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain,
+            dest_domain: target_domain,
+            nonce,
+            asset_home_domain: source_domain,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 5,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x4444444444444444444444444444444444444444".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        })
+    }
+
     fn test_contract_artifact(
         code: Vec<u8>,
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
@@ -2203,6 +2248,84 @@ mod tests {
 
         assert_eq!(set.read_keys, [format!("account:{authority}")].into());
         assert_eq!(set.write_keys, [format!("tx.sequence:{authority}")].into());
+    }
+
+    #[test]
+    fn record_sccp_message_access_uses_outbound_message_key() {
+        let payload =
+            sccp_transfer_payload(1, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            ));
+        let mut visited_triggers = BTreeSet::new();
+
+        let set = derive_from_instruction(
+            &instruction,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+
+        let expected =
+            key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));
+        assert!(set.read_keys.is_empty());
+        assert_eq!(set.write_keys, BTreeSet::from([expected]));
+    }
+
+    #[test]
+    fn record_sccp_message_access_serializes_binary_and_hex_aliases() {
+        let payload =
+            sccp_transfer_payload(3, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
+        let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let binary = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            canonical_payload.clone(),
+        ));
+        let hex_alias =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                format!("0x{}", hex::encode(&canonical_payload)).into_bytes(),
+            ));
+        let expected =
+            key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));
+
+        for instruction in [&binary, &hex_alias] {
+            let mut visited_triggers = BTreeSet::new();
+            let set = derive_from_instruction(
+                instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            );
+            assert!(set.read_keys.is_empty());
+            assert_eq!(set.write_keys, BTreeSet::from([expected.clone()]));
+        }
+    }
+
+    #[test]
+    fn record_sccp_message_access_serializes_invalid_or_non_sora_payloads() {
+        let invalid =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![
+                0xFF,
+            ]));
+        let inbound_payload =
+            sccp_transfer_payload(2, iroha_sccp::SCCP_DOMAIN_ETH, iroha_sccp::SCCP_DOMAIN_SORA);
+        let inbound = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            iroha_sccp::canonical_sccp_payload_bytes(&inbound_payload),
+        ));
+
+        for instruction in [&invalid, &inbound] {
+            let mut visited_triggers = BTreeSet::new();
+            let set = derive_from_instruction(
+                instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            );
+            assert_eq!(set, AccessSet::global());
+        }
     }
 
     #[test]

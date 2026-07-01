@@ -815,7 +815,11 @@ fn verify_council_envelope(
             )));
         }
 
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid council signature material for signer `{signer_hex}` in manifest {manifest_label}: {err}"
+            ))
+        })?;
         signature.verify(&public_key, record.digest.as_bytes()).map_err(|err| {
             invalid_parameter(format!(
                 "failed to verify council signature for signer `{signer_hex}` in manifest {manifest_label}: {err}"
@@ -4820,6 +4824,62 @@ mod sorafs_tests {
         };
         assert!(
             message.contains("failed to verify council signature"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_all_zero_signature_material() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let stored_record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let council_key = checked_ed25519_keypair();
+        let (envelope, signature_hex) = build_envelope(&stored_record, &council_key);
+        let inert_signature_hex = hex::encode([0_u8; 64]);
+
+        let mut invalid_json =
+            String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
+        invalid_json = invalid_json.replacen(&signature_hex, &inert_signature_hex, 1);
+        let invalid_envelope = invalid_json.into_bytes();
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 7,
+            council_envelope: Some(invalid_envelope),
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject all-zero signature material");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("signature payload must not be all zero"),
             "unexpected error message: {message}"
         );
     }

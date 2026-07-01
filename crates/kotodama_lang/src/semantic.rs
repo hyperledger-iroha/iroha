@@ -1679,16 +1679,15 @@ pub fn is_pointer_type(ty: &Type) -> bool {
 }
 
 const TRANSFER_BATCH_SIGNATURE: &str =
-    "(AccountId, AccountId, AssetDefinitionId, int, DataSpaceId) tuple entries";
+    "(AccountId, AccountId, AssetDefinitionId, int) tuple entries";
 
 fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
     match ty {
-        Type::Tuple(fields) if fields.len() == 5 => {
+        Type::Tuple(fields) if fields.len() == 4 => {
             matches!(resolve_struct_type(&fields[0]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[1]), Type::AccountId)
                 && matches!(resolve_struct_type(&fields[2]), Type::AssetDefinitionId)
                 && is_int_like(&fields[3])
-                && matches!(resolve_struct_type(&fields[4]), Type::DataSpaceId)
         }
         _ => false,
     }

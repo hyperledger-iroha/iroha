@@ -10,7 +10,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey};
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{ProfileId, chunker_registry};
 use sorafs_manifest::{
@@ -1354,31 +1354,7 @@ fn parse_signing_key(bytes: &[u8]) -> Result<SigningKey, String> {
 }
 
 fn verify_advert_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
-    match advert.signature.algorithm {
-        SignatureAlgorithm::Ed25519 => {
-            if advert.signature.public_key.len() != 32 {
-                return Err("ed25519 public key must be 32 bytes".into());
-            }
-            if advert.signature.signature.len() != 64 {
-                return Err("ed25519 signature must be 64 bytes".into());
-            }
-            let mut pk = [0u8; 32];
-            pk.copy_from_slice(&advert.signature.public_key);
-            let verifying_key = VerifyingKey::from_bytes(&pk)
-                .map_err(|err| format!("invalid ed25519 public key: {err}"))?;
-
-            let mut sig_bytes = [0u8; 64];
-            sig_bytes.copy_from_slice(&advert.signature.signature);
-            let signature = DalekSignature::from_bytes(&sig_bytes);
-
-            let body_bytes = norito::to_bytes(&advert.body)
-                .map_err(|err| format!("encode advert body: {err}"))?;
-            verifying_key
-                .verify_strict(&body_bytes, &signature)
-                .map_err(|_| "ed25519 signature validation failed".to_string())
-        }
-        other => Err(format!("unsupported signature algorithm: {other:?}")),
-    }
+    advert.verify_signature().map_err(|err| err.to_string())
 }
 
 fn endpoint_kind_name(kind: EndpointKind) -> &'static str {
@@ -1539,6 +1515,42 @@ mod tests {
             err.contains("invalid transport hint"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn verify_advert_signature_rejects_all_zero_signature_material() {
+        let opts = EmitOptions {
+            profile_handle: Some("sorafs.sf1@1.0.0".into()),
+            provider_id: Some([0x11; 32]),
+            stake_pool_id: Some([0x22; 32]),
+            stake_amount: Some(1_000_000),
+            availability: Some(AvailabilityTier::Hot),
+            max_latency_ms: Some(500),
+            max_streams: Some(5),
+            capabilities: vec![CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            }],
+            endpoints: vec![AdvertEndpoint {
+                kind: EndpointKind::Torii,
+                host_pattern: "localhost".into(),
+                metadata: Vec::new(),
+            }],
+            topics: vec![RendezvousTopic {
+                topic: "sorafs.zero-signature.primary".into(),
+                region: "global".into(),
+            }],
+            issued_at: Some(1_700_000_000),
+            signing_key_hex: Some(vec![0xAB; 32]),
+            ..EmitOptions::default()
+        };
+        let mut advert = build_advert(&opts).expect("advert builds");
+        advert.signature.signature.fill(0);
+
+        let err = verify_advert_signature(&advert)
+            .expect_err("all-zero signature material must be rejected");
+
+        assert!(err.contains("all zero"), "unexpected error: {err}");
     }
 
     #[test]

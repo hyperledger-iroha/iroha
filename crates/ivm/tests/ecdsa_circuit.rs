@@ -3,9 +3,8 @@ use ivm::halo2::{EcdsaVerifyCircuit, Secp256k1AddCircuit, Secp256k1MulCircuit};
 use k256::{
     ProjectivePoint, Scalar,
     ecdsa::{SigningKey, signature::Signer},
-    elliptic_curve::sec1::ToEncodedPoint,
+    elliptic_curve::{rand_core::OsRng, sec1::ToEncodedPoint},
 };
-use rand_core::OsRng;
 use sha2::Digest;
 
 #[test]

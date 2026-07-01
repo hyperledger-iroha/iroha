@@ -24,7 +24,7 @@ const SUBMIT_BALLOT_TYPE_NAME = 'iroha_data_model::isi::zk::SubmitBallot';
 const FINALIZE_ELECTION_TYPE_NAME = 'iroha_data_model::isi::zk::FinalizeElection';
 const UNSHIELD_TYPE_NAME = 'iroha_data_model::isi::zk::Unshield';
 const NORITO_TYPE_NAME_SCHEMA_HASH_DOMAIN = 'norito:v1:type-name\0';
-const ABI_HASH_HEX = '73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d';
+const ABI_HASH_HEX = 'cfedd3f16e55a2db43076d7ac0daabc92c19684143af89594b841234ca17037d';
 const COMPILER_FINGERPRINT = 'kotodama_lang/2.0.0-rc.2.0';
 const DEFAULT_MAX_CYCLES = 1_000_000;
 const I64_MAX = 9_223_372_036_854_775_807n;
@@ -274,6 +274,7 @@ const SYSCALL_NFT_BURN_ASSET = 0x28;
 const SYSCALL_TRANSFER_V1_BATCH_BEGIN = 0x29;
 const SYSCALL_TRANSFER_V1_BATCH_END = 0x2a;
 const SYSCALL_TRANSFER_V1_BATCH_APPLY = 0x2b;
+const SYSCALL_TRANSFER_ASSET_SCOPED = 0x2c;
 const SYSCALL_CREATE_ROLE = 0x30;
 const SYSCALL_DELETE_ROLE = 0x31;
 const SYSCALL_GRANT_ROLE = 0x32;
@@ -1588,11 +1589,11 @@ function nativeAssetOperationBuiltinSpec(name) {
             };
         case 'transfer_asset':
             return {
-                syscall: SYSCALL_TRANSFER_ASSET,
+                syscall: SYSCALL_TRANSFER_ASSET_SCOPED,
                 kind: 'transfer',
-                args: ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric'],
+                args: ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric', 'DataSpaceId'],
                 valueType: null,
-                message: 'transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)',
+                message: 'transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId)',
                 hostSideEffect: true,
             };
         default:
@@ -7773,7 +7774,7 @@ class Parser {
             return this.parseLegacyHostStatementOrCall(token, 'info', 1, ([expression]) => ({ kind: 'info', expression, line: token.line }));
         }
         if (this.peekIdentifier('transfer_asset')) {
-            return this.parseLegacyHostStatementOrCall(token, 'transfer_asset', 4, ([from, to, asset, amount]) => ({ kind: 'transferAsset', from, to, asset, amount, line: token.line }));
+            return this.parseLegacyHostStatementOrCall(token, 'transfer_asset', 5, ([from, to, asset, amount, dataspace]) => ({ kind: 'transferAsset', from, to, asset, amount, dataspace, line: token.line }));
         }
         if (this.peekIdentifier('mint_asset')) {
             return this.parseLegacyHostStatementOrCall(token, 'mint_asset', 3, ([account, asset, amount]) => ({ kind: 'mintAsset', account, asset, amount, line: token.line }));
@@ -9489,6 +9490,7 @@ function collectFunctionCallsInStatement(statement, calls) {
             collectFunctionCallsInExpression(statement.to, calls);
             collectFunctionCallsInExpression(statement.asset, calls);
             collectFunctionCallsInExpression(statement.amount, calls);
+            collectFunctionCallsInExpression(statement.dataspace, calls);
             return;
         case 'mintAsset':
         case 'burnAsset':
@@ -10415,6 +10417,7 @@ function collectReferencedLocalNamesInStatement(statement, out) {
             collectReferencedLocalNamesInExpression(statement.to, out);
             collectReferencedLocalNamesInExpression(statement.asset, out);
             collectReferencedLocalNamesInExpression(statement.amount, out);
+            collectReferencedLocalNamesInExpression(statement.dataspace, out);
             return;
         case 'mintAsset':
         case 'burnAsset':
@@ -10709,6 +10712,7 @@ function collectReadStateNamesInStatement(statement, stateTypes, out) {
             collectReadStateNamesInExpression(statement.to, stateTypes, out);
             collectReadStateNamesInExpression(statement.asset, stateTypes, out);
             collectReadStateNamesInExpression(statement.amount, stateTypes, out);
+            collectReadStateNamesInExpression(statement.dataspace, stateTypes, out);
             return;
         case 'mintAsset':
         case 'burnAsset':
@@ -10945,6 +10949,7 @@ function collectFunctionParamLiteralHintsInStatements(statements, localLiterals,
                 collectFunctionParamLiteralHintsInExpression(statement.to, localLiterals, functions, hints, stateNames);
                 collectFunctionParamLiteralHintsInExpression(statement.asset, localLiterals, functions, hints, stateNames);
                 collectFunctionParamLiteralHintsInExpression(statement.amount, localLiterals, functions, hints, stateNames);
+                collectFunctionParamLiteralHintsInExpression(statement.dataspace, localLiterals, functions, hints, stateNames);
                 break;
             case 'mintAsset':
             case 'burnAsset':
@@ -11101,6 +11106,7 @@ function collectBuilderOnlyPointerLocalNames(statements) {
                 collectBuilderOnlyPointerLocalRefsInExpression(statement.to, builderRefs, nonBuilderRefs);
                 collectBuilderOnlyPointerLocalRefsInExpression(statement.asset, builderRefs, nonBuilderRefs);
                 collectBuilderOnlyPointerLocalRefsInExpression(statement.amount, builderRefs, nonBuilderRefs);
+                collectBuilderOnlyPointerLocalRefsInExpression(statement.dataspace, builderRefs, nonBuilderRefs);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -11470,6 +11476,7 @@ function collectDirectStatePathLocalNames(statements) {
                 collectDirectStatePathLocalNamesInExpression(statement.to, out);
                 collectDirectStatePathLocalNamesInExpression(statement.asset, out);
                 collectDirectStatePathLocalNamesInExpression(statement.amount, out);
+                collectDirectStatePathLocalNamesInExpression(statement.dataspace, out);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -11588,6 +11595,7 @@ function collectPathHelperBaseLocalNames(statements) {
                 collectPathHelperBaseLocalNamesInExpression(statement.to, out);
                 collectPathHelperBaseLocalNamesInExpression(statement.asset, out);
                 collectPathHelperBaseLocalNamesInExpression(statement.amount, out);
+                collectPathHelperBaseLocalNamesInExpression(statement.dataspace, out);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -13760,6 +13768,7 @@ class StudioCodeGenerator {
                 this.collectExpressionAccesses(statement.to, scope, summary, literalScope);
                 this.collectExpressionAccesses(statement.asset, scope, summary, literalScope);
                 this.collectExpressionAccesses(statement.amount, scope, summary, literalScope);
+                this.collectExpressionAccesses(statement.dataspace, scope, summary, literalScope);
                 {
                     const access = this.resolveStaticTransferAssetAccess(statement.from, statement.to, statement.asset, scope, literalScope);
                     if (access) {
@@ -14528,6 +14537,7 @@ class StudioCodeGenerator {
                 this.collectExecutedInstructionParamIndexesInExpression(statement.to, fn, out);
                 this.collectExecutedInstructionParamIndexesInExpression(statement.asset, fn, out);
                 this.collectExecutedInstructionParamIndexesInExpression(statement.amount, fn, out);
+                this.collectExecutedInstructionParamIndexesInExpression(statement.dataspace, fn, out);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -14648,6 +14658,7 @@ class StudioCodeGenerator {
                 this.expressionCallsExecutedInstructionParam(statement.to, fn, executedParamIndexes, out);
                 this.expressionCallsExecutedInstructionParam(statement.asset, fn, executedParamIndexes, out);
                 this.expressionCallsExecutedInstructionParam(statement.amount, fn, executedParamIndexes, out);
+                this.expressionCallsExecutedInstructionParam(statement.dataspace, fn, executedParamIndexes, out);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -14827,6 +14838,7 @@ class StudioCodeGenerator {
                 this.collectInlineInstructionContractAccessInExpression(statement.to, scope, literalScope, executedParamIndexes, out);
                 this.collectInlineInstructionContractAccessInExpression(statement.asset, scope, literalScope, executedParamIndexes, out);
                 this.collectInlineInstructionContractAccessInExpression(statement.amount, scope, literalScope, executedParamIndexes, out);
+                this.collectInlineInstructionContractAccessInExpression(statement.dataspace, scope, literalScope, executedParamIndexes, out);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -14978,7 +14990,8 @@ class StudioCodeGenerator {
                 return this.firstCallMatchingExpression(statement.from, predicate)
                     ?? this.firstCallMatchingExpression(statement.to, predicate)
                     ?? this.firstCallMatchingExpression(statement.asset, predicate)
-                    ?? this.firstCallMatchingExpression(statement.amount, predicate);
+                    ?? this.firstCallMatchingExpression(statement.amount, predicate)
+                    ?? this.firstCallMatchingExpression(statement.dataspace, predicate);
             case 'mintAsset':
             case 'burnAsset':
                 return this.firstCallMatchingExpression(statement.account, predicate)
@@ -15216,6 +15229,7 @@ class StudioCodeGenerator {
                 this.collectViewEffectsInExpression(statement.to, scope, summary);
                 this.collectViewEffectsInExpression(statement.asset, scope, summary);
                 this.collectViewEffectsInExpression(statement.amount, scope, summary);
+                this.collectViewEffectsInExpression(statement.dataspace, scope, summary);
                 summary.hostSideEffects = true;
                 return;
             case 'mintAsset':
@@ -15687,6 +15701,7 @@ class StudioCodeGenerator {
                     this.validateStateParamCallArgumentsInExpression(statement.to, scope, stateHandles);
                     this.validateStateParamCallArgumentsInExpression(statement.asset, scope, stateHandles);
                     this.validateStateParamCallArgumentsInExpression(statement.amount, scope, stateHandles);
+                    this.validateStateParamCallArgumentsInExpression(statement.dataspace, scope, stateHandles);
                     break;
                 case 'mintAsset':
                 case 'burnAsset':
@@ -16547,7 +16562,8 @@ class StudioCodeGenerator {
                     this.validateSemanticExpressionUsage(statement.to, scopeTypes, stateHandles);
                     this.validateSemanticExpressionUsage(statement.asset, scopeTypes, stateHandles);
                     this.validateSemanticExpressionUsage(statement.amount, scopeTypes, stateHandles);
-                    this.validateSemanticExactArgumentTypes([statement.from, statement.to, statement.asset, statement.amount], ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric'], 'transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)', scopeTypes, stateHandles, statement.line);
+                    this.validateSemanticExpressionUsage(statement.dataspace, scopeTypes, stateHandles);
+                    this.validateSemanticExactArgumentTypes([statement.from, statement.to, statement.asset, statement.amount, statement.dataspace], ['AccountId', 'AccountId', 'AssetDefinitionId', 'numeric', 'DataSpaceId'], 'transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId)', scopeTypes, stateHandles, statement.line);
                     break;
                 case 'mintAsset':
                     this.validateSemanticExpressionUsage(statement.account, scopeTypes, stateHandles);
@@ -16884,7 +16900,7 @@ class StudioCodeGenerator {
                     this.validateOnChainPolicyExpression(statement.expression, `expression in \`${fn.name}\``, scopeTypes, stateHandles, errors, seen);
                     break;
                 case 'transferAsset':
-                    [statement.from, statement.to, statement.asset, statement.amount].forEach((expression) => this.validateOnChainPolicyExpression(expression, `expression in \`${fn.name}\``, scopeTypes, stateHandles, errors, seen));
+                    [statement.from, statement.to, statement.asset, statement.amount, statement.dataspace].forEach((expression) => this.validateOnChainPolicyExpression(expression, `expression in \`${fn.name}\``, scopeTypes, stateHandles, errors, seen));
                     break;
                 case 'mintAsset':
                 case 'burnAsset':
@@ -18970,6 +18986,7 @@ class StudioCodeGenerator {
                 this.collectScalarStateIntValueReadsInExpression(statement.to, out);
                 this.collectScalarStateIntValueReadsInExpression(statement.asset, out);
                 this.collectScalarStateIntValueReadsInExpression(statement.amount, out);
+                this.collectScalarStateIntValueReadsInExpression(statement.dataspace, out);
                 return;
             case 'mintAsset':
             case 'burnAsset':
@@ -19639,131 +19656,29 @@ class StudioCodeGenerator {
                 return;
             }
             case 'transferAsset': {
-                if (this.tryCompileStaticTransferAssetFastPath(statement, callStack, locals, returnContext)) {
-                    return;
-                }
                 const liveBeforeStatement = liveRegisters(locals, returnContext, this.scalarStateIntReadCache);
-                const assetLiteral = this.resolveRematerializableAssetDefinitionLiteral(statement.asset, locals);
-                if (assetLiteral !== null) {
-                    const fromLiteral = this.resolveRematerializableAccountLiteral(statement.from, locals);
-                    const toLiteral = this.resolveRematerializableAccountLiteral(statement.to, locals);
-                    if (statement.from.kind === 'authority' && fromLiteral === null && toLiteral !== null) {
-                        const fromReg = this.compileExpressionAsAccountPointer(statement.from, callStack, locals);
-                        const amountInt = this.compileExpressionAsInt(statement.amount, callStack, locals);
-                        const amountReg = this.emitNumericFromInt(amountInt, 6);
-                        const toLogicalReg = this.assembler.allocRegister();
-                        const assetLogicalReg = this.assembler.allocRegister();
-                        if (!liveBeforeStatement.has(amountInt)) {
-                            this.assembler.releaseRegister(amountInt);
-                        }
-                        this.emitFourArgAssetSyscallWithToLiteral(fromReg, toLiteral, assetLiteral, amountReg, SYSCALL_TRANSFER_ASSET, statement.line, 1);
-                        this.releaseExpressionRegisterIfTemporary(fromReg, locals);
-                        this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
-                        this.assembler.releaseRegister(assetLogicalReg);
-                        this.assembler.releaseRegister(toLogicalReg);
-                        return;
-                    }
-                    if (statement.to.kind === 'authority' && fromLiteral !== null && toLiteral === null) {
-                        this.assembler.emitSyscall(SYSCALL_GET_AUTHORITY);
-                        const toReg = this.assembler.canClaimRegister(23)
-                            ? this.assembler.claimRegister(23)
-                            : this.assembler.allocRegister();
-                        this.assembler.emitMove(toReg, 10);
-                        const amountInt = this.compileExpressionAsInt(statement.amount, callStack, locals);
-                        const amountReg = this.emitNumericFromInt(amountInt, 7);
-                        const fromLogicalReg = this.assembler.allocRegister();
-                        const assetLogicalReg = this.assembler.allocRegister();
-                        if (!liveBeforeStatement.has(amountInt)) {
-                            this.assembler.releaseRegister(amountInt);
-                        }
-                        this.emitFourArgAssetSyscallWithAccountLiterals(fromLiteral, null, null, toReg, assetLiteral, amountReg, SYSCALL_TRANSFER_ASSET, statement.line, 1);
-                        this.releaseExpressionRegisterIfTemporary(toReg, locals);
-                        this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
-                        this.assembler.releaseRegister(assetLogicalReg);
-                        this.assembler.releaseRegister(fromLogicalReg);
-                        return;
-                    }
+                const fromReg = this.compileExpressionAsAccountPointer(statement.from, callStack, locals);
+                const toReg = this.compileExpressionAsAccountPointer(statement.to, callStack, locals);
+                const assetReg = this.compileExpressionAsAssetDefinitionPointer(statement.asset, callStack, locals);
+                const amountType = this.inferExpressionValueType(statement.amount, locals);
+                let amountReg;
+                if (isSemanticWideNumericType(amountType)) {
+                    amountReg = this.compileExpressionAsNumericPointer(statement.amount, callStack, locals);
+                }
+                else {
                     const amountInt = this.compileExpressionAsInt(statement.amount, callStack, locals);
-                    const amountReg = this.emitNumericFromInt(amountInt);
-                    const fromDirectReg = toLiteral !== null
-                        ? this.resolveDirectLocalPointerRegister(statement.from, locals, 'AccountId')
-                        : null;
-                    if (fromDirectReg === null && (fromLiteral !== null || toLiteral !== null)) {
-                        const fromLogicalReg = fromLiteral !== null ? this.assembler.allocRegister() : null;
-                        const toLogicalReg = toLiteral !== null ? this.assembler.allocRegister() : null;
-                        const assetLogicalReg = this.assembler.allocRegister();
-                        const fromReg = fromLiteral === null
-                            ? this.compileExpressionAsAccountPointer(statement.from, callStack, locals)
-                            : null;
-                        const toReg = toLiteral === null
-                            ? this.compileExpressionAsAccountPointer(statement.to, callStack, locals)
-                            : null;
-                        if (!liveBeforeStatement.has(amountInt)) {
-                            this.assembler.releaseRegister(amountInt);
-                        }
-                        this.emitFourArgAssetSyscallWithAccountLiterals(fromLiteral, fromReg, toLiteral, toReg, assetLiteral, amountReg, SYSCALL_TRANSFER_ASSET, statement.line, 1);
-                        if (fromReg !== null)
-                            this.releaseExpressionRegisterIfTemporary(fromReg, locals);
-                        if (toReg !== null)
-                            this.releaseExpressionRegisterIfTemporary(toReg, locals);
-                        this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
-                        this.assembler.releaseRegister(assetLogicalReg);
-                        if (toLogicalReg !== null)
-                            this.assembler.releaseRegister(toLogicalReg);
-                        if (fromLogicalReg !== null)
-                            this.assembler.releaseRegister(fromLogicalReg);
-                        return;
-                    }
-                    if (fromDirectReg !== null && toLiteral !== null) {
-                        const toLogicalReg = this.assembler.allocRegister();
-                        const assetLogicalReg = this.assembler.allocRegister();
-                        const publishedInputLogicalReg = this.assembler.allocRegister();
-                        if (!liveBeforeStatement.has(amountInt)) {
-                            this.assembler.releaseRegister(amountInt);
-                        }
-                        this.emitFourArgAssetSyscallWithToLiteral(fromDirectReg, toLiteral, assetLiteral, amountReg, SYSCALL_TRANSFER_ASSET, statement.line, 1);
-                        this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
-                        this.assembler.releaseRegister(publishedInputLogicalReg);
-                        this.assembler.releaseRegister(assetLogicalReg);
-                        this.assembler.releaseRegister(toLogicalReg);
-                        return;
-                    }
-                    const fromReg = this.compileExpressionAsAccountPointer(statement.from, callStack, locals);
-                    const toReg = this.compileExpressionAsAccountPointer(statement.to, callStack, locals);
+                    amountReg = this.emitNumericFromInt(amountInt);
                     if (!liveBeforeStatement.has(amountInt)) {
                         this.assembler.releaseRegister(amountInt);
                     }
-                    this.emitFourArgAssetSyscallWithLiteral(fromReg, toReg, assetLiteral, amountReg, SYSCALL_TRANSFER_ASSET, statement.line, 1);
-                    this.releaseExpressionRegisterIfTemporary(fromReg, locals);
-                    this.releaseExpressionRegisterIfTemporary(toReg, locals);
-                    this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
                 }
-                else {
-                    if (this.tryCompileFrame160StackSpilledTransferAsset(statement, callStack, locals, liveBeforeStatement)) {
-                        return;
-                    }
-                    const fromReg = this.compileExpressionAsAccountPointer(statement.from, callStack, locals);
-                    const toReg = this.compileExpressionAsAccountPointer(statement.to, callStack, locals);
-                    const assetReg = this.compileExpressionAsAssetDefinitionPointer(statement.asset, callStack, locals);
-                    const frame144AmountReg = this.tryCompileFrame144WithdrawAssetAmountNumeric(statement.amount, locals);
-                    let amountReg;
-                    if (frame144AmountReg !== null) {
-                        amountReg = frame144AmountReg;
-                    }
-                    else {
-                        const amountInt = this.compileExpressionAsInt(statement.amount, callStack, locals);
-                        amountReg = this.emitNumericFromInt(amountInt);
-                        if (!liveBeforeStatement.has(amountInt)) {
-                            this.assembler.releaseRegister(amountInt);
-                        }
-                    }
-                    this.emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, SYSCALL_TRANSFER_ASSET);
-                    this.releaseExpressionRegisterIfTemporary(assetReg, locals);
-                    this.releaseExpressionRegisterIfTemporary(fromReg, locals);
-                    this.releaseExpressionRegisterIfTemporary(toReg, locals);
-                    this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
-                    this.tryPatchFrame168DepositSecondTransfer(statement);
-                }
+                const dataspaceReg = this.compileExpressionAsTypedPointer(statement.dataspace, 'DataSpaceId', callStack, locals);
+                this.emitFiveArgAssetSyscall(fromReg, toReg, assetReg, amountReg, dataspaceReg, SYSCALL_TRANSFER_ASSET_SCOPED);
+                this.releaseExpressionRegisterIfTemporary(dataspaceReg, locals);
+                this.releaseExpressionRegisterIfTemporary(assetReg, locals);
+                this.releaseExpressionRegisterIfTemporary(fromReg, locals);
+                this.releaseExpressionRegisterIfTemporary(toReg, locals);
+                this.emitDiscardedVoidIntrinsicResult(this.deadTransferDiscardRegister(amountReg));
                 return;
             }
             case 'mintAsset': {
@@ -21015,6 +20930,29 @@ class StudioCodeGenerator {
         this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
         this.assembler.emitMove(13, 10);
         this.assembler.emitMove(10, 14);
+        this.assembler.emitSyscall(syscall);
+    }
+    emitFiveArgAssetSyscall(fromReg, toReg, assetReg, amountReg, dataspaceReg, syscall) {
+        this.assembler.emitMove(10, fromReg);
+        this.assembler.emitMove(11, toReg);
+        this.assembler.emitMove(12, assetReg);
+        this.assembler.emitMove(13, amountReg);
+        this.assembler.emitMove(14, dataspaceReg);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(15, 10);
+        this.assembler.emitMove(10, 11);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(11, 10);
+        this.assembler.emitMove(10, 12);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(12, 10);
+        this.assembler.emitMove(10, 13);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(13, 10);
+        this.assembler.emitMove(10, 14);
+        this.assembler.emitSyscall(SYSCALL_INPUT_PUBLISH_TLV);
+        this.assembler.emitMove(14, 10);
+        this.assembler.emitMove(10, 15);
         this.assembler.emitSyscall(syscall);
     }
     emitFourArgAssetSyscallWithLiteral(fromReg, toReg, assetLiteral, amountReg, syscall, line, column) {
@@ -25520,7 +25458,8 @@ class StudioCodeGenerator {
             const amountReg = isSemanticWideNumericType(amountType)
                 ? this.compileExpressionAsNumericPointer(expression.args[3], callStack, locals)
                 : this.emitNumericFromInt(this.compileExpressionAsInt(expression.args[3], callStack, locals));
-            this.emitFourArgAssetSyscall(fromReg, toReg, assetReg, amountReg, spec.syscall);
+            const dataspaceReg = this.compileExpressionAsTypedPointer(expression.args[4], 'DataSpaceId', callStack, locals);
+            this.emitFiveArgAssetSyscall(fromReg, toReg, assetReg, amountReg, dataspaceReg, spec.syscall);
         }
         else {
             const accountReg = this.compileExpressionAsAccountPointer(expression.args[0], callStack, locals);

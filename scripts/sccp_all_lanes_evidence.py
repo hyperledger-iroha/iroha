@@ -2508,11 +2508,14 @@ def _check_evm_live_source_bridge_evidence(
             f"EVM source live RPC chain-id must be canonical for {profile.chain}: "
             f"expected {expected_chain_id}"
         )
-    if (
-        profile.domain == SCCP_DOMAIN_ETH
-        and record.get("_comment_evm_source_block_tag") != "finalized"
-    ):
-        errors.append("Ethereum source live block-tag metadata must be finalized")
+    # Source-inventory marker: Ethereum source live block-tag metadata must be finalized
+    # Source-inventory marker: BSC source live block-tag metadata must be latest
+    expected_block_tag = "finalized" if profile.domain == SCCP_DOMAIN_ETH else "latest"
+    if record.get("_comment_evm_source_block_tag") != expected_block_tag:
+        network_label = "Ethereum" if profile.domain == SCCP_DOMAIN_ETH else "BSC"
+        errors.append(
+            f"{network_label} source live block-tag metadata must be {expected_block_tag}"
+        )
 
     bridge_address = _hex_bytes(
         record.get("_comment_evm_source_bridge_address"),
@@ -4179,11 +4182,14 @@ def _check_evm_live_bridge_evidence(
             f"EVM live RPC chain-id must be canonical for {profile.chain}: "
             f"expected {expected_chain_id}"
         )
-    if (
-        profile.domain == SCCP_DOMAIN_ETH
-        and record.get("_comment_evm_block_tag") != "finalized"
-    ):
-        errors.append("Ethereum destination live block-tag metadata must be finalized")
+    # Source-inventory marker: Ethereum destination live block-tag metadata must be finalized
+    # Source-inventory marker: BSC destination live block-tag metadata must be latest
+    expected_block_tag = "finalized" if profile.domain == SCCP_DOMAIN_ETH else "latest"
+    if record.get("_comment_evm_block_tag") != expected_block_tag:
+        network_label = "Ethereum" if profile.domain == SCCP_DOMAIN_ETH else "BSC"
+        errors.append(
+            f"{network_label} destination live block-tag metadata must be {expected_block_tag}"
+        )
 
     bridge_code_hash = _hex_bytes(
         record.get("_comment_evm_bridge_code_hash"),
@@ -7547,9 +7553,15 @@ def _release_checklist(
     )
     unresolved_blockers = [*root_blockers, *root_blocker_schema_errors]
 
+    def append_unique_blocker(blockers: list[str], blocker: str) -> None:
+        blocker_key = _canonical_public_blocker_key(blocker)
+        if not any(
+            _canonical_public_blocker_key(item) == blocker_key for item in blockers
+        ):
+            blockers.append(blocker)
+
     def append_unresolved(blocker: str) -> None:
-        if blocker not in unresolved_blockers:
-            unresolved_blockers.append(blocker)
+        append_unique_blocker(unresolved_blockers, blocker)
 
     def append_unexpected_fields(
         blockers: list[str],
@@ -8135,21 +8147,20 @@ def _release_checklist(
                 ),
             )
         ]
-        deployment_blockers.extend(
-            f"{lane_label}: {item}" for item in lane_deployment_blockers
-        )
+        for item in lane_deployment_blockers:
+            append_unique_blocker(deployment_blockers, f"{lane_label}: {item}")
         lane_route_blockers = [
             item
             for item in lane_blockers
             if _blocker_mentions(item, ("route allowlist",))
         ]
-        route_blockers.extend(f"{lane_label}: {item}" for item in lane_route_blockers)
+        for item in lane_route_blockers:
+            append_unique_blocker(route_blockers, f"{lane_label}: {item}")
         lane_canary_blockers = [
             item for item in lane_blockers if _blocker_mentions_route_canary(item)
         ]
-        canary_blockers.extend(
-            f"{lane_label}: {item}" for item in lane_canary_blockers
-        )
+        for item in lane_canary_blockers:
+            append_unique_blocker(canary_blockers, f"{lane_label}: {item}")
 
     for blockers in (
         records_blockers,
@@ -8277,19 +8288,13 @@ def _evm_live_metadata_summary(
         _is_canonical_decimal_text(destination_rpc_chain_id, positive=True)
         and int(destination_rpc_chain_id, 10) == expected_chain_id
     )
-    if profile.domain == SCCP_DOMAIN_ETH:
-        ready = (
-            source_chain_id_ready
-            and destination_chain_id_ready
-            and source_block_tag == "finalized"
-            and destination_block_tag == "finalized"
-        )
-    else:
-        ready = (
-            source_chain_id_ready
-            and destination_chain_id_ready
-            and bool(source_block_tag and destination_block_tag)
-        )
+    expected_block_tag = "finalized" if profile.domain == SCCP_DOMAIN_ETH else "latest"
+    ready = (
+        source_chain_id_ready
+        and destination_chain_id_ready
+        and source_block_tag == expected_block_tag
+        and destination_block_tag == expected_block_tag
+    )
     return {
         "required": True,
         "ready": ready,
@@ -9916,13 +9921,35 @@ def _public_lane_tron_address_match_errors(
     return []
 
 
+def _public_lane_domain_duplicate_errors(lanes: list[Any]) -> list[str]:
+    """Return copied lane-domain duplicate errors from inspectable lane objects."""
+
+    seen_domains: set[int] = set()
+    errors: list[str] = []
+    for lane in lanes:
+        if not isinstance(lane, dict):
+            continue
+        raw_domain = lane.get("domain")
+        if type(raw_domain) is not int or raw_domain not in LANE_PROFILES:
+            continue
+        if raw_domain in seen_domains:
+            errors.append(f"all-lanes summary lane domain {raw_domain} is duplicated")
+        seen_domains.add(raw_domain)
+    return errors
+
+
 def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
     """Return bounded public errors for copied all-lanes lane summaries."""
 
     if type(require_ready) is not bool:
         raise ValueError("lanes require_ready must be a boolean")
-    if not isinstance(value, list) or not all(isinstance(lane, dict) for lane in value):
+    if not isinstance(value, list):
         return ["all-lanes summary lanes must be a list of objects"]
+    if not all(isinstance(lane, dict) for lane in value):
+        return [
+            "all-lanes summary lanes must be a list of objects",
+            *_public_lane_domain_duplicate_errors(value),
+        ]
 
     errors: list[str] = []
     seen_domains: set[int] = set()
@@ -10243,23 +10270,18 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         ("source_rpc_chain_id", "destination_rpc_chain_id"),
                     )
                 )
-            if live_metadata_require_structure and domain == SCCP_DOMAIN_ETH:
+            if live_metadata_require_structure:
+                expected_block_tag = (
+                    "finalized" if domain == SCCP_DOMAIN_ETH else "latest"
+                )
                 errors.extend(
                     _public_lane_required_exact_string_errors(
                         evm_live_metadata,
                         f"{lane_label}.evm_live_metadata",
                         {
-                            "source_block_tag": "finalized",
-                            "destination_block_tag": "finalized",
+                            "source_block_tag": expected_block_tag,
+                            "destination_block_tag": expected_block_tag,
                         },
-                    )
-                )
-            elif live_metadata_require_structure:
-                errors.extend(
-                    _public_lane_required_canonical_string_errors(
-                        evm_live_metadata,
-                        f"{lane_label}.evm_live_metadata",
-                        ("source_block_tag", "destination_block_tag"),
                     )
                 )
             if live_metadata_require_ready:
@@ -10279,17 +10301,17 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                         expected_chain_id,
                     )
                 )
-            if domain == SCCP_DOMAIN_ETH:
-                errors.extend(
-                    _public_lane_optional_exact_string_errors(
-                        evm_live_metadata,
-                        f"{lane_label}.evm_live_metadata",
-                        {
-                            "source_block_tag": "finalized",
-                            "destination_block_tag": "finalized",
-                        },
-                    )
+            expected_block_tag = "finalized" if domain == SCCP_DOMAIN_ETH else "latest"
+            errors.extend(
+                _public_lane_optional_exact_string_errors(
+                    evm_live_metadata,
+                    f"{lane_label}.evm_live_metadata",
+                    {
+                        "source_block_tag": expected_block_tag,
+                        "destination_block_tag": expected_block_tag,
+                    },
                 )
+            )
         elif domain in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON, SCCP_DOMAIN_TRON):
             errors.extend(
                 _public_lane_non_evm_live_metadata_errors(
@@ -11118,6 +11140,9 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
 def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     """Return bounded public errors for copied launch-domain roots."""
 
+    # Source-inventory marker: required_domains contains duplicate domains
+    # Source-inventory marker: supported_launch_domains contains duplicate domains
+    # Source-inventory marker: unsupported_launch_domains contains duplicate domains
     errors: list[str] = []
     invalid_fields: dict[str, str] = {}
     parsed: dict[str, list[int]] = {}
@@ -11125,13 +11150,26 @@ def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict
         if field not in summary:
             continue
         value = summary.get(field)
+        contains_duplicate_domains = False
+        if isinstance(value, list):
+            seen_domains: set[int] = set()
+            for domain in value:
+                if type(domain) is not int:
+                    continue
+                if domain in seen_domains:
+                    contains_duplicate_domains = True
+                    break
+                seen_domains.add(domain)
         if not isinstance(value, list) or not all(type(domain) is int for domain in value):
             error = f"all-lanes summary {field} must be a list of integers"
+            if contains_duplicate_domains:
+                errors.append(f"all-lanes summary {field} contains duplicate domains")
             invalid_fields[field] = error
             continue
         parsed[field] = value
-        if len(set(value)) != len(value):
+        if contains_duplicate_domains:
             errors.append(f"all-lanes summary {field} must not contain duplicate integers")
+            errors.append(f"all-lanes summary {field} contains duplicate domains")
             invalid_fields[field] = f"all-lanes summary {field} is invalid"
         if value != list(expected):
             errors.append(f"all-lanes summary {field} {detail}")

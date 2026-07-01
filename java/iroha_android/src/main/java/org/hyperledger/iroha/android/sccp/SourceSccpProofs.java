@@ -54,6 +54,20 @@ public final class SourceSccpProofs {
       "iroha:sccp:evm-destination-binding:v1";
   private static final String TRON_DESTINATION_BINDING_LABEL_V1 =
       "iroha:sccp:tron-destination-binding:v1";
+
+  private static void requireEvmLogNotRemoved(final Map<String, Object> log, final String label) {
+    if (!log.containsKey("removed")) {
+      return;
+    }
+    final Object removed = log.get("removed");
+    if (Boolean.FALSE.equals(removed)) {
+      return;
+    }
+    if (Boolean.TRUE.equals(removed)) {
+      throw new IllegalArgumentException(label + " must not be removed");
+    }
+    throw new IllegalArgumentException(label + ".removed must be a boolean");
+  }
   private static final String BASE58_ALPHABET =
       "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   public static final String SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1 =
@@ -5287,9 +5301,7 @@ public final class SourceSccpProofs {
         throw new IllegalArgumentException("receipt.logs[" + index + "] must be an object");
       }
       final Map<String, Object> log = (Map<String, Object>) logInput;
-      if (Boolean.TRUE.equals(log.get("removed"))) {
-        throw new IllegalArgumentException("receipt.logs[" + index + "] must not be removed");
-      }
+      requireEvmLogNotRemoved(log, "receipt.logs[" + index + "]");
       if (!(log.get("topics") instanceof List)) {
         throw new IllegalArgumentException("receipt.logs[" + index + "].topics must be an array");
       }

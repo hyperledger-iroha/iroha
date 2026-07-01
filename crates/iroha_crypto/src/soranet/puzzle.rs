@@ -221,6 +221,9 @@ pub enum Error {
     /// Ticket expires too far in the future relative to the relay clock.
     #[error("puzzle ticket expires too far in the future (>{0:?})")]
     FutureSkewExceeded(Duration),
+    /// Ticket expiry timestamp cannot be represented by `SystemTime`.
+    #[error("puzzle ticket expiry timestamp {0} overflows system time")]
+    ExpiryTimestampOverflow(u64),
     /// Ticket lifetime is too short for the configured policy.
     #[error("puzzle ticket ttl shorter than required min ({0:?})")]
     ExpiryWindowTooSmall(Duration),
@@ -342,6 +345,8 @@ pub fn verify_at(
 
     let now_duration = now.duration_since(UNIX_EPOCH)?;
     let now_secs = now_duration.as_secs();
+    unix_time_from_secs(ticket.expires_at)
+        .ok_or(Error::ExpiryTimestampOverflow(ticket.expires_at))?;
     let expires_at = Duration::from_secs(ticket.expires_at);
     let ttl_remaining = expires_at
         .checked_sub(now_duration)
@@ -516,6 +521,10 @@ fn leading_zero_bits_at_least(bytes: &[u8], bits: u8) -> bool {
     }
     let mask = 0xFFu8 << (8 - rem_bits);
     bytes[full_bytes] & mask == 0
+}
+
+fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
 #[derive(Debug)]
@@ -983,6 +992,27 @@ mod tests {
             MintError::ExpiryTimestampOverflow(ttl)
                 if ttl == Duration::from_secs(u64::MAX)
         ));
+    }
+
+    #[test]
+    fn verify_rejects_unrepresentable_expiry_before_argon2_work() {
+        let params = test_parameters();
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: params.difficulty(),
+            expires_at: u64::MAX,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+
+        let err = verify_at(
+            &ticket,
+            &binding(),
+            &params,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        )
+        .expect_err("unrepresentable expiry must fail before Argon2 work");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
     }
 
     #[test]

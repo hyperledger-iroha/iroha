@@ -9625,6 +9625,27 @@ pub mod isi {
                     ),
                 ));
             }
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            if state_transaction
+                .world
+                .sccp_outbound_messages
+                .get(&key)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP outbound message has already been recorded".into(),
+                    ),
+                ));
+            }
+            let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+            state_transaction.world.sccp_outbound_messages.insert(
+                key,
+                iroha_data_model::bridge::SccpOutboundMessageRecord {
+                    payload_hash: iroha_sccp::payload_hash(&canonical_payload),
+                    recorded_at_height: state_transaction._curr_block.height.get(),
+                },
+            );
             Ok(())
         }
     }
@@ -16458,7 +16479,7 @@ pub mod isi {
             seed: u8,
         ) -> iroha_sccp::SccpSourceVerifierMaterialV1 {
             match domain {
-                iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC => {
+                iroha_sccp::SCCP_DOMAIN_ETH => {
                     iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
                         domain,
                         [seed; 32],
@@ -16468,7 +16489,20 @@ pub mod isi {
                         [seed + 4; 20],
                         [seed + 5; 32],
                     )
-                    .expect("EVM-family SCCP source verifier material")
+                    .expect("Ethereum SCCP source verifier material")
+                }
+                iroha_sccp::SCCP_DOMAIN_BSC => {
+                    iroha_sccp::sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+                        [seed; 32],
+                        [seed + 1; 32],
+                        [seed + 2; 32],
+                        [seed + 3; 32],
+                        [seed + 4; 20],
+                        [seed + 5; 32],
+                        iroha_sccp::sccp_bsc_mainnet_network_id_word_v1(),
+                        [seed + 6; 20],
+                    )
+                    .expect("BSC SCCP source verifier material")
                 }
                 iroha_sccp::SCCP_DOMAIN_SOL => {
                     iroha_sccp::sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
@@ -16531,9 +16565,9 @@ pub mod isi {
                 )
                 .expect("SCCP source adapter deployment");
             if domain == iroha_sccp::SCCP_DOMAIN_SOL {
-                deployment.solana_tower_replay_verifier_hash = [0xb1; 32];
-                deployment.solana_full_accountsdb_lattice_verifier_hash = [0xb2; 32];
-                deployment.solana_bank_fork_choice_verifier_hash = [0xb3; 32];
+                deployment.solana_tower_replay_verifier_hash = [0xb7; 32];
+                deployment.solana_full_accountsdb_lattice_verifier_hash = [0xc8; 32];
+                deployment.solana_bank_fork_choice_verifier_hash = [0xd9; 32];
                 assert!(
                     iroha_sccp::sccp_solana_full_light_client_gate_hash_from_deployment_v1(
                         material,
@@ -16544,9 +16578,9 @@ pub mod isi {
                 );
             }
             if domain == iroha_sccp::SCCP_DOMAIN_TON {
-                deployment.ton_masterchain_config_verifier_hash = [0xc1; 32];
-                deployment.ton_validator_set_transition_verifier_hash = [0xc2; 32];
-                deployment.ton_shard_accounts_dictionary_verifier_hash = [0xc3; 32];
+                deployment.ton_masterchain_config_verifier_hash = [0x26; 32];
+                deployment.ton_validator_set_transition_verifier_hash = [0x27; 32];
+                deployment.ton_shard_accounts_dictionary_verifier_hash = [0x28; 32];
                 assert!(
                     iroha_sccp::sccp_ton_full_light_client_gate_hash_from_deployment_v1(
                         material,
@@ -17232,35 +17266,40 @@ pub mod isi {
         }
 
         #[test]
-        fn configured_sccp_ethereum_mainnet_lane_launch_rejects_other_domains() {
+        fn configured_sccp_lane_launch_rejects_cross_domain_material() {
             let zk = test_configured_sccp_all_lanes_zk_config();
-            let domain = iroha_sccp::SCCP_DOMAIN_BSC;
-            let material = super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
-                .expect("configured BSC source material")
-                .expect("BSC source material");
-            let deployment =
-                super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
-                    .expect("configured BSC source deployment")
-                    .expect("BSC source deployment");
-            let rollout = super::configured_sccp_destination_rollout_for_domain(&zk, domain)
-                .expect("configured BSC destination rollout")
-                .expect("BSC destination rollout");
-            let allowlist = super::configured_sccp_route_allowlist_for_domain(&zk, domain)
+            let material_domain = iroha_sccp::SCCP_DOMAIN_BSC;
+            let evaluated_domain = iroha_sccp::SCCP_DOMAIN_ETH;
+            let material =
+                super::configured_sccp_source_verifier_material_for_domain(&zk, material_domain)
+                    .expect("configured BSC source material")
+                    .expect("BSC source material");
+            let deployment = super::configured_sccp_source_adapter_engine_deployment_for_domain(
+                &zk,
+                material_domain,
+            )
+            .expect("configured BSC source deployment")
+            .expect("BSC source deployment");
+            let rollout =
+                super::configured_sccp_destination_rollout_for_domain(&zk, material_domain)
+                    .expect("configured BSC destination rollout")
+                    .expect("BSC destination rollout");
+            let allowlist = super::configured_sccp_route_allowlist_for_domain(&zk, material_domain)
                 .expect("configured BSC route allowlist")
                 .expect("BSC route allowlist");
 
             let err = super::validate_configured_sccp_lane_launch_ready(
                 &zk,
-                domain,
+                evaluated_domain,
                 &material,
                 &deployment,
                 &rollout,
                 &allowlist,
             )
-            .expect_err("BSC should remain outside the Ethereum-mainnet launch policy");
+            .expect_err("BSC material must not satisfy the Ethereum lane");
             let err = format!("{err:?}");
             assert!(
-                err.contains("Ethereum mainnet lane launch policy") && err.contains("domain 2"),
+                err.contains("domain 1") && err.contains("source verifier material"),
                 "unexpected error: {err}",
             );
         }
@@ -17725,6 +17764,216 @@ pub mod isi {
             );
             assert!(
                 format!("{err:?}").contains("only accepts SORA-origin payloads"),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        fn sora_outbound_sccp_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
+            iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                nonce,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                amount: 7,
+                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                sender: b"sora:bridge".to_vec(),
+                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                recipient: b"0x2222222222222222222222222222222222222222".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:eth:xor".to_vec(),
+            })
+        }
+
+        #[test]
+        fn record_sccp_message_records_outbound_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
+
+            let payload = sora_outbound_sccp_payload(43);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+            let instruction =
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload_bytes.clone());
+
+            instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect("SORA-origin SCCP record should execute");
+            let record = stx
+                .world
+                .sccp_outbound_messages
+                .get(&key)
+                .copied()
+                .expect("SCCP outbox record should be stored");
+
+            assert_eq!(
+                record.payload_hash,
+                iroha_sccp::payload_hash(&payload_bytes)
+            );
+            assert_eq!(record.recorded_at_height, 1);
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_duplicate_outbound_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_recording_proof_verified = true;
+
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&sora_outbound_sccp_payload(44)),
+            );
+
+            instruction
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("first SCCP outbox record should execute");
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("duplicate SCCP outbox record must be rejected");
+            assert!(
+                format!("{err:?}").contains("already been recorded"),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn record_sccp_message_duplicate_reject_does_not_commit_partial_outbox_write() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let payload = sora_outbound_sccp_payload(46);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            {
+                let mut block = state.block(header);
+                let mut stx = block.transaction();
+                stx.sccp_recording_proof_verified = true;
+                instruction
+                    .clone()
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("first SCCP outbox record should execute in the transaction overlay");
+                let err = instruction
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("duplicate SCCP outbox record must reject the transaction");
+                assert!(
+                    format!("{err:?}").contains("already been recorded"),
+                    "unexpected error: {err:?}"
+                );
+                drop(stx);
+                block
+                    .commit()
+                    .expect("block without applied rejected transaction overlay should commit");
+            }
+
+            assert!(
+                state
+                    .world
+                    .sccp_outbound_messages
+                    .view()
+                    .get(&key)
+                    .is_none(),
+                "rejected duplicate transaction must not leave a durable outbox record"
+            );
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_replay_after_commit_on_different_lane() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let payload = sora_outbound_sccp_payload(45);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            {
+                let mut block = state.block(header);
+                let mut stx = block.transaction();
+                stx.sccp_recording_proof_verified = true;
+                stx.current_lane_id = Some(iroha_data_model::nexus::LaneId::new(0));
+                instruction
+                    .clone()
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("first SCCP outbox record should execute");
+                stx.apply();
+                block
+                    .commit()
+                    .expect("first SCCP outbox record should commit");
+            }
+
+            assert!(
+                state
+                    .world
+                    .sccp_outbound_messages
+                    .view()
+                    .get(&key)
+                    .is_some(),
+                "first SCCP outbox record must be durable"
+            );
+
+            let replay_header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(2).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut replay_block = state.block(replay_header);
+            let mut replay_stx = replay_block.transaction();
+            replay_stx.sccp_recording_proof_verified = true;
+            replay_stx.current_lane_id = Some(iroha_data_model::nexus::LaneId::new(7));
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut replay_stx)
+                .expect_err("SCCP replay on another lane must be rejected");
+            assert!(
+                format!("{err:?}").contains("already been recorded"),
                 "unexpected error: {err:?}"
             );
         }

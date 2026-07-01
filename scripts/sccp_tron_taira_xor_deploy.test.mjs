@@ -148,6 +148,21 @@ const writeJson = async (path, value, mode) => {
   }
 };
 
+const defineThrowingAccessors = (record, keys) => {
+  let reads = 0;
+  for (const key of keys) {
+    Object.defineProperty(record, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error(`${key} accessor must not be read`);
+      },
+    });
+  }
+  return () => reads;
+};
+
 const deployerSecretRecord = () => ({
   schema: "iroha-sccp-tron-taira-xor-deployer/v1",
   created_at: "2026-06-01T00:00:00.000Z",
@@ -2680,6 +2695,133 @@ test("TRON route-config rejects duplicate route manifest aliases", async () => {
         () => buildTairaXorRouteConfigToml(patchedManifest),
         pattern,
       );
+    }
+  });
+});
+
+test("TRON route-config ignores accessor-backed route manifest aliases", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
+    const patchedManifest = cloneManifest();
+    const readCounts = [
+      defineThrowingAccessors(patchedManifest, [
+        "version",
+        "route_id",
+        "production_ready",
+        "post_deploy_readback_checked",
+        "post_deploy_live_evidence",
+        "destination_rollout",
+        "destination_binding",
+        "taira_xor_burn_record",
+        "network_id_hex",
+        "taira_xor_token_address",
+        "disabled_reason",
+      ]),
+      defineThrowingAccessors(patchedManifest.destinationRollout, [
+        "version",
+        "source_domain",
+        "target_domain",
+        "verifier_backend",
+        "proof_family",
+        "verifier_code_hash",
+        "verifier_key_hash",
+        "destination_network_id",
+        "verifier_identity",
+        "destination_binding_key",
+        "destination_binding_hash",
+      ]),
+      defineThrowingAccessors(patchedManifest.destinationBinding, [
+        "version",
+        "source_domain",
+        "target_domain",
+        "network_id_hex",
+        "destination_binding_key",
+        "binding_hash",
+      ]),
+      defineThrowingAccessors(patchedManifest.tairaXorBurnRecord, [
+        "vk_ref",
+        "artifact_b64",
+        "artifact_sha256",
+        "settlement_asset_definition_id",
+        "gas_limit",
+        "code_hash",
+      ]),
+      defineThrowingAccessors(patchedManifest.settlement, [
+        "route_id",
+        "asset_key",
+        "submit_path",
+        "contract_address",
+        "contract_alias",
+      ]),
+      defineThrowingAccessors(patchedManifest.postDeployLiveEvidence, [
+        "full_toml_ready",
+        "source_bridge_config_hash",
+        "source_event_transaction_id",
+        "route_canary_evidence_hash",
+        "route_canary_transaction_id",
+        "offline_full_toml_sha256",
+        "post_deploy_production_blockers",
+        "full_toml_production_blockers",
+        "source_event_transaction_production_blockers",
+        "route_canary_production_blockers",
+      ]),
+    ];
+
+    const toml = buildTairaXorRouteConfigToml(patchedManifest);
+    assert.match(toml, /route_id = "taira_tron_xor"/u);
+    assert.equal(
+      readCounts.reduce((sum, readCount) => sum + readCount(), 0),
+      0,
+    );
+
+    for (const [label, mutate, pattern] of [
+      [
+        "schema",
+        (candidate) => defineThrowingAccessors(candidate, ["schema"]),
+        /route manifest schema is required/u,
+      ],
+      [
+        "chain",
+        (candidate) => defineThrowingAccessors(candidate, ["chain"]),
+        /route manifest chain is required/u,
+      ],
+      [
+        "settlement mode",
+        (candidate) => defineThrowingAccessors(candidate.settlement, ["mode"]),
+        /route manifest settlement\.mode is required/u,
+      ],
+      [
+        "vkRef backend",
+        (candidate) =>
+          defineThrowingAccessors(candidate.tairaXorBurnRecord.vkRef, ["backend"]),
+        /route manifest tairaXorBurnRecord\.vkRef\.backend is required/u,
+      ],
+    ]) {
+      const candidate = cloneManifest();
+      const readCount = mutate(candidate);
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(candidate),
+        pattern,
+        label,
+      );
+      assert.equal(readCount(), 0, label);
     }
   });
 });

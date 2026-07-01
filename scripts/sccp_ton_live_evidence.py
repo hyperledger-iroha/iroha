@@ -292,7 +292,7 @@ def _positive_decimal(value: Any, *, label: str) -> str:
 def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
     value = live.get(field)
     if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{label} must be an exact non-empty string")
+        raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
 
@@ -381,14 +381,22 @@ def _validate_live_evidence(
         raise ValueError("TON live evidence must be an object")
     try:
         verifier = evidence.normalize_ton_raw_address(
-            str(live.get("verifier_contract_address", "")),
+            _exact_live_string(
+                live,
+                "verifier_contract_address",
+                label="verifier_contract_address",
+            ),
             label="verifier contract address",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live verifier address metadata is invalid") from None
     try:
         account_address = evidence.normalize_ton_raw_address(
-            str(live.get("account_address", "")),
+            _exact_live_string(
+                live,
+                "account_address",
+                label="account_address",
+            ),
             label="account address",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -403,11 +411,15 @@ def _validate_live_evidence(
         raise ValueError("TON live code BoC hash match metadata must be true")
 
     account_state_hash = _parse_hex32(
-        str(live.get("account_state_hash", "")),
+        _exact_live_string(live, "account_state_hash", label="account_state_hash"),
         label="account_state_hash",
     )
     last_transaction_hash = _parse_hex32(
-        str(live.get("last_transaction_hash", "")),
+        _exact_live_string(
+            live,
+            "last_transaction_hash",
+            label="last_transaction_hash",
+        ),
         label="last_transaction_hash",
     )
     try:
@@ -418,11 +430,11 @@ def _validate_live_evidence(
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live last_transaction_lt metadata is invalid") from None
     verifier_code_hash = _parse_hex32(
-        str(live.get("verifier_code_hash", "")),
+        _exact_live_string(live, "verifier_code_hash", label="verifier_code_hash"),
         label="verifier_code_hash",
     )
     code_boc_root_hash = _parse_hex32(
-        str(live.get("code_boc_root_hash", "")),
+        _exact_live_string(live, "code_boc_root_hash", label="code_boc_root_hash"),
         label="code_boc_root_hash",
     )
     if code_boc_root_hash != verifier_code_hash:

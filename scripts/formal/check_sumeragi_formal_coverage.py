@@ -134,30 +134,67 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases",
     "Literal-gated exactness helper wrappers must not hide single-helper conjunct aliases",
     "Literal-gated exactness helper wrappers must not hide zero-arity helper aliases",
+    "Literal-gated zero-arity helper alias checks recurse through nested identity gates",
     "Literal-gated exactness helper wrappers must not hide negated helper operands",
+    "Literal-gated negated helper operand checks recurse through nested identity gates",
     "Compound exactness helper operands must not hide repeated helper conjuncts",
     "Helper conjunct repetition checks traverse unary-temporal wrappers",
+    "Repeated helper same-polarity checks split top-level boolean operands before peeling temporal or negated wrappers",
     "Transitive exactness predicate chains must not hide repeated helper operands",
     "Helper operand repetition checks traverse unary-temporal wrappers",
+    "Repeated helper operand checks include chained implication and equivalence operands",
     "Transitive exactness predicate chains must not hide contradictory helper operands",
     "Transitive exactness predicate chains must not hide excluded-middle helper operands",
     "Transitive exactness predicate chains must not hide complementary-equivalence helper operands",
+    "Complementary-equivalence checks include chained equivalence operands",
     "Helper operand polarity checks traverse unary-temporal wrappers",
     "Helper operand polarity checks unwrap one-line `LET` helper aliases",
     "Transitive exactness predicate chains must not hide undefined helpers",
     "Quantified exactness helper formulas must not hide undefined helpers",
+    "Undefined helper scans preserve quantified binding scope",
+    "Undefined helper scans preserve tuple-pattern quantifier domains",
+    "Undefined helper scans preserve LET binding scope",
+    "Undefined helper scans preserve parameterized LET operator scope",
+    "Undefined helper scans preserve CHOOSE binding scope",
+    "Undefined helper scans preserve LAMBDA binding scope",
+    "Undefined helper scans preserve standard TLA set/operator identifiers",
+    "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
+    "Undefined helper scans preserve CASE branch scope",
+    "Undefined helper scans preserve relation operand scope",
+    "Undefined helper scans preserve operator-call argument scope",
+    "Undefined helper scans preserve arithmetic/set infix operand scope",
+    "Undefined helper scans preserve explicit set literal element scope",
+    "Undefined helper scans preserve unary set-operator operand scope",
+    "Undefined helper scans preserve set-comprehension binding scope",
+    "Undefined helper scans preserve set-comprehension outer enclosure scope",
+    "Undefined helper scans preserve function-constructor binding scope",
+    "Undefined helper scans preserve function-set domain and range scope",
+    "Undefined helper scans preserve record field label scope",
+    "Undefined helper scans preserve record set field label scope",
+    "Undefined helper scans preserve record update field label scope",
+    "Undefined helper scans preserve record selector field label scope",
+    "Undefined helper scans preserve comma-shared set/function binding scope",
+    "Undefined helper scans preserve operator parameter scope",
     "Quantified exactness helper formulas must not be vacuous",
     "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
     "Quantified helper restatement checks reject pure top-level boolean compositions",
     "Quantified helper restatement checks reject identity-literal gates",
     "Quantified helper restatement checks propagate known truth values",
+    "Quantified formula prefix scans preserve escaped string literal colons",
+    "Quantified bound identifier scans preserve escaped string literal domains",
+    "Quantified helper bound-domain checks preserve escaped string literal domains",
     "Quantified helper bound-domain checks include comma-shared bindings",
     "Quantified helper bound-domain checks skip tuple-pattern component domains",
     "Quantified helper singleton-domain checks preserve tuple literal elements",
+    "Line comment scans preserve escaped string literal comment markers",
+    "Static outer wrapper scans preserve escaped string literal parentheses",
+    "Semantic identifier scans ignore escaped string literal contents",
     "Top-level relation and boolean scans preserve tuple literal operators",
+    "Top-level boolean scans preserve escaped string literal operators",
     "Top-level boolean/equality detector helpers preserve tuple literal operators",
     "Top-level keyword scans preserve tuple literal keywords",
     "Top-level CASE branch scans preserve tuple literal arms and conditions",
+    "Top-level keyword and CASE branch scans preserve escaped string literal delimiters",
     "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
     "Quantified exactness helper formulas must use their bound identifiers",
     "Quantified unused-bound checks include later binding groups",
@@ -197,7 +234,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals",
     "Exactness boolean-composition checks unwrap one-line `LET` helper aliases",
     "Unary-temporal exactness helper wrappers must not hide quantified formulas",
-    "Unary-temporal quantified and control-flow checks split top-level boolean operands before peeling temporal wrappers",
+    "Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers",
     "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
     "Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases",
     "Transitive exactness predicate chains must not hide literal or alias helpers",
@@ -210,14 +247,18 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers",
     "Static and unary-temporal boolean-only exactness helper wrappers count as",
     "Static IF literal exactness helpers count as literal helpers",
+    "Static temporal literal checks split top-level boolean operands before peeling temporal or negated wrappers",
     "Negated unary-temporal boolean-only helper wrappers count as literal helpers",
     "Compound boolean-only temporal helper wrappers count as literal helpers",
     "Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands",
     "Helper reference traversal unwraps one-line `LET` helper aliases",
     "LET helper alias unwrapping preserves static unary result wrappers",
     "LET binding scans preserve tuple literal definition bodies",
+    "LET binding scans preserve escaped string literal definition bodies",
     "LET helper alias unwrapping resolves chained one-line bindings",
     "LET alias substitution respects later quantified binding groups",
+    "LET alias substitution respects escaped string literal domain binding groups",
+    "LET alias substitution preserves escaped string literal result bodies",
     "LET helper alias unwrapping substitutes simple chained binding references",
     "Temporal literal checks unwrap one-line `LET` helper aliases",
     "Non-named correctness-envelope conjuncts are rejected even when mixed",
@@ -232,14 +273,44 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive allowlisted temporal correctness-envelope conjunct chains must not",
     "Transitive allowlisted temporal helper chains must not hide undefined helpers",
     "Quantified temporal helper formulas must not hide undefined helpers",
+    "Undefined helper scans preserve quantified binding scope",
+    "Undefined helper scans preserve tuple-pattern quantifier domains",
+    "Undefined helper scans preserve LET binding scope",
+    "Undefined helper scans preserve parameterized LET operator scope",
+    "Undefined helper scans preserve CHOOSE binding scope",
+    "Undefined helper scans preserve LAMBDA binding scope",
+    "Undefined helper scans preserve standard TLA set/operator identifiers",
+    "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
+    "Undefined helper scans preserve CASE branch scope",
+    "Undefined helper scans preserve relation operand scope",
+    "Undefined helper scans preserve operator-call argument scope",
+    "Undefined helper scans preserve arithmetic/set infix operand scope",
+    "Undefined helper scans preserve explicit set literal element scope",
+    "Undefined helper scans preserve unary set-operator operand scope",
+    "Undefined helper scans preserve set-comprehension binding scope",
+    "Undefined helper scans preserve set-comprehension outer enclosure scope",
+    "Undefined helper scans preserve function-constructor binding scope",
+    "Undefined helper scans preserve function-set domain and range scope",
+    "Undefined helper scans preserve record field label scope",
+    "Undefined helper scans preserve record set field label scope",
+    "Undefined helper scans preserve record update field label scope",
+    "Undefined helper scans preserve record selector field label scope",
+    "Undefined helper scans preserve comma-shared set/function binding scope",
+    "Undefined helper scans preserve operator parameter scope",
     "Quantified temporal helper formulas must not be vacuous",
     "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
     "Quantified helper restatement checks reject pure top-level boolean compositions",
     "Quantified helper restatement checks reject identity-literal gates",
     "Quantified helper restatement checks propagate known truth values",
+    "Quantified formula prefix scans preserve escaped string literal colons",
+    "Quantified bound identifier scans preserve escaped string literal domains",
+    "Quantified helper bound-domain checks preserve escaped string literal domains",
     "Quantified helper bound-domain checks include comma-shared bindings",
     "Quantified helper bound-domain checks skip tuple-pattern component domains",
     "Quantified helper singleton-domain checks preserve tuple literal elements",
+    "Line comment scans preserve escaped string literal comment markers",
+    "Static outer wrapper scans preserve escaped string literal parentheses",
+    "Semantic identifier scans ignore escaped string literal contents",
     "Top-level relation and boolean scans preserve tuple literal operators",
     "Top-level boolean/equality detector helpers preserve tuple literal operators",
     "Top-level keyword scans preserve tuple literal keywords",
@@ -410,6 +481,19 @@ TLA_QUANTIFIED_BODY_PREDICATE_SELECTION_RE = re.compile(
     r"^(IF|CASE|LET|CHOOSE|ENABLED|UNCHANGED)\b"
 )
 TLA_QUANTIFIER_IDENTIFIER_TOKENS = {"A", "E"}
+TLA_UNARY_SET_OPERATOR_IDENTIFIERS = {"DOMAIN", "SUBSET", "UNION"}
+TLA_STATIC_INFIX_OPERATORS = (
+    "\\div",
+    "\\cup",
+    "\\cap",
+    "\\X",
+    "..",
+    "\\",
+    "+",
+    "-",
+    "*",
+    "%",
+)
 TLA_STANDARD_OPERATOR_IDENTIFIERS = {
     "Any",
     "Append",
@@ -434,6 +518,7 @@ TLA_STANDARD_OPERATOR_IDENTIFIERS = {
     "Real",
     "SelectSeq",
     "Seq",
+    "STRING",
     "SortSeq",
     "SubSeq",
     "TLCGet",
@@ -457,6 +542,7 @@ TLA_RESERVED_WORDS = {
     "IF",
     "IN",
     "INSTANCE",
+    "LAMBDA",
     "LET",
     "LOCAL",
     "MODULE",
@@ -650,9 +736,45 @@ class RunnerCase:
         return self.label[:-1]
 
 
+@dataclass(frozen=True)
+class TlaLetBinding:
+    """A parsed one-line local LET operator definition."""
+
+    name: str
+    params: frozenset[str]
+    operand: str
+
+
 @cache
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def tla_line_without_comment(line: str) -> str:
+    """Strip a TLA line comment while preserving escaped quoted strings."""
+
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if line.startswith("\\*", index):
+            return line[:index]
+        index += 1
+    return line
 
 
 def display_path(path: Path) -> Path:
@@ -1402,8 +1524,7 @@ def cfg_shape_errors(mode: str, paths: list[Path]) -> list[str]:
         directives = {
             stripped.split()[0]
             for line in text.splitlines()
-            if (stripped := line.strip())
-            and not stripped.startswith("\\*")
+            if (stripped := tla_line_without_comment(line).strip())
             and not line[:1].isspace()
         }
         has_specification = "SPECIFICATION" in directives
@@ -1449,7 +1570,7 @@ def cfg_directive_errors(path: Path) -> list[str]:
         return directive
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0].strip()
+        stripped = tla_line_without_comment(line).strip()
         if not stripped:
             collecting = None
             continue
@@ -1591,7 +1712,7 @@ def cfg_operator_references(path: Path) -> tuple[list[tuple[int, str, str]], lis
         return directive
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0].strip()
+        stripped = tla_line_without_comment(line).strip()
         if not stripped:
             close_collecting()
             continue
@@ -1821,7 +1942,7 @@ def tla_operator_definition_signature_entries_and_errors(
     entries: list[tuple[int, str, int]] = []
     errors: list[str] = []
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0]
+        stripped = tla_line_without_comment(line)
         if stripped.startswith((" ", "\t")):
             continue
         if TLA_FORBIDDEN_DIRECTIVE_RE.match(stripped.strip()):
@@ -1939,7 +2060,7 @@ def tla_recursive_declaration_signature_entries_and_errors(
         return None
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0]
+        stripped = tla_line_without_comment(line)
         if stripped.startswith((" ", "\t")):
             if TLA_RECURSIVE_START_RE.match(stripped.lstrip()):
                 errors.append(
@@ -2040,12 +2161,46 @@ def tla_operator_signatures(path: Path) -> dict[str, tuple[int, int]]:
 
 
 @cache
+def tla_operator_parameter_names(path: Path) -> dict[str, frozenset[str]]:
+    parameter_names: dict[str, frozenset[str]] = {}
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = tla_line_without_comment(line)
+        if stripped.startswith((" ", "\t")):
+            continue
+        if TLA_FORBIDDEN_DIRECTIVE_RE.match(stripped.strip()):
+            continue
+
+        match = TLA_OPERATOR_DEFINITION_BODY_RE.match(stripped)
+        if match is None:
+            continue
+        if match.group("local") is not None:
+            continue
+        body = match.group("body").strip()
+        if TLA_INSTANCE_BODY_RE.match(body):
+            continue
+        name = match.group("name")
+        if not is_tla_operator_name(name):
+            continue
+
+        params = match.group("params")
+        names: list[str] = []
+        if params is not None:
+            names = [param.strip() for param in params.split(",")]
+            if not names or any(not is_tla_operator_name(param) for param in names):
+                continue
+            if len(set(names)) != len(names):
+                continue
+        parameter_names[name] = frozenset(names)
+    return parameter_names
+
+
+@cache
 def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[int, str]]:
     entries: dict[str, tuple[int, str]] = {}
     lines = read_text(path).splitlines()
     for index, line in enumerate(lines):
         line_number = index + 1
-        stripped = line.split("\\*", 1)[0]
+        stripped = tla_line_without_comment(line)
         if stripped.startswith((" ", "\t")):
             continue
         if TLA_FORBIDDEN_DIRECTIVE_RE.match(stripped.strip()):
@@ -2074,7 +2229,7 @@ def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[in
 
         body_lines: list[tuple[int, str]] = []
         for body_index, body_line in enumerate(lines[index + 1 :], line_number + 1):
-            body_stripped = body_line.split("\\*", 1)[0]
+            body_stripped = tla_line_without_comment(body_line)
             if not body_stripped.strip():
                 continue
             if not body_stripped.startswith((" ", "\t")):
@@ -2111,8 +2266,21 @@ def strip_static_outer_parentheses(expression: str) -> str:
     stripped = expression.strip()
     while stripped.startswith("(") and stripped.endswith(")"):
         depth = 0
+        in_string = False
+        escaped = False
         encloses_full_expression = True
         for index, char in enumerate(stripped):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+                continue
             if char == "(":
                 depth += 1
             elif char == ")":
@@ -2122,7 +2290,7 @@ def strip_static_outer_parentheses(expression: str) -> str:
                 if depth == 0 and index != len(stripped) - 1:
                     encloses_full_expression = False
                     break
-        if depth != 0 or not encloses_full_expression:
+        if depth != 0 or in_string or not encloses_full_expression:
             return stripped
         stripped = stripped[1:-1].strip()
     return stripped
@@ -2245,6 +2413,12 @@ def tla_static_temporal_boolean_literal(expression: str) -> str | None:
             memo[normalized] = result
             return result
 
+        compound_literal = tla_compound_temporal_boolean_literal(normalized, collect)
+        if compound_literal is not None:
+            visiting.remove(normalized)
+            memo[normalized] = compound_literal
+            return compound_literal
+
         operand = tla_unary_temporal_operand(normalized)
         if operand is not None:
             result = collect(operand)
@@ -2264,7 +2438,7 @@ def tla_static_temporal_boolean_literal(expression: str) -> str | None:
             memo[normalized] = result
             return result
 
-        result = tla_compound_temporal_boolean_literal(normalized, collect)
+        result = None
         visiting.remove(normalized)
         memo[normalized] = result
         return result
@@ -2446,7 +2620,7 @@ def tla_module_dependency_references(
         return None
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        dependency_text = line.split("\\*", 1)[0]
+        dependency_text = tla_line_without_comment(line)
         stripped = dependency_text.strip()
         if not stripped:
             continue
@@ -2594,7 +2768,7 @@ def tla_module_dependency_references(
 def tla_instance_alias_entries(path: Path) -> list[tuple[int, str]]:
     entries: list[tuple[int, str]] = []
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0].strip()
+        stripped = tla_line_without_comment(line).strip()
         if not stripped:
             continue
         match = TLA_INSTANCE_RE.match(stripped)
@@ -2738,7 +2912,7 @@ def tla_forbidden_directive_errors(mode: str, path: Path) -> list[str]:
         return None
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0]
+        stripped = tla_line_without_comment(line)
         stripped_directive = stripped.strip()
         if not stripped_directive:
             continue
@@ -2855,7 +3029,7 @@ def tla_declaration_block_entries(
         return None
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        declaration_text = line.split("\\*", 1)[0]
+        declaration_text = tla_line_without_comment(line)
         stripped = declaration_text.strip()
         if not stripped:
             continue
@@ -3080,7 +3254,7 @@ def tla_vars_tuple_entries(
     lines = read_text(path).splitlines()
 
     for index, line in enumerate(lines):
-        stripped = line.split("\\*", 1)[0]
+        stripped = tla_line_without_comment(line)
         if stripped.startswith((" ", "\t")):
             continue
         match = TLA_VARS_DEFINITION_RE.match(stripped)
@@ -3095,7 +3269,7 @@ def tla_vars_tuple_entries(
         body = [match.group(1)]
         if ">>" not in body[0]:
             for continuation in lines[index + 1 :]:
-                continuation = continuation.split("\\*", 1)[0]
+                continuation = tla_line_without_comment(continuation)
                 body.append(continuation)
                 if ">>" in continuation:
                     break
@@ -3293,7 +3467,7 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
         return directive
 
     for line_number, line in enumerate(read_text(path).splitlines(), 1):
-        stripped = line.split("\\*", 1)[0].strip()
+        stripped = tla_line_without_comment(line).strip()
         if not stripped:
             close_collecting()
             continue
@@ -3625,6 +3799,225 @@ def tla_static_identifiers(expression: str) -> set[str]:
     }
 
 
+def tla_static_non_string_identifiers(expression: str) -> set[str]:
+    """Return static TLA identifiers outside quoted string literals."""
+
+    return tla_static_identifiers(tla_without_string_literals(expression))
+
+
+def tla_free_static_identifiers(
+    expression: str,
+    bound: frozenset[str] = frozenset(),
+) -> set[str]:
+    """Return static TLA identifiers not hidden by quantified binders."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not normalized:
+        return set()
+
+    set_scope = tla_set_comprehension_scope(normalized)
+    if set_scope is not None:
+        domains, body, local_bound = set_scope
+        identifiers: set[str] = set()
+        for domain in domains:
+            identifiers.update(tla_free_static_identifiers(domain, bound))
+        identifiers.update(
+            tla_free_static_identifiers(body, bound | frozenset(local_bound))
+        )
+        return identifiers
+
+    set_elements = tla_explicit_set_elements(normalized)
+    if set_elements is not None:
+        identifiers: set[str] = set()
+        for element in set_elements:
+            identifiers.update(tla_free_static_identifiers(element, bound))
+        return identifiers
+
+    function_scope = tla_function_constructor_scope(normalized)
+    if function_scope is not None:
+        domains, body, local_bound = function_scope
+        identifiers: set[str] = set()
+        for domain in domains:
+            identifiers.update(tla_free_static_identifiers(domain, bound))
+        identifiers.update(
+            tla_free_static_identifiers(body, bound | frozenset(local_bound))
+        )
+        return identifiers
+
+    function_set_scope = tla_function_set_scope(normalized)
+    if function_set_scope is not None:
+        domain, range_expression = function_set_scope
+        identifiers: set[str] = set()
+        identifiers.update(tla_free_static_identifiers(domain, bound))
+        identifiers.update(tla_free_static_identifiers(range_expression, bound))
+        return identifiers
+
+    record_values = tla_record_literal_values(normalized)
+    if record_values is not None:
+        identifiers: set[str] = set()
+        for value in record_values:
+            identifiers.update(tla_free_static_identifiers(value, bound))
+        return identifiers
+
+    record_domains = tla_record_set_field_domains(normalized)
+    if record_domains is not None:
+        identifiers: set[str] = set()
+        for domain in record_domains:
+            identifiers.update(tla_free_static_identifiers(domain, bound))
+        return identifiers
+
+    record_update = tla_record_update_scope(normalized)
+    if record_update is not None:
+        base, selectors, replacements = record_update
+        identifiers: set[str] = set()
+        identifiers.update(tla_free_static_identifiers(base, bound))
+        for selector in selectors:
+            identifiers.update(tla_free_static_identifiers(selector, bound))
+        for replacement in replacements:
+            identifiers.update(tla_free_static_identifiers(replacement, bound))
+        return identifiers
+
+    tuple_values = tla_tuple_literal_values(normalized)
+    if tuple_values is not None:
+        identifiers: set[str] = set()
+        for value in tuple_values:
+            identifiers.update(tla_free_static_identifiers(value, bound))
+        return identifiers
+
+    lambda_scope = tla_lambda_scope(normalized)
+    if lambda_scope is not None:
+        domains, body, local_bound = lambda_scope
+        identifiers: set[str] = set()
+        for domain in domains:
+            identifiers.update(tla_free_static_identifiers(domain, bound))
+        identifiers.update(
+            tla_free_static_identifiers(body, bound | frozenset(local_bound))
+        )
+        return identifiers
+
+    choose_split = tla_choose_prefix_and_body(normalized)
+    if choose_split is not None:
+        prefix, body = choose_split
+        identifiers: set[str] = set()
+        for domain in tla_choose_bound_domains(prefix):
+            identifiers.update(tla_free_static_identifiers(domain, bound))
+        local_bound = tla_choose_binding_identifiers(prefix)
+        identifiers.update(
+            tla_free_static_identifiers(body, bound | frozenset(local_bound))
+        )
+        return identifiers
+
+    split = quantified_formula_prefix_and_body(normalized)
+    if split is not None:
+        prefix, body = split
+        identifiers: set[str] = set()
+        for domain in quantified_formula_domain_expressions(normalized):
+            identifiers.update(tla_free_static_identifiers(domain, bound))
+        local_bound = tla_quantifier_binding_identifiers(prefix)
+        identifiers.update(
+            tla_free_static_identifiers(body, bound | frozenset(local_bound))
+        )
+        return identifiers
+
+    if re.match(r"^LET\b", normalized):
+        in_index = tla_top_level_keyword_index(normalized, "IN", start=len("LET"))
+        if in_index is not None:
+            binding = normalized[len("LET") : in_index].strip()
+            result = strip_static_outer_parentheses(
+                normalized[in_index + len("IN") :].strip()
+            )
+            let_bindings = tla_static_let_binding_entries(binding)
+            if let_bindings:
+                let_bound = frozenset(entry.name for entry in let_bindings)
+                identifiers: set[str] = set()
+                for entry in let_bindings:
+                    identifiers.update(
+                        tla_free_static_identifiers(
+                            entry.operand,
+                            bound | let_bound | entry.params,
+                        )
+                    )
+                identifiers.update(
+                    tla_free_static_identifiers(result, bound | let_bound)
+                )
+                return identifiers
+
+    case_branches = tla_top_level_case_condition_result_branches(normalized)
+    if case_branches:
+        identifiers: set[str] = set()
+        for condition, result in case_branches:
+            identifiers.update(tla_free_static_identifiers(condition, bound))
+            identifiers.update(tla_free_static_identifiers(result, bound))
+        return identifiers
+
+    boolean_parts = tla_top_level_boolean_parts(normalized)
+    if len(boolean_parts) > 1:
+        identifiers: set[str] = set()
+        for part in boolean_parts:
+            identifiers.update(tla_free_static_identifiers(part, bound))
+        return identifiers
+
+    negated_operand = tla_static_negation_operand(normalized)
+    if negated_operand is not None:
+        return tla_free_static_identifiers(negated_operand, bound)
+
+    temporal_operand = tla_unary_temporal_operand(normalized)
+    if temporal_operand is not None:
+        return tla_free_static_identifiers(temporal_operand, bound)
+
+    action_operand = tla_unary_action_operand(normalized)
+    if action_operand is not None:
+        return tla_free_static_identifiers(action_operand, bound)
+
+    unary_set_operand = tla_unary_set_operator_operand(normalized)
+    if unary_set_operand is not None:
+        return tla_free_static_identifiers(unary_set_operand, bound)
+
+    if_parts = tla_top_level_if_parts(normalized)
+    if if_parts is not None:
+        identifiers: set[str] = set()
+        for part in if_parts:
+            identifiers.update(tla_free_static_identifiers(part, bound))
+        return identifiers
+
+    relation_parts = tla_top_level_relation_parts(normalized)
+    if relation_parts is not None:
+        left, _, right = relation_parts
+        identifiers: set[str] = set()
+        identifiers.update(tla_free_static_identifiers(left, bound))
+        identifiers.update(tla_free_static_identifiers(right, bound))
+        return identifiers
+
+    infix_operands = tla_top_level_static_infix_operands(normalized)
+    if infix_operands is not None:
+        identifiers: set[str] = set()
+        for operand in infix_operands:
+            identifiers.update(tla_free_static_identifiers(operand, bound))
+        return identifiers
+
+    call_arguments = tla_direct_operator_call_arguments(normalized)
+    if call_arguments is not None:
+        callee = tla_direct_operator_call_name(normalized)
+        identifiers: set[str] = set()
+        if callee is not None and callee not in bound:
+            identifiers.add(callee)
+        for argument in tla_top_level_argument_parts(call_arguments):
+            if argument:
+                identifiers.update(tla_free_static_identifiers(argument, bound))
+        return identifiers
+
+    selector_scope = tla_selector_scope(normalized)
+    if selector_scope is not None:
+        base, selectors = selector_scope
+        identifiers: set[str] = set()
+        identifiers.update(tla_free_static_identifiers(base, bound))
+        for selector in selectors:
+            identifiers.update(tla_free_static_identifiers(selector, bound))
+        return identifiers
+
+    return tla_static_non_string_identifiers(normalized) - set(bound)
+
+
 def tla_without_string_literals(expression: str) -> str:
     """Return expression text with quoted string contents blanked out."""
 
@@ -3652,7 +4045,6 @@ def tla_without_string_literals(expression: str) -> str:
 def tla_quantified_bound_identifiers(expression: str) -> set[str]:
     """Return identifiers bound by simple TLA quantifier clauses."""
 
-    expression = tla_without_string_literals(expression)
     bound: set[str] = set()
     for prefix in tla_quantifier_prefixes(expression):
         bound.update(tla_quantifier_binding_identifiers(prefix))
@@ -3665,14 +4057,59 @@ def tla_quantifier_prefixes(expression: str) -> list[str]:
     prefixes: list[str] = []
     index = 0
     while index < len(expression):
-        match = re.search(r"\\[AE]\b", expression[index:])
-        if match is None:
+        start: int | None = None
+        in_string = False
+        escaped = False
+        scan = index
+        while scan < len(expression):
+            char = expression[scan]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                scan += 1
+                continue
+            if char == '"':
+                in_string = True
+                scan += 1
+                continue
+            if (
+                expression.startswith("\\A", scan)
+                or expression.startswith("\\E", scan)
+            ) and (
+                scan + 2 == len(expression)
+                or not (
+                    expression[scan + 2].isalnum()
+                    or expression[scan + 2] == "_"
+                )
+            ):
+                start = scan
+                break
+            scan += 1
+        if start is None:
             break
-        start = index + match.start()
         depth = 0
+        in_string = False
+        escaped = False
         scan = start
         while scan < len(expression):
             char = expression[scan]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                scan += 1
+                continue
+            if char == '"':
+                in_string = True
+                scan += 1
+                continue
             if expression.startswith("<<", scan):
                 depth += 1
                 scan += 2
@@ -3705,7 +4142,7 @@ def tla_quantifier_binding_identifiers(prefix: str) -> set[str]:
     text = re.sub(
         r"^\\[AE]\s+",
         "",
-        tla_without_string_literals(prefix).strip(),
+        prefix.strip(),
         count=1,
     ).strip()
     bound: set[str] = set()
@@ -3717,11 +4154,684 @@ def tla_quantifier_binding_identifiers(prefix: str) -> set[str]:
             continue
         names, _ = match.groups()
         for name_part in [*pending_names, names]:
-            for identifier in TLA_IDENTIFIER_SCAN_RE.findall(name_part):
+            for identifier in TLA_IDENTIFIER_SCAN_RE.findall(
+                tla_without_string_literals(name_part)
+            ):
                 if is_tla_user_identifier(identifier):
                     bound.add(identifier)
         pending_names = []
     return bound
+
+
+def tla_choose_prefix_and_body(expression: str) -> tuple[str, str] | None:
+    """Return a whole-body CHOOSE prefix and body, if present."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not re.match(r"^CHOOSE\b", normalized):
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    index = len("CHOOSE")
+    while index < len(normalized):
+        char = normalized[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if normalized.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if normalized.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth == 0 and char == ":":
+            prefix = normalized[:index].strip()
+            body = normalized[index + 1 :].strip()
+            if not prefix or not body:
+                return None
+            return prefix, strip_static_outer_parentheses(body)
+        index += 1
+    return None
+
+
+def tla_choose_binding_identifiers(prefix: str) -> set[str]:
+    """Return identifiers bound by a simple CHOOSE prefix."""
+
+    text = re.sub(r"^CHOOSE\s+", "", prefix.strip(), count=1).strip()
+    if not text:
+        return set()
+    bound: set[str] = set()
+    for binding in tla_top_level_argument_parts(text):
+        membership = tla_top_level_membership_parts(binding)
+        names = membership[0] if membership is not None else binding
+        for identifier in TLA_IDENTIFIER_SCAN_RE.findall(
+            tla_without_string_literals(names)
+        ):
+            if is_tla_user_identifier(identifier):
+                bound.add(identifier)
+    return bound
+
+
+def tla_choose_bound_domains(prefix: str) -> list[str]:
+    """Return explicit domains from a simple CHOOSE prefix."""
+
+    text = re.sub(r"^CHOOSE\s+", "", prefix.strip(), count=1).strip()
+    domains: list[str] = []
+    for binding in tla_top_level_argument_parts(text):
+        membership = tla_top_level_membership_parts(binding)
+        if membership is not None and membership[1] == "\\in":
+            domains.append(membership[2])
+    return domains
+
+
+def tla_lambda_scope(expression: str) -> tuple[list[str], str, set[str]] | None:
+    """Return domains, body, and local binders for simple LAMBDA expressions."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not re.match(r"^LAMBDA\b", normalized):
+        return None
+    colon_index = tla_top_level_symbol_index(normalized, ":", start=len("LAMBDA"))
+    if colon_index is None:
+        return None
+    prefix = normalized[len("LAMBDA") : colon_index].strip()
+    body = normalized[colon_index + 1 :].strip()
+    if not prefix or not body:
+        return None
+
+    domains, bound = tla_binding_domains_from_prefix(prefix)
+    if domains and bound:
+        return domains, strip_static_outer_parentheses(body), bound
+
+    if "\\in" in prefix or "\\notin" in prefix:
+        return None
+
+    local_bound: set[str] = set()
+    for part in tla_top_level_argument_parts(prefix):
+        if not part:
+            return None
+        part_bound = tla_binding_identifiers_from_names(part)
+        if not part_bound:
+            return None
+        local_bound.update(part_bound)
+    if not local_bound:
+        return None
+    return [], strip_static_outer_parentheses(body), local_bound
+
+
+def tla_top_level_symbol_index(text: str, symbol: str, start: int = 0) -> int | None:
+    """Return a top-level symbol occurrence, preserving TLA delimiters."""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    index = start
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth == 0 and text.startswith(symbol, index):
+            return index
+        index += 1
+    return None
+
+
+def tla_top_level_function_set_arrow_index(text: str) -> int | None:
+    """Return a top-level function-set arrow, excluding record/function constructors."""
+
+    start = 0
+    while True:
+        index = tla_top_level_symbol_index(text, "->", start=start)
+        if index is None:
+            return None
+        previous = text[index - 1] if index > 0 else ""
+        if previous != "|":
+            return index
+        start = index + len("->")
+
+
+def tla_delimited_expression_end(
+    text: str,
+    start: int,
+    opener: str,
+    closer: str,
+) -> int | None:
+    """Return the matching closing delimiter for a TLA expression."""
+
+    if start >= len(text) or text[start] != opener:
+        return None
+
+    depth = 1
+    in_string = False
+    escaped = False
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return index if char == closer else None
+            index += 1
+            continue
+        index += 1
+    return None
+
+
+def tla_square_bracket_expression_end(text: str, start: int) -> int | None:
+    """Return the matching closing bracket for a square-bracket expression."""
+
+    return tla_delimited_expression_end(text, start, "[", "]")
+
+
+def tla_outer_square_brackets_enclose_expression(text: str) -> bool:
+    """Return whether outer square brackets enclose the full expression."""
+
+    return (
+        text.startswith("[")
+        and text.endswith("]")
+        and tla_square_bracket_expression_end(text, 0) == len(text) - 1
+    )
+
+
+def tla_curly_brace_expression_end(text: str, start: int) -> int | None:
+    """Return the matching closing brace for a curly-brace expression."""
+
+    return tla_delimited_expression_end(text, start, "{", "}")
+
+
+def tla_outer_curly_braces_enclose_expression(text: str) -> bool:
+    """Return whether outer curly braces enclose the full expression."""
+
+    return (
+        text.startswith("{")
+        and text.endswith("}")
+        and tla_curly_brace_expression_end(text, 0) == len(text) - 1
+    )
+
+
+def tla_tuple_expression_end(text: str, start: int) -> int | None:
+    """Return the matching closing token for a tuple expression."""
+
+    if start >= len(text) or not text.startswith("<<", start):
+        return None
+
+    depth = 1
+    in_string = False
+    escaped = False
+    index = start + 2
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index):
+            depth -= 1
+            if depth == 0:
+                return index
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}":
+            depth -= 1
+            if depth <= 0:
+                return None
+            index += 1
+            continue
+        index += 1
+    return None
+
+
+def tla_outer_tuple_brackets_enclose_expression(text: str) -> bool:
+    """Return whether outer tuple brackets enclose the full expression."""
+
+    return (
+        text.startswith("<<")
+        and text.endswith(">>")
+        and tla_tuple_expression_end(text, 0) == len(text) - 2
+    )
+
+
+def tla_binding_identifiers_from_names(names: str) -> set[str]:
+    """Return identifiers bound by a static binding-name expression."""
+
+    return {
+        identifier
+        for identifier in TLA_IDENTIFIER_SCAN_RE.findall(
+            tla_without_string_literals(names)
+        )
+        if is_tla_user_identifier(identifier)
+    }
+
+
+def tla_binding_domains_from_prefix(prefix: str) -> tuple[list[str], set[str]]:
+    """Return domains and local binders from top-level membership bindings."""
+
+    domains: list[str] = []
+    bound: set[str] = set()
+    pending_names: list[str] = []
+    for binding in tla_top_level_argument_parts(prefix):
+        membership = tla_top_level_membership_parts(binding)
+        if membership is None:
+            pending_names.append(binding)
+            continue
+        if membership[1] != "\\in":
+            return [], set()
+        names, _, domain = membership
+        local_bound: set[str] = set()
+        for name_part in [*pending_names, names]:
+            local_bound.update(tla_binding_identifiers_from_names(name_part))
+        if not local_bound:
+            return [], set()
+        bound.update(local_bound)
+        domains.append(domain)
+        pending_names = []
+    if pending_names:
+        return [], set()
+    return domains, bound
+
+
+def tla_set_comprehension_scope(
+    expression: str,
+) -> tuple[list[str], str, set[str]] | None:
+    """Return domains, body, and local binders for simple set comprehensions."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_curly_braces_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+    colon_index = tla_top_level_symbol_index(inner, ":")
+    if colon_index is None:
+        return None
+    left = inner[:colon_index].strip()
+    right = inner[colon_index + 1 :].strip()
+    if not left or not right:
+        return None
+
+    domains, bound = tla_binding_domains_from_prefix(left)
+    if domains and bound:
+        return domains, right, bound
+
+    domains, bound = tla_binding_domains_from_prefix(right)
+    if domains and bound:
+        return domains, left, bound
+
+    return None
+
+
+def tla_function_constructor_scope(
+    expression: str,
+) -> tuple[list[str], str, set[str]] | None:
+    """Return domains, body, and local binders for function constructors."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_square_brackets_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+    arrow_index = tla_top_level_symbol_index(inner, "|->")
+    if arrow_index is None:
+        return None
+    prefix = inner[:arrow_index].strip()
+    body = inner[arrow_index + len("|->") :].strip()
+    if not prefix or not body:
+        return None
+    domains, bound = tla_binding_domains_from_prefix(prefix)
+    if not domains or not bound:
+        return None
+    return domains, body, bound
+
+
+def tla_function_set_scope(expression: str) -> tuple[str, str] | None:
+    """Return domain and range expressions for whole-expression function sets."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_square_brackets_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+    arrow_index = tla_top_level_function_set_arrow_index(inner)
+    if arrow_index is None:
+        return None
+    domain = inner[:arrow_index].strip()
+    range_expression = inner[arrow_index + len("->") :].strip()
+    if not domain or not range_expression:
+        return None
+    return domain, range_expression
+
+
+def tla_record_literal_values(expression: str) -> list[str] | None:
+    """Return record-literal values while ignoring static field labels."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_square_brackets_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+
+    values: list[str] = []
+    for entry in tla_top_level_argument_parts(inner):
+        arrow_index = tla_top_level_symbol_index(entry, "|->")
+        if arrow_index is None:
+            return None
+        field = entry[:arrow_index].strip()
+        value = entry[arrow_index + len("|->") :].strip()
+        if not field or not value:
+            return None
+        if TLA_IDENTIFIER_RE.fullmatch(field) is None or not is_tla_user_identifier(
+            field
+        ):
+            return None
+        values.append(value)
+    return values
+
+
+def tla_record_set_field_domains(expression: str) -> list[str] | None:
+    """Return record-set domains while ignoring static field labels."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_square_brackets_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+
+    domains: list[str] = []
+    for entry in tla_top_level_argument_parts(inner):
+        colon_index = tla_top_level_symbol_index(entry, ":")
+        if colon_index is None:
+            return None
+        field = entry[:colon_index].strip()
+        domain = entry[colon_index + 1 :].strip()
+        if not field or not domain:
+            return None
+        if TLA_IDENTIFIER_RE.fullmatch(field) is None or not is_tla_user_identifier(
+            field
+        ):
+            return None
+        domains.append(domain)
+    return domains
+
+
+def tla_record_update_scope(expression: str) -> tuple[str, list[str], list[str]] | None:
+    """Return base, dynamic selector expressions, and values for record updates."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_square_brackets_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+
+    except_index = tla_top_level_keyword_index(inner, "EXCEPT")
+    if except_index is None:
+        return None
+    base = inner[:except_index].strip()
+    updates = inner[except_index + len("EXCEPT") :].strip()
+    if not base or not updates:
+        return None
+
+    selectors: list[str] = []
+    replacements: list[str] = []
+    for update in tla_top_level_argument_parts(updates):
+        relation = tla_top_level_equality_relation_parts(update)
+        if relation is None or relation[1] != "=":
+            return None
+        path, _, replacement = relation
+        path_selectors = tla_record_update_path_selector_expressions(path)
+        if path_selectors is None:
+            return None
+        selectors.extend(path_selectors)
+        replacements.append(replacement)
+    return base, selectors, replacements
+
+
+def tla_tuple_literal_values(expression: str) -> list[str] | None:
+    """Return tuple elements as recursively scanned expression values."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_tuple_brackets_enclose_expression(text):
+        return None
+    inner = text[2:-2].strip()
+    if not inner:
+        return []
+    values = tla_top_level_argument_parts(inner)
+    if not values or any(not value for value in values):
+        return None
+    return values
+
+
+def tla_record_update_path_selector_expressions(path: str) -> list[str] | None:
+    """Return dynamic expressions from an EXCEPT selector path."""
+
+    text = " ".join(path.split())
+    if not text.startswith("!"):
+        return None
+
+    selectors: list[str] = []
+    index = 1
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if char == ".":
+            index += 1
+            while index < len(text) and text[index].isspace():
+                index += 1
+            match = TLA_IDENTIFIER_SCAN_RE.match(text, index)
+            if match is None:
+                return None
+            field = match.group(0)
+            if not is_tla_user_identifier(field):
+                return None
+            index = match.end()
+            continue
+        if char == "[":
+            end = tla_square_bracket_expression_end(text, index)
+            if end is None:
+                return None
+            selector = text[index + 1 : end].strip()
+            if not selector:
+                return None
+            selectors.append(selector)
+            index = end + 1
+            continue
+        return None
+    return selectors
+
+
+def tla_selector_scope(expression: str) -> tuple[str, list[str]] | None:
+    """Return base and dynamic selector expressions for a selector chain."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    selector_start = tla_top_level_selector_start(text)
+    if selector_start is None:
+        return None
+    base = text[:selector_start].strip()
+    if not base:
+        return None
+    selectors = tla_selector_chain_dynamic_expressions(text[selector_start:])
+    if selectors is None:
+        return None
+    return base, selectors
+
+
+def tla_top_level_selector_start(text: str) -> int | None:
+    """Return the start of a top-level field/index selector chain."""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if depth == 0 and char == "." and text[:index].strip():
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            previous_char = text[index - 1] if index > 0 else ""
+            if not (previous_char.isdigit() and next_char.isdigit()):
+                return index
+        if depth == 0 and char == "[" and text[:index].strip():
+            return index
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        index += 1
+    return None
+
+
+def tla_selector_chain_dynamic_expressions(chain: str) -> list[str] | None:
+    """Return dynamic index expressions from a field/index selector chain."""
+
+    selectors: list[str] = []
+    index = 0
+    while index < len(chain):
+        char = chain[index]
+        if char.isspace():
+            index += 1
+            continue
+        if char == ".":
+            index += 1
+            while index < len(chain) and chain[index].isspace():
+                index += 1
+            match = TLA_IDENTIFIER_SCAN_RE.match(chain, index)
+            if match is None:
+                return None
+            field = match.group(0)
+            if not is_tla_user_identifier(field):
+                return None
+            index = match.end()
+            continue
+        if char == "[":
+            end = tla_square_bracket_expression_end(chain, index)
+            if end is None:
+                return None
+            selector = chain[index + 1 : end].strip()
+            if not selector:
+                return None
+            selectors.append(selector)
+            index = end + 1
+            continue
+        return None
+    return selectors
 
 
 def undefined_static_helper_identifiers(
@@ -3731,10 +4841,10 @@ def undefined_static_helper_identifiers(
     *,
     current: str | None = None,
     exactness_operator: str | None = None,
+    local_bound: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Return undefined helper-like identifiers from a static TLA expression."""
 
-    expression = tla_without_string_literals(expression)
     declared_names = {
         *tla_constant_declarations(module_path),
         *(variable for _, variable in tla_variable_declaration_entries(module_path)),
@@ -3746,11 +4856,12 @@ def undefined_static_helper_identifiers(
     }
     ignored_identifiers.update(TLA_QUANTIFIER_IDENTIFIER_TOKENS)
     ignored_identifiers.update(TLA_STANDARD_OPERATOR_IDENTIFIERS)
-    ignored_identifiers.update(tla_quantified_bound_identifiers(expression))
 
     return [
         identifier
-        for identifier in sorted(tla_static_identifiers(expression))
+        for identifier in sorted(
+            tla_free_static_identifiers(expression, frozenset(local_bound))
+        )
         if identifier not in ignored_identifiers
         and identifier not in declared_names
         and identifier not in definitions
@@ -3766,36 +4877,46 @@ def tla_top_level_conjuncts(expression: str) -> list[str]:
     current: list[str] = []
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(text):
         char = text[index]
-        if char == '"':
+        if in_string:
             current.append(char)
-            in_string = not in_string
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if not in_string:
-            if text.startswith("<<", index):
-                depth += 1
-                current.append("<<")
-                index += 2
-                continue
-            if text.startswith(">>", index) and depth > 0:
-                depth -= 1
-                current.append(">>")
-                index += 2
-                continue
-            if char in "([{":
-                depth += 1
-            elif char in ")]}" and depth > 0:
-                depth -= 1
-            if depth == 0 and text.startswith("/\\", index):
-                part = "".join(current).strip()
-                if part:
-                    conjuncts.append(part)
-                current = []
-                index += 2
-                continue
+        if char == '"':
+            current.append(char)
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            current.append("<<")
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            current.append(">>")
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        if depth == 0 and text.startswith("/\\", index):
+            part = "".join(current).strip()
+            if part:
+                conjuncts.append(part)
+            current = []
+            index += 2
+            continue
         current.append(char)
         index += 1
 
@@ -3813,36 +4934,46 @@ def tla_top_level_disjuncts(expression: str) -> list[str]:
     current: list[str] = []
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(text):
         char = text[index]
-        if char == '"':
+        if in_string:
             current.append(char)
-            in_string = not in_string
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if not in_string:
-            if text.startswith("<<", index):
-                depth += 1
-                current.append("<<")
-                index += 2
-                continue
-            if text.startswith(">>", index) and depth > 0:
-                depth -= 1
-                current.append(">>")
-                index += 2
-                continue
-            if char in "([{":
-                depth += 1
-            elif char in ")]}" and depth > 0:
-                depth -= 1
-            if depth == 0 and text.startswith("\\/", index):
-                part = "".join(current).strip()
-                if part:
-                    disjuncts.append(part)
-                current = []
-                index += 2
-                continue
+        if char == '"':
+            current.append(char)
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            current.append("<<")
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            current.append(">>")
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        if depth == 0 and text.startswith("\\/", index):
+            part = "".join(current).strip()
+            if part:
+                disjuncts.append(part)
+            current = []
+            index += 2
+            continue
         current.append(char)
         index += 1
 
@@ -3858,33 +4989,42 @@ def tla_top_level_implication_operands(expression: str) -> list[str]:
     text = strip_static_outer_parentheses(expression).strip()
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(text):
         char = text[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if not in_string:
-            if text.startswith("<<", index):
-                depth += 1
-                index += 2
-                continue
-            if text.startswith(">>", index) and depth > 0:
-                depth -= 1
-                index += 2
-                continue
-            if char in "([{":
-                depth += 1
-            elif char in ")]}" and depth > 0:
-                depth -= 1
-            if (
-                depth == 0
-                and text.startswith("=>", index)
-                and (index == 0 or text[index - 1] != "<")
-            ):
-                operands = [text[:index].strip(), text[index + 2 :].strip()]
-                return [operand for operand in operands if operand]
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        if (
+            depth == 0
+            and text.startswith("=>", index)
+            and (index == 0 or text[index - 1] != "<")
+        ):
+            operands = [text[:index].strip(), text[index + 2 :].strip()]
+            return [operand for operand in operands if operand]
         index += 1
     return [text] if text else []
 
@@ -3895,29 +5035,38 @@ def tla_top_level_equivalence_operands(expression: str) -> list[str]:
     text = strip_static_outer_parentheses(expression).strip()
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(text):
         char = text[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if not in_string:
-            if text.startswith("<<", index):
-                depth += 1
-                index += 2
-                continue
-            if text.startswith(">>", index) and depth > 0:
-                depth -= 1
-                index += 2
-                continue
-            if char in "([{":
-                depth += 1
-            elif char in ")]}" and depth > 0:
-                depth -= 1
-            if depth == 0 and text.startswith("<=>", index):
-                operands = [text[:index].strip(), text[index + 3 :].strip()]
-                return [operand for operand in operands if operand]
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        if depth == 0 and text.startswith("<=>", index):
+            operands = [text[:index].strip(), text[index + 3 :].strip()]
+            return [operand for operand in operands if operand]
         index += 1
     return [text] if text else []
 
@@ -3938,6 +5087,81 @@ def tla_top_level_boolean_parts(expression: str) -> list[str]:
         if len(parts) > 1:
             return parts
     return [text]
+
+
+def tla_top_level_operator_chain_operands(expression: str, operator: str) -> list[str]:
+    """Return top-level operands split across a repeated binary operator."""
+
+    text = strip_static_outer_parentheses(expression).strip()
+    if not text:
+        return []
+
+    operands: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            current.append(char)
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            current.append("<<")
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            current.append(">>")
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        is_operator = depth == 0 and text.startswith(operator, index)
+        if is_operator and operator == "=>" and index > 0 and text[index - 1] == "<":
+            is_operator = False
+        if is_operator:
+            operand = "".join(current).strip()
+            if operand:
+                operands.append(operand)
+            current = []
+            index += len(operator)
+            continue
+        current.append(char)
+        index += 1
+
+    operand = "".join(current).strip()
+    if operand:
+        operands.append(operand)
+    return operands if len(operands) > 1 else ([text] if text else [])
+
+
+def tla_top_level_implication_chain_operands(expression: str) -> list[str]:
+    """Return operands across a top-level implication chain."""
+
+    return tla_top_level_operator_chain_operands(expression, "=>")
+
+
+def tla_top_level_equivalence_chain_operands(expression: str) -> list[str]:
+    """Return operands across a top-level equivalence chain."""
+
+    return tla_top_level_operator_chain_operands(expression, "<=>")
 
 
 def tla_identity_literal_gated_operand(
@@ -4108,6 +5332,13 @@ def duplicate_zero_arity_wrapped_conjunct_references(expression: str) -> list[st
             collect(let_operand)
             return
 
+        conjuncts = tla_top_level_conjuncts(normalized)
+        if len(conjuncts) > 1:
+            for conjunct in conjuncts:
+                collect(conjunct)
+            record(conjuncts)
+            return
+
         operand = tla_unary_temporal_operand(normalized)
         if operand is not None:
             collect(operand)
@@ -4116,13 +5347,6 @@ def duplicate_zero_arity_wrapped_conjunct_references(expression: str) -> list[st
         negated_operand = tla_static_negation_operand(normalized)
         if negated_operand is not None:
             collect(negated_operand)
-            return
-
-        conjuncts = tla_top_level_conjuncts(normalized)
-        if len(conjuncts) > 1:
-            for conjunct in conjuncts:
-                collect(conjunct)
-            record(conjuncts)
             return
 
         for part in tla_top_level_boolean_parts(normalized):
@@ -4164,6 +5388,17 @@ def duplicate_zero_arity_boolean_operand_references(expression: str) -> list[str
             collect(let_operand)
             return
 
+        for parts in (
+            tla_top_level_disjuncts(normalized),
+            tla_top_level_implication_chain_operands(normalized),
+            tla_top_level_equivalence_chain_operands(normalized),
+        ):
+            if len(parts) > 1:
+                record(parts)
+                for part in parts:
+                    collect(part)
+                return
+
         operand = tla_unary_temporal_operand(normalized)
         if operand is not None:
             collect(operand)
@@ -4173,17 +5408,6 @@ def duplicate_zero_arity_boolean_operand_references(expression: str) -> list[str
         if negated_operand is not None:
             collect(negated_operand)
             return
-
-        for parts in (
-            tla_top_level_disjuncts(normalized),
-            tla_top_level_implication_operands(normalized),
-            tla_top_level_equivalence_operands(normalized),
-        ):
-            if len(parts) > 1:
-                record(parts)
-                for part in parts:
-                    collect(part)
-                return
 
         for conjunct in tla_top_level_conjuncts(normalized):
             compact_conjunct = strip_static_outer_parentheses(
@@ -4358,7 +5582,7 @@ def complementary_equivalence_zero_arity_references(expression: str) -> list[str
             collect(operand)
             return
 
-        equivalence_parts = tla_top_level_equivalence_operands(normalized)
+        equivalence_parts = tla_top_level_equivalence_chain_operands(normalized)
         if len(equivalence_parts) > 1:
             record(equivalence_parts)
             for part in equivalence_parts:
@@ -4479,6 +5703,12 @@ def literal_gated_zero_arity_helper_alias(
             return direct_helper_operand(let_operand)
         return None
 
+    def helper_alias_operand(current: str) -> str | None:
+        alias = direct_helper_operand(current)
+        if alias is not None:
+            return alias
+        return collect(current)
+
     def literal_gated_alias(parts: list[str], neutral: str) -> str | None:
         aliases: list[str] = []
         for part in parts:
@@ -4487,7 +5717,7 @@ def literal_gated_zero_arity_helper_alias(
                 if literal != neutral:
                     return None
                 continue
-            alias = direct_helper_operand(part)
+            alias = helper_alias_operand(part)
             if alias is None:
                 return None
             aliases.append(alias)
@@ -4525,7 +5755,7 @@ def literal_gated_zero_arity_helper_alias(
         if len(implication_parts) > 1:
             antecedent, consequent = implication_parts
             if tla_static_temporal_boolean_literal(antecedent) == "TRUE":
-                return direct_helper_operand(consequent)
+                return helper_alias_operand(consequent)
 
         equivalence_parts = tla_top_level_equivalence_operands(compact_body)
         if len(equivalence_parts) > 1:
@@ -4564,6 +5794,12 @@ def literal_gated_negated_zero_arity_helper_operand(
             return operand
         return None
 
+    def negated_helper_alias_operand(current: str) -> str | None:
+        operand = negated_helper_operand(current)
+        if operand is not None:
+            return operand
+        return collect(current)
+
     def literal_gated_operand(parts: list[str], neutral: str) -> str | None:
         operands: list[str] = []
         for part in parts:
@@ -4572,7 +5808,7 @@ def literal_gated_negated_zero_arity_helper_operand(
                 if literal != neutral:
                     return None
                 continue
-            operand = negated_helper_operand(part)
+            operand = negated_helper_alias_operand(part)
             if operand is None:
                 return None
             operands.append(operand)
@@ -4610,7 +5846,7 @@ def literal_gated_negated_zero_arity_helper_operand(
         if len(implication_parts) > 1:
             antecedent, consequent = implication_parts
             if tla_static_temporal_boolean_literal(antecedent) == "TRUE":
-                return negated_helper_operand(consequent)
+                return negated_helper_alias_operand(consequent)
 
         equivalence_parts = tla_top_level_equivalence_operands(compact_body)
         if len(equivalence_parts) > 1:
@@ -4970,14 +6206,21 @@ def tla_top_level_keyword_index(text: str, keyword: str, start: int = 0) -> int 
 
     depth = 0
     in_string = False
+    escaped = False
     index = start
     while index < len(text):
         char = text[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if in_string:
+        if char == '"':
+            in_string = True
             index += 1
             continue
         if text.startswith("<<", index):
@@ -5311,7 +6554,7 @@ def exactness_definition_shape_errors(
                 "named zero-arity model predicates directly"
             ]
 
-    exactness_identifiers = tla_static_identifiers(exactness_body)
+    exactness_identifiers = tla_static_non_string_identifiers(exactness_body)
     if len(exactness_identifiers) == 1 and exactness_body in exactness_identifiers:
         return [
             f"{prefix} at "
@@ -5438,7 +6681,7 @@ def exactness_definition_shape_errors(
                 f"{', '.join(conjunct_self_inequality_parts)}"
             )
             continue
-        conjunct_identifiers = tla_static_identifiers(conjunct_body)
+        conjunct_identifiers = tla_static_non_string_identifiers(conjunct_body)
         if len(conjunct_identifiers) == 1 and conjunct_body in conjunct_identifiers:
             aliased_conjuncts.append(
                 f"{conjunct_operator} at {display_path(module_path)}:"
@@ -5982,7 +7225,7 @@ def transitive_vacuous_exactness_conjuncts(
                     f"at {display_path(module_path)}:{line} contains "
                     f"self-inequality {', '.join(self_inequality_parts)}"
                 )
-        body_identifiers = tla_static_identifiers(compact_body)
+        body_identifiers = tla_static_non_string_identifiers(compact_body)
         if (
             len(chain) > 1
             and len(body_identifiers) == 1
@@ -6056,7 +7299,7 @@ def transitive_hidden_exactness_conjuncts(
         if definition is None:
             return
         line, body = definition
-        for identifier in sorted(tla_static_identifiers(body)):
+        for identifier in sorted(tla_static_non_string_identifiers(body)):
             if identifier == exactness_operator or identifier == current:
                 continue
             is_hidden_coverage = (
@@ -6455,7 +7698,7 @@ def control_flow_named_helper_branch_operands(
         and control is not None
         and control.group(1) in {"CHOOSE", "ENABLED"}
     ):
-        for identifier in sorted(tla_static_identifiers(compact)):
+        for identifier in sorted(tla_static_non_string_identifiers(compact)):
             if (
                 identifier not in seen
                 and identifier in definitions
@@ -6482,6 +7725,37 @@ def control_flow_named_helper_branch_operands(
 def tla_top_level_case_result_branches(expression: str) -> list[str]:
     """Return top-level CASE result branches from a static CASE expression."""
 
+    branches: list[str] = []
+    for _, result in tla_top_level_case_condition_result_branches(expression):
+        branches.append(result)
+    return branches
+
+
+def tla_top_level_case_condition_result_branches(
+    expression: str,
+) -> list[tuple[str, str]]:
+    """Return top-level CASE condition/result branch pairs."""
+
+    branches: list[tuple[str, str]] = []
+    for arm in tla_top_level_case_arms(expression):
+        arrow_index = tla_top_level_case_arrow_index(arm)
+        if arrow_index is None:
+            continue
+        condition = arm[:arrow_index].strip()
+        result = arm[arrow_index + 2 :].strip()
+        if condition and result:
+            branches.append(
+                (
+                    strip_static_outer_parentheses(condition),
+                    strip_static_outer_parentheses(result),
+                )
+            )
+    return branches
+
+
+def tla_top_level_case_arms(expression: str) -> list[str]:
+    """Return top-level CASE arm text from a static CASE expression."""
+
     text = strip_static_outer_parentheses(" ".join(expression.split()))
     if not re.match(r"^CASE\b", text):
         return []
@@ -6489,38 +7763,48 @@ def tla_top_level_case_result_branches(expression: str) -> list[str]:
     current: list[str] = []
     depth = 0
     in_string = False
+    escaped = False
     index = len("CASE")
     while index < len(text):
         char = text[index]
-        if char == '"':
+        if in_string:
             current.append(char)
-            in_string = not in_string
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if not in_string:
-            if text.startswith("<<", index):
-                depth += 1
-                current.append("<<")
-                index += 2
-                continue
-            if text.startswith(">>", index) and depth > 0:
-                depth -= 1
-                current.append(">>")
-                index += 2
-                continue
-            if depth == 0 and text.startswith("[]", index) and (
-                tla_case_arm_has_result("".join(current))
-            ):
-                arm = "".join(current).strip()
-                if arm:
-                    arms.append(arm)
-                current = []
-                index += 2
-                continue
-            if char in "([{":
-                depth += 1
-            elif char in ")]}" and depth > 0:
-                depth -= 1
+        if char == '"':
+            current.append(char)
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            current.append("<<")
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            current.append(">>")
+            index += 2
+            continue
+        if depth == 0 and text.startswith("[]", index) and (
+            tla_case_arm_has_result("".join(current))
+        ):
+            arm = "".join(current).strip()
+            if arm:
+                arms.append(arm)
+            current = []
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
         current.append(char)
         index += 1
 
@@ -6528,15 +7812,7 @@ def tla_top_level_case_result_branches(expression: str) -> list[str]:
     if arm:
         arms.append(arm)
 
-    branches: list[str] = []
-    for arm in arms:
-        arrow_index = tla_top_level_case_arrow_index(arm)
-        if arrow_index is None:
-            continue
-        branch = arm[arrow_index + 2 :].strip()
-        if branch:
-            branches.append(strip_static_outer_parentheses(branch))
-    return branches
+    return arms
 
 
 def tla_case_arm_has_result(text: str) -> bool:
@@ -6553,14 +7829,21 @@ def tla_top_level_case_arrow_index(text: str) -> int | None:
 
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(text):
         char = text[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if in_string:
+        if char == '"':
+            in_string = True
             index += 1
             continue
         if text.startswith("<<", index):
@@ -6988,20 +8271,76 @@ def tla_static_let_alias_operand(expression: str) -> str | None:
     return tla_static_resolve_let_alias_result(result, bindings)
 
 
-def tla_static_let_binding_definitions(binding: str) -> list[tuple[str, str]] | None:
-    """Return simple one-line non-parameterized LET definitions."""
+def tla_static_let_binding_entries(binding: str) -> list[TlaLetBinding] | None:
+    """Return simple one-line LET definitions with optional parameters."""
 
-    markers: list[tuple[int, int, int, str]] = []
+    def signature_before(operator_index: int) -> tuple[int, str, frozenset[str]] | None:
+        signature_end = operator_index
+        while signature_end > 0 and binding[signature_end - 1].isspace():
+            signature_end -= 1
+        if signature_end <= 0:
+            return None
+
+        name_end = signature_end
+        params: frozenset[str] = frozenset()
+        if binding[signature_end - 1] == ")":
+            depth = 0
+            open_index: int | None = None
+            scan = signature_end - 1
+            while scan >= 0:
+                char = binding[scan]
+                if char == ")":
+                    depth += 1
+                elif char == "(":
+                    depth -= 1
+                    if depth == 0:
+                        open_index = scan
+                        break
+                scan -= 1
+            if open_index is None:
+                return None
+            param_parts = tla_top_level_argument_parts(
+                binding[open_index + 1 : signature_end - 1].strip()
+            )
+            if not param_parts or any(
+                not is_tla_operator_name(param) for param in param_parts
+            ):
+                return None
+            if len(set(param_parts)) != len(param_parts):
+                return None
+            params = frozenset(param_parts)
+            name_end = open_index
+
+        while name_end > 0 and binding[name_end - 1].isspace():
+            name_end -= 1
+        name_start = name_end
+        while name_start > 0 and (
+            binding[name_start - 1].isalnum() or binding[name_start - 1] == "_"
+        ):
+            name_start -= 1
+        name = binding[name_start:name_end]
+        if not is_tla_operator_name(name):
+            return None
+        return name_start, name, params
+
+    markers: list[tuple[int, int, int, str, frozenset[str]]] = []
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(binding):
         char = binding[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if in_string:
+        if char == '"':
+            in_string = True
             index += 1
             continue
         if binding.startswith("<<", index):
@@ -7021,22 +8360,11 @@ def tla_static_let_binding_definitions(binding: str) -> list[tuple[str, str]] | 
             index += 1
             continue
         if depth == 0 and binding.startswith("==", index):
-            name_end = index
-            while name_end > 0 and binding[name_end - 1].isspace():
-                name_end -= 1
-            name_start = name_end
-            while name_start > 0 and (
-                binding[name_start - 1].isalnum()
-                or binding[name_start - 1] == "_"
-            ):
-                name_start -= 1
-            alias = binding[name_start:name_end]
-            if (
-                TLA_IDENTIFIER_RE.fullmatch(alias) is None
-                or not is_tla_user_identifier(alias)
-            ):
+            signature = signature_before(index)
+            if signature is None:
                 return None
-            markers.append((name_start, name_end, index, alias))
+            name_start, alias, params = signature
+            markers.append((name_start, index, index, alias, params))
             index += 2
             continue
         index += 1
@@ -7044,9 +8372,9 @@ def tla_static_let_binding_definitions(binding: str) -> list[tuple[str, str]] | 
     if not markers or binding[: markers[0][0]].strip():
         return None
 
-    definitions: list[tuple[str, str]] = []
+    definitions: list[TlaLetBinding] = []
     seen_aliases: set[str] = set()
-    for marker_index, (_, _, operator_index, alias) in enumerate(markers):
+    for marker_index, (_, _, operator_index, alias, params) in enumerate(markers):
         if alias in seen_aliases:
             return None
         seen_aliases.add(alias)
@@ -7061,8 +8389,17 @@ def tla_static_let_binding_definitions(binding: str) -> list[tuple[str, str]] | 
         )
         if not operand:
             return None
-        definitions.append((alias, operand))
+        definitions.append(TlaLetBinding(alias, params, operand))
     return definitions
+
+
+def tla_static_let_binding_definitions(binding: str) -> list[tuple[str, str]] | None:
+    """Return simple one-line non-parameterized LET definitions."""
+
+    entries = tla_static_let_binding_entries(binding)
+    if entries is None or any(entry.params for entry in entries):
+        return None
+    return [(entry.name, entry.operand) for entry in entries]
 
 
 def tla_static_resolve_let_alias_result(
@@ -7110,7 +8447,7 @@ def tla_static_substitute_let_alias_references(
     without_strings = tla_without_string_literals(expression)
     if re.search(r"\bLET\b", without_strings):
         return None
-    bound = tla_quantified_bound_identifiers(without_strings)
+    bound = tla_quantified_bound_identifiers(expression)
     if bound & set(alias_operands):
         return None
 
@@ -7118,14 +8455,21 @@ def tla_static_substitute_let_alias_references(
     last_index = 0
     changed = False
     in_string = False
+    escaped = False
     index = 0
     while index < len(expression):
         char = expression[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if in_string:
+        if char == '"':
+            in_string = True
             index += 1
             continue
         match = TLA_IDENTIFIER_SCAN_RE.match(expression, index)
@@ -7696,14 +9040,21 @@ def quantified_formula_prefix_and_body(formula: str) -> tuple[str, str] | None:
         return None
     depth = 0
     in_string = False
+    escaped = False
     index = 0
     while index < len(normalized):
         char = normalized[index]
-        if char == '"':
-            in_string = not in_string
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
             index += 1
             continue
-        if in_string:
+        if char == '"':
+            in_string = True
             index += 1
             continue
         if char in "([{":
@@ -7741,7 +9092,7 @@ def quantified_formula_bound_domains(formula: str) -> dict[str, str]:
     if split is None:
         return {}
     prefix, _ = split
-    prefix = tla_without_string_literals(prefix).strip()
+    prefix = prefix.strip()
     prefix = re.sub(r"^\\[AE]\s+", "", prefix, count=1).strip()
     domains: dict[str, str] = {}
     pending_names: list[str] = []
@@ -7765,6 +9116,26 @@ def quantified_formula_bound_domains(formula: str) -> dict[str, str]:
             ):
                 domains[identifier] = compact_domain
         pending_names = []
+    return domains
+
+
+def quantified_formula_domain_expressions(formula: str) -> list[str]:
+    """Return top-level quantified domain expressions in scan order."""
+
+    split = quantified_formula_prefix_and_body(formula)
+    if split is None:
+        return []
+    prefix, _ = split
+    prefix = prefix.strip()
+    prefix = re.sub(r"^\\[AE]\s+", "", prefix, count=1).strip()
+    domains: list[str] = []
+    for binding in tla_top_level_argument_parts(prefix):
+        membership = tla_top_level_membership_parts(binding)
+        if membership is None or membership[1] != "\\in":
+            continue
+        domain = strip_static_outer_parentheses(" ".join(membership[2].split()))
+        if domain:
+            domains.append(domain)
     return domains
 
 
@@ -7830,6 +9201,19 @@ def tla_top_level_membership_parts(
     return None
 
 
+def tla_top_level_relation_parts(expression: str) -> tuple[str, str, str] | None:
+    """Return top-level relation operands from a static expression."""
+
+    for relation in (
+        tla_top_level_membership_parts(expression),
+        tla_top_level_equality_relation_parts(expression),
+        tla_top_level_order_relation_parts(expression),
+    ):
+        if relation is not None:
+            return relation
+    return None
+
+
 def tla_top_level_equality_relation_parts(
     expression: str,
 ) -> tuple[str, str, str] | None:
@@ -7892,11 +9276,180 @@ def tla_top_level_equality_relation_parts(
     return None
 
 
+def tla_top_level_order_relation_parts(
+    expression: str,
+) -> tuple[str, str, str] | None:
+    """Return top-level ordering relation operands from a static expression."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        for operator in ("<=", ">=", "<", ">"):
+            if not text.startswith(operator, index):
+                continue
+            if operator == "<=":
+                next_char = text[index + 2] if index + 2 < len(text) else ""
+                if next_char == ">":
+                    continue
+            if operator == "<":
+                next_char = text[index + 1] if index + 1 < len(text) else ""
+                if next_char in "<=>":
+                    continue
+            if operator == ">":
+                previous_char = text[index - 1] if index > 0 else ""
+                if previous_char in "<>=":
+                    continue
+            left = text[:index].strip()
+            right = text[index + len(operator) :].strip()
+            if left and right:
+                return left, operator, right
+        index += 1
+    return None
+
+
+def tla_top_level_static_infix_operands(expression: str) -> list[str] | None:
+    """Return operands split by supported top-level static infix operators."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    operands: list[str] = []
+    start = 0
+    found = False
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        matched_operator = None
+        for operator in TLA_STATIC_INFIX_OPERATORS:
+            if not text.startswith(operator, index):
+                continue
+            if not tla_static_infix_operator_is_binary(text, index, operator):
+                continue
+            matched_operator = operator
+            break
+        if matched_operator is None:
+            index += 1
+            continue
+        operand = text[start:index].strip()
+        if not operand:
+            return None
+        operands.append(operand)
+        start = index + len(matched_operator)
+        found = True
+        index = start
+    if not found:
+        return None
+    final_operand = text[start:].strip()
+    if not final_operand:
+        return None
+    operands.append(final_operand)
+    return operands
+
+
+def tla_static_infix_operator_is_binary(text: str, index: int, operator: str) -> bool:
+    """Return whether a supported infix operator occurrence is binary."""
+
+    left = text[:index].strip()
+    right = text[index + len(operator) :].strip()
+    if not left or not right:
+        return False
+    previous = text[index - 1] if index > 0 else ""
+    next_char = text[index + len(operator)] if index + len(operator) < len(text) else ""
+    if operator == "-":
+        if next_char == ">":
+            return False
+        previous_nonspace = left[-1]
+        if previous_nonspace in "([{+-*/%<>=#":
+            return False
+    if operator == "\\":
+        if next_char.isalpha():
+            return False
+    if operator.startswith("\\") and len(operator) > 1:
+        after = text[index + len(operator)] if index + len(operator) < len(text) else ""
+        if after.isalnum() or after == "_":
+            return False
+    if operator == "..":
+        before = text[index - 1] if index > 0 else ""
+        after = text[index + 2] if index + 2 < len(text) else ""
+        if before == "." or after == ".":
+            return False
+    return previous != "\\" or operator.startswith("\\")
+
+
 def tla_explicit_set_elements(expression: str) -> list[str] | None:
     """Return normalized top-level elements from an explicit set literal."""
 
     text = strip_static_outer_parentheses(" ".join(expression.split()))
-    if not (text.startswith("{") and text.endswith("}")):
+    if not tla_outer_curly_braces_enclose_expression(text):
         return None
     inner = text[1:-1].strip()
     if not inner:
@@ -8332,6 +9885,7 @@ def transitive_undefined_quantified_exactness_conjuncts(
 
     undefined: list[str] = []
     seen_messages: set[str] = set()
+    parameter_names = tla_operator_parameter_names(module_path)
 
     def record(root: str, chain: list[str], line: int, reference: str) -> None:
         message = (
@@ -8344,6 +9898,7 @@ def transitive_undefined_quantified_exactness_conjuncts(
         undefined.append(message)
 
     def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        local_bound = parameter_names.get(chain[-1], frozenset())
         for formula in quantified_helper_formulas(body):
             for reference in undefined_static_helper_identifiers(
                 formula,
@@ -8351,6 +9906,7 @@ def transitive_undefined_quantified_exactness_conjuncts(
                 module_path,
                 current=chain[-1],
                 exactness_operator=exactness_operator,
+                local_bound=local_bound,
             ):
                 record(root, chain, line, reference)
 
@@ -8364,6 +9920,8 @@ def transitive_undefined_quantified_exactness_conjuncts(
         line, body = definition
         inspect_body(root, chain, line, body)
         for reference in exactness_helper_references(body):
+            if reference in parameter_names.get(current, frozenset()):
+                continue
             if reference == current or reference == exactness_operator:
                 continue
             if reference not in definitions:
@@ -8631,6 +10189,7 @@ def transitive_undefined_exactness_conjuncts(
         *tla_constant_declarations(module_path),
         *(variable for _, variable in tla_variable_declaration_entries(module_path)),
     }
+    parameter_names = tla_operator_parameter_names(module_path)
 
     def record(root: str, chain: list[str], line: int, reference: str) -> None:
         message = (
@@ -8650,7 +10209,10 @@ def transitive_undefined_exactness_conjuncts(
         if definition is None:
             return
         line, body = definition
+        local_bound = parameter_names.get(current, frozenset())
         for reference in exactness_helper_references(body):
+            if reference in local_bound:
+                continue
             if reference == current or reference == exactness_operator:
                 continue
             if reference in declared_names:
@@ -8859,6 +10421,12 @@ def unary_temporal_parameterized_calls(body: str) -> list[str]:
             collect(let_operand, in_temporal)
             return
 
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, in_temporal)
+            return
+
         negated_operand = tla_static_negation_operand(normalized)
         if negated_operand is not None:
             collect(negated_operand, in_temporal)
@@ -8868,12 +10436,6 @@ def unary_temporal_parameterized_calls(body: str) -> list[str]:
         if temporal_operand is not None:
             collect(temporal_operand, True)
             return
-
-        for part in tla_top_level_boolean_parts(normalized):
-            compact_part = strip_static_outer_parentheses(" ".join(part.split()))
-            if compact_part == normalized:
-                continue
-            collect(part, in_temporal)
 
     collect(body, False)
     return calls
@@ -8965,7 +10527,7 @@ def temporal_extra_definition_shape_errors(
             f"self-inequality {', '.join(self_inequality_parts)}; temporal "
             "correctness-envelope exceptions must stay satisfiable"
         ]
-    identifiers = tla_static_identifiers(body)
+    identifiers = tla_static_non_string_identifiers(body)
     if not identifiers:
         return [
             f"{prefix} at {display_path(module_path)}:{line} has no static "
@@ -9544,6 +11106,34 @@ def tla_unary_temporal_operand(expression: str) -> str | None:
     return operator_operand[1]
 
 
+def tla_unary_action_operand(expression: str) -> str | None:
+    """Return the operand of an ENABLED/UNCHANGED action wrapper, if present."""
+
+    stripped = strip_static_outer_parentheses(expression).strip()
+    match = re.match(r"^(ENABLED|UNCHANGED)\b", stripped)
+    if match is None:
+        return None
+    operand = stripped[match.end() :].strip()
+    if not operand:
+        return None
+    return strip_static_outer_parentheses(operand)
+
+
+def tla_unary_set_operator_operand(expression: str) -> str | None:
+    """Return the operand of a static unary set operator, if present."""
+
+    stripped = strip_static_outer_parentheses(expression).strip()
+    for operator in sorted(TLA_UNARY_SET_OPERATOR_IDENTIFIERS):
+        match = re.match(rf"^{operator}\b", stripped)
+        if match is None:
+            continue
+        operand = stripped[match.end() :].strip()
+        if not operand:
+            return None
+        return strip_static_outer_parentheses(operand)
+    return None
+
+
 def tla_unary_temporal_operator_operand(expression: str) -> tuple[str, str] | None:
     """Return the operator and operand of a static unary temporal formula."""
 
@@ -9691,6 +11281,7 @@ def transitive_undefined_temporal_extra_conjuncts(
         *tla_constant_declarations(module_path),
         *(variable for _, variable in tla_variable_declaration_entries(module_path)),
     }
+    parameter_names = tla_operator_parameter_names(module_path)
 
     def record(root: str, chain: list[str], line: int, reference: str) -> None:
         message = (
@@ -9703,7 +11294,10 @@ def transitive_undefined_temporal_extra_conjuncts(
         undefined.append(message)
 
     def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        local_bound = parameter_names.get(chain[-1], frozenset())
         for reference in temporal_undefined_helper_references(body):
+            if reference in local_bound:
+                continue
             if reference == temporal_operator:
                 continue
             if reference in declared_names:
@@ -9721,6 +11315,8 @@ def transitive_undefined_temporal_extra_conjuncts(
         line, body = definition
         inspect_body(root, chain, line, body)
         for reference in temporal_helper_references(body):
+            if reference in parameter_names.get(current, frozenset()):
+                continue
             if reference == current or reference == temporal_operator:
                 continue
             if reference not in definitions:
@@ -9746,6 +11342,7 @@ def transitive_undefined_quantified_temporal_extra_conjuncts(
 
     undefined: list[str] = []
     seen_messages: set[str] = set()
+    parameter_names = tla_operator_parameter_names(module_path)
 
     def record(root: str, chain: list[str], line: int, reference: str) -> None:
         message = (
@@ -9758,6 +11355,7 @@ def transitive_undefined_quantified_temporal_extra_conjuncts(
         undefined.append(message)
 
     def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        local_bound = parameter_names.get(chain[-1], frozenset())
         for formula in quantified_helper_formulas(body):
             for reference in undefined_static_helper_identifiers(
                 formula,
@@ -9765,6 +11363,7 @@ def transitive_undefined_quantified_temporal_extra_conjuncts(
                 module_path,
                 current=chain[-1],
                 exactness_operator=temporal_operator,
+                local_bound=local_bound,
             ):
                 record(root, chain, line, reference)
 
@@ -9778,6 +11377,8 @@ def transitive_undefined_quantified_temporal_extra_conjuncts(
         line, body = definition
         inspect_body(root, chain, line, body)
         for reference in temporal_helper_references(body):
+            if reference in parameter_names.get(current, frozenset()):
+                continue
             if reference == current or reference == temporal_operator:
                 continue
             if reference not in definitions:
@@ -10827,7 +12428,7 @@ def transitive_vacuous_temporal_extra_conjuncts(
                     f"at {display_path(module_path)}:{line} contains "
                     f"self-inequality {', '.join(self_inequality_parts)}"
                 )
-        body_identifiers = tla_static_identifiers(compact_body)
+        body_identifiers = tla_static_non_string_identifiers(compact_body)
         if (
             len(body_identifiers) == 1
             and compact_body in body_identifiers
@@ -10903,7 +12504,7 @@ def cfg_correctness_envelope_shape_errors(
             )
             continue
         definition_line, body = definition
-        identifiers = tla_static_identifiers(body)
+        identifiers = tla_static_non_string_identifiers(body)
         envelope_conjunct_references = set(tla_zero_arity_conjunct_references(body))
         duplicate_conjuncts = duplicate_zero_arity_conjunct_references(body)
         if duplicate_conjuncts:
@@ -11154,7 +12755,7 @@ def cfg_direct_exactness_envelope_pairing_errors(
             continue
         enveloped_exactness.update(
             identifier
-            for identifier in tla_static_identifiers(definition[1])
+            for identifier in tla_static_non_string_identifiers(definition[1])
             if identifier.endswith("Exactness")
         )
 

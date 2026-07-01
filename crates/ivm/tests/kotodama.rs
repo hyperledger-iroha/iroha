@@ -3153,7 +3153,7 @@ fn parse_transfer_batch_builtin() {
     );
     let transfer_count = instrs
         .iter()
-        .filter(|i| matches!(i, Instr::TransferAsset { .. }))
+        .filter(|i| matches!(i, Instr::TransferBatchAsset { .. }))
         .count();
     assert_eq!(
         transfer_count, 2,

@@ -82,7 +82,8 @@ impl NativeAmxVoteV1 {
         if !peer_uses_bls_normal(&self.signer) {
             return Err(NativeAmxVoteIngressError::SignerNotBlsNormal);
         }
-        Signature::from_bytes(&self.bls_signature)
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| NativeAmxVoteIngressError::InvalidSignature)?
             .verify(self.signer.public_key(), &self.body.signature_preimage())
             .map_err(|_| NativeAmxVoteIngressError::InvalidSignature)
     }
@@ -201,7 +202,9 @@ pub fn aggregate_votes_to_qc(
         if !peer_uses_bls_normal(&vote.signer) {
             return Err(NativeAmxQcBuildError::SignerNotBlsNormal);
         }
-        if Signature::from_bytes(&vote.bls_signature)
+        let signature = Signature::try_from_bytes(&vote.bls_signature)
+            .map_err(|_| NativeAmxQcBuildError::InvalidSignature)?;
+        if signature
             .verify(vote.signer.public_key(), &body.signature_preimage())
             .is_err()
         {
