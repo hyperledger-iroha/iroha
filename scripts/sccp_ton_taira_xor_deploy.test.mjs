@@ -13,6 +13,7 @@ const TON_DESTINATION_BINDING_HASH =
   "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799";
 const TON_TESTNET_CHAIN_ID_HEX =
   "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd";
+const DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO = "100000000";
 
 function hex32(byte) {
   return `0x${Buffer.alloc(32, byte).toString("hex")}`;
@@ -52,25 +53,23 @@ async function fixtureRoot() {
 
 async function writeFixtureFiles(root, overrides = {}) {
   const proofArtifactHash = overrides.proofArtifactHash ?? hex32(0x90);
-  const deploymentEvidence =
-    overrides.deploymentEvidence ?? {
-      schema: "ton-testnet-deployment-evidence/v1",
-      routeId: "taira_ton_xor",
-      contracts: {
-        token: tonRaw(0x11),
-        bridge: tonRaw(0x22),
-        sourceBridge: tonRaw(0x33),
-        verifier: tonRaw(0x44),
-      },
-    };
-  const sourceVerifierMaterial =
-    overrides.sourceVerifierMaterial ?? {
-      schema: "sccp-ton-source-verifier-material/v1",
-      source_domain: 4,
-      target_domain: 0,
-      source_chain: "ton-testnet",
-      masterchainConfigHash: hex32(0x45),
-    };
+  const deploymentEvidence = overrides.deploymentEvidence ?? {
+    schema: "ton-testnet-deployment-evidence/v1",
+    routeId: "taira_ton_xor",
+    contracts: {
+      token: tonRaw(0x11),
+      bridge: tonRaw(0x22),
+      sourceBridge: tonRaw(0x33),
+      verifier: tonRaw(0x44),
+    },
+  };
+  const sourceVerifierMaterial = overrides.sourceVerifierMaterial ?? {
+    schema: "sccp-ton-source-verifier-material/v1",
+    source_domain: 4,
+    target_domain: 0,
+    source_chain: "ton-testnet",
+    masterchainConfigHash: hex32(0x45),
+  };
   const sourceAdapterEngineDeployment =
     overrides.sourceAdapterEngineDeployment ?? {
       schema: "sccp-ton-source-adapter-engine-deployment/v1",
@@ -88,24 +87,22 @@ async function writeFixtureFiles(root, overrides = {}) {
     bound_proof_hash: proofArtifactHash,
     ...extra,
   });
-  const tairaContract =
-    overrides.tairaContract ?? {
-      settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      contractArtifactB64: Buffer.alloc(32, 0x5a).toString("base64"),
-      artifactSha256: hex32(0x51),
-      codeHash: hex32(0x52),
-      vkRef: {
-        backend: "halo2/ipa",
-        name: "taira_xor_burn_record_v1",
-      },
-      gasLimit: 2_000_000,
-    };
-  const offlineFullTomlEvidence =
-    overrides.offlineFullTomlEvidence ?? {
-      schema: "taira-full-config-evidence/v1",
-      routeId: "taira_ton_xor",
-      fullTomlSha256: hex32(0x53),
-    };
+  const tairaContract = overrides.tairaContract ?? {
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    contractArtifactB64: Buffer.alloc(32, 0x5a).toString("base64"),
+    artifactSha256: hex32(0x51),
+    codeHash: hex32(0x52),
+    vkRef: {
+      backend: "halo2/ipa",
+      name: "taira_xor_burn_record_v1",
+    },
+    gasLimit: 2_000_000,
+  };
+  const offlineFullTomlEvidence = overrides.offlineFullTomlEvidence ?? {
+    schema: "taira-full-config-evidence/v1",
+    routeId: "taira_ton_xor",
+    fullTomlSha256: hex32(0x53),
+  };
 
   const paths = {
     deploymentEvidence: join(root, "deployment-evidence.json"),
@@ -151,6 +148,9 @@ function routeManifestArgs(paths, proofArtifactHash, extra = {}) {
     extra.sourceBridge ?? tonRaw(0x33),
     "--verifier",
     extra.verifier ?? tonRaw(0x44),
+    "--ton-finalize-message-value-nano",
+    extra.tonFinalizeMessageValueNano ??
+      DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
     "--verifier-code-hash",
     extra.verifierCodeHash ?? hex32(0x81),
     "--verifier-key-hash",
@@ -206,6 +206,10 @@ test("TON route manifest renders production-ready offline evidence", async () =>
   assert.equal(summary.assetKey, "xor");
   assert.equal(summary.productionReady, true);
   assert.equal(summary.destinationBindingHash, TON_DESTINATION_BINDING_HASH);
+  assert.equal(
+    summary.tonFinalizeMessageValueNano,
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
 
   const envelope = JSON.parse(await readFile(paths.out, "utf8"));
   assert.equal(
@@ -218,6 +222,10 @@ test("TON route manifest renders production-ready offline evidence", async () =>
   assert.equal(envelope.manifest.chain, "ton-testnet");
   assert.equal(envelope.manifest.chain_id_hex, TON_TESTNET_CHAIN_ID_HEX);
   assert.equal(envelope.manifest.network_id_hex, TON_TESTNET_CHAIN_ID_HEX);
+  assert.equal(
+    envelope.manifest.ton_finalize_message_value_nano,
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
   assert.equal(envelope.manifest.production_ready, true);
   assert.equal(envelope.manifest.disabled_reason, undefined);
   assert.equal(
@@ -260,8 +268,15 @@ test("TON publish-route-manifest writes a reviewable ISI artifact without submit
   assert.equal(artifact.routeId, "taira_ton_xor");
   assert.equal(artifact.requiredPermission, "CanManageSccpRouteManifests");
   assert.equal(artifact.productionReady, true);
+  assert.equal(
+    artifact.tonFinalizeMessageValueNano,
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
   assert.equal(artifact.submission, undefined);
-  assert.equal(artifact.instruction.UpsertSccpRouteManifest.manifest.route_id, "taira_ton_xor");
+  assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest.route_id,
+    "taira_ton_xor",
+  );
 });
 
 test("TON route manifest rejects non-canonical TON addresses before writing", async () => {
@@ -269,12 +284,33 @@ test("TON route manifest rejects non-canonical TON addresses before writing", as
   const { paths, proofArtifactHash } = await writeFixtureFiles(root);
   const result = runTonCli(
     routeManifestArgs(paths, proofArtifactHash, {
-      token: "0:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      token:
+        "0:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     }),
   );
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /--token must be canonical lowercase TON raw address text/u);
+  assert.match(
+    result.stderr,
+    /--token must be canonical lowercase TON raw address text/u,
+  );
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest rejects missing finalize message value", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const result = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      tonFinalizeMessageValueNano: "0",
+    }),
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /--ton-finalize-message-value-nano must be a positive integer decimal string/u,
+  );
   await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
 });
 

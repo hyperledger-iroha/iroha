@@ -33,19 +33,19 @@ const TON_TESTNET_EXPLORER_URL = "https://testnet.tonscan.org";
 const TON_DESTINATION_BINDING_KEY = "sccp:0:4:ton:ton-contract-v1:3";
 const TON_DESTINATION_BINDING_HASH =
   "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799";
+const DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO = "100000000";
 const TON_COUNTERPARTY_DOMAIN = 4;
 const TON_COUNTERPARTY_ACCOUNT_CODEC = 4;
 const TON_COUNTERPARTY_ACCOUNT_CODEC_KEY = "ton_raw";
 const TON_VERIFIER_TARGET = "TonContract";
-const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID =
-  "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const TAIRA_BURN_RECORD_VK_BACKEND = "halo2/ipa";
 const TAIRA_BURN_RECORD_VK_NAME = "taira_xor_burn_record_v1";
 const TAIRA_BURN_RECORD_GAS_LIMIT = 2_000_000;
 
 function usage(command = "") {
   const common = `Usage:
-  node scripts/sccp_ton_taira_xor_deploy.mjs route-manifest --token <0:...> --bridge <0:...> --source-bridge <0:...> --verifier <0:...> --verifier-code-hash <0x...> --verifier-key-hash <0x...> --proof-artifact-hash <0x...> --proving-key-hash <0x...> --deployment-evidence <public-json> --source-verifier-material <public-json> --source-adapter-engine-deployment <public-json> --destination-browser-prover-manifest <public-json> --source-browser-prover-manifest <public-json> --taira-contract <public-json> --post-deploy-source-bridge-config-hash <0x...> --post-deploy-source-event-transaction-id <0x...> --post-deploy-route-canary-evidence-hash <0x...> --post-deploy-route-canary-transaction-id <0x...> --offline-full-toml-evidence <public-json-or-toml> [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_ton_taira_xor_deploy.mjs route-manifest --token <0:...> --bridge <0:...> --source-bridge <0:...> --verifier <0:...> --verifier-code-hash <0x...> --verifier-key-hash <0x...> --proof-artifact-hash <0x...> --proving-key-hash <0x...> --deployment-evidence <public-json> --source-verifier-material <public-json> --source-adapter-engine-deployment <public-json> --destination-browser-prover-manifest <public-json> --source-browser-prover-manifest <public-json> --taira-contract <public-json> --post-deploy-source-bridge-config-hash <0x...> --post-deploy-source-event-transaction-id <0x...> --post-deploy-route-canary-evidence-hash <0x...> --post-deploy-route-canary-transaction-id <0x...> --offline-full-toml-evidence <public-json-or-toml> [--ton-finalize-message-value-nano ${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_ton_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --authority <taira-route-manifest-manager-account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${TAIRA_CHAIN_ID}] [--wait-for-commit true|false] [--commit-timeout-ms ${DEFAULT_COMMIT_TIMEOUT_MS}]
 
 Commands:
@@ -113,12 +113,7 @@ function optionEnabled(options, key, fallback = false) {
   if (value === true || value === "true" || value === "1" || value === "yes") {
     return true;
   }
-  if (
-    value === false ||
-    value === "false" ||
-    value === "0" ||
-    value === "no"
-  ) {
+  if (value === false || value === "false" || value === "0" || value === "no") {
     return false;
   }
   throw new Error(`--${key} must be true or false.`);
@@ -135,6 +130,15 @@ function normalizePositiveInteger(value, label, fallback = null) {
     throw new Error(`${label} must be a positive integer.`);
   }
   return parsed;
+}
+
+function normalizePositiveDecimalString(value, label, fallback = null) {
+  const candidate = value ?? fallback;
+  const text = String(candidate ?? "").trim();
+  if (!/^[1-9][0-9]*$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer decimal string.`);
+  }
+  return text;
 }
 
 function normalizeHex32(value, label, { nonzero = true } = {}) {
@@ -160,7 +164,9 @@ function normalizeTonRawAddress(value, label) {
   }
   const text = value.trim();
   if (text !== value || text !== text.toLowerCase()) {
-    throw new Error(`${label} must be canonical lowercase TON raw address text.`);
+    throw new Error(
+      `${label} must be canonical lowercase TON raw address text.`,
+    );
   }
   const match = text.match(/^0:([0-9a-f]{64})$/u);
   if (!match) {
@@ -301,12 +307,16 @@ function normalizeModuleUrl(value, label) {
     throw new Error(`${label} must be a deterministic module URL.`);
   }
   if (/[?#\\]/u.test(value) || value.includes("\0")) {
-    throw new Error(`${label} must not include credentials, query, fragment, or escapes.`);
+    throw new Error(
+      `${label} must not include credentials, query, fragment, or escapes.`,
+    );
   }
   if (/^https:\/\//u.test(value)) {
     const url = new URL(value);
     if (url.username || url.password || url.search || url.hash) {
-      throw new Error(`${label} must not include credentials, query, or fragment.`);
+      throw new Error(
+        `${label} must not include credentials, query, or fragment.`,
+      );
     }
     return value;
   }
@@ -319,15 +329,21 @@ function normalizeModuleUrl(value, label) {
       host === "::1" ||
       host.endsWith(".localhost");
     if (!loopback || url.username || url.password || url.search || url.hash) {
-      throw new Error(`${label} http URLs must be loopback and credential-free.`);
+      throw new Error(
+        `${label} http URLs must be loopback and credential-free.`,
+      );
     }
     return value;
   }
   if (/^[a-z][a-z0-9+.-]*:/iu.test(value) || value.startsWith("//")) {
-    throw new Error(`${label} must be HTTPS, loopback HTTP, or package-relative.`);
+    throw new Error(
+      `${label} must be HTTPS, loopback HTTP, or package-relative.`,
+    );
   }
   if (!/^(?:\.{0,2}\/|\/|@?[A-Za-z0-9_-])[-A-Za-z0-9_@./]*$/u.test(value)) {
-    throw new Error(`${label} must be package-relative, HTTPS, or loopback HTTP.`);
+    throw new Error(
+      `${label} must be package-relative, HTTPS, or loopback HTTP.`,
+    );
   }
   if (value.split("/").includes("..")) {
     throw new Error(`${label} must not traverse parent directories.`);
@@ -374,10 +390,14 @@ function normalizeBrowserProverRef(record, label, proofArtifactHash) {
     `${label}.bound_proof_hash`,
   );
   if (boundRouteHash !== TON_DESTINATION_BINDING_HASH) {
-    throw new Error(`${label}.bound_route_hash must match the TON destination binding hash.`);
+    throw new Error(
+      `${label}.bound_route_hash must match the TON destination binding hash.`,
+    );
   }
   if (boundProofHash !== proofArtifactHash) {
-    throw new Error(`${label}.bound_proof_hash must match proof_artifact_hash.`);
+    throw new Error(
+      `${label}.bound_proof_hash must match proof_artifact_hash.`,
+    );
   }
   return {
     module_url: moduleUrl,
@@ -411,7 +431,9 @@ function rejectSecretLikeMaterial(value, label) {
     }
     for (const [key, entry] of Object.entries(current.value)) {
       if (secretKeyPattern.test(key)) {
-        throw new Error(`${current.path}.${key} looks secret-like; remove it before publishing.`);
+        throw new Error(
+          `${current.path}.${key} looks secret-like; remove it before publishing.`,
+        );
       }
       stack.push({ value: entry, path: `${current.path}.${key}` });
     }
@@ -444,14 +466,21 @@ function normalizeTairaContractMaterial(raw) {
       ),
     "TAIRA burn-record settlement asset definition id",
   );
-  if (settlementAssetDefinitionId !== TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID) {
+  if (
+    settlementAssetDefinitionId !== TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
+  ) {
     throw new Error(
       `TAIRA burn-record settlement asset must be ${TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID}.`,
     );
   }
   const vkRef =
-    firstRecord(contract, "vk_ref", "vkRef", "verifying_key_ref", "verifyingKeyRef") ??
-    {};
+    firstRecord(
+      contract,
+      "vk_ref",
+      "vkRef",
+      "verifying_key_ref",
+      "verifyingKeyRef",
+    ) ?? {};
   const vkBackend =
     firstString(vkRef, "backend", "proof_backend", "proofBackend") ||
     firstString(contract, "vk_backend", "vkBackend");
@@ -538,10 +567,14 @@ function normalizeTonRouteManifestForPublication(input) {
     throw new Error("TON route manifest network_id_hex must be TON testnet.");
   }
   if (manifest.destination_binding_key !== TON_DESTINATION_BINDING_KEY) {
-    throw new Error("TON route manifest destination_binding_key is not canonical.");
+    throw new Error(
+      "TON route manifest destination_binding_key is not canonical.",
+    );
   }
   if (manifest.destination_binding_hash !== TON_DESTINATION_BINDING_HASH) {
-    throw new Error("TON route manifest destination_binding_hash is not canonical.");
+    throw new Error(
+      "TON route manifest destination_binding_hash is not canonical.",
+    );
   }
   for (const [key, label] of [
     ["taira_xor_token_address", "TON TairaXOR token address"],
@@ -559,8 +592,15 @@ function normalizeTonRouteManifestForPublication(input) {
       manifest.destination_verifier_address,
     ]).size !== 4
   ) {
-    throw new Error("TON token, bridge, source bridge, and verifier addresses must be distinct.");
+    throw new Error(
+      "TON token, bridge, source bridge, and verifier addresses must be distinct.",
+    );
   }
+  manifest.ton_finalize_message_value_nano = normalizePositiveDecimalString(
+    manifest.ton_finalize_message_value_nano,
+    "TON finalize message value in nanoTON",
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
   manifest.verifier_code_hash = normalizeHex32(
     manifest.verifier_code_hash,
     "TON verifier code hash",
@@ -619,18 +659,40 @@ function normalizeTonRouteManifestForPublication(input) {
   if (manifest.production_ready !== true) {
     throw new Error("TON route manifest production_ready must be true.");
   }
-  if (manifest.disabled_reason !== undefined && manifest.disabled_reason !== null) {
-    throw new Error("Production TON route manifest must not carry disabled_reason.");
+  if (
+    manifest.disabled_reason !== undefined &&
+    manifest.disabled_reason !== null
+  ) {
+    throw new Error(
+      "Production TON route manifest must not carry disabled_reason.",
+    );
   }
   if (manifest.post_deploy_full_toml_ready !== true) {
-    throw new Error("TON route manifest post_deploy_full_toml_ready must be true.");
+    throw new Error(
+      "TON route manifest post_deploy_full_toml_ready must be true.",
+    );
   }
   for (const [key, label] of [
-    ["post_deploy_source_bridge_config_hash", "post-deploy source bridge config hash"],
-    ["post_deploy_source_event_transaction_id", "post-deploy source event transaction id"],
-    ["post_deploy_route_canary_evidence_hash", "post-deploy route canary evidence hash"],
-    ["post_deploy_route_canary_transaction_id", "post-deploy route canary transaction id"],
-    ["post_deploy_offline_full_toml_sha256", "post-deploy offline full TOML sha256"],
+    [
+      "post_deploy_source_bridge_config_hash",
+      "post-deploy source bridge config hash",
+    ],
+    [
+      "post_deploy_source_event_transaction_id",
+      "post-deploy source event transaction id",
+    ],
+    [
+      "post_deploy_route_canary_evidence_hash",
+      "post-deploy route canary evidence hash",
+    ],
+    [
+      "post_deploy_route_canary_transaction_id",
+      "post-deploy route canary transaction id",
+    ],
+    [
+      "post_deploy_offline_full_toml_sha256",
+      "post-deploy offline full TOML sha256",
+    ],
   ]) {
     manifest[key] = normalizeHex32(manifest[key], label);
   }
@@ -643,7 +705,10 @@ async function commandRouteManifest(options) {
     "--proof-artifact-hash",
   );
   const tairaContract = normalizeTairaContractMaterial(
-    await readJson(requireOption(options, "taira-contract"), "TAIRA burn-record contract"),
+    await readJson(
+      requireOption(options, "taira-contract"),
+      "TAIRA burn-record contract",
+    ),
   );
   const sourceVerifierMaterial = normalizePublicJsonRecord(
     await readJson(
@@ -709,6 +774,11 @@ async function commandRouteManifest(options) {
       requireOption(options, "verifier"),
       "--verifier",
     ),
+    ton_finalize_message_value_nano: normalizePositiveDecimalString(
+      options["ton-finalize-message-value-nano"],
+      "--ton-finalize-message-value-nano",
+      DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+    ),
     verifier_code_hash: normalizeHex32(
       requireOption(options, "verifier-code-hash"),
       "--verifier-code-hash",
@@ -771,11 +841,14 @@ async function commandRouteManifest(options) {
           "TON offline full TOML evidence",
         ),
   });
-  const out = await writeJsonNoSecrets(options.out ?? DEFAULT_ROUTE_MANIFEST_OUT, {
-    schema: ROUTE_MANIFEST_SCHEMA,
-    generated_at_ms: Date.now(),
-    manifest,
-  });
+  const out = await writeJsonNoSecrets(
+    options.out ?? DEFAULT_ROUTE_MANIFEST_OUT,
+    {
+      schema: ROUTE_MANIFEST_SCHEMA,
+      generated_at_ms: Date.now(),
+      manifest,
+    },
+  );
   return {
     ok: true,
     wrote: out,
@@ -783,6 +856,7 @@ async function commandRouteManifest(options) {
     assetKey: manifest.asset_key,
     productionReady: manifest.production_ready,
     destinationBindingHash: manifest.destination_binding_hash,
+    tonFinalizeMessageValueNano: manifest.ton_finalize_message_value_nano,
     deploymentEvidenceSha256: manifest.deployment_evidence_sha256,
     nextStep:
       "Review the manifest, publish it with publish-route-manifest, then rerun the public TAIRA TON preflight before UI smoke.",
@@ -812,6 +886,7 @@ async function commandPublishRouteManifest(options) {
     instruction,
     manifestSha256: sha256HexJson(manifest),
     productionReady: manifest.production_ready,
+    tonFinalizeMessageValueNano: manifest.ton_finalize_message_value_nano,
     destinationBrowserProverManifestHash:
       manifest.destination_browser_prover.manifest_hash,
     sourceBrowserProverManifestHash:
@@ -837,7 +912,9 @@ async function commandPublishRouteManifest(options) {
     options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV;
   const privateKeyHex = process.env[privateKeyEnv];
   if (typeof privateKeyHex !== "string" || privateKeyHex.trim() === "") {
-    throw new Error(`${privateKeyEnv} must be set at runtime for --submit true.`);
+    throw new Error(
+      `${privateKeyEnv} must be set at runtime for --submit true.`,
+    );
   }
   const privateKey = Buffer.from(
     normalizePrivateKeyHex(privateKeyHex, privateKeyEnv).slice(2),
@@ -847,7 +924,9 @@ async function commandPublishRouteManifest(options) {
   if (chainId !== TAIRA_CHAIN_ID) {
     throw new Error(`--chain-id must be ${TAIRA_CHAIN_ID} for TAIRA.`);
   }
-  const toriiUrl = normalizeToriiUrl(options["torii-url"] ?? DEFAULT_TAIRA_TORII_URL);
+  const toriiUrl = normalizeToriiUrl(
+    options["torii-url"] ?? DEFAULT_TAIRA_TORII_URL,
+  );
   const waitForCommit = optionEnabled(options, "wait-for-commit", true);
   const timeoutMs = normalizePositiveInteger(
     options["commit-timeout-ms"],
@@ -857,7 +936,9 @@ async function commandPublishRouteManifest(options) {
   const { buildUpsertSccpRouteManifestTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
-  const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
   const transaction = buildUpsertSccpRouteManifestTransaction({
     chainId,
     authority,
@@ -909,7 +990,9 @@ function normalizePrivateKeyHex(value, label) {
   const text = value.trim();
   const prefixed = text.startsWith("0x") ? text : `0x${text}`;
   if (!/^0x[0-9a-fA-F]{64}(?:[0-9a-fA-F]{64})?$/u.test(prefixed)) {
-    throw new Error(`${label} must contain a 32- or 64-byte Ed25519 private key.`);
+    throw new Error(
+      `${label} must contain a 32- or 64-byte Ed25519 private key.`,
+    );
   }
   return `0x${prefixed.slice(2).toLowerCase()}`;
 }
@@ -920,7 +1003,9 @@ function normalizeToriiUrl(value) {
     throw new Error("--torii-url must be an HTTP(S) URL.");
   }
   if (url.username || url.password || url.search || url.hash) {
-    throw new Error("--torii-url must not include credentials, query, or fragment.");
+    throw new Error(
+      "--torii-url must not include credentials, query, or fragment.",
+    );
   }
   return url.toString().replace(/\/$/u, "");
 }
