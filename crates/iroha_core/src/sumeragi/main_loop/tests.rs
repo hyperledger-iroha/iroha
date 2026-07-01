@@ -146844,6 +146844,148 @@ async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_vote_loc
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_prioritizes_vote_locked_owner_over_current_view_proposal_seen() {
+    use std::borrow::Cow;
+
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    actor.highest_qc = Some(highest_qc);
+
+    let height = highest_qc.height.saturating_add(1);
+    let owner_view = 0_u64;
+    let topology_len = actor.effective_commit_topology().len();
+    let search_limit = u64::try_from(topology_len.saturating_mul(8))
+        .unwrap_or(8)
+        .max(2);
+    let current_view = (owner_view.saturating_add(1)..=search_limit)
+        .find(|candidate_view| actor.local_is_round_leader(height, *candidate_view))
+        .expect("find a later view where local peer is leader");
+    let now = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, now);
+    actor.mark_proposal_liveness_state(
+        height,
+        current_view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        now,
+    );
+
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(parent_hash),
+    );
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    let commit_topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = commit_topology.min_votes_for_commit().max(1);
+    assert!(required >= 3, "test requires remote near-quorum votes");
+    let seeded = seed_cached_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        height,
+        owner_view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup requires remote near-quorum evidence on the lower-view owner"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, current_view)
+            .is_some_and(|(hash, view)| hash == owner_hash && view == owner_view),
+        "same-height vote lock should keep the lower-view owner live for the current view"
+    );
+
+    let current_block = block_with_txs(
+        height,
+        current_view,
+        Some(parent_hash),
+        vec![sample_transaction(), sample_transaction()],
+    );
+    let current_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&current_block));
+    actor.note_proposal_seen(height, current_view, current_payload_hash);
+    assert!(
+        actor.slot_has_proposal_evidence(height, current_view),
+        "regression setup requires exact-view proposal evidence"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&owner_hash)
+            .expect("owner pending block exists")
+            .local_commit_vote_emitted(),
+        "local vote should not be emitted before pacemaker evaluates the recovery branch"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "exact-view proposal evidence must not let the pacemaker build a conflicting branch"
+    );
+    assert!(
+        actor
+            .local_same_height_vote(height, actor.epoch_for_height(height))
+            .as_ref()
+            .is_some_and(|vote| {
+                vote.block_hash == owner_hash
+                    && vote.view == owner_view
+                    && matches!(vote.phase, Phase::Commit)
+            }),
+        "pacemaker should progress the lower-view vote-locked owner before waiting on exact-view proposal evidence"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, current_view)
+            .is_none(),
+        "current-view proposal evidence should not be rebuilt while the lower owner is vote-locked"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn later_view_block_created_becomes_passive_when_frontier_owner_has_vote_locked_commit_evidence()
  {
     let _commit_history_guard = isolate_commit_history_state();

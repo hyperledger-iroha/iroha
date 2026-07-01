@@ -4915,6 +4915,100 @@ impl Actor {
         progressed
     }
 
+    fn same_height_frontier_owner_blocks_proposal(
+        &mut self,
+        height: u64,
+        view_idx: u64,
+        pending_queue_len: usize,
+        now: Instant,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> bool {
+        let Some((owner_hash, owner_view)) = self
+            .frontier_slot_live_local_owner_for_round(height, view_idx)
+            .filter(|(_, owner_view)| *owner_view < view_idx)
+        else {
+            return false;
+        };
+        let stale_local_commit_vote_allows_owner_clear = self
+            .stale_local_commit_vote_allows_frontier_owner_clear_for_proposal_assembly(
+                height, view_idx, owner_hash, owner_view, now, highest_qc,
+            );
+        if self.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            height,
+            view_idx,
+            owner_hash,
+            owner_view,
+            now,
+            pending_queue_len,
+        ) {
+            debug!(
+                height,
+                view = view_idx,
+                owner = %owner_hash,
+                owner_view,
+                queue_len = pending_queue_len,
+                "stale same-height frontier owner yielded; continuing fresh proposal assembly"
+            );
+            false
+        } else if stale_local_commit_vote_allows_owner_clear {
+            let dropped =
+                self.drop_stale_pending_block_for_fresh_proposal(owner_hash, height, owner_view);
+            if self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height && slot.view == owner_view && slot.block_hash == owner_hash
+            }) {
+                self.frontier_slot = None;
+            }
+            info!(
+                height,
+                view = view_idx,
+                owner = %owner_hash,
+                owner_view,
+                queue_len = pending_queue_len,
+                dropped_tx_count = dropped.map(|(tx_count, _, _, _)| tx_count),
+                "cleared stale same-height frontier owner for fresh proposal assembly after missing-QC repair"
+            );
+            false
+        } else {
+            let progressed = self.maybe_progress_existing_slot_proposal(
+                height,
+                owner_view,
+                pending_queue_len,
+                now,
+                "same_height_owner_live",
+            );
+            if !progressed {
+                self.nudge_frontier_recovery_proposal_retry(now);
+            }
+            if pending_queue_len > 0 {
+                debug!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    queue_len = pending_queue_len,
+                    "same-height frontier owner is still locally live for this round; deferring reassembly"
+                );
+            } else {
+                trace!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    "same-height frontier owner is still locally live for this round; deferring reassembly"
+                );
+            }
+            self.warn_resilience_frontier_proposal_deferred(
+                height,
+                view_idx,
+                "same_height_owner_live",
+                highest_qc,
+                pending_queue_len,
+                now,
+            );
+            true
+        }
+    }
+
     fn stale_proposals_seen_only_slot_allows_recovery_rotation(
         &self,
         height: u64,
@@ -6617,6 +6711,16 @@ impl Actor {
             );
         }
 
+        if self.same_height_frontier_owner_blocks_proposal(
+            height,
+            view_idx,
+            pending_queue_len,
+            now,
+            highest_qc,
+        ) {
+            return false;
+        }
+
         if let Some(block_hash) = self.authoritative_slot_owner_hash(height, view_idx) {
             let progressed = self.maybe_progress_existing_slot_proposal(
                 height,
@@ -6774,107 +6878,6 @@ impl Actor {
                 now,
             );
             return false;
-        }
-
-        if let Some((owner_hash, owner_view)) = self
-            .frontier_slot_live_local_owner_for_round(height, view_idx)
-            .filter(|(_, owner_view)| *owner_view < view_idx)
-        {
-            let stale_local_commit_vote_allows_owner_clear = self
-                .stale_local_commit_vote_allows_frontier_owner_clear_for_proposal_assembly(
-                    height, view_idx, owner_hash, owner_view, now, highest_qc,
-                );
-            if self.maybe_yield_stale_frontier_owner_for_fresh_proposal(
-                height,
-                view_idx,
-                owner_hash,
-                owner_view,
-                now,
-                pending_queue_len,
-            ) {
-                debug!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    queue_len = pending_queue_len,
-                    "stale same-height frontier owner yielded; continuing fresh proposal assembly"
-                );
-            } else if stale_local_commit_vote_allows_owner_clear {
-                let dropped = self
-                    .drop_stale_pending_block_for_fresh_proposal(owner_hash, height, owner_view);
-                if self.frontier_slot.as_ref().is_some_and(|slot| {
-                    slot.height == height
-                        && slot.view == owner_view
-                        && slot.block_hash == owner_hash
-                }) {
-                    self.frontier_slot = None;
-                }
-                info!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    queue_len = pending_queue_len,
-                    dropped_tx_count = dropped.map(|(tx_count, _, _, _)| tx_count),
-                    "cleared stale same-height frontier owner for fresh proposal assembly after missing-QC repair"
-                );
-            } else if pending_queue_len > 0 {
-                let progressed = self.maybe_progress_existing_slot_proposal(
-                    height,
-                    owner_view,
-                    pending_queue_len,
-                    now,
-                    "same_height_owner_live",
-                );
-                if !progressed {
-                    self.nudge_frontier_recovery_proposal_retry(now);
-                }
-                debug!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    queue_len = pending_queue_len,
-                    "same-height frontier owner is still locally live for this round; deferring reassembly"
-                );
-                self.warn_resilience_frontier_proposal_deferred(
-                    height,
-                    view_idx,
-                    "same_height_owner_live",
-                    highest_qc,
-                    pending_queue_len,
-                    now,
-                );
-                return false;
-            } else {
-                let progressed = self.maybe_progress_existing_slot_proposal(
-                    height,
-                    owner_view,
-                    pending_queue_len,
-                    now,
-                    "same_height_owner_live",
-                );
-                if !progressed {
-                    self.nudge_frontier_recovery_proposal_retry(now);
-                }
-                trace!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    "same-height frontier owner is still locally live for this round; deferring reassembly"
-                );
-                self.warn_resilience_frontier_proposal_deferred(
-                    height,
-                    view_idx,
-                    "same_height_owner_live",
-                    highest_qc,
-                    pending_queue_len,
-                    now,
-                );
-                return false;
-            }
         }
 
         if height == self.committed_height_snapshot().saturating_add(1)

@@ -1547,10 +1547,12 @@ final class TxBuilderTests: XCTestCase {
     func testBuildSignedTransferWithValidationFeeCreatesTwoInstructionEnvelopeWithPolicyMetadata() throws {
         let keypair = try makeFixtureKeypair()
         let sponsorKeypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let feeSponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
-        let destination = AccountId.make(publicKey: Data(repeating: 0x33, count: 32))
-        let treasury = AccountId.make(publicKey: Data(repeating: 0x44, count: 32))
+        let destinationKeypair = try Keypair.generate()
+        let treasuryKeypair = try Keypair.generate()
+        let authority = try AccountId.makeI105(publicKey: keypair.publicKey)
+        let feeSponsor = try AccountId.makeI105(publicKey: sponsorKeypair.publicKey)
+        let destination = try AccountId.makeI105(publicKey: destinationKeypair.publicKey)
+        let treasury = try AccountId.makeI105(publicKey: treasuryKeypair.publicKey)
         let policyHash = String(repeating: "AB", count: 32)
         let principal = TransferRequest(chainId: Self.fixtureChainId,
                                         authority: authority,
@@ -1593,6 +1595,45 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertTrue(json.contains(feeSponsor), json)
         XCTAssertTrue(json.contains("\"memo\""), json)
         XCTAssertTrue(json.contains("invoice-123"), json)
+    }
+
+    func testBuildSignedTransferWithValidationFeePreservesExplicitMemoMetadata() throws {
+        let keypair = try makeFixtureKeypair()
+        let destinationKeypair = try Keypair.generate()
+        let treasuryKeypair = try Keypair.generate()
+        let authority = try AccountId.makeI105(publicKey: keypair.publicKey)
+        let destination = try AccountId.makeI105(publicKey: destinationKeypair.publicKey)
+        let treasury = try AccountId.makeI105(publicKey: treasuryKeypair.publicKey)
+        let descriptionMemo = "description-memo"
+        let explicitMemo = "explicit-memo"
+        let principal = TransferRequest(chainId: Self.fixtureChainId,
+                                        authority: authority,
+                                        assetDefinitionId: "\(Self.fixtureAssetDefinition)#dataspace:42",
+                                        quantity: "12.34",
+                                        destination: destination,
+                                        description: descriptionMemo,
+                                        ttlMs: 120_000,
+                                        nonce: 10)
+        let request = ValidationFeeTransferRequest(
+            principal: principal,
+            feeQuantity: "0.10",
+            treasuryAccountId: treasury,
+            policyVersion: 7,
+            policyHashHex: String(repeating: "ab", count: 32),
+            transactionMetadata: ["memo": .string(explicitMemo)]
+        )
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
+
+        let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
+
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native decoder not linked")
+        }
+        let json = try XCTUnwrap(sdk.decodeSignedTransaction(envelope: envelope))
+        XCTAssertTrue(json.contains("\"memo\""), json)
+        XCTAssertTrue(json.contains(explicitMemo), json)
+        XCTAssertFalse(json.contains(descriptionMemo), json)
     }
 
     func testBuildSignedTransferWithValidationFeeRejectsMalformedPolicyHash() throws {
