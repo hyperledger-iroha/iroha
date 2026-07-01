@@ -277,6 +277,24 @@ test("TON publish-route-manifest writes a reviewable ISI artifact without submit
     artifact.instruction.UpsertSccpRouteManifest.manifest.route_id,
     "taira_ton_xor",
   );
+  assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest
+      .sccp_tron_source_bridge_address,
+    tonRaw(0x33),
+  );
+  assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest.tron_verifier_address,
+    tonRaw(0x44),
+  );
+  assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest.source_bridge_address,
+    undefined,
+  );
+  assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest
+      .destination_verifier_address,
+    undefined,
+  );
 });
 
 test("TON route manifest rejects non-canonical TON addresses before writing", async () => {

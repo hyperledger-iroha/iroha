@@ -71,6 +71,8 @@ pub struct SccpRouteManifest {
     pub sccp_tron_source_bridge_address: String,
     /// Destination verifier contract address.
     pub tron_verifier_address: String,
+    /// TON verifier internal message value in nanoTON.
+    pub ton_finalize_message_value_nano: Option<String>,
     /// Hex-encoded verifier code digest.
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
@@ -459,6 +461,7 @@ mod tests {
             sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
                 .to_owned(),
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: hex(0x45),
             verifier_key_hash: hex(0x46),
             proof_artifact_hash: Some(hex(0x47)),

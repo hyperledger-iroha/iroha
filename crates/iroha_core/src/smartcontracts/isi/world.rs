@@ -9449,6 +9449,7 @@ pub mod isi {
             destination_verifier_address: None,
             verifier_address: None,
             sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
+            ton_finalize_message_value_nano: manifest.ton_finalize_message_value_nano,
             bsc_verifier_address: None,
             evm_verifier_address: None,
             tron_verifier_address: (!is_bsc).then_some(verifier_address),

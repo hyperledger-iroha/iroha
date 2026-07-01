@@ -579,11 +579,25 @@ function normalizeTonRouteManifestForPublication(input) {
   for (const [key, label] of [
     ["taira_xor_token_address", "TON TairaXOR token address"],
     ["taira_xor_bridge_address", "TON bridge address"],
-    ["source_bridge_address", "TON source bridge address"],
-    ["destination_verifier_address", "TON verifier address"],
   ]) {
     manifest[key] = normalizeTonRawAddress(manifest[key], label);
   }
+  manifest.source_bridge_address = normalizeTonRawAddress(
+    firstString(
+      manifest,
+      "source_bridge_address",
+      "sccp_tron_source_bridge_address",
+    ),
+    "TON source bridge address",
+  );
+  manifest.destination_verifier_address = normalizeTonRawAddress(
+    firstString(
+      manifest,
+      "destination_verifier_address",
+      "tron_verifier_address",
+    ),
+    "TON verifier address",
+  );
   if (
     new Set([
       manifest.taira_xor_token_address,
@@ -697,6 +711,17 @@ function normalizeTonRouteManifestForPublication(input) {
     manifest[key] = normalizeHex32(manifest[key], label);
   }
   return stableJsonValue(manifest);
+}
+
+function bridgeRouteManifestForInstruction(manifest) {
+  const bridgeManifest = { ...manifest };
+  bridgeManifest.sccp_tron_source_bridge_address =
+    manifest.sccp_tron_source_bridge_address ?? manifest.source_bridge_address;
+  bridgeManifest.tron_verifier_address =
+    manifest.tron_verifier_address ?? manifest.destination_verifier_address;
+  delete bridgeManifest.source_bridge_address;
+  delete bridgeManifest.destination_verifier_address;
+  return stableJsonValue(bridgeManifest);
 }
 
 async function commandRouteManifest(options) {
@@ -867,9 +892,10 @@ async function commandPublishRouteManifest(options) {
   const manifestPath = options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT;
   const manifestEnvelope = await readJson(manifestPath, "TON route manifest");
   const manifest = normalizeTonRouteManifestForPublication(manifestEnvelope);
+  const instructionManifest = bridgeRouteManifestForInstruction(manifest);
   const instruction = {
     UpsertSccpRouteManifest: {
-      manifest,
+      manifest: instructionManifest,
     },
   };
   const artifact = {
@@ -885,6 +911,7 @@ async function commandPublishRouteManifest(options) {
     requiredPermission: "CanManageSccpRouteManifests",
     instruction,
     manifestSha256: sha256HexJson(manifest),
+    instructionManifestSha256: sha256HexJson(instructionManifest),
     productionReady: manifest.production_ready,
     tonFinalizeMessageValueNano: manifest.ton_finalize_message_value_nano,
     destinationBrowserProverManifestHash:
@@ -942,7 +969,7 @@ async function commandPublishRouteManifest(options) {
   const transaction = buildUpsertSccpRouteManifestTransaction({
     chainId,
     authority,
-    manifest,
+    manifest: instructionManifest,
     metadata: {
       route_id: manifest.route_id,
       asset_key: manifest.asset_key,

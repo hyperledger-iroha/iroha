@@ -4549,6 +4549,8 @@ pub struct SccpRouteManifest {
     pub sccp_tron_source_bridge_address: Option<String>,
     /// Generic destination verifier contract address.
     pub destination_verifier_address: Option<String>,
+    /// TON verifier internal message value in nanoTON.
+    pub ton_finalize_message_value_nano: Option<String>,
     /// Generic verifier contract address.
     pub verifier_address: Option<String>,
     /// BSC destination verifier contract address.
@@ -4828,6 +4830,17 @@ impl SccpRouteManifest {
         assert!(
             account_hex.as_bytes().iter().any(|byte| *byte != b'0'),
             "SCCP TON route manifest {field} must be non-zero"
+        );
+        value.to_owned()
+    }
+
+    fn normalize_positive_decimal_string(field: &str, value: &str) -> String {
+        assert!(
+            !value.is_empty()
+                && value.trim() == value
+                && value.as_bytes()[0] != b'0'
+                && value.as_bytes().iter().all(u8::is_ascii_digit),
+            "SCCP route manifest {field} must be a positive integer decimal string"
         );
         value.to_owned()
     }
@@ -6001,6 +6014,23 @@ impl SccpRouteManifest {
                 && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
             "SCCP TON route manifest production_ready requires proof_artifact_hash and proving_key_hash"
         );
+        let ton_finalize_message_value_nano = self
+            .ton_finalize_message_value_nano
+            .as_deref()
+            .and_then(|value| {
+                if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(Self::normalize_positive_decimal_string(
+                        "ton_finalize_message_value_nano",
+                        value,
+                    ))
+                }
+            });
+        assert!(
+            !(self.production_ready && is_ton_route && ton_finalize_message_value_nano.is_none()),
+            "SCCP TON route manifest production_ready requires ton_finalize_message_value_nano"
+        );
         assert!(
             !(self.production_ready && is_ton_route && self.source_verifier_material.is_none()),
             "SCCP TON route manifest production_ready requires source_verifier_material"
@@ -6240,6 +6270,7 @@ impl SccpRouteManifest {
             taira_xor_bridge_address,
             sccp_tron_source_bridge_address: source_bridge_address,
             tron_verifier_address: destination_verifier_address,
+            ton_finalize_message_value_nano,
             verifier_code_hash,
             verifier_key_hash,
             proof_artifact_hash,
@@ -6324,6 +6355,7 @@ mod sccp_route_manifest_user_config_tests {
             bsc_source_bridge_address: None,
             sccp_tron_source_bridge_address: None,
             destination_verifier_address: None,
+            ton_finalize_message_value_nano: None,
             verifier_address: None,
             sccp_bsc_destination_verifier_address: Some(VERIFIER.to_owned()),
             bsc_verifier_address: None,
@@ -6460,6 +6492,7 @@ mod sccp_route_manifest_user_config_tests {
             bsc_source_bridge_address: None,
             sccp_tron_source_bridge_address: Some("TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned()),
             destination_verifier_address: None,
+            ton_finalize_message_value_nano: None,
             verifier_address: None,
             sccp_bsc_destination_verifier_address: None,
             bsc_verifier_address: None,
@@ -6547,6 +6580,7 @@ mod sccp_route_manifest_user_config_tests {
             bsc_source_bridge_address: None,
             sccp_tron_source_bridge_address: Some(ton_raw("33")),
             destination_verifier_address: None,
+            ton_finalize_message_value_nano: Some("100000000".to_owned()),
             verifier_address: None,
             sccp_bsc_destination_verifier_address: None,
             bsc_verifier_address: None,
@@ -7314,6 +7348,10 @@ mod sccp_route_manifest_user_config_tests {
             Some("ton_raw")
         );
         assert_eq!(
+            actual.ton_finalize_message_value_nano.as_deref(),
+            Some("100000000")
+        );
+        assert_eq!(
             actual.proof_artifact_hash,
             Some(format!("0x{}", "cc".repeat(32)))
         );
@@ -7323,6 +7361,28 @@ mod sccp_route_manifest_user_config_tests {
         );
         assert!(actual.source_verifier_material.is_some());
         assert!(actual.source_adapter_engine_deployment.is_some());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TON route manifest production_ready requires ton_finalize_message_value_nano"
+    )]
+    fn production_ready_ton_route_requires_finalize_message_value() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.ton_finalize_message_value_nano = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP route manifest ton_finalize_message_value_nano must be a positive integer decimal string"
+    )]
+    fn production_ready_ton_route_rejects_zero_finalize_message_value() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.ton_finalize_message_value_nano = Some("0".to_owned());
+
+        let _ = manifest.parse();
     }
 
     #[test]
