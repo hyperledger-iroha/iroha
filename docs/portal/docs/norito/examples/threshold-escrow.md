@@ -94,7 +94,8 @@ seiyaku ThresholdEscrow {
       authority(),
       account_id(escrow_account_literal),
       asset_definition(escrow_asset_definition_literal),
-      amount
+      amount,
+      dataspace_id("0")
     );
     funded_amount_value = next_funded;
   }
@@ -106,7 +107,8 @@ seiyaku ThresholdEscrow {
       account_id(escrow_account_literal),
       account_id(recipient_account_literal),
       asset_definition(escrow_asset_definition_literal),
-      funded_amount_value
+      funded_amount_value,
+      dataspace_id("0")
     );
     is_open = false;
     is_released = true;
@@ -121,7 +123,8 @@ seiyaku ThresholdEscrow {
         account_id(escrow_account_literal),
         authority(),
         asset_definition(escrow_asset_definition_literal),
-        funded
+        funded,
+        dataspace_id("0")
       );
     }
     is_open = false;

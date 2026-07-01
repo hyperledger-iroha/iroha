@@ -879,6 +879,27 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "lane-readiness blocker-cell visibility",
     "lane-readiness root suppression",
 )
+READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_PREFIX = (
+    "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include"
+)
+READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_EXCLUDED_MARKERS = (
+    "`Results` contains only direct `UnitTestResult` rows",
+    "`TestDefinitions` contains only direct `UnitTest` definitions",
+)
+READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_MARKERS = tuple(
+    marker
+    for marker in READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS[
+        READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS.index(
+            "Windows `.NET 8.0.x` SCCP SDK phase evidence"
+        ) : READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS.index(
+            "empty-component, padded/control-bearing, URI-like, drive-relative, "
+            "percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed "
+            "or nested `.dll` aliases"
+        )
+        + 1
+    ]
+    if marker not in READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_EXCLUDED_MARKERS
+)
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
     "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1"
@@ -21233,7 +21254,7 @@ def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
 
 
 def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
-    if len(tokens) != 8 or _command_token_basename(tokens[0]) != "dotnet":
+    if len(tokens) < 8 or _command_token_basename(tokens[0]) != "dotnet":
         return False
     project_fragment = next(
         (
@@ -21253,14 +21274,27 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
     )
     project_tokens = shlex.split(project_fragment)
     expected_project = project_tokens[2] if len(project_tokens) > 2 else ""
+    if tokens[1] != "test" or tokens[2] != expected_project:
+        return False
+    index = 3
+    if index < len(tokens) and tokens[index] == "--artifacts-path":
+        index += 1
+        if index >= len(tokens) or not tokens[index] or tokens[index].startswith("-"):
+            return False
+        index += 1
+    if index + 1 >= len(tokens) or tokens[index] != "--filter":
+        return False
+    if tokens[index + 1].replace("\\|", "|") != filter_fragment.replace("\\|", "|"):
+        return False
+    index += 2
+    if index < len(tokens) and tokens[index] == "-p:ProduceReferenceAssembly=false":
+        index += 1
     return (
-        tokens[1] == "test"
-        and tokens[2] == expected_project
-        and tokens[3] == "--filter"
-        and tokens[4].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
-        and tokens[5] == "--nologo"
-        and tokens[6] == "--logger"
-        and tokens[7] == "trx;LogFileName=sccp-dotnet-sdk.trx"
+        index + 2 < len(tokens)
+        and tokens[index] == "--nologo"
+        and tokens[index + 1] == "--logger"
+        and tokens[index + 2] == "trx;LogFileName=sccp-dotnet-sdk.trx"
+        and index + 3 == len(tokens)
     )
 
 
@@ -21613,7 +21647,7 @@ def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
     if not _dotnet_sdk_command_matches(tokens):
         return False
     if fragment.startswith("FullyQualifiedName"):
-        return tokens[4].replace("\\|", "|") == fragment.replace("\\|", "|")
+        return _command_option_values(tokens, "--filter") == [fragment]
     if fragment.startswith("dotnet test "):
         fragment_tokens = shlex.split(fragment)
         return (
@@ -27353,7 +27387,7 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, and requires every present `UnitTestResult` `isExecuted` flag to be `true`. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
@@ -29042,6 +29076,24 @@ def _readiness_markdown_invariant_errors(
                 "release evidence marker",
             )
         )
+    dotnet_evidence_line = next(
+        (
+            line
+            for line in required_evidence_section.splitlines()
+            if line.startswith(READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_PREFIX)
+        ),
+        "",
+    )
+    for marker in READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_MARKERS:
+        if marker in required_evidence_section and marker not in dotnet_evidence_line:
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Required Release Evidence",
+                    dotnet_evidence_line,
+                    marker,
+                    "release evidence marker",
+                )
+            )
 
     return errors
 
@@ -33744,6 +33796,43 @@ def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
     return paths
 
 
+def _referenced_native_evm_prover_report_artifact_paths(
+    report: dict[str, Any],
+) -> set[str]:
+    paths: set[str] = set()
+    native_bundle = report.get("native_evm_prover_bundle")
+    if not isinstance(native_bundle, dict):
+        return paths
+    artifact = native_bundle.get("artifact")
+    if isinstance(artifact, dict):
+        artifact_path, path_errors = _canonical_artifact_path(artifact)
+        if not path_errors and artifact_path is not None:
+            paths.add(artifact_path)
+    for artifact_field in (
+        "proof_artifact",
+        "proving_key",
+        "verifier_key",
+        "cross_sdk_fixture_parity_artifact",
+        "native_prover_self_test_artifact",
+    ):
+        artifact = native_bundle.get(artifact_field)
+        if isinstance(artifact, dict):
+            artifact_path, path_errors = _canonical_artifact_path(artifact)
+            if not path_errors and artifact_path is not None:
+                paths.add(artifact_path)
+    sdk_artifacts = native_bundle.get("sdk_artifacts")
+    if isinstance(sdk_artifacts, list):
+        for row in sdk_artifacts:
+            if not isinstance(row, dict):
+                continue
+            artifact = row.get("implementation_artifact")
+            if isinstance(artifact, dict):
+                artifact_path, path_errors = _canonical_artifact_path(artifact)
+                if not path_errors and artifact_path is not None:
+                    paths.add(artifact_path)
+    return paths
+
+
 def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     """Return a verification summary for an SCCP release bundle."""
 
@@ -33871,10 +33960,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 errors.append(
                     f"{artifact_error} #{manifest_artifact_error_counts[numbering_key]}"
                 )
-        if any(
-            error in {"bundle artifact path uses symlink", "missing bundle artifact"}
-            for error in artifact_errors
-        ):
+        if "bundle artifact path uses symlink" in artifact_errors:
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 manifest_artifacts.pop(artifact_path, None)
@@ -34010,16 +34096,32 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             summary_release_checklist = raw_summary_checklist
     if report:
         referenced_paths = _referenced_report_artifact_paths(report)
+        sensitive_referenced_paths = (
+            _referenced_native_evm_prover_report_artifact_paths(report)
+        )
         for unexpected in sorted(set(manifest_artifacts) - referenced_paths):
             errors.append(
                 "manifest contains artifact not referenced by readiness report: "
                 f"{unexpected}"
             )
+        sensitive_missing_count = 0
         for missing in sorted(referenced_paths - set(manifest_artifacts)):
-            errors.append(
-                "manifest missing readiness report referenced artifact: "
-                f"{missing}"
-            )
+            if missing in sensitive_referenced_paths:
+                sensitive_missing_count += 1
+                suffix = (
+                    f" #{sensitive_missing_count}"
+                    if sensitive_missing_count > 1
+                    else ""
+                )
+                errors.append(
+                    "manifest missing readiness report referenced native EVM "
+                    f"prover artifact{suffix}"
+                )
+            else:
+                errors.append(
+                    "manifest missing readiness report referenced artifact: "
+                    f"{missing}"
+                )
         try:
             expected_order = _expected_manifest_artifact_order(report)
         except (Exception, SystemExit):

@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -570,6 +570,69 @@ fn build_fee_sponsor_metadata(fee_sponsor: Option<AccountId>) -> Metadata {
         );
     }
     metadata
+}
+
+unsafe fn parse_optional_string_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<Option<String>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(None);
+    }
+    unsafe { read_string_bridge(ptr, len) }.map(Some)
+}
+
+unsafe fn parse_metadata_object_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<Metadata> {
+    let mut metadata = Metadata::default();
+    if ptr.is_null() || len == 0 {
+        return Ok(metadata);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let value: norito::json::Value =
+        norito::json::from_slice(bytes).map_err(|_| BridgeError::MetadataValue)?;
+    let object = value.as_object().ok_or(BridgeError::MetadataValue)?;
+    for (key, value) in object {
+        let name = Name::from_str(key).map_err(|_| BridgeError::MetadataKey)?;
+        let json = Json::from_norito_value_ref(value).map_err(|_| BridgeError::MetadataValue)?;
+        metadata.insert(name, json);
+    }
+    Ok(metadata)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_validation_fee_metadata(
+    mut metadata: Metadata,
+    policy_version: u64,
+    policy_hash: String,
+    fee_instruction_index: u64,
+    fee_sponsor: Option<AccountId>,
+    memo: Option<String>,
+) -> BridgeResult<Metadata> {
+    metadata.insert(
+        Name::from_str("validation_fee_policy_version").expect("static metadata key"),
+        Json::new(policy_version),
+    );
+    metadata.insert(
+        Name::from_str("validation_fee_policy_hash").expect("static metadata key"),
+        Json::new(policy_hash),
+    );
+    metadata.insert(
+        Name::from_str("validation_fee_instruction_index").expect("static metadata key"),
+        Json::new(fee_instruction_index),
+    );
+    if let Some(fee_sponsor) = fee_sponsor {
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static metadata key"),
+            Json::new(fee_sponsor.to_string()),
+        );
+    }
+    if let Some(memo) = memo {
+        metadata.insert(
+            Name::from_str("memo").expect("static metadata key"),
+            Json::new(memo),
+        );
+    }
+    Ok(metadata)
 }
 
 fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
@@ -10409,7 +10472,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 12);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 13);
     }
 
     #[test]
@@ -15315,6 +15378,140 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             || {
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
+            },
+        )?;
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    principal_asset_definition_ptr: *const c_char,
+    principal_asset_definition_len: c_ulong,
+    principal_quantity_ptr: *const c_char,
+    principal_quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_asset_definition_ptr: *const c_char,
+    fee_asset_definition_len: c_ulong,
+    fee_quantity_ptr: *const c_char,
+    fee_quantity_len: c_ulong,
+    treasury_ptr: *const c_char,
+    treasury_len: c_ulong,
+    policy_version: u64,
+    policy_hash_ptr: *const c_char,
+    policy_hash_len: c_ulong,
+    fee_instruction_index: u64,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    memo_ptr: *const c_char,
+    memo_len: c_ulong,
+    metadata_json_ptr: *const c_char,
+    metadata_json_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let inputs = unsafe {
+            gather_asset_tx_inputs(AssetInputPointers {
+                chain_ptr,
+                chain_len,
+                authority_ptr,
+                authority_len,
+                asset_definition_ptr: principal_asset_definition_ptr,
+                asset_definition_len: principal_asset_definition_len,
+                quantity_ptr: principal_quantity_ptr,
+                quantity_len: principal_quantity_len,
+                destination_ptr,
+                destination_len,
+                ttl_ms,
+                ttl_present,
+                private_key_ptr,
+                private_key_len,
+            })?
+        };
+
+        let fee_asset_definition =
+            unsafe { read_string_bridge(fee_asset_definition_ptr, fee_asset_definition_len) }?;
+        let fee_quantity = unsafe { read_string_bridge(fee_quantity_ptr, fee_quantity_len) }?;
+        let treasury = unsafe { read_string_bridge(treasury_ptr, treasury_len) }?;
+        let policy_hash = unsafe { read_string_bridge(policy_hash_ptr, policy_hash_len) }?;
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let memo = unsafe { parse_optional_string_bridge(memo_ptr, memo_len)? };
+        let metadata =
+            unsafe { parse_metadata_object_bridge(metadata_json_ptr, metadata_json_len)? };
+        let metadata = build_validation_fee_metadata(
+            metadata,
+            policy_version,
+            policy_hash,
+            fee_instruction_index,
+            fee_sponsor,
+            memo,
+        )?;
+
+        let (fee_asset_definition, fee_asset_scope) =
+            parse_asset_definition_with_balance_scope(fee_asset_definition)?;
+        let fee_quantity = parse_quantity(fee_quantity)?;
+        let treasury = parse_destination(treasury)?;
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            asset_scope,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let principal_asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
+        let fee_asset_id = AssetId::with_scope(
+            fee_asset_definition.clone(),
+            authority.clone(),
+            fee_asset_scope,
+        );
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
+            private_key,
+            || {
+                let principal_transfer =
+                    Transfer::asset_numeric(principal_asset_id, quantity, destination);
+                let fee_transfer = Transfer::asset_numeric(fee_asset_id, fee_quantity, treasury);
+                Executable::from([
+                    InstructionBox::from(principal_transfer),
+                    InstructionBox::from(fee_transfer),
+                ])
             },
         )?;
 

@@ -31790,43 +31790,59 @@ pub struct ContractCallSimulateDto {
 )]
 /// Public, normalized evidence for a contract operation.
 pub struct OperationReceiptDto {
+    /// Operation category, for example `contract_call` or `contract_deploy`.
     pub operation_kind: String,
+    /// Public operation status such as `submitted`, `committed`, or `pending_signature`.
     pub status: String,
+    /// Submission surface that produced the receipt.
     pub transport: String,
+    /// Dataspace targeted by the operation.
     pub dataspace: String,
+    /// Optional contract alias used for the operation.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_alias: Option<String>,
+    /// Optional canonical contract address.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
+    /// Optional code hash of the deployed or invoked artifact.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
+    /// Optional ABI hash of the deployed or invoked artifact.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub abi_hash_hex: Option<String>,
+    /// Optional submitted transaction hash.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Optional contract entrypoint for calls.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Optional transaction entrypoint hash.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint_hash_hex: Option<String>,
+    /// Optional gas limit attached to the operation.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_limit: Option<u64>,
+    /// Optional gas actually consumed when available.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_used: Option<u64>,
+    /// Optional gas asset identifier.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee_sponsor: Option<String>,
+    /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
 }
 
@@ -34681,7 +34697,6 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
 }
 
 #[cfg(feature = "app_api")]
-#[cfg(feature = "app_api")]
 fn deploy_operation_receipt(
     contract: &DeployContractBundleContractReceiptDto,
 ) -> OperationReceiptDto {
@@ -34701,7 +34716,7 @@ fn deploy_operation_receipt(
         gas_used: None,
         gas_asset_id: None,
         fee_sponsor: None,
-        payload_digest_hex: hex::encode(blake3_hash(contract.code_hash_hex.as_bytes()).as_bytes()),
+        payload_digest_hex: contract.code_hash_hex.clone(),
     }
 }
 

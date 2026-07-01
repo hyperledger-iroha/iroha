@@ -35,13 +35,14 @@ fonte: exemplos/transfer/transfer.ko
 // Transfer example: uses typed pointer constructors and transfer_asset syscall
 
 seiyaku TransferDemo {
-  // Public entrypoint to transfer 10 units of 62Fk4FPcMuLvW5QjDGNF2a4jAmjM from alice to bob
+  // Public entrypoint to transfer 10 units of the canonical Base58 asset definition between canonical I105 accounts
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<i105-account-id>"),
-      account!("<i105-account-id>"),
+      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10
+      10,
+      dataspace_id("0")
     );
   }
 }

@@ -1042,9 +1042,9 @@ fn main() -> Result<()> {
         "committed"
     };
     let operation_receipt = norito::json!({
-        "operation_kind": "contract_deploy",
+        "operation_kind": ("contract_deploy"),
         "status": (operation_status),
-        "transport": "ivm-contract-deploy-helper",
+        "transport": ("ivm-contract-deploy-helper"),
         "dataspace": (dataspace_id.to_string()),
         "contract_alias": (contract_alias.to_string()),
         "contract_address": (contract_address.to_string()),
@@ -1081,12 +1081,12 @@ fn main() -> Result<()> {
         "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),
         "final": (if args.emit_only {
             norito::json!({
-                "kind": "Prepared",
+                "kind": ("Prepared"),
                 "hash": (activate_tx_hash),
             })
         } else {
             norito::json!({
-                "kind": "Committed",
+                "kind": ("Committed"),
                 "hash": (activate_tx_hash),
             })
         }),
