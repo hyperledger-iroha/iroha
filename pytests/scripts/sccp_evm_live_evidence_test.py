@@ -58,6 +58,11 @@ class RawResponse:
         return self.payload[:size]
 
 
+class HostileImportedScalar:
+    def __str__(self):
+        raise AssertionError("secret-token imported EVM live metadata was stringified")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -624,6 +629,35 @@ def route_canary_hash_for(
         network_id=fake.network_id,
         used_message_proof=True,
         receipt_block_finalized=receipt_block_finalized,
+    )
+
+
+def full_evm_live_summary(module):
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    return module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="finalized",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
     )
 
 
@@ -1847,6 +1881,90 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
         assert "route-canary-transaction-hash" in str(exc)
     else:
         raise AssertionError("EVM full TOML accepted unverified route-canary block")
+
+
+def test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    cases = (
+        (
+            ("source_record_hashes", "source_verifier_material_hash"),
+            "source verifier material hash must be an exact hex string",
+        ),
+        (
+            ("source_record_hashes", "source_adapter_engine_deployment_hash"),
+            "source adapter engine deployment hash must be an exact hex string",
+        ),
+        (
+            ("route_canary", "evidence_hash"),
+            "route canary evidence hash must be an exact hex string",
+        ),
+    )
+
+    for path, expected_message in cases:
+        forged = copy.deepcopy(summary)
+        container = forged
+        for key in path[:-1]:
+            container = container[key]
+        container[path[-1]] = HostileImportedScalar()
+
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM full TOML accepted non-string copied {'.'.join(path)}"
+            )
+
+
+def test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+    destination = copy.deepcopy(summary["destination_bridge"])
+    destination["destination_binding_hash"] = HostileImportedScalar()
+    args = SimpleNamespace(
+        domain=module.evidence.SCCP_DOMAIN_ETH,
+        route_allowlist_hash=bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR),
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+    )
+
+    try:
+        module._validate_route_allowlist_hash(args, destination)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "destination binding hash must be an exact hex string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM route allowlist accepted non-string binding hash")
+
+
+def test_live_evm_torii_query_rejects_non_string_copied_destination_metadata():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+    destination = copy.deepcopy(summary["destination_bridge"])
+    destination["network_id"] = HostileImportedScalar()
+
+    try:
+        module._torii_destination_query_params({"destination_bridge": destination})
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "network id must be an exact hex string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM Torii query accepted non-string network metadata")
 
 
 def test_live_evm_diagnostic_offline_args_withhold_route_until_binding_pin():

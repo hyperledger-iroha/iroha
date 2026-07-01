@@ -29,6 +29,13 @@ fn deploy_receipt_contract(response: &norito::json::Value) -> &norito::json::Val
         .expect("single-contract deploy response should include exactly one contract receipt")
 }
 
+fn deploy_operation_receipt(response: &norito::json::Value) -> &norito::json::Map {
+    response
+        .get("operation_receipt")
+        .and_then(norito::json::Value::as_object)
+        .expect("single-contract deploy response should include operation_receipt")
+}
+
 #[tokio::test]
 async fn contracts_deploy_and_fetch_code_bytes() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -210,6 +217,7 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
     let first_body = first_resp.into_body().collect().await.unwrap().to_bytes();
     let first_json: norito::json::Value = norito::json::from_slice(&first_body).unwrap();
     let first_contract = deploy_receipt_contract(&first_json);
+    let first_receipt = deploy_operation_receipt(&first_json);
     let first_address: iroha_data_model::smart_contract::ContractAddress = first_contract
         .get("contract_address")
         .and_then(norito::json::Value::as_str)
@@ -240,6 +248,42 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
             .and_then(norito::json::Value::as_u64),
         Some(0)
     );
+    assert_eq!(
+        first_receipt
+            .get("operation_kind")
+            .and_then(norito::json::Value::as_str),
+        Some("contract_deploy")
+    );
+    assert_eq!(
+        first_receipt
+            .get("status")
+            .and_then(norito::json::Value::as_str),
+        first_contract
+            .get("status")
+            .and_then(norito::json::Value::as_str)
+    );
+    assert_eq!(
+        first_receipt
+            .get("transport")
+            .and_then(norito::json::Value::as_str),
+        Some("torii")
+    );
+    assert_eq!(
+        first_receipt
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str),
+        Some(first_address.as_ref())
+    );
+    assert_eq!(
+        first_receipt
+            .get("payload_digest_hex")
+            .and_then(norito::json::Value::as_str),
+        first_contract
+            .get("code_hash_hex")
+            .and_then(norito::json::Value::as_str)
+    );
+    assert!(!first_receipt.contains_key("private_key"));
+    assert!(!first_receipt.contains_key("payload"));
 
     let applied_first =
         iroha_torii::test_utils::drain_queue_and_apply_all(&state, &queue, &chain_id, 1);

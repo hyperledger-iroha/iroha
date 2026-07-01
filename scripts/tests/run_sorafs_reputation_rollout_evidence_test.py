@@ -252,3 +252,35 @@ def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> 
     assert "--metrics-evidence" not in captured.err
     assert str(missing) not in captured.err
     assert captured.out == ""
+
+
+def test_torii_url_rejects_secret_bearing_url_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    url = "https://user:private_key@torii.example/path?token=secret"
+    url_index = args.index("--torii-url") + 1
+    args[url_index] = url
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner URL arguments must not contain" in captured.err
+    assert "private_key" not in captured.err
+    assert "token=secret" not in captured.err
+    assert captured.out == ""
+
+
+def test_sorafs_cli_bin_rejects_secret_bearing_path_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--sorafs-cli-bin") + 1] = "/runtime/private_key/sorafs_cli"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner passthrough arguments must not contain" in captured.err
+    assert "private_key" not in captured.err
+    assert "/runtime/private_key" not in captured.err
+    assert captured.out == ""

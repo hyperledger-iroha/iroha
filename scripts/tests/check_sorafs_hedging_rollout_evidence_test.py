@@ -33,6 +33,7 @@ def write_json(path: Path, payload: dict) -> Path:
 
 
 def with_context(payload: dict) -> dict:
+    payload.setdefault("generated_at_unix", GENERATED_AT)
     payload["deployment_id"] = DEPLOYMENT_ID
     payload["environment"] = ENVIRONMENT
     payload["deployment_context_reviewed"] = True

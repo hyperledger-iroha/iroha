@@ -1085,6 +1085,30 @@ int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+int32_t connect_norito_encode_validation_fee_transfer_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const char* principal_asset_definition, unsigned long principal_asset_definition_len,
+    const char* principal_quantity, unsigned long principal_quantity_len,
+    const char* destination, unsigned long destination_len,
+    const char* fee_asset_definition, unsigned long fee_asset_definition_len,
+    const char* fee_quantity, unsigned long fee_quantity_len,
+    const char* treasury, unsigned long treasury_len,
+    uint64_t policy_version,
+    const char* policy_hash, unsigned long policy_hash_len,
+    uint64_t fee_instruction_index,
+    const char* fee_sponsor, unsigned long fee_sponsor_len,
+    const char* memo, unsigned long memo_len,
+    const char* metadata_json, unsigned long metadata_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 int32_t connect_norito_encode_shield_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,

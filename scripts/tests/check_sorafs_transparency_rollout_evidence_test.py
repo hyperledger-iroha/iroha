@@ -34,6 +34,7 @@ DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 DEPLOYMENT_ID = "transparency-staging-a"
 ENVIRONMENT = "staging"
+GENERATED_AT = 1_800_000_120
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -55,6 +56,7 @@ def source_entry_evidence() -> dict:
     return {
         "schema": "sorafs.transparency.source_entry.canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -73,6 +75,7 @@ def publication_evidence(*, publisher_identity: bool = True) -> dict:
     return {
         "schema": "sorafs.transparency.publication_canary.v1",
         "status": "passed" if publisher_identity else "failed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -114,6 +117,7 @@ def privacy_aggregate_evidence(*, publish_due_count: int = 1) -> dict:
     return {
         "schema": "sorafs.transparency.privacy_aggregate.canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -148,6 +152,7 @@ def proof_token_issuance_evidence() -> dict:
     return {
         "schema": "sorafs.transparency.proof_token_issuance.canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -174,6 +179,7 @@ def explorer_evidence() -> dict:
     return {
         "schema": "sorafs.transparency.explorer_canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,

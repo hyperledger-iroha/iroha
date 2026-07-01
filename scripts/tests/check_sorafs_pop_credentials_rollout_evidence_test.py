@@ -20,6 +20,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 NOW = 1_800_006_000
+GENERATED_AT = NOW - 120
 HEX = "ab" * 32
 HEX_2 = "cd" * 32
 DEPLOYMENT_ID = "pop-staging-a"
@@ -179,6 +180,7 @@ def complete_payloads() -> dict[str, dict[str, object]]:
         },
     }
     for payload in payloads.values():
+        payload["generated_at_unix"] = GENERATED_AT
         payload["deployment_id"] = DEPLOYMENT_ID
         payload["environment"] = ENVIRONMENT
         payload["deployment_context_reviewed"] = True

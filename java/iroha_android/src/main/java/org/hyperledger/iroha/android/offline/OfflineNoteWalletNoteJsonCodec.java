@@ -54,11 +54,15 @@ public final class OfflineNoteWalletNoteJsonCodec {
       throw new IllegalArgumentException(
           "Offline Note wallet note JSON version must be " + VERSION);
     }
+    final String amount = asString(object.get("amount"), "amount");
+    if (!amount.equals(OfflineNote.canonicalAmountString(amount))) {
+      throw new IllegalArgumentException("amount must be canonical");
+    }
     return new OfflineNoteWalletNote(
         asString(object.get("chain_id"), "chain_id"),
         asString(object.get("account_id"), "account_id"),
         asString(object.get("asset_id"), "asset_id"),
-        asString(object.get("amount"), "amount"),
+        amount,
         OfflineNote.decodeCertificate(
             Base64.getDecoder()
                 .decode(

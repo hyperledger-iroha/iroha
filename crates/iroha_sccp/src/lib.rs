@@ -54,7 +54,12 @@ use halo2curves::{
     group::{cofactor::CofactorGroup, prime::PrimeCurveAffine},
 };
 use iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256, KeyPair};
-use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+use iroha_data_model::{
+    block::BlockHeader,
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    peer::PeerId,
+    zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
+};
 use norito::to_bytes;
 use sha2::{Digest, Sha256};
 use tiny_keccak::Hasher;
@@ -1227,6 +1232,8 @@ pub struct NexusCommitQcV1 {
     #[norito(with = "json_utils::u64_string")]
     pub rechain_seq: u64,
     pub highest_qc: Option<NexusQcRefV1>,
+    #[norito(with = "json_utils::hex32")]
+    pub validator_set_hash: H256,
     pub validator_set_hash_version: u16,
     pub validator_public_keys: Vec<String>,
     #[norito(with = "json_utils::vec_bytes_hex")]
@@ -33310,6 +33317,23 @@ pub fn decode_nexus_bridge_finality_proof(
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
+fn hash_block_header_for_sccp_finality(header: &BlockHeader) -> H256 {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(header.hash().as_ref().as_ref());
+    out
+}
+
+fn nexus_validator_set_hash_from_public_keys(public_keys: &[String]) -> Option<H256> {
+    let validator_set = public_keys
+        .iter()
+        .map(|key| key.parse::<iroha_crypto::PublicKey>().ok().map(PeerId::from))
+        .collect::<Option<Vec<_>>>()?;
+    let hash = iroha_crypto::HashOf::<Vec<PeerId>>::new(&validator_set);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_ref().as_ref());
+    Some(out)
+}
+
 pub fn decode_sccp_source_chain_proof_envelope(
     proof_bytes: &[u8],
 ) -> Option<SccpSourceChainProofEnvelopeV1> {
@@ -33542,13 +33566,25 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
     {
         return false;
     }
+    let Ok(block_header) = norito::decode_from_bytes::<BlockHeader>(&proof.block_header_bytes)
+    else {
+        return false;
+    };
+    if to_bytes(&block_header).ok().as_deref() != Some(proof.block_header_bytes.as_slice())
+        || block_header.height().get() != proof.height
+        || hash_block_header_for_sccp_finality(&block_header) != proof.block_hash
+        || block_header.sccp_commitment_root() != Some(proof.commitment_root)
+    {
+        return false;
+    }
     let qc = &proof.commit_qc;
     if qc.version != 1
         || qc.phase != NexusConsensusPhaseV1::Commit
         || qc.height != proof.height
         || qc.subject_block_hash != proof.block_hash
         || qc.mode_tag.is_empty()
-        || qc.validator_set_hash_version != 1
+        || !h256_is_nonzero(&qc.validator_set_hash)
+        || qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || qc.validator_public_keys.is_empty()
         || qc.validator_set_pops.len() != qc.validator_public_keys.len()
         || qc.bls_aggregate_signature.is_empty()
@@ -33566,6 +33602,14 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
         {
             return false;
         }
+    }
+    let Some(computed_validator_set_hash) =
+        nexus_validator_set_hash_from_public_keys(&qc.validator_public_keys)
+    else {
+        return false;
+    };
+    if computed_validator_set_hash != qc.validator_set_hash {
+        return false;
     }
     for pop in &qc.validator_set_pops {
         if pop.is_empty() {
@@ -42183,14 +42227,35 @@ mod tests {
         assert_eq!(signals[8], changed_statement[8]);
     }
 
+    fn sample_nexus_finality_block_header(commitment_root: H256) -> BlockHeader {
+        let mut header = BlockHeader::new(
+            core::num::NonZeroU64::new(7).expect("non-zero finality height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        header.set_sccp_commitment_root(Some(commitment_root));
+        header
+    }
+
     fn sample_finality_proof(commitment_root: H256) -> Vec<u8> {
+        let block_header = sample_nexus_finality_block_header(commitment_root);
+        let block_hash = hash_block_header_for_sccp_finality(&block_header);
+        let validator_public_keys = vec![
+            "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                .to_owned(),
+        ];
+        let validator_set_hash = nexus_validator_set_hash_from_public_keys(&validator_public_keys)
+            .expect("sample validator public key should parse");
         to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 7,
-            block_hash: [7u8; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x42; 4],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -42198,23 +42263,32 @@ mod tests {
                 view: 0,
                 epoch: 0,
                 mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
-                subject_block_hash: [7u8; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash_version: 1,
-                validator_public_keys: vec![
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                        .to_owned(),
-                ],
+                validator_set_hash,
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_public_keys,
                 validator_set_pops: vec![vec![1u8; 48]],
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![2u8; 96],
             },
         })
         .expect("encode finality proof")
+    }
+
+    fn sample_nexus_validator_public_keys(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|idx| {
+                let seed_byte = 0x40_u8 + u8::try_from(idx).expect("fixture index fits u8");
+                checked_sccp_fixture_keypair(vec![seed_byte; 32], Algorithm::Ed25519)
+                    .public_key()
+                    .to_string()
+            })
+            .collect()
     }
 
     #[cfg(feature = "bls")]
@@ -42225,6 +42299,14 @@ mod tests {
             checked_sccp_fixture_keypair(vec![3; 32], Algorithm::BlsNormal),
         ];
         let chain_id = SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned();
+        let block_header = sample_nexus_finality_block_header(commitment_root);
+        let block_hash = hash_block_header_for_sccp_finality(&block_header);
+        let validator_public_keys = keypairs
+            .iter()
+            .map(|keypair| keypair.public_key().to_string())
+            .collect::<Vec<_>>();
+        let validator_set_hash = nexus_validator_set_hash_from_public_keys(&validator_public_keys)
+            .expect("sample BLS validator public keys should parse");
         let mut commit_qc = NexusCommitQcV1 {
             version: 1,
             phase: NexusConsensusPhaseV1::Commit,
@@ -42232,7 +42314,7 @@ mod tests {
             view: 2,
             epoch: 1,
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
-            subject_block_hash: [7u8; 32],
+            subject_block_hash: block_hash,
             parent_state_root: [0xA1; 32],
             post_state_root: [0xA2; 32],
             chain_order_hash: [0xA3; 32],
@@ -42244,11 +42326,9 @@ mod tests {
                 subject_block_hash: [6u8; 32],
                 phase: NexusConsensusPhaseV1::Prepare,
             }),
-            validator_set_hash_version: 1,
-            validator_public_keys: keypairs
-                .iter()
-                .map(|keypair| keypair.public_key().to_string())
-                .collect(),
+            validator_set_hash,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_public_keys,
             validator_set_pops: keypairs
                 .iter()
                 .map(|keypair| {
@@ -42280,9 +42360,9 @@ mod tests {
             version: 1,
             chain_id,
             height: 7,
-            block_hash: [7u8; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x42; 4],
+            block_header_bytes: to_bytes(&block_header).expect("encode signed Nexus block header"),
             commit_qc,
         }
     }
@@ -72798,8 +72878,10 @@ mod tests {
         let commitment_root = [0x8B; 32];
         let mut valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
             .expect("decode proof");
-        valid.commit_qc.validator_public_keys =
-            (0..9).map(|idx| format!("validator-{idx}")).collect();
+        valid.commit_qc.validator_public_keys = sample_nexus_validator_public_keys(9);
+        valid.commit_qc.validator_set_hash =
+            nexus_validator_set_hash_from_public_keys(&valid.commit_qc.validator_public_keys)
+                .expect("sample validator public keys should parse");
         valid.commit_qc.validator_set_pops = (0..9)
             .map(|idx| vec![u8::try_from(idx + 1).expect("index fits u8")])
             .collect();
@@ -72822,12 +72904,92 @@ mod tests {
         let commitment_root = [0x8C; 32];
         let mut proof = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
             .expect("decode proof");
-        proof.commit_qc.validator_public_keys =
-            vec!["validator-1".to_owned(), "validator-1".to_owned()];
+        let validator_key = sample_nexus_validator_public_keys(1)
+            .pop()
+            .expect("sample validator key");
+        proof.commit_qc.validator_public_keys = vec![validator_key.clone(), validator_key];
+        proof.commit_qc.validator_set_hash =
+            nexus_validator_set_hash_from_public_keys(&proof.commit_qc.validator_public_keys)
+                .expect("sample validator public keys should parse");
         proof.commit_qc.validator_set_pops = vec![vec![0xAA], vec![0xBB]];
         proof.commit_qc.signers_bitmap = vec![0b0000_0011];
 
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+    }
+
+    #[test]
+    fn finality_proof_structure_rejects_validator_set_hash_mismatch() {
+        let commitment_root = [0x8E; 32];
+        let valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+        assert!(verify_nexus_bridge_finality_proof_structure(&valid));
+
+        let mut wrong_hash = valid.clone();
+        wrong_hash.commit_qc.validator_set_hash[0] ^= 0x01;
+        assert!(!verify_nexus_bridge_finality_proof_structure(
+            &wrong_hash
+        ));
+
+        let mut swapped_roster = valid;
+        swapped_roster.commit_qc.validator_public_keys = sample_nexus_validator_public_keys(1);
+        assert!(!verify_nexus_bridge_finality_proof_structure(
+            &swapped_roster
+        ));
+    }
+
+    #[test]
+    fn finality_proof_structure_rejects_unbound_block_header_bytes() {
+        let commitment_root = [0x8F; 32];
+        let valid = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+        assert!(verify_nexus_bridge_finality_proof_structure(&valid));
+
+        let mut garbage_header = valid.clone();
+        garbage_header.block_header_bytes = vec![0x42; 4];
+        assert!(!verify_nexus_bridge_finality_proof_structure(
+            &garbage_header
+        ));
+
+        let mut wrong_root_header = sample_nexus_finality_block_header([0x90; 32]);
+        wrong_root_header.set_sccp_commitment_root(Some([0x90; 32]));
+        let mut wrong_root = valid.clone();
+        wrong_root.block_header_bytes =
+            to_bytes(&wrong_root_header).expect("encode wrong-root header");
+        assert_eq!(
+            hash_block_header_for_sccp_finality(&wrong_root_header),
+            valid.block_hash,
+            "SCCP root is intentionally excluded from the consensus hash"
+        );
+        assert!(!verify_nexus_bridge_finality_proof_structure(&wrong_root));
+
+        let mut missing_root_header = sample_nexus_finality_block_header(commitment_root);
+        missing_root_header.set_sccp_commitment_root(None);
+        let mut missing_root = valid.clone();
+        missing_root.block_header_bytes =
+            to_bytes(&missing_root_header).expect("encode missing-root header");
+        assert_eq!(
+            hash_block_header_for_sccp_finality(&missing_root_header),
+            valid.block_hash,
+            "removing the SCCP root also leaves the consensus hash unchanged"
+        );
+        assert!(!verify_nexus_bridge_finality_proof_structure(&missing_root));
+
+        let mut wrong_height_header = BlockHeader::new(
+            core::num::NonZeroU64::new(8).expect("non-zero finality height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        wrong_height_header.set_sccp_commitment_root(Some(commitment_root));
+        let wrong_height_hash = hash_block_header_for_sccp_finality(&wrong_height_header);
+        let mut wrong_height = valid;
+        wrong_height.block_hash = wrong_height_hash;
+        wrong_height.commit_qc.subject_block_hash = wrong_height_hash;
+        wrong_height.block_header_bytes =
+            to_bytes(&wrong_height_header).expect("encode wrong-height header");
+        assert!(!verify_nexus_bridge_finality_proof_structure(&wrong_height));
     }
 
     #[test]
@@ -72869,7 +73031,7 @@ mod tests {
         let mut tampered_block = proof.clone();
         tampered_block.commit_qc.subject_block_hash[0] ^= 0x01;
         tampered_block.block_hash = tampered_block.commit_qc.subject_block_hash;
-        assert!(verify_nexus_bridge_finality_proof_structure(
+        assert!(!verify_nexus_bridge_finality_proof_structure(
             &tampered_block
         ));
         assert!(!verify_nexus_bridge_finality_proof_cryptographic(

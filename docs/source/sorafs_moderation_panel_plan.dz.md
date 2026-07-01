@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 54625457389e1b7ba8e82e0fc7682f0de239461aa0bf39019d96f1defbf76c99
+source_hash: 129fa8954c02e0189199ef8b5e74d313063bd81384fa4a10c02f5da3e63fb032
 source_last_modified: "2026-06-25T17:11:06+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -26,7 +26,14 @@ by adjacent SoraFS event/readback APIs.
 fail-closed SFM-4b rollout evidence gate for deployed moderation-panel
 promotion packets, and
 `scripts/run_sorafs_moderation_panel_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner.
+reviewed evidence collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
+dry-run emits the checker-backed `evidence_contract` map listing each selected
+evidence kind's schema and required payload fields.
+Every recognized rollout artifact must also carry reviewed `deployment_id` and
+`environment` context, so staging or production evidence cannot be satisfied by
+local, mock, dev, or otherwise unreviewed deployment packets. The gate also
+blocks mixed reviewed deployment contexts across the same rollout bundle.
 The gate also rejects mixed promotion packets: sortition, viewer, operator,
 notification, voting, publication, settlement, transparency/reputation,
 metrics, end-to-end, and governance artifacts must bind back to the appeal

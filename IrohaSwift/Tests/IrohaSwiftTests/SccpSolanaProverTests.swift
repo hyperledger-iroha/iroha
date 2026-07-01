@@ -11639,6 +11639,15 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertThrowsError(try canonicalEvmReceiptRlp(removedLogReceipt)) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidRlp("receipt.logs[0]"))
         }
+        for removed in [NSNull(), 1, "secret-token-removed"] as [Any] {
+            var malformedRemovedReceipt = typedReceipt
+            malformedRemovedReceipt["logs"] = [
+                validReceiptLog.merging(["removed": removed]) { _, new in new },
+            ]
+            XCTAssertThrowsError(try canonicalEvmReceiptRlp(malformedRemovedReceipt)) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidRlp("receipt.logs[0].removed"))
+            }
+        }
         var tooManyTopicsLog = validReceiptLog
         tooManyTopicsLog["topics"] = Array(repeating: "0x" + String(repeating: "22", count: 32), count: 5)
         var tooManyTopicsReceipt = typedReceipt
@@ -12522,6 +12531,19 @@ final class SccpSolanaProverTests: XCTestCase {
                     sourceBridgeEmitterAddress: sourceBridgeAddress
                 )
             )
+        }
+        for removed in [NSNull(), 1, "secret-token-removed"] as [Any] {
+            var malformedRemovedReceipt = sourceReceipt
+            malformedRemovedReceipt["logs"] = [sourceEventLog(["removed": removed])]
+            await assertEvmError(.invalidPublicInputs("receipt.logs[0].removed")) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: malformedRemovedReceipt,
+                        block: block,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
         }
         var nonObjectLogReceipt = sourceReceipt
         nonObjectLogReceipt["logs"] = ["not-a-log"]

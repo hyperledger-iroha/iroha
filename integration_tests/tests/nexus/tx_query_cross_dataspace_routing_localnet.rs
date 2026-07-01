@@ -54,12 +54,14 @@ use reqwest::StatusCode as HttpStatusCode;
 use tokio::time::sleep;
 use toml::{Table, Value as TomlValue};
 
-const NEXUS_ALIAS: &str = "nexus";
+const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
 const NEXUS_ID_U64: u64 = 0;
 const DS1_ID_U64: u64 = 1;
 const DS2_ID_U64: u64 = 2;
+const DS1_MANIFEST_HASH: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+const DS2_MANIFEST_HASH: &str = "0200000000000000000000000000000000000000000000000000000000000000";
 const NEXUS_LANE_INDEX: u32 = 0;
 const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
@@ -205,6 +207,10 @@ fn localnet_builder() -> NetworkBuilder {
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
             ds1.insert(
+                "manifest_hash".into(),
+                TomlValue::String(DS1_MANIFEST_HASH.to_owned()),
+            );
+            ds1.insert(
                 "description".into(),
                 TomlValue::String("private dataspace one".to_owned()),
             );
@@ -213,6 +219,10 @@ fn localnet_builder() -> NetworkBuilder {
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
+            ds2.insert(
+                "manifest_hash".into(),
+                TomlValue::String(DS2_MANIFEST_HASH.to_owned()),
+            );
             ds2.insert(
                 "description".into(),
                 TomlValue::String("private dataspace two".to_owned()),
@@ -1114,6 +1124,12 @@ fn account_assets_response_contains(
 }
 
 #[test]
+fn tx_query_cross_dataspace_routing_genesis_preexecution_smoke() {
+    let _guard = sandbox::serial_guard();
+    let _network = localnet_builder().build();
+}
+
+#[test]
 fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models() -> Result<()>
 {
     let context = stringify!(
@@ -1526,10 +1542,11 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 mod tests {
     use super::{
         ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, DS1_ID_U64,
-        DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX, DataSpaceId, DomainId,
-        ExpectedLaneValidatorBinding, KeyPair, LaneId, Level, Log, NEXUS_ID_U64, NEXUS_LANE_INDEX,
-        PeerId, RoutedJsonResponse, RoutedTransactionSubmitResponse, SignedTransaction,
-        TOTAL_PEERS, account_assets_response_contains, encode_versioned_signed_transaction,
+        DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH,
+        DataSpaceId, DomainId, ExpectedLaneValidatorBinding, KeyPair, LaneId, Level, Log,
+        NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, PeerId, RoutedJsonResponse,
+        RoutedTransactionSubmitResponse, SignedTransaction, TOTAL_PEERS,
+        account_assets_response_contains, encode_versioned_signed_transaction,
         expect_proxy_fanout_headers, expect_proxy_route_headers, expected_lane_binding_for_peer,
         lane_validator_snapshot, manifest_response_contains_dataspace,
         manifest_response_contains_status, multilane_da_proof_policy_bundle,
@@ -1599,6 +1616,29 @@ mod tests {
                 PeerId::new(key_pair.public_key().clone())
             })
             .collect()
+    }
+
+    fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
+        assert_eq!(raw.len(), 64);
+        let mut hash = [0_u8; 32];
+        for (idx, chunk) in raw.as_bytes().chunks_exact(2).enumerate() {
+            let pair = std::str::from_utf8(chunk).expect("hex pair");
+            hash[idx] = u8::from_str_radix(pair, 16).expect("manifest hash hex");
+        }
+        hash
+    }
+
+    #[test]
+    fn dataspace_fixture_manifest_hashes_derive_config_ids() {
+        let ds1_hash = decode_manifest_hash_fixture(DS1_MANIFEST_HASH);
+        let ds2_hash = decode_manifest_hash_fixture(DS2_MANIFEST_HASH);
+
+        assert_eq!(NEXUS_ALIAS, "universal");
+        assert_eq!(NEXUS_ID_U64, DataSpaceId::UNIVERSAL.as_u64());
+        assert_eq!(DataSpaceId::from_hash(&ds1_hash).as_u64(), DS1_ID_U64);
+        assert_eq!(DataSpaceId::from_hash(&ds2_hash).as_u64(), DS2_ID_U64);
+        assert_ne!(DataSpaceId::from_hash(&ds1_hash), DataSpaceId::UNIVERSAL);
+        assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
 
     #[test]

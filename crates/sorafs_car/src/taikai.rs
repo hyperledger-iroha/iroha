@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
-    fs::{self, File},
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -16,6 +17,9 @@ use iroha_data_model::{
 use norito::json::{self, Map, Value};
 
 use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Request describing a Taikai segment bundle operation.
 pub struct BundleRequest<'a> {
@@ -129,8 +133,7 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
 
     let writer = CarWriter::new(&summary.plan, payload_cow.as_ref())
         .map_err(|err| eyre!("failed to initialise CAR writer: {err}"))?;
-    let mut car_file = File::create(request.car_out)
-        .wrap_err_with(|| format!("failed to create `{}`", request.car_out.display()))?;
+    let mut car_file = open_output_file(request.car_out, "CAR archive")?;
     let car_stats = writer.write_to(&mut car_file).map_err(|err| {
         eyre!(
             "failed to write CAR archive `{}`: {err}",
@@ -235,19 +238,13 @@ fn write_outputs(
 ) -> Result<BundleSummary> {
     let envelope_bytes =
         norito::to_bytes(envelope).wrap_err("failed to encode Taikai envelope payload")?;
-    fs::write(envelope_out, envelope_bytes).wrap_err_with(|| {
-        format!(
-            "failed to write envelope output `{}`",
-            envelope_out.display()
-        )
-    })?;
+    write_output_bytes(envelope_out, "envelope output", &envelope_bytes)?;
 
     let indexes = envelope.indexes();
     let indexes_out_paths = if let Some(path) = indexes_out {
         let rendered = json::to_json_pretty(&indexes)
             .map_err(|err| eyre!("failed to render Taikai index JSON: {err}"))?;
-        fs::write(path, rendered.as_bytes())
-            .wrap_err_with(|| format!("failed to write index output `{}`", path.display()))?;
+        write_output_bytes(path, "index output", rendered.as_bytes())?;
         Some(path.to_path_buf())
     } else {
         None
@@ -256,12 +253,7 @@ fn write_outputs(
     let ingest_metadata_out_paths = if let Some(path) = ingest_metadata_out {
         let rendered = json::to_json_pretty(&Value::Object(ingest_metadata.clone()))
             .map_err(|err| eyre!("failed to render ingest metadata JSON: {err}"))?;
-        fs::write(path, rendered.as_bytes()).wrap_err_with(|| {
-            format!(
-                "failed to write ingest metadata output `{}`",
-                path.display()
-            )
-        })?;
+        write_output_bytes(path, "ingest metadata output", rendered.as_bytes())?;
         Some(path.to_path_buf())
     } else {
         None
@@ -360,9 +352,7 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
     };
 
     if request.car_out != request.car_in {
-        fs::write(request.car_out, &car_bytes).wrap_err_with(|| {
-            format!("failed to write CAR output `{}`", request.car_out.display())
-        })?;
+        write_output_bytes(request.car_out, "CAR output", &car_bytes)?;
     }
 
     let envelope = build_envelope(&details, ingest_pointer);
@@ -384,6 +374,143 @@ pub fn load_extra_metadata(path: &Path) -> Result<ExtraMetadata> {
         .wrap_err_with(|| format!("failed to read metadata JSON `{}`", path.display()))?;
     json::from_str(&contents)
         .wrap_err_with(|| format!("failed to parse metadata JSON `{}`", path.display()))
+}
+
+fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
+    let mut file = open_output_file(path, label)?;
+    file.write_all(bytes)
+        .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
+    let metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect {label} `{}` after open", path.display()))?;
+    if !metadata.is_file() {
+        return Err(eyre!(
+            "failed to write {label} `{}`: output must be a regular file",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("failed to create output parent `{}`", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(eyre!("output `{}` must not be a symlink", path.display()));
+            }
+            if metadata.is_dir() {
+                return Err(eyre!("output `{}` must not be a directory", path.display()));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect output `{}`: {err}",
+                path.display()
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(eyre!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        ));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(eyre!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        ));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(eyre!(
+                        "failed to inspect output parent `{}`: {err}",
+                        ancestor.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 struct IngestMetadataParams<'a> {
@@ -542,19 +669,25 @@ mod tests {
         name::Name,
         taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
     };
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
 
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
+
     #[test]
     fn bundle_writes_outputs() {
-        let tmp = tempdir().expect("tempdir");
-        let payload = tmp.path().join("segment.bin");
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let payload = tmp_path.join("segment.bin");
         fs::write(&payload, b"taikai-payload").expect("write payload");
-        let car_out = tmp.path().join("segment.car");
-        let envelope_out = tmp.path().join("segment.to");
-        let indexes_out = tmp.path().join("segment.indexes.json");
-        let ingest_out = tmp.path().join("segment.ingest.json");
+        let car_out = tmp_path.join("bundle").join("segment.car");
+        let envelope_out = tmp_path.join("bundle").join("segment.to");
+        let indexes_out = tmp_path.join("bundle").join("segment.indexes.json");
+        let ingest_out = tmp_path.join("bundle").join("segment.ingest.json");
         let request = BundleRequest {
             payload_path: &payload,
             payload_bytes: None,
@@ -602,6 +735,64 @@ mod tests {
         );
         assert!(summary.indexes_out.as_ref().unwrap().exists());
         assert!(summary.ingest_metadata_out.as_ref().unwrap().exists());
+    }
+
+    #[test]
+    fn write_output_bytes_creates_parent_and_writes_all_bytes() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let output_path = tmp_path.join("nested").join("segment.to");
+
+        write_output_bytes(&output_path, "test output", b"taikai-output")
+            .expect("write output bytes");
+
+        assert_eq!(
+            fs::read(output_path).expect("read output"),
+            b"taikai-output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_symlink_output() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let target_path = tmp_path.join("target.to");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = tmp_path.join("segment.to");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_output_bytes(&output_path, "test output", b"replace")
+            .expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_symlink_parent() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let real_dir = tmp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = tmp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("segment.to");
+
+        let err = write_output_bytes(&output_path, "test output", b"replace")
+            .expect_err("reject symlink parent");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join("segment.to").exists(),
+            "symlink parent should not receive output"
+        );
     }
 
     #[test]

@@ -658,6 +658,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBearerCashTextCodec.java",
@@ -2666,6 +2667,22 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-wallet-input-claim-strictness",
     ),
     (
+        "Swift Offline Note issued-claim exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-issued-claim-exactness",
+    ),
+    (
+        "Kotlin Offline Note issued-claim amount exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-note-issued-claim-amount-exactness",
+    ),
+    (
+        "Android Java Offline Note issued-claim asset exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-note-issued-claim-asset-exactness",
+    ),
+    (
+        "Android Java Offline Note issued-claim amount exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-note-issued-claim-amount-exactness",
+    ),
+    (
         "Offline readiness artifact contract negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract",
     ),
@@ -2728,6 +2745,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Mobile wallet-note retired state migration negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-wallet-note-retired-state-migration",
+    ),
+    (
+        "Swift Offline Note wallet-note JSON amount exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-wallet-note-json-amount-exactness",
     ),
     (
         "Mobile wallet-note commitment hex exactness negative control",
@@ -10824,6 +10845,209 @@ def check_kotlin_offline_wallet_input_claim_strictness(texts, errors):
     )
 
 
+def check_swift_offline_note_issued_claim_exactness(texts, errors):
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift"
+    source_v2 = "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    test_v2 = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
+    require_contains(
+        texts,
+        source,
+        (
+            "case nonCanonicalField(field: String)",
+            "let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)",
+            "guard assetId == canonicalAssetId else {",
+            'throw OfflineNoteError.nonCanonicalField(field: "asset_id")',
+            "let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString",
+            "guard amount == canonicalAmount else {",
+            'throw OfflineNoteError.nonCanonicalField(field: "amount")',
+            "self.assetId = canonicalAssetId",
+            "self.amount = canonicalAmount",
+        ),
+        "Swift Offline Note issued-claim exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        source_v2,
+        (
+            "case nonCanonicalField(field: String)",
+            "let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)",
+            "guard assetId == canonicalAssetId else {",
+            'throw OfflineNoteV2Error.nonCanonicalField(field: "asset_id")',
+            "let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString",
+            "guard amount == canonicalAmount else {",
+            'throw OfflineNoteV2Error.nonCanonicalField(field: "amount")',
+            "self.assetId = canonicalAssetId",
+            "self.amount = canonicalAmount",
+        ),
+        "Swift Offline Note V2 issued-claim exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "func testOfflineNoteIssueAndClaimValidationCoversDerivedClaimAndFailures() throws",
+            'amount: "05.5000"',
+            '.nonCanonicalField(field: "amount")',
+        ),
+        "Swift Offline Note issued-claim exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        test_v2,
+        (
+            "func testOfflineNoteV2IssueAndClaimValidationCoversDerivedClaimAndFailures() throws",
+            'amount: "05.5000"',
+            '.nonCanonicalField(field: "amount")',
+        ),
+        "Swift Offline Note V2 issued-claim exactness tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_note_issued_claim_amount_exactness(texts, errors):
+    source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt"
+    wallet = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    require_contains(
+        texts,
+        source,
+        (
+            "fun canonicalAmountString(amount: String): String = parseNumeric(amount).canonicalString",
+            "val canonicalAmount: String = canonicalAmountString(amount)",
+            "val canonicalAssetIdValue = canonicalAssetId(assetId)",
+            'require(assetId == canonicalAssetIdValue) { "asset_id must be canonical" }',
+            'require(amount == canonicalAmount) { "amount must be canonical" }',
+        ),
+        "Kotlin Offline Note issued-claim amount exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        wallet,
+        (
+            "val amount: String",
+            "canonicalAmount = OfflineNote.canonicalAmountString(amount)",
+            "OfflineNote.IssuedClaim(",
+            "keyCertificatePayloadHash = keyCertificate.payloadHash()",
+            "this.amount = canonicalAmount",
+            "canonicalAmount = canonicalPositivePaymentAmountString(amount)",
+            "issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)",
+            "val canonicalAmount = canonicalPositivePaymentAmountString(amount)",
+            "private fun canonicalPositivePaymentAmountString(amount: String): String",
+        ),
+        "Kotlin Offline Note wallet amount canonicalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "issuedClaimsRejectNonCanonicalAssetIdsAndAmounts",
+            "AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.toI105(1)",
+            "OfflineNote.canonicalAmountString(nonCanonicalAmount)",
+            "walletCanonicalizesLoadAndReceiveAmounts",
+            'loadWallet.load(assetDefinitionId, "001.2300").get(5, TimeUnit.SECONDS)',
+            'assertEquals("1.2300", issuerClient.lastPrepareAmount)',
+            'val receiveRequest = receiveWallet.prepareReceive(assetDefinitionId, "+10")',
+            'assertEquals("10", receiveStore.listNotes().single().amount)',
+        ),
+        "Kotlin Offline Note issued-claim amount exactness tests",
+        errors,
+    )
+
+
+def check_android_offline_note_issued_claim_asset_exactness(texts, errors):
+    source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
+    test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_contains(
+        texts,
+        source,
+        (
+            "public static String canonicalAssetId(final String assetId)",
+            "writeAssetId(encoder, assetId);",
+            "final String canonical = readAssetId(decoder);",
+            "final String canonicalAssetId = canonicalAssetId(assetId);",
+            "if (!assetId.equals(canonicalAssetId)) {",
+            'throw new IllegalArgumentException("asset_id must be canonical");',
+            "this.assetId = canonicalAssetId;",
+        ),
+        "Android Java Offline Note issued-claim asset exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "private static void issuedClaimsRejectNonCanonicalAssetIds() throws Exception",
+            "AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.toI105(1)",
+            "OfflineNote.canonicalAssetId(nonCanonicalAssetId)",
+            "alternate account discriminant must produce a distinct asset id",
+            '"asset_id must be canonical"',
+        ),
+        "Android Java Offline Note issued-claim asset exactness tests",
+        errors,
+    )
+
+
+def check_android_offline_note_issued_claim_amount_exactness(texts, errors):
+    source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
+    wallet_note = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNote.java"
+    json_codec = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java"
+    test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    require_contains(
+        texts,
+        source,
+        (
+            "public static String canonicalAmountString(final String amount)",
+            "this.canonicalAmount = canonicalAmountString(amount);",
+            "if (!amount.equals(this.canonicalAmount)) {",
+            'throw new IllegalArgumentException("amount must be canonical");',
+            "this.amount = this.canonicalAmount;",
+        ),
+        "Android Java Offline Note issued-claim amount exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        wallet_note,
+        (
+            "final String canonicalAssetId = OfflineNote.canonicalAssetId(this.assetId);",
+            "this.canonicalAmount = OfflineNote.canonicalAmountString(amount);",
+            "this.amount = this.canonicalAmount;",
+        ),
+        "Android Java Offline Note wallet-note amount canonical storage source",
+        errors,
+    )
+    require_contains(
+        texts,
+        json_codec,
+        (
+            'final String amount = asString(object.get("amount"), "amount");',
+            "if (!amount.equals(OfflineNote.canonicalAmountString(amount))) {",
+            'throw new IllegalArgumentException("amount must be canonical");',
+        ),
+        "Android Java Offline Note wallet-note JSON amount exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "private static void issuedClaimsRejectNonCanonicalAmounts() throws Exception",
+            "OfflineNote.canonicalAmountString(nonCanonicalAmount)",
+            "private static void walletNoteJsonCodecRejectsNonCanonicalAmount() throws Exception",
+            'final String replacementField = "\\"amount\\":\\"0" + note.canonicalAmount() + "\\"";',
+            '"amount must be canonical"',
+        ),
+        "Android Java Offline Note issued-claim amount exactness tests",
+        errors,
+    )
+
+
 def check_offline_cash_issuer_key_exactness(texts, errors):
     common_vectors = (
         "missing_issuer_public_key",
@@ -14161,6 +14385,69 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
         )
 
 
+def check_swift_wallet_note_json_amount_exactness(texts, errors):
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift"
+    wallet = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    require_contains(
+        texts,
+        wallet,
+        (
+            "let canonicalAssetId: String",
+            "canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)",
+            "catch {",
+            "guard assetId == canonicalAssetId else {",
+            'throw OfflineNoteWalletError.invalidField("asset_id")',
+            "let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString",
+            "guard amount == canonicalAmount else {",
+            'throw OfflineNoteWalletError.invalidField("amount")',
+            "self.assetId = canonicalAssetId",
+            "self.amount = canonicalAmount",
+        ),
+        "Swift Offline Note wallet-note direct asset/amount exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        source,
+        (
+            'let assetId = try string(object["asset_id"], field: "asset_id")',
+            "try validateCanonicalAssetId(assetId)",
+            "assetId: assetId,",
+            'let amount = try string(object["amount"], field: "amount")',
+            "try validateCanonicalAmount(amount)",
+            "amount: amount,",
+            "private static func validateCanonicalAssetId(_ assetId: String) throws",
+            "let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)",
+            "guard assetId == canonicalAssetId else {",
+            'throw OfflineNoteWalletNoteJsonCodecError.invalidField("asset_id")',
+            "private static func validateCanonicalAmount(_ amount: String) throws",
+            "let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString",
+            "guard amount == canonicalAmount else {",
+            'throw OfflineNoteWalletNoteJsonCodecError.invalidField("amount")',
+        ),
+        "Swift Offline Note wallet-note JSON amount exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "var nonCanonicalAmountObject = try XCTUnwrap(",
+            'nonCanonicalAmountObject["amount"] = "0\\(note.amount)"',
+            'XCTAssertEqual(error as? OfflineNoteWalletNoteJsonCodecError, .invalidField("amount"))',
+            "var nonCanonicalAssetObject = try XCTUnwrap(",
+            'nonCanonicalAssetObject["asset_id"] = "\\(note.assetId)#dataspace:01"',
+            'XCTAssertEqual(error as? OfflineNoteWalletNoteJsonCodecError, .invalidField("asset_id"))',
+            'XCTAssertThrowsError(try copy(amount: "0\\(note.amount)"))',
+            'XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))',
+            'XCTAssertThrowsError(try copy(assetId: "\\(note.assetId)#dataspace:01"))',
+        ),
+        "Swift Offline Note wallet-note JSON amount exactness tests",
+        errors,
+    )
+
+
 def check_mobile_offline_note_draft_proof_replacement(texts, errors):
     swift = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
     swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
@@ -14319,6 +14606,7 @@ def check_mobile_offline_note_wallet_input_cap(texts, errors):
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+    android_receive_request = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java"
     android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
     require_regex(
         texts,
@@ -14391,16 +14679,25 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+    android_receive_request = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java"
     android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
     require_contains(
         texts,
         swift,
         (
             "private func requirePositivePaymentAmount(_ amount: String) throws -> OfflineCanonicalNumeric",
+            "private func requirePositivePaymentAmount(_ amount: String) throws -> OfflineCanonicalNumeric {\n        let parsed = try OfflineNorito.parseCanonicalNumeric(amount)\n        guard !parsed.isNegative && parsed.digits != \"0\" else",
             'guard !parsed.isNegative && parsed.digits != "0" else',
             'throw OfflineNoteWalletError.invalidField("amount")',
-            "try requirePositivePaymentAmount(amount)",
+            "private func canonicalPositivePaymentAmountString(_ amount: String) throws -> String",
+            "try requirePositivePaymentAmount(amount).canonicalString",
+            "let canonicalAmount = try canonicalPositivePaymentAmountString(amount)",
+            "let canonicalAmount = try Self.canonicalPositiveAmountString(amount)",
+            "amount: canonicalAmount",
             "try requirePositivePaymentAmount(receiveRequest.amount)",
+            "private static func canonicalPositiveAmountString(_ amount: String) throws -> String",
+            "private static func canonicalPositiveAmountString(_ amount: String) throws -> String {\n        let parsed = try OfflineNorito.parseCanonicalNumeric(amount)\n        guard !parsed.isNegative && parsed.digits != \"0\" else",
+            "guard amount == canonicalAmount else",
         ),
         "Swift Offline Note wallet positive amount source",
         errors,
@@ -14408,7 +14705,21 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     require_regex(
         texts,
         swift,
-        r"public func load\(assetDefinitionId: String, amount: String\) async throws -> OfflineNoteWalletNote \{[\s\S]*?guard let issuerClient else \{[\s\S]*?\}[\s\S]*?_ = try requirePositivePaymentAmount\(amount\)[\s\S]*?issuerClient\.prepareLoad",
+        r"private func requirePositivePaymentAmount\(_ amount: String\) throws -> OfflineCanonicalNumeric \{[\s\S]*?guard !parsed\.isNegative && parsed\.digits != \"0\" else",
+        "Swift Offline Note wallet positive amount source",
+        errors,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"public func load\(assetDefinitionId: String, amount: String\) async throws -> OfflineNoteWalletNote \{[\s\S]*?guard let issuerClient else \{[\s\S]*?\}[\s\S]*?let canonicalAmount = try canonicalPositivePaymentAmountString\(amount\)[\s\S]*?issuerClient\.prepareLoad\([\s\S]*?amount: canonicalAmount",
+        "Swift Offline Note wallet positive amount source",
+        errors,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"public struct OfflineNoteReceiveRequest: Equatable, Sendable \{[\s\S]*?canonicalAssetId = try OfflineNorito\.canonicalAssetIdLiteral\(assetId\)[\s\S]*?throw OfflineNoteWalletError\.invalidField\(\"asset_id\"\)[\s\S]*?guard assetId == canonicalAssetId else[\s\S]*?let canonicalAmount = try Self\.canonicalPositiveAmountString\(amount\)[\s\S]*?guard amount == canonicalAmount else",
         "Swift Offline Note wallet positive amount source",
         errors,
     )
@@ -14417,12 +14728,18 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
         swift_test,
         (
             "func testOfflineNoteWalletRejectsNonPositiveLoadAmounts() async throws",
+            "func testOfflineNoteWalletCanonicalizesLoadAndReceiveAmounts() async throws",
             "func testOfflineNoteWalletRejectsNonPositiveReceiveAndPaymentAmounts() throws",
             'for invalidAmount in ["0", "-1"]',
             'XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))',
             "XCTAssertEqual(issuerClient.prepareLoadCount, 0)",
             "XCTAssertNil(issuerClient.lastIssueRequest)",
-            "senderWallet.pay(forgedRequest)",
+            'XCTAssertEqual(issuerClient.lastPrepareLoadAmount, "1.2300")',
+            'XCTAssertEqual(receiveRequest.amount, "10")',
+            'XCTAssertEqual(storedReceive.amount, "10")',
+            'for nonCanonicalAmount in ["010", "+10"]',
+            "XCTAssertThrowsError(try OfflineNoteReceiveRequest(",
+            'XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("asset_id"))',
             "XCTAssertEqual(try senderStore.listNotes().first?.state, .spendable)",
         ),
         "Swift Offline Note wallet positive amount tests",
@@ -14434,7 +14751,14 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
         (
             "private fun requirePositivePaymentAmount(amount: String): BigDecimal",
             "require(value.signum() > 0) { \"Offline Note payment amount must be positive\" }",
-            "requirePositivePaymentAmount(amount)",
+            "private fun canonicalPositivePaymentAmountString(amount: String): String",
+            "requirePositivePaymentAmount(canonical)",
+            "canonicalAmount = canonicalPositivePaymentAmountString(amount)",
+            "val canonicalAmount = canonicalPositivePaymentAmountString(amount)",
+            "val canonicalAmount: String = canonicalPositivePaymentAmountString(amount)",
+            'require(assetId == canonicalAssetId) { "asset_id must be canonical" }',
+            'require(amount == canonicalAmount) { "amount must be canonical" }',
+            'require(amount == canonicalAmount) { "amount must be canonical" }\n        OfflineNote.AuditOutputClaim(',
             "requirePositivePaymentAmount(receiveRequest.canonicalAmount)",
         ),
         "Kotlin Offline Note wallet positive amount source",
@@ -14443,7 +14767,7 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     require_regex(
         texts,
         kotlin,
-        r"fun load\(assetDefinitionId: String, amount: String\): CompletableFuture<OfflineNoteWalletNote> \{[\s\S]*?try \{\s*requirePositivePaymentAmount\(amount\)\s*\} catch \(error: Throwable\) \{\s*return failedFuture\(error\)\s*\}[\s\S]*?issuer\.prepareLoad",
+        r"fun load\(assetDefinitionId: String, amount: String\): CompletableFuture<OfflineNoteWalletNote> \{[\s\S]*?val canonicalAmount: String[\s\S]*?canonicalAmount = canonicalPositivePaymentAmountString\(amount\)[\s\S]*?issuer\.prepareLoad\(chainId, accountId, assetDefinition\(assetId\), canonicalAmount\)",
         "Kotlin Offline Note wallet positive amount source",
         errors,
     )
@@ -14455,9 +14779,13 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
             "fun walletRejectsNonPositiveReceiveAndPaymentAmounts()",
             'listOf("0", "-1").forEach { invalidAmount ->',
             'assertIllegalArgumentContains("Offline Note payment amount must be positive")',
+            'listOf("010", "+10").forEach { nonCanonicalAmount ->',
+            'assertIllegalArgumentContains("amount must be canonical")',
+            "AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId, null).address.toI105(1)",
+            'assertIllegalArgumentContains("asset_id must be canonical")',
             "assertEquals(0, issuerClient.prepareLoadCount)",
             "assertNull(issuerClient.lastIssueRequest)",
-            "senderWallet.pay(forgedRequest)",
+            "OfflineNoteReceiveRequest(",
             "assertEquals(OfflineNoteWalletNoteState.SPENDABLE, senderStore.listNotes().single().state)",
         ),
         "Kotlin Offline Note wallet positive amount tests",
@@ -14484,9 +14812,14 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     )
     require_contains(
         texts,
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java",
+        android_receive_request,
         (
-            "this.amount = OfflineNoteWallet.canonicalPositivePaymentAmountString(amount);",
+            "final String canonicalAssetId = OfflineNote.canonicalAssetId(assetId);",
+            'throw new IllegalArgumentException("asset_id must be canonical");',
+            "final String canonicalAmount = OfflineNoteWallet.canonicalPositivePaymentAmountString(amount);",
+            "if (!amount.equals(canonicalAmount)) {",
+            'throw new IllegalArgumentException("amount must be canonical");',
+            "this.amount = canonicalAmount;",
             "this.outputCommitment, keyCertificate, assetId, this.amount)",
         ),
         "Android Java Offline Note receive request positive amount source",
@@ -14510,6 +14843,11 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
             'assertEquals("1.2300", issuerClient.lastPrepareAmount, "canonical load prepare amount")',
             'assertEquals("1.2300", issuerClient.lastIssueRequest.amount(), "canonical issue amount")',
             'assertEquals("10", receiveRequest.amount(), "canonical receive request amount")',
+            'for (final String nonCanonicalAmount : Arrays.asList("010", "+10"))',
+            '"amount must be canonical"',
+            "AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId(), null)",
+            "OfflineNote.canonicalAssetId(nonCanonicalAssetId)",
+            '"asset_id must be canonical"',
             'Arrays.asList(" 1", "1\\n", "1e3", ".", "")',
             "walletRejectsNonPositiveReceiveAndPaymentAmounts();",
             "private static void walletRejectsNonPositiveReceiveAndPaymentAmounts()",
@@ -33376,6 +33714,10 @@ def run_checks(texts):
     check_kotlin_offline_wallet_amount_normalization(texts, errors)
     check_kotlin_offline_wallet_max_inputs_strictness(texts, errors)
     check_kotlin_offline_wallet_input_claim_strictness(texts, errors)
+    check_swift_offline_note_issued_claim_exactness(texts, errors)
+    check_kotlin_offline_note_issued_claim_amount_exactness(texts, errors)
+    check_android_offline_note_issued_claim_asset_exactness(texts, errors)
+    check_android_offline_note_issued_claim_amount_exactness(texts, errors)
     check_offline_cash_issuer_key_exactness(texts, errors)
     check_mobile_offline_retired_qr_prefix_wording(texts, errors)
     check_android_offline_transfer_persistence_coverage(texts, errors)
@@ -33392,6 +33734,7 @@ def run_checks(texts):
     check_bridge_retired_offline_note_transaction_builders(texts, errors)
     check_mobile_classic_offline_note_fixture_labels(texts, errors)
     check_mobile_wallet_note_state_strictness(texts, errors)
+    check_swift_wallet_note_json_amount_exactness(texts, errors)
     check_mobile_offline_note_draft_proof_replacement(texts, errors)
     check_mobile_offline_note_wallet_input_cap(texts, errors)
     check_mobile_offline_note_wallet_positive_amounts(texts, errors)
@@ -40091,6 +40434,268 @@ if mode == "--negative-control-kotlin-offline-wallet-input-claim-strictness":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-swift-offline-note-issued-claim-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
+            "guard assetId == canonicalAssetId else {",
+            "guard true || assetId == canonicalAssetId else {",
+            "Swift Offline Note issued-claim exactness source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
+            "guard amount == canonicalAmount else {",
+            "guard true || amount == canonicalAmount else {",
+            "Swift Offline Note issued-claim exactness source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+            "guard assetId == canonicalAssetId else {",
+            "guard true || assetId == canonicalAssetId else {",
+            "Swift Offline Note V2 issued-claim exactness source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+            "guard amount == canonicalAmount else {",
+            "guard true || amount == canonicalAmount else {",
+            "Swift Offline Note V2 issued-claim exactness source",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'amount: "05.5000"',
+            'amount: "5.5000"',
+            "Swift Offline Note issued-claim exactness tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
+            'amount: "05.5000"',
+            'amount: "5.5000"',
+            "Swift Offline Note V2 issued-claim exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift Offline Note issued-claim exactness coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Swift Offline Note issued-claim exactness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift Offline Note issued-claim exactness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Swift Offline Note issued-claim exactness drift was not detected"
+        )
+    print("negative control rejected Swift Offline Note issued-claim exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-offline-note-issued-claim-amount-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
+            'require(amount == canonicalAmount) { "amount must be canonical" }',
+            'check(amount == canonicalAmount) { "amount must be canonical" }',
+            "Kotlin Offline Note issued-claim amount exactness source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "this.amount = canonicalAmount",
+            "this.amount = amount",
+            "Kotlin Offline Note wallet amount canonicalization source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "canonicalAmount = canonicalPositivePaymentAmountString(amount)",
+            "canonicalAmount = amount",
+            "Kotlin Offline Note wallet positive amount source",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "issuedClaimsRejectNonCanonicalAssetIdsAndAmounts",
+            "issuedClaimsAcceptNonCanonicalAssetIdsAndAmounts",
+            "Kotlin Offline Note issued-claim amount exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "walletCanonicalizesLoadAndReceiveAmounts",
+            "walletPreservesNonCanonicalLoadAndReceiveAmounts",
+            "Kotlin Offline Note issued-claim amount exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin Offline Note issued-claim amount exactness coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin Offline Note issued-claim amount exactness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin Offline Note issued-claim amount exactness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin Offline Note issued-claim amount exactness drift was not detected"
+        )
+    print("negative control rejected Kotlin Offline Note issued-claim amount exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-offline-note-issued-claim-asset-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
+            "if (!assetId.equals(canonicalAssetId)) {",
+            "if (false && !assetId.equals(canonicalAssetId)) {",
+            "Android Java Offline Note issued-claim asset exactness source",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void issuedClaimsRejectNonCanonicalAssetIds() throws Exception",
+            "private static void issuedClaimsAcceptNonCanonicalAssetIds() throws Exception",
+            "Android Java Offline Note issued-claim asset exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Android Java Offline Note issued-claim asset exactness coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Android Java Offline Note issued-claim asset exactness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Android Java Offline Note issued-claim asset exactness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Android Java Offline Note issued-claim asset exactness drift was not detected"
+        )
+    print("negative control rejected Android Java Offline Note issued-claim asset exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-offline-note-issued-claim-amount-exactness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
+            "if (!amount.equals(this.canonicalAmount)) {",
+            "if (false && !amount.equals(this.canonicalAmount)) {",
+            "Android Java Offline Note issued-claim amount exactness source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java",
+            "if (!amount.equals(OfflineNote.canonicalAmountString(amount))) {",
+            "if (false && !amount.equals(OfflineNote.canonicalAmountString(amount))) {",
+            "Android Java Offline Note wallet-note JSON amount exactness source",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void issuedClaimsRejectNonCanonicalAmounts() throws Exception",
+            "private static void issuedClaimsAcceptNonCanonicalAmounts() throws Exception",
+            "Android Java Offline Note issued-claim amount exactness tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void walletNoteJsonCodecRejectsNonCanonicalAmount() throws Exception",
+            "private static void walletNoteJsonCodecAcceptsNonCanonicalAmount() throws Exception",
+            "Android Java Offline Note issued-claim amount exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Android Java Offline Note issued-claim amount exactness coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Android Java Offline Note issued-claim amount exactness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Android Java Offline Note issued-claim amount exactness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Android Java Offline Note issued-claim amount exactness drift was not detected"
+        )
+    print("negative control rejected Android Java Offline Note issued-claim amount exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-offline-readiness-artifact-contract":
     mutated_texts = dict(texts)
     targets = (
@@ -42481,6 +43086,91 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-swift-wallet-note-json-amount-exactness":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift"
+    wallet = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    mutations = (
+        (
+            wallet,
+            "guard assetId == canonicalAssetId else {",
+            "guard true || assetId == canonicalAssetId else {",
+            "Swift Offline Note wallet-note direct asset/amount exactness source",
+        ),
+        (
+            wallet,
+            "guard amount == canonicalAmount else {",
+            "guard true || amount == canonicalAmount else {",
+            "Swift Offline Note wallet-note direct asset/amount exactness source",
+        ),
+        (
+            source,
+            "try validateCanonicalAssetId(assetId)",
+            "// asset id exactness check removed",
+            "Swift Offline Note wallet-note JSON amount exactness source",
+        ),
+        (
+            source,
+            "try validateCanonicalAmount(amount)",
+            "// amount exactness check removed",
+            "Swift Offline Note wallet-note JSON amount exactness source",
+        ),
+        (
+            source,
+            "guard amount == canonicalAmount else {",
+            "guard true || amount == canonicalAmount else {",
+            "Swift Offline Note wallet-note JSON amount exactness source",
+        ),
+        (
+            test,
+            'nonCanonicalAssetObject["asset_id"] = "\\(note.assetId)#dataspace:01"',
+            'nonCanonicalAssetObject["asset_id"] = note.assetId',
+            "Swift Offline Note wallet-note JSON amount exactness tests",
+        ),
+        (
+            test,
+            'nonCanonicalAmountObject["amount"] = "0\\(note.amount)"',
+            'nonCanonicalAmountObject["amount"] = note.amount',
+            "Swift Offline Note wallet-note JSON amount exactness tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift wallet-note JSON amount exactness coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Swift wallet-note JSON amount exactness drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Swift wallet-note JSON amount exactness drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Swift wallet-note JSON amount exactness drift was not detected"
+        )
+    print("negative control rejected Swift wallet-note JSON amount exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-mobile-wallet-note-commitment-hex-exactness":
     mutated = dict(texts)
     java_source = (
@@ -42737,13 +43427,13 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
-            "        _ = try requirePositivePaymentAmount(amount)\n        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)",
-            "        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)",
+            "        let canonicalAmount = try canonicalPositivePaymentAmountString(amount)\n        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)",
+            "        let canonicalAmount = amount\n        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)",
             "Swift Offline Note wallet positive amount source",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
-            "        try {\n            requirePositivePaymentAmount(amount)\n        } catch (error: Throwable) {\n            return failedFuture(error)\n        }\n        val assetId = walletAssetId(assetDefinitionId, accountId)",
+            "        val canonicalAmount: String\n        try {\n            canonicalAmount = canonicalPositivePaymentAmountString(amount)\n        } catch (error: Throwable) {\n            return failedFuture(error)\n        }\n        val assetId = walletAssetId(assetDefinitionId, accountId)",
             "        val assetId = walletAssetId(assetDefinitionId, accountId)",
             "Kotlin Offline Note wallet positive amount source",
         ),
@@ -42752,6 +43442,24 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
             "    final String canonicalAmount;\n    try {\n      canonicalAmount = canonicalPositivePaymentAmountString(amount);\n    } catch (final Throwable error) {\n      return failedFuture(error);\n    }\n    final String assetId = walletAssetId(assetDefinitionId, accountId);",
             "    final String assetId = walletAssetId(assetDefinitionId, accountId);",
             "Android Java Offline Note wallet positive amount source",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "        let canonicalAmount = try Self.canonicalPositiveAmountString(amount)\n        guard amount == canonicalAmount else {",
+            "        let canonicalAmount = try Self.canonicalPositiveAmountString(amount)\n        guard true || amount == canonicalAmount else {",
+            "Swift Offline Note wallet positive amount source",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "        require(amount == canonicalAmount) { \"amount must be canonical\" }\n        OfflineNote.AuditOutputClaim(",
+            "        require(true || amount == canonicalAmount) { \"amount must be canonical\" }\n        OfflineNote.AuditOutputClaim(",
+            "Kotlin Offline Note wallet positive amount source",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteReceiveRequest.java",
+            "    if (!amount.equals(canonicalAmount)) {\n      throw new IllegalArgumentException(\"amount must be canonical\");\n    }",
+            "    if (false && !amount.equals(canonicalAmount)) {\n      throw new IllegalArgumentException(\"amount must be canonical\");\n    }",
+            "Android Java Offline Note receive request positive amount source",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
@@ -42776,6 +43484,30 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
             "private static void walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts()",
             "private static void walletAllowsMalformedLoadAndReceiveAmounts()",
             "Android Java Offline Note wallet positive amount tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            'for nonCanonicalAmount in ["010", "+10"]',
+            'for nonCanonicalAmount in ["10"]',
+            "Swift Offline Note wallet positive amount tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            'listOf("010", "+10").forEach { nonCanonicalAmount ->',
+            'listOf("10").forEach { nonCanonicalAmount ->',
+            "Kotlin Offline Note wallet positive amount tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            'for (final String nonCanonicalAmount : Arrays.asList("010", "+10"))',
+            'for (final String nonCanonicalAmount : Arrays.asList("10"))',
+            "Android Java Offline Note wallet positive amount tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineNoteWalletCanonicalizesLoadAndReceiveAmounts() async throws",
+            "func testOfflineNoteWalletPreservesNonCanonicalLoadAndReceiveAmounts() async throws",
+            "Swift Offline Note wallet positive amount tests",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
@@ -42822,6 +43554,8 @@ if mode == "--negative-control-mobile-offline-note-wallet-positive-amounts":
         raise SystemExit(
             "negative control failed: mobile Offline Note wallet positive amount drift was not detected for "
             + expected_label
+            + " while mutating "
+            + old.splitlines()[0]
         )
     if not detected_messages:
         raise SystemExit(

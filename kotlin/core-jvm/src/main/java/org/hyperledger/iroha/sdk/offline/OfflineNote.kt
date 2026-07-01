@@ -89,6 +89,8 @@ object OfflineNote {
         return canonical
     }
 
+    fun canonicalAmountString(amount: String): String = parseNumeric(amount).canonicalString
+
     /**
      * Historical classic Offline Note instruction wire names kept only for
      * fixture-only decoding; production offline payments use Kagemusha
@@ -659,13 +661,15 @@ object OfflineNote {
     ) {
         private val _noteCommitment = noteCommitment.copyOf()
         private val _keyCertificatePayloadHash = keyCertificatePayloadHash.copyOf()
-        val canonicalAmount: String = parseNumeric(amount).canonicalString
+        val canonicalAmount: String = canonicalAmountString(amount)
 
         init {
             require(domain == ISSUED_CLAIM_DOMAIN) { "unsupported issued claim domain" }
             requireHash(_noteCommitment, "note_commitment")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
-            parseAssetId(assetId)
+            val canonicalAssetIdValue = canonicalAssetId(assetId)
+            require(assetId == canonicalAssetIdValue) { "asset_id must be canonical" }
+            require(amount == canonicalAmount) { "amount must be canonical" }
         }
 
         fun noteCommitment(): ByteArray = _noteCommitment.copyOf()

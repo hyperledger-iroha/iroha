@@ -29,6 +29,7 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -119,6 +120,7 @@ DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
 COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema",
     "status",
+    "generated_at_unix",
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
@@ -228,8 +230,10 @@ SENSITIVE_KEYS = {
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "source_batch_digest_hex",
     "cycle_digest_hex",
 )
@@ -405,7 +409,7 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
 
 
 def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list[str]]:
-    return validate_standard_evidence_payload(
+    kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
         "SoraFS transparency rollout artifact",
@@ -414,6 +418,9 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         validate_kind_specific,
         require_reviewed_deployment_context=True,
     )
+    if kind_name is not None:
+        require_positive_int(payload, "generated_at_unix", errors)
+    return kind_name, errors
 
 
 
@@ -452,7 +459,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,

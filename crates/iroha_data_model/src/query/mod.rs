@@ -143,6 +143,24 @@ mod signature_tests {
             .verify(key_pair.public_key(), &fallible.payload)
             .expect("query signature should verify");
     }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn query_signature_json_rejects_all_zero_signature_material() {
+        let encoded = json_wrappers::base64_encode(&[0_u8; 64]);
+        let err = norito::json::from_value::<QuerySignature>(norito::json::Value::from(encoded))
+            .expect_err("all-zero query signature JSON must fail closed");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("QuerySignature"),
+            "unexpected query signature JSON error: {message}"
+        );
+        assert!(
+            message.contains("all zero"),
+            "unexpected all-zero query signature JSON error: {message}"
+        );
+    }
 }
 
 impl iroha_version::codec::EncodeVersioned for SignedQuery {
@@ -1629,7 +1647,12 @@ mod model {
                     message: String::from("invalid base64 signature payload"),
                 }
             })?;
-            let signature = iroha_crypto::Signature::from_bytes(&bytes);
+            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|err| {
+                norito::json::Error::InvalidField {
+                    field: String::from("QuerySignature"),
+                    message: format!("invalid signature payload: {err}"),
+                }
+            })?;
             Ok(QuerySignature(SignatureOf::from_signature(signature)))
         }
     }

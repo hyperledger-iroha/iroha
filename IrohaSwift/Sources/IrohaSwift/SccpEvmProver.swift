@@ -69,6 +69,20 @@ private let sccpEvmSubmitMessageProofEntrypointV1 =
 private let ethereumMainnetBeaconRestMaxResponseBytes = 1024 * 1024
 private let ethereumMainnetSecondsPerSlot: UInt64 = 12
 
+private func requireEvmReceiptLogNotRemoved(_ log: [String: Any],
+                                            label: String,
+                                            removedField: String) throws {
+    guard let removed = log["removed"] else {
+        return
+    }
+    guard let removedFlag = removed as? Bool else {
+        throw EvmSccpProverError.invalidPublicInputs("\(label).removed")
+    }
+    if removedFlag {
+        throw EvmSccpProverError.invalidPublicInputs(removedField)
+    }
+}
+
 private func sccpCallbackDictionarySnapshot(_ value: [String: Any]) -> [String: Any] {
     var snapshot: [String: Any] = [:]
     snapshot.reserveCapacity(value.count)
@@ -3945,9 +3959,11 @@ public final class BscMainnetSccp {
         let sourceEventTopic = evmSccpSourceEventTopic()
         var matchedDigest: String?
         for (index, log) in logs.enumerated() {
-            if (log["removed"] as? Bool) == true {
-                throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
-            }
+            try requireEvmReceiptLogNotRemoved(
+                log,
+                label: "receipt.logs[\(index)]",
+                removedField: "receipt.logs"
+            )
             let address = try normalizeRpcHex(
                 log["address"],
                 label: "receipt.logs[\(index)].address",
@@ -5887,9 +5903,11 @@ public final class EthereumMainnetSccp {
         let sourceEventTopic = evmSccpSourceEventTopic()
         var matchedDigest: String?
         for (index, log) in logs.enumerated() {
-            if (log["removed"] as? Bool) == true {
-                throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
-            }
+            try requireEvmReceiptLogNotRemoved(
+                log,
+                label: "receipt.logs[\(index)]",
+                removedField: "receipt.logs"
+            )
             let address = try normalizeRpcHex(
                 log["address"],
                 label: "receipt.logs[\(index)].address",

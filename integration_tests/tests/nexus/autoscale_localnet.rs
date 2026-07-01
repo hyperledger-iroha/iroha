@@ -39,6 +39,9 @@ const PUBLIC_PROFILE_ELASTIC_LANE_ID: u32 = 3;
 const OBSERVED_AUTOSCALE_LANE_IDS: [u32; 2] = [ELASTIC_LANE_ID, PUBLIC_PROFILE_ELASTIC_LANE_ID];
 const STRICT_CYCLE_LOAD_TX_COUNT: usize = 96;
 const PUBLIC_PROFILE_STRICT_CYCLE_LOAD_TX_COUNT: usize = 256;
+const LOCALNET_AUTOSCALE_SCALE_OUT_UTILIZATION_RATIO: f64 = 0.05;
+const LOCALNET_AUTOSCALE_SCALE_IN_UTILIZATION_RATIO: f64 = 0.04;
+const LOCALNET_AUTOSCALE_PER_LANE_TARGET_TPS: i64 = 100;
 const LANE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 const EXPANSION_TOP_UP_EVERY_HEARTBEATS: u64 = 4;
@@ -110,16 +113,19 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.80_f64)
                 .write(
                     ["nexus", "autoscale", "scale_out_utilization_ratio"],
-                    0.05_f64,
+                    LOCALNET_AUTOSCALE_SCALE_OUT_UTILIZATION_RATIO,
                 )
                 .write(
                     ["nexus", "autoscale", "scale_in_utilization_ratio"],
-                    0.04_f64,
+                    LOCALNET_AUTOSCALE_SCALE_IN_UTILIZATION_RATIO,
                 )
                 .write(["nexus", "autoscale", "scale_out_window_blocks"], 2_i64)
                 .write(["nexus", "autoscale", "scale_in_window_blocks"], 4_i64)
                 .write(["nexus", "autoscale", "cooldown_blocks"], 1_i64)
-                .write(["nexus", "autoscale", "per_lane_target_tps"], 40_i64);
+                .write(
+                    ["nexus", "autoscale", "per_lane_target_tps"],
+                    LOCALNET_AUTOSCALE_PER_LANE_TARGET_TPS,
+                );
         })
 }
 
@@ -671,6 +677,21 @@ impl AutoscaleSoakReporter {
         quorum_required: usize,
         cycle_outcome: &ExpandContractCycleOutcome,
     ) -> Result<()> {
+        ensure!(
+            cycle_outcome.peers_with_scale_out_after_expansion >= quorum_required,
+            "autoscale soak cycle {cycle_index} attempt {attempt}: fresh scale-out transition quorum miss ({}/{TOTAL_PEERS}; required {quorum_required}) must fail the soak instead of being summarized as success",
+            cycle_outcome.peers_with_scale_out_after_expansion,
+        );
+        ensure!(
+            scale_in_transition_quorum_satisfied(
+                cycle_outcome.peers_with_scale_in_after_expansion,
+                Some(cycle_outcome.peers_with_scale_in_since_cycle_start),
+                quorum_required,
+            ),
+            "autoscale soak cycle {cycle_index} attempt {attempt}: scale-in transition quorum miss after contraction (after expansion: {}/{TOTAL_PEERS}; since cycle start: {}/{TOTAL_PEERS}; required {quorum_required}) must fail the soak instead of being summarized as success",
+            cycle_outcome.peers_with_scale_in_after_expansion,
+            cycle_outcome.peers_with_scale_in_since_cycle_start,
+        );
         self.cycles_completed = self.cycles_completed.saturating_add(1);
         self.expansion_times_s.push(cycle_outcome.expansion_time_s);
         self.contraction_times_s
@@ -680,7 +701,11 @@ impl AutoscaleSoakReporter {
             self.scale_out_quorum_misses_total =
                 self.scale_out_quorum_misses_total.saturating_add(1);
         }
-        if cycle_outcome.peers_with_scale_in_after_expansion < quorum_required {
+        if !scale_in_transition_quorum_satisfied(
+            cycle_outcome.peers_with_scale_in_after_expansion,
+            Some(cycle_outcome.peers_with_scale_in_since_cycle_start),
+            quorum_required,
+        ) {
             self.scale_in_post_expansion_quorum_misses_total = self
                 .scale_in_post_expansion_quorum_misses_total
                 .saturating_add(1);
@@ -961,15 +986,20 @@ fn strip_ansi_escape_codes(input: &str) -> Cow<'_, str> {
 }
 
 fn line_has_single_unsigned_field(line: &str, field: &str) -> bool {
-    line_unsigned_field_values(line, field).len() == 1
+    matches!(
+        line_unsigned_field_occurrences(line, field).as_slice(),
+        [Some(_)]
+    )
 }
 
 fn line_has_unique_unsigned_field(line: &str, field: &str, expected: u64) -> bool {
-    let mut values = line_unsigned_field_values(line, field);
-    values.len() == 1 && values.pop() == Some(expected)
+    matches!(
+        line_unsigned_field_occurrences(line, field).as_slice(),
+        [Some(value)] if *value == expected
+    )
 }
 
-fn line_unsigned_field_values(line: &str, field: &str) -> Vec<u64> {
+fn line_unsigned_field_occurrences(line: &str, field: &str) -> Vec<Option<u64>> {
     let prefixes = [
         format!("{field}="),
         format!("{field}:"),
@@ -978,6 +1008,9 @@ fn line_unsigned_field_values(line: &str, field: &str) -> Vec<u64> {
     let mut values = Vec::new();
     for prefix in prefixes {
         for (offset, _) in line.match_indices(prefix.as_str()) {
+            if line_offset_inside_quoted_or_keyed_value(line, offset) {
+                continue;
+            }
             if offset > 0
                 && line[..offset].chars().next_back().is_some_and(|previous| {
                     !previous.is_ascii_whitespace() && !matches!(previous, '{' | '[' | '(' | ',')
@@ -985,30 +1018,88 @@ fn line_unsigned_field_values(line: &str, field: &str) -> Vec<u64> {
             {
                 continue;
             }
-            let value = line[offset + prefix.len()..].trim_start();
-            let digit_len = value
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .map(char::len_utf8)
-                .sum::<usize>();
-            if digit_len == 0 {
-                continue;
-            }
-            let digits = &value[..digit_len];
-            if digits.len() > 1 && digits.starts_with('0') {
-                continue;
-            }
-            let Ok(parsed) = digits.parse::<u64>() else {
-                continue;
-            };
-            if value[digit_len..].chars().next().is_none_or(|next| {
-                next.is_ascii_whitespace() || matches!(next, ',' | ';' | '}' | ']' | ')')
-            }) {
-                values.push(parsed);
-            }
+            values.push(parse_unsigned_field_value(&line[offset + prefix.len()..]));
         }
     }
     values
+}
+
+fn line_offset_inside_quoted_or_keyed_value(line: &str, offset: usize) -> bool {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut containers = Vec::new();
+    for (index, ch) in line.char_indices() {
+        if index >= offset {
+            break;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            match ch {
+                '\\' => escaped = true,
+                quote_ch if quote_ch == active_quote => quote = None,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' => containers.push((')', line_opener_starts_keyed_value(line, index))),
+            '[' => containers.push((']', line_opener_starts_keyed_value(line, index))),
+            '{' => containers.push(('}', line_opener_starts_keyed_value(line, index))),
+            ')' | ']' | '}' => {
+                if containers
+                    .last()
+                    .is_some_and(|(expected, _)| *expected == ch)
+                {
+                    containers.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    quote.is_some() || containers.iter().any(|(_, keyed_value)| *keyed_value)
+}
+
+fn line_opener_starts_keyed_value(line: &str, opener_offset: usize) -> bool {
+    let before_opener = line[..opener_offset].trim_end_matches(|ch: char| ch.is_ascii_whitespace());
+    let Some(delimiter) = before_opener.chars().next_back() else {
+        return false;
+    };
+    if !matches!(delimiter, '=' | ':') {
+        return false;
+    }
+    before_opener[..before_opener.len() - delimiter.len_utf8()]
+        .trim_end_matches(|ch: char| ch.is_ascii_whitespace())
+        .chars()
+        .next_back()
+        .is_some_and(|ch| ch == '"' || ch == '\'' || ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn parse_unsigned_field_value(raw: &str) -> Option<u64> {
+    let value = raw.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
+    let digit_len = value
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if digit_len == 0 {
+        return None;
+    }
+    let digits = &value[..digit_len];
+    if digits.len() > 1 && digits.starts_with('0') {
+        return None;
+    }
+    let parsed = digits.parse::<u64>().ok()?;
+    value[digit_len..]
+        .chars()
+        .next()
+        .is_none_or(|next| {
+            next.is_ascii_whitespace() || matches!(next, ',' | ';' | '}' | ']' | ')')
+        })
+        .then_some(parsed)
 }
 
 fn line_has_lane_field(line: &str, lane_id: u32) -> bool {
@@ -1034,6 +1125,89 @@ fn line_has_autoscale_scale_in_transition_fields(line: &str, lane_id: u32) -> bo
         && line_has_single_unsigned_field(line, "in_utilization_p95_permille")
 }
 
+fn line_has_transition_marker(line: &str, marker: &str) -> bool {
+    line.match_indices(marker).any(|(offset, _)| {
+        let prefix = &line[..offset];
+        let suffix = &line[offset + marker.len()..];
+        if !line_marker_suffix_is_boundary(suffix) {
+            return false;
+        }
+        if line_marker_prefix_is_message_field(prefix)
+            || line_marker_prefix_is_tracing_target(prefix)
+        {
+            return true;
+        }
+        !line_offset_inside_quoted_or_keyed_value(line, offset)
+            && prefix
+                .chars()
+                .next_back()
+                .is_none_or(|ch| ch.is_ascii_whitespace())
+            && prefix
+                .chars()
+                .rev()
+                .find(|ch| !ch.is_ascii_whitespace())
+                .is_none_or(|previous| {
+                    !matches!(previous, '=' | ':' | '"' | '\'' | '(' | '[' | '{')
+                })
+    })
+}
+
+fn line_marker_prefix_is_tracing_target(prefix: &str) -> bool {
+    let trimmed = prefix.trim_end_matches(|ch: char| ch.is_ascii_whitespace());
+    let Some(before_target_colon) = trimmed.strip_suffix(':') else {
+        return false;
+    };
+    let mut tokens = before_target_colon.split_ascii_whitespace().rev();
+    let Some(target) = tokens.next() else {
+        return false;
+    };
+    let Some(level) = tokens.next() else {
+        return false;
+    };
+    line_log_level_token(level) && line_rust_target_token(target)
+}
+
+fn line_log_level_token(token: &str) -> bool {
+    matches!(token, "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR")
+}
+
+fn line_rust_target_token(token: &str) -> bool {
+    token.contains("::")
+        && !token.starts_with("::")
+        && !token.ends_with("::")
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':')
+}
+
+fn line_marker_suffix_is_boundary(suffix: &str) -> bool {
+    suffix
+        .chars()
+        .next()
+        .is_none_or(|next| matches!(next, '"' | '\'' | ',' | ';' | '}' | ']' | ')'))
+}
+
+fn line_marker_prefix_is_message_field(prefix: &str) -> bool {
+    let trimmed = prefix.trim_end_matches(|ch: char| ch.is_ascii_whitespace());
+    message_field_prefix_has_suffix(trimmed, "\"message\":\"")
+        || message_field_prefix_has_suffix(trimmed, "\"msg\":\"")
+        || message_field_prefix_has_suffix(trimmed, "message=\"")
+        || message_field_prefix_has_suffix(trimmed, "msg=\"")
+        || message_field_prefix_has_suffix(trimmed, "message=")
+        || message_field_prefix_has_suffix(trimmed, "msg=")
+        || message_field_prefix_has_suffix(trimmed, "message:")
+        || message_field_prefix_has_suffix(trimmed, "msg:")
+}
+
+fn message_field_prefix_has_suffix(prefix: &str, suffix: &str) -> bool {
+    let Some(before) = prefix.strip_suffix(suffix) else {
+        return false;
+    };
+    before.chars().next_back().is_none_or(|previous| {
+        previous.is_ascii_whitespace() || matches!(previous, '{' | '[' | '(' | ',')
+    })
+}
+
 fn parse_autoscale_transition_stats_for_lane(
     log_contents: &str,
     lane_id: u32,
@@ -1043,7 +1217,7 @@ fn parse_autoscale_transition_stats_for_lane(
             .lines()
             .filter(|raw_line| {
                 let line = strip_ansi_escape_codes(raw_line);
-                line.contains(AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER)
+                line_has_transition_marker(line.as_ref(), AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER)
                     && line_has_autoscale_scale_out_transition_fields(line.as_ref(), lane_id)
             })
             .count(),
@@ -1054,7 +1228,7 @@ fn parse_autoscale_transition_stats_for_lane(
             .lines()
             .filter(|raw_line| {
                 let line = strip_ansi_escape_codes(raw_line);
-                line.contains(AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER)
+                line_has_transition_marker(line.as_ref(), AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER)
                     && line_has_autoscale_scale_in_transition_fields(line.as_ref(), lane_id)
             })
             .count(),
@@ -1152,6 +1326,15 @@ fn scale_in_transition_counts(
     let peers_since_cycle_start = baseline_since_cycle_start
         .map(|baseline| peers_with_scale_in_transition(current, baseline));
     (peers_after_expansion, peers_since_cycle_start)
+}
+
+fn scale_in_transition_quorum_satisfied(
+    peers_after_expansion: usize,
+    peers_since_cycle_start: Option<usize>,
+    quorum_required: usize,
+) -> bool {
+    peers_after_expansion >= quorum_required
+        || peers_since_cycle_start.is_some_and(|peers| peers >= quorum_required)
 }
 
 fn peer_client_with_timeout(peer: &NetworkPeer) -> Client {
@@ -1750,44 +1933,6 @@ fn expansion_observed_on_storage(storage_snapshot: &[(usize, Vec<String>)]) -> b
     )
 }
 
-fn expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
-    storage_snapshot: &[(usize, Vec<String>)],
-    baseline_transitions: &[AutoscaleTransitionStats],
-    expanded_provisioned_lanes: usize,
-    quorum_required: usize,
-) -> bool {
-    expansion_observed_on_storage_for_count(storage_snapshot, expanded_provisioned_lanes)
-        && peers_with_scale_out_transition(baseline_transitions, &[]) >= quorum_required
-}
-
-fn expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-    storage_snapshot: &[(usize, Vec<String>)],
-    baseline_transitions: &[AutoscaleTransitionStats],
-    expanded_provisioned_lanes: usize,
-    elastic_lane_id: u32,
-    quorum_required: usize,
-) -> bool {
-    expansion_observed_on_storage_for_lane_count(
-        storage_snapshot,
-        expanded_provisioned_lanes,
-        elastic_lane_id,
-    ) && peers_with_scale_out_transition(baseline_transitions, &[]) >= quorum_required
-}
-
-fn expansion_observed_with_prior_scale_out_quorum_on_storage(
-    storage_snapshot: &[(usize, Vec<String>)],
-    baseline_transitions: &[AutoscaleTransitionStats],
-    quorum_required: usize,
-) -> bool {
-    expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-        storage_snapshot,
-        baseline_transitions,
-        EXPANDED_PROVISIONED_LANES,
-        ELASTIC_LANE_ID,
-        quorum_required,
-    )
-}
-
 fn peer_has_contracted_profile(
     status: &PeerStatusSnapshot,
     base_lane_count: usize,
@@ -2274,8 +2419,12 @@ fn expansion_probe_top_up_tx_count(
     storage_expanded: bool,
     elapsed: Duration,
     cycle_load_tx_count: usize,
+    require_scale_out_transition: bool,
 ) -> usize {
     if storage_expanded && elapsed >= EXPANSION_STATUS_SIGNAL_GRACE {
+        if require_scale_out_transition {
+            return 0;
+        }
         return expansion_post_storage_top_up_tx_count(cycle_load_tx_count);
     }
     expansion_scaled_top_up_tx_count(heartbeat_seq, cycle_load_tx_count)
@@ -2310,8 +2459,6 @@ fn wait_for_expanded_lanes_with_heartbeat(
     let mut last_transition_error = None::<String>;
     let mut last_scale_out_transition_peers = 0_usize;
     let mut post_grace_wait_logged = false;
-    let baseline_scale_out_transition_peers =
-        peers_with_scale_out_transition(baseline_autoscale_transitions, &[]);
 
     while started.elapsed() <= timeout {
         let storage_snapshot = lane_snapshot(network)?;
@@ -2336,21 +2483,6 @@ fn wait_for_expanded_lanes_with_heartbeat(
         let elapsed = started.elapsed();
         let fallback_ready_at =
             EXPANSION_STATUS_SIGNAL_GRACE + EXPANSION_POST_STORAGE_STATUS_WINDOW;
-
-        if require_scale_out_transition
-            && expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-                &storage_snapshot,
-                baseline_autoscale_transitions,
-                expanded_provisioned_lanes,
-                elastic_lane_id,
-                quorum_required,
-            )
-        {
-            eprintln!(
-                "[autoscale-localnet] {context}: expansion accepted via persisted storage lane profile with previously satisfied deterministic autoscale scale-out transition quorum (baseline scale-out transitions {baseline_scale_out_transition_peers}/{quorum_required})"
-            );
-            return Ok(());
-        }
 
         let status_snapshot = match status_snapshot(network) {
             Ok(snapshot) => snapshot,
@@ -2418,6 +2550,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
                     storage_expanded,
                     elapsed,
                     cycle_load_tx_count,
+                    require_scale_out_transition,
                 );
                 if top_up_tx_count > 0 {
                     if let Err(top_up_err) =
@@ -2521,6 +2654,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
             storage_expanded,
             elapsed,
             cycle_load_tx_count,
+            require_scale_out_transition,
         );
         if top_up_tx_count > 0 {
             if let Err(err) = submit_load_round_robin(top_up_clients, top_up_tx_count) {
@@ -2533,7 +2667,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     Err(eyre!(
         "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation || jailed || exiting`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         if require_scale_out_transition {
-            "; strict mode requires deterministic scale-out transition quorum unless the cycle baseline already satisfies that quorum and the storage lane profile remains expanded"
+            "; strict mode requires fresh deterministic scale-out transition quorum after the cycle baseline"
         } else {
             ""
         },
@@ -2773,7 +2907,11 @@ fn wait_for_contracted_lanes(
                     last_scale_in_transition_peers_since_cycle_start =
                         peers_with_scale_in_since_cycle;
                     last_transition_snapshot = snapshot;
-                    peers_with_scale_in_after_expansion >= quorum_required
+                    scale_in_transition_quorum_satisfied(
+                        peers_with_scale_in_after_expansion,
+                        peers_with_scale_in_since_cycle,
+                        quorum_required,
+                    )
                 }
                 Err(err) => {
                     last_transition_error = Some(err.to_string());
@@ -2866,6 +3004,23 @@ fn run_expand_contract_cycle(
             EXPANSION_PROBE_INTERVAL,
             tx_confirmation_status_counts_as_load_activity,
             "load activity",
+        )?;
+        let post_cooldown_context =
+            format!("autoscale post-cooldown contraction check cycle {cycle_index}");
+        let post_cooldown_heartbeat_client = peer_client_with_timeout(network.peer());
+        wait_for_contracted_lanes(
+            network,
+            Some(&post_cooldown_heartbeat_client),
+            &format!("autoscale-post-cooldown-heartbeat-cycle-{cycle_index}"),
+            initial_provisioned_lanes,
+            elastic_lane_id,
+            quorum_required,
+            SCALE_IN_WAIT_TIMEOUT,
+            &post_cooldown_context,
+            None,
+            None,
+            false,
+            CONTRACTION_HEARTBEAT_INTERVAL,
         )?;
     }
 
@@ -2964,6 +3119,10 @@ fn run_expand_contract_cycle(
     eprintln!(
         "[autoscale-localnet][cycle {cycle_index}] autoscale transition snapshot after expansion: scale-out peers with new transitions {peers_with_scale_out}/{TOTAL_PEERS}, scale-in peers since cycle start {peers_with_scale_in_before_contraction}/{TOTAL_PEERS}"
     );
+    ensure!(
+        !require_scale_out_transition || peers_with_scale_out >= quorum_required,
+        "autoscale cycle {cycle_index}: expansion profile was observed but fresh deterministic autoscale scale-out transitions were not observed on quorum peers after the cycle baseline (scale-out peers after expansion snapshot: {peers_with_scale_out}/{TOTAL_PEERS}; required quorum: {quorum_required})"
+    );
     let post_expansion_status = status_snapshot(network)?;
     let require_scale_in_transition_this_cycle = if require_expansion_status_before_contraction {
         require_scale_in_transition
@@ -3025,8 +3184,12 @@ fn run_expand_contract_cycle(
     );
     if require_scale_in_transition_this_cycle {
         ensure!(
-            peers_with_scale_in_after_expansion >= quorum_required,
-            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not observed on quorum peers after expansion (scale-in peers after expansion snapshot: {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; since cycle start: {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}; required quorum: {quorum_required})"
+            scale_in_transition_quorum_satisfied(
+                peers_with_scale_in_after_expansion,
+                Some(peers_with_scale_in_since_cycle_start),
+                quorum_required,
+            ),
+            "autoscale cycle {cycle_index}: contraction profile was observed but deterministic autoscale scale-in transitions were not observed on quorum peers after expansion or since the cycle baseline (scale-in peers after expansion snapshot: {peers_with_scale_in_after_expansion}/{TOTAL_PEERS}; since cycle start: {peers_with_scale_in_since_cycle_start}/{TOTAL_PEERS}; required quorum: {quorum_required})"
         );
     } else if require_scale_in_transition {
         eprintln!(
@@ -3664,8 +3827,8 @@ mod tests {
     use super::{
         AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
-        AutoscaleTransitionStats, ElasticLaneStorageStats, LaneCommitmentSnapshot,
-        LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
+        AutoscaleTransitionStats, ElasticLaneStorageStats, ExpandContractCycleOutcome,
+        LaneCommitmentSnapshot, LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
         PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
         PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
         autoscale_soak_duration_from_env_value, contraction_observed_on_quorum_peers,
@@ -3674,15 +3837,12 @@ mod tests {
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
-        expansion_observed_on_storage_for_lane_count,
-        expansion_observed_with_prior_scale_out_quorum_on_storage,
-        expansion_observed_with_prior_scale_out_quorum_on_storage_for_count,
-        expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count,
-        expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
-        expansion_top_up_tx_count, is_autoscale_elastic_storage_segment,
-        parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
-        peers_with_expanded_lane_signal, peers_with_scale_in_transition,
-        peers_with_scale_out_transition, scale_in_transition_counts,
+        expansion_observed_on_storage_for_lane_count, expansion_probe_top_up_tx_count,
+        expansion_scaled_top_up_tx_count, expansion_top_up_tx_count,
+        is_autoscale_elastic_storage_segment, parse_autoscale_transition_stats,
+        parse_autoscale_transition_stats_for_lane, peers_with_expanded_lane_signal,
+        peers_with_scale_in_transition, peers_with_scale_out_transition,
+        scale_in_transition_counts, scale_in_transition_quorum_satisfied,
         scale_out_transition_observed_on_quorum_peers, should_require_scale_in_transition,
         should_require_scale_in_transition_for_lane, should_run_cooldown_clearance,
         single_cycle_load_tx_count, soak_cycle_load_tx_count, storage_lane_id,
@@ -3712,6 +3872,25 @@ mod tests {
         }
     }
 
+    fn utilization_permille_for_probe_tx(active_lanes: u64) -> u64 {
+        let latency_ms = u64::try_from(super::EXPANSION_PROBE_INTERVAL.as_millis())
+            .expect("probe interval milliseconds must fit into u64");
+        let per_lane_target_tps = u64::try_from(super::LOCALNET_AUTOSCALE_PER_LANE_TARGET_TPS)
+            .expect("localnet autoscale target must be positive");
+        1_000_000_u64
+            .saturating_div(latency_ms.max(1))
+            .saturating_div(
+                active_lanes
+                    .max(1)
+                    .saturating_mul(per_lane_target_tps)
+                    .max(1),
+            )
+    }
+
+    fn ratio_permille(ratio: f64) -> u64 {
+        (ratio * 1_000.0).round() as u64
+    }
+
     #[test]
     fn expansion_top_up_profile_is_deterministic() {
         assert_eq!(expansion_top_up_tx_count(0), 0);
@@ -3727,20 +3906,32 @@ mod tests {
     #[test]
     fn expansion_probe_top_up_intensifies_after_storage_grace() {
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8), 96),
+            expansion_probe_top_up_tx_count(4, false, Duration::from_secs(8), 96, false),
             24
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96),
+            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96, false),
             24
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8), 96),
+            expansion_probe_top_up_tx_count(1, true, Duration::from_secs(8), 96, false),
             96
         );
         assert_eq!(
-            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384),
+            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384, false),
             384
+        );
+    }
+
+    #[test]
+    fn strict_expansion_probe_stops_top_up_after_storage_expands() {
+        assert_eq!(
+            expansion_probe_top_up_tx_count(7, true, Duration::from_secs(15), 384, true),
+            0
+        );
+        assert_eq!(
+            expansion_probe_top_up_tx_count(4, true, Duration::from_secs(7), 96, true),
+            24
         );
     }
 
@@ -3904,6 +4095,20 @@ mod tests {
     }
 
     #[test]
+    fn localnet_probe_heartbeat_stays_below_autoscale_thresholds() {
+        assert!(
+            utilization_permille_for_probe_tx(1)
+                < ratio_permille(super::LOCALNET_AUTOSCALE_SCALE_OUT_UTILIZATION_RATIO),
+            "one probe tx must not pre-trigger scale-out before the cycle baseline"
+        );
+        assert!(
+            utilization_permille_for_probe_tx(2)
+                < ratio_permille(super::LOCALNET_AUTOSCALE_SCALE_IN_UTILIZATION_RATIO),
+            "one probe tx across expanded localnet lanes must still be cold enough for scale-in"
+        );
+    }
+
+    #[test]
     fn elastic_lane_storage_progress_detects_growth_or_first_presence() {
         let baseline = ElasticLaneStorageStats {
             file_count: 3,
@@ -4038,6 +4243,33 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_transition_stats_parse_tracing_target_log_markers() {
+        let log = format!(
+            "  \u{1b}[2m2026-06-30T14:07:21.764405Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[1;32miroha_core::state\u{1b}[0m\u{1b}[32m: \u{1b}[32m{out}, \u{1b}[1;32mheight\u{1b}[0m\u{1b}[32m: 3, \u{1b}[1;32mlane\u{1b}[0m\u{1b}[32m: 3, \u{1b}[1;32mactive_lanes\u{1b}[0m\u{1b}[32m: 3, \u{1b}[1;32mautoscale_capacity_lanes\u{1b}[0m\u{1b}[32m: 3, \u{1b}[1;32mout_latency_ratio_permille\u{1b}[0m\u{1b}[32m: 189, \u{1b}[1;32mout_utilization_p95_permille\u{1b}[0m\u{1b}[32m: 284\u{1b}[0m\n\
+             2026-06-30T14:07:23.860632Z WARN iroha_core::state: {input}, height: 9, lane: 3, active_lanes: 4, autoscale_capacity_lanes: 4, in_latency_ratio_permille: 700, in_utilization_p95_permille: 20",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(lane_three.scale_out_transitions, 1);
+        assert_eq!(lane_three.scale_in_transitions, 1);
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_keyed_tracing_target_spoofing() {
+        let log = format!(
+            "INFO details: iroha_core::state: {out}, height: 3, lane: 3, active_lanes: 3, autoscale_capacity_lanes: 3, out_latency_ratio_permille: 189, out_utilization_p95_permille: 284\n\
+             INFO detail=iroha_core::state: {out}, height: 3, lane: 3, active_lanes: 3, autoscale_capacity_lanes: 3, out_latency_ratio_permille: 189, out_utilization_p95_permille: 284",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(lane_three.scale_out_transitions, 0);
+        assert_eq!(lane_three.scale_in_transitions, 0);
+    }
+
+    #[test]
     fn autoscale_transition_stats_reject_ambiguous_lane_fields() {
         let log = format!(
             "INFO height=2 lane=3 lane=4 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
@@ -4088,6 +4320,100 @@ mod tests {
             lane_three.scale_in_transitions, 0,
             "duplicate producer fields must not fake a scale-in transition"
         );
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_malformed_duplicate_producer_fields() {
+        let log = format!(
+            "INFO height=2 height=bogus lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 lane=bogus active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 active_lanes=bogus autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 autoscale_capacity_lanes=bogus out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_latency_ratio_permille=bogus out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 out_utilization_p95_permille=bogus {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 in_utilization_p95_permille=bogus {input}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 1,
+            "malformed duplicate fields must not be ignored as harmless text"
+        );
+        assert_eq!(
+            lane_three.scale_in_transitions, 0,
+            "malformed duplicate ratio fields must not fake a scale-in transition"
+        );
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_non_ascii_or_control_numeric_separators() {
+        let log = format!(
+            "INFO height=2 lane=\u{00a0}3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3\u{00a0} active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200\u{2007} out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700\u{1f} {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 1,
+            "only the canonical ASCII-delimited transition line should count"
+        );
+        assert_eq!(lane_three.scale_in_transitions, 0);
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_quoted_detail_field_spoofing() {
+        let log = format!(
+            "INFO detail=\"height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\"\n\
+             INFO message=\"{out}\" detail=\"height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700\"\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=\"{out}\"\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail={out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail: {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=( {out} )\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=[ {out} ]\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 notmessage={out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 notmessage: {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 message=\"{out} forged\"\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}-forged\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 2,
+            "only the real structured text event and JSON message event should count"
+        );
+        assert_eq!(lane_three.scale_in_transitions, 0);
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_keyed_container_field_spoofing() {
+        let log = format!(
+            "INFO detail=[height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700] {out}\n\
+             INFO detail=(height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700) {out}\n\
+             INFO detail={{height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700}} {out}\n\
+             INFO detail='height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700' message=\"{out}\"\n\
+             INFO message=\"{out}\" detail=[height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700]\n\
+             INFO payload: [height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700] {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 2,
+            "only top-level producer fields should satisfy transition evidence"
+        );
+        assert_eq!(lane_three.scale_in_transitions, 0);
     }
 
     #[test]
@@ -4207,7 +4533,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_scale_in_quorum_rejects_cycle_start_only_deltas() {
+    fn strict_scale_in_quorum_accepts_cycle_start_deltas_when_snapshot_races() {
         let baseline_since_cycle_start = vec![AutoscaleTransitionStats::default(); 4];
         let baseline_after_expansion = vec![
             AutoscaleTransitionStats {
@@ -4226,6 +4552,17 @@ mod tests {
         assert_eq!(since_cycle_start, Some(4));
         assert!(after_expansion < 3);
         assert!(since_cycle_start.unwrap_or_default() >= 3);
+        assert!(scale_in_transition_quorum_satisfied(
+            after_expansion,
+            since_cycle_start,
+            3
+        ));
+    }
+
+    #[test]
+    fn strict_scale_in_quorum_rejects_missing_after_expansion_and_cycle_start_deltas() {
+        assert!(!scale_in_transition_quorum_satisfied(2, Some(2), 3));
+        assert!(!scale_in_transition_quorum_satisfied(2, None, 3));
     }
 
     #[test]
@@ -4278,6 +4615,55 @@ mod tests {
         assert!(root.contains_key("final_result"));
         assert!(root.contains_key("failure_cycle"));
         assert!(root.contains_key("failure_reason"));
+    }
+
+    #[test]
+    fn soak_reporter_rejects_successful_cycle_without_fresh_scale_out_quorum() -> Result<()> {
+        let dir = tempdir()?;
+        let mut reporter = AutoscaleSoakReporter::new_for_paths(
+            dir.path().join("summary.json"),
+            dir.path().join("events.jsonl"),
+            "strict-soak-regression",
+        )?;
+        let stale_expansion_outcome = ExpandContractCycleOutcome {
+            expansion_time_s: 0.001,
+            contraction_time_s: 20.0,
+            peers_with_scale_out_after_expansion: 1,
+            peers_with_scale_in_after_expansion: 4,
+            peers_with_scale_in_since_cycle_start: 4,
+        };
+
+        let err = reporter
+            .record_cycle_success(17, 1, 3, &stale_expansion_outcome)
+            .expect_err("fresh scale-out quorum misses must not be summarized as success");
+        assert!(
+            err.to_string()
+                .contains("fresh scale-out transition quorum miss")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soak_reporter_rejects_successful_cycle_without_scale_in_quorum() -> Result<()> {
+        let dir = tempdir()?;
+        let mut reporter = AutoscaleSoakReporter::new_for_paths(
+            dir.path().join("summary.json"),
+            dir.path().join("events.jsonl"),
+            "strict-soak-regression",
+        )?;
+        let missing_scale_in_outcome = ExpandContractCycleOutcome {
+            expansion_time_s: 0.001,
+            contraction_time_s: 20.0,
+            peers_with_scale_out_after_expansion: 3,
+            peers_with_scale_in_after_expansion: 2,
+            peers_with_scale_in_since_cycle_start: 2,
+        };
+
+        let err = reporter
+            .record_cycle_success(17, 1, 3, &missing_scale_in_outcome)
+            .expect_err("missing scale-in quorum must not be summarized as success");
+        assert!(err.to_string().contains("scale-in transition quorum miss"));
+        Ok(())
     }
 
     #[test]
@@ -5028,51 +5414,15 @@ mod tests {
             );
             4
         ];
-        let prior_transitions = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats::default(),
-        ];
-        assert!(
-            expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
-                &expanded_storage,
-                &prior_transitions,
-                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-                3
-            )
-        );
         assert!(expansion_observed_on_storage_for_lane_count(
             &expanded_storage,
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
             PUBLIC_PROFILE_ELASTIC_LANE_ID
         ));
-        assert!(
-            expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-                &expanded_storage,
-                &prior_transitions,
-                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-                PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                3
-            )
-        );
-        assert!(
-            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_count(
-                &partial_four_lane_storage,
-                &prior_transitions,
-                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-                3
-            )
-        );
+        assert!(!expansion_observed_on_storage_for_count(
+            &partial_four_lane_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
 
         let duplicate_elastic_missing_base = vec![
             (
@@ -5095,15 +5445,6 @@ mod tests {
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
             PUBLIC_PROFILE_ELASTIC_LANE_ID
         ));
-        assert!(
-            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-                &duplicate_elastic_missing_base,
-                &prior_transitions,
-                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-                PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                3
-            )
-        );
 
         let valid_profile_with_extra_spoofed_lane = vec![
             (
@@ -5158,21 +5499,6 @@ mod tests {
             );
             4
         ];
-        let prior_transitions = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats::default(),
-        ];
 
         assert!(expansion_observed_on_storage_for_count(
             &wrong_elastic_storage,
@@ -5183,15 +5509,6 @@ mod tests {
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
             PUBLIC_PROFILE_ELASTIC_LANE_ID
         ));
-        assert!(
-            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-                &wrong_elastic_storage,
-                &prior_transitions,
-                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-                PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                3
-            )
-        );
     }
 
     #[test]
@@ -5208,21 +5525,6 @@ mod tests {
             );
             4
         ];
-        let prior_transitions = vec![
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats {
-                scale_out_transitions: 1,
-                scale_in_transitions: 0,
-            },
-            AutoscaleTransitionStats::default(),
-        ];
 
         assert!(expansion_observed_on_storage_for_count(
             &wrong_elastic_slug_storage,
@@ -5234,15 +5536,6 @@ mod tests {
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
             PUBLIC_PROFILE_ELASTIC_LANE_ID
         ));
-        assert!(
-            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
-                &wrong_elastic_slug_storage,
-                &prior_transitions,
-                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-                PUBLIC_PROFILE_ELASTIC_LANE_ID,
-                3
-            )
-        );
     }
 
     #[test]
@@ -6256,38 +6549,8 @@ mod tests {
     }
 
     #[test]
-    fn strict_expansion_accepts_prior_scale_out_quorum_with_expanded_storage() {
-        let expanded_storage = vec![
-            (
-                0,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-            (
-                1,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-            (
-                2,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-            (
-                3,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-        ];
-        let prior_transitions = vec![
+    fn strict_expansion_requires_fresh_scale_out_delta_after_baseline() {
+        let baseline_transitions = vec![
             AutoscaleTransitionStats {
                 scale_out_transitions: 1,
                 scale_in_transitions: 0,
@@ -6302,65 +6565,33 @@ mod tests {
             },
             AutoscaleTransitionStats::default(),
         ];
+        let stale_current = baseline_transitions.clone();
 
-        assert!(expansion_observed_with_prior_scale_out_quorum_on_storage(
-            &expanded_storage,
-            &prior_transitions,
-            3
+        assert!(!scale_out_transition_observed_on_quorum_peers(
+            &stale_current,
+            &baseline_transitions,
+            3,
         ));
-        assert!(!expansion_observed_with_prior_scale_out_quorum_on_storage(
-            &expanded_storage,
-            &prior_transitions,
-            4
-        ));
-    }
 
-    #[test]
-    fn strict_expansion_rejects_prior_scale_out_quorum_when_storage_not_expanded() {
-        let partial_storage = vec![
-            (
-                0,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-            (
-                1,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-            (2, vec!["lane_000_default".to_owned()]),
-            (
-                3,
-                vec![
-                    "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
-                ],
-            ),
-        ];
-        let prior_transitions = vec![
+        let fresh_current = vec![
             AutoscaleTransitionStats {
-                scale_out_transitions: 1,
+                scale_out_transitions: 2,
                 scale_in_transitions: 0,
             },
             AutoscaleTransitionStats {
-                scale_out_transitions: 1,
+                scale_out_transitions: 2,
                 scale_in_transitions: 0,
             },
             AutoscaleTransitionStats {
-                scale_out_transitions: 1,
+                scale_out_transitions: 2,
                 scale_in_transitions: 0,
             },
             AutoscaleTransitionStats::default(),
         ];
-
-        assert!(!expansion_observed_with_prior_scale_out_quorum_on_storage(
-            &partial_storage,
-            &prior_transitions,
-            3
+        assert!(scale_out_transition_observed_on_quorum_peers(
+            &fresh_current,
+            &baseline_transitions,
+            3,
         ));
     }
 

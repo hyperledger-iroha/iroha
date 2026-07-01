@@ -28,6 +28,7 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_kinded_evidence_artifact,
     count_evidence_files,
     count_recognized_evidence_artifacts,
@@ -571,6 +572,7 @@ def validate_consumption(evidence: LoadedEvidence, errors: list[str]) -> tuple[s
 def validate_evidence_set(
     loaded: list[LoadedEvidence],
     *,
+    evidence_dirs: list[Path] | None = None,
     required_kinds: tuple[str, ...],
     required_providers: tuple[str, ...],
     now_unix: int,
@@ -652,7 +654,7 @@ def validate_evidence_set(
 
         record = build_kinded_evidence_artifact(
             kind_name=record_kind,
-            path=evidence.path,
+            path=archive_artifact_path_label(evidence.path, evidence_dirs or []),
             digest=digest,
             payload=payload,
             validation_errors=errors,
@@ -861,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
     now_unix = args.now_unix if args.now_unix is not None else int(time.time())
     summary = validate_evidence_set(
         loaded,
+        evidence_dirs=args.evidence_dir,
         required_kinds=required_kinds,
         required_providers=tuple(args.require_provider),
         now_unix=now_unix,

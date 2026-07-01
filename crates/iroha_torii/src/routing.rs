@@ -9211,6 +9211,49 @@ mod sccp_message_backend_tests {
         }
     }
 
+    fn sample_sccp_finality_block_header(
+        height: u64,
+        commitment_root: [u8; 32],
+    ) -> BlockHeader {
+        let mut header = BlockHeader::new(
+            core::num::NonZeroU64::new(height).expect("non-zero finality height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        header.set_sccp_commitment_root(Some(commitment_root));
+        header
+    }
+
+    fn sample_sccp_validator_public_keys(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|idx| {
+                let seed_byte = 0x40_u8 + u8::try_from(idx).expect("fixture index fits u8");
+                checked_routing_fixture_keypair(
+                    vec![seed_byte; 32],
+                    Algorithm::Ed25519,
+                    "derive Torii routing SCCP validator fixture key",
+                )
+                .public_key()
+                .to_string()
+            })
+            .collect()
+    }
+
+    fn sample_sccp_validator_set_hash(public_keys: &[String]) -> [u8; 32] {
+        let validator_set = public_keys
+            .iter()
+            .map(|key| {
+                key.parse::<PublicKey>()
+                    .expect("sample validator public key should parse")
+            })
+            .map(PeerId::from)
+            .collect::<Vec<_>>();
+        hash_of_to_h256(&HashOf::<Vec<PeerId>>::new(&validator_set))
+    }
+
     #[test]
     fn sccp_evm_destination_query_decodes_norito_json_defaults() {
         let mut value = Map::new();
@@ -9482,13 +9525,17 @@ mod sccp_message_backend_tests {
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        let block_header = sample_sccp_finality_block_header(19, commitment_root);
+        let block_hash = hash_of_to_h256(&block_header.hash());
+        let validator_public_keys = sample_sccp_validator_public_keys(1);
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
-            block_hash: [0x44; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -9496,14 +9543,15 @@ mod sccp_message_backend_tests {
                 view: 1,
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
-                subject_block_hash: [0x44; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_hash,
+                validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],
@@ -10289,13 +10337,17 @@ mod sccp_message_backend_tests {
     }
 
     fn sample_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
+        let block_header = sample_sccp_finality_block_header(31, commitment_root);
+        let block_hash = hash_of_to_h256(&block_header.hash());
+        let validator_public_keys = sample_sccp_validator_public_keys(1);
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         norito::to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 31,
-            block_hash: [0x31; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -10303,14 +10355,15 @@ mod sccp_message_backend_tests {
                 view: 1,
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
-                subject_block_hash: [0x31; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_hash,
+                validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],
@@ -10388,6 +10441,13 @@ mod sccp_message_backend_tests {
             ),
         ];
         let chain_id = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned();
+        let block_header = sample_sccp_finality_block_header(31, commitment_root);
+        let block_hash = hash_of_to_h256(&block_header.hash());
+        let validator_public_keys = keypairs
+            .iter()
+            .map(|keypair| keypair.public_key().to_string())
+            .collect::<Vec<_>>();
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         let mut commit_qc = NexusCommitQcV1 {
             version: 1,
             phase: NexusConsensusPhaseV1::Commit,
@@ -10395,17 +10455,15 @@ mod sccp_message_backend_tests {
             view: 1,
             epoch: 1,
             mode_tag: "normal".to_owned(),
-            subject_block_hash: [0x31; 32],
+            subject_block_hash: block_hash,
             parent_state_root: [0u8; 32],
             post_state_root: [0u8; 32],
             chain_order_hash: [0u8; 32],
             rechain_seq: 0,
             highest_qc: None,
-            validator_set_hash_version: 1,
-            validator_public_keys: keypairs
-                .iter()
-                .map(|keypair| keypair.public_key().to_string())
-                .collect(),
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_public_keys,
             validator_set_pops: keypairs
                 .iter()
                 .map(|keypair| {
@@ -10438,9 +10496,9 @@ mod sccp_message_backend_tests {
             version: 1,
             chain_id,
             height: 31,
-            block_hash: [0x31; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc,
         })
         .expect("encode signed finality proof")
@@ -10591,6 +10649,8 @@ mod sccp_message_backend_tests {
     ) -> NexusSccpMessageTransparentProofV1 {
         let mut artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
         let bundle = sample_eth_inbound_message_bundle_with_nexus_finality(nonce);
+        let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof)
+            .expect("sample bundle carries Nexus finality proof");
         let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_ETH)
             .expect("eth manifest");
         artifact.counterparty_domain = manifest.counterparty_domain;
@@ -10607,8 +10667,8 @@ mod sccp_message_backend_tests {
             payload_hash: bundle.commitment.payload_hash,
             target_domain: bundle.commitment.target_domain,
             commitment_root: bundle.commitment_root,
-            finality_height: 31,
-            finality_block_hash: [0x31; 32],
+            finality_height: finality.height,
+            finality_block_hash: finality.block_hash,
         };
         artifact.bundle = bundle;
         artifact
@@ -13258,6 +13318,8 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn message_bundle_bridge_proof_wraps_typed_transparent_artifact() {
+        let validator_public_keys = sample_sccp_validator_public_keys(1);
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         let bundle = NexusSccpMessageProofV1 {
             version: 1,
             commitment_root: commitment_leaf_hash(&SccpHubCommitmentV1 {
@@ -13417,11 +13479,10 @@ mod sccp_message_backend_tests {
                     chain_order_hash: [0u8; 32],
                     rechain_seq: 0,
                     highest_qc: None,
-                    validator_set_hash_version: 1,
-                    validator_public_keys: vec![
-                        "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                            .to_owned(),
-                    ],
+                    validator_set_hash,
+                    validator_set_hash_version:
+                        iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_public_keys,
                     validator_set_pops: vec![vec![1u8; 48]],
                     signers_bitmap: vec![0b0000_0001],
                     bls_aggregate_signature: vec![2u8; 96],
@@ -13555,6 +13616,7 @@ fn build_sccp_finality_proof_bytes(
                 .highest_qc
                 .as_ref()
                 .map(sccp_qc_ref),
+            validator_set_hash: hash_of_to_h256(&finality_proof.commit_qc.validator_set_hash),
             validator_set_hash_version: finality_proof.commit_qc.validator_set_hash_version,
             validator_public_keys: finality_proof
                 .commit_qc
@@ -31823,43 +31885,59 @@ pub struct ContractCallSimulateDto {
 )]
 /// Public, normalized evidence for a contract operation.
 pub struct OperationReceiptDto {
+    /// Operation category, for example `contract_call` or `contract_deploy`.
     pub operation_kind: String,
+    /// Public operation status such as `submitted`, `committed`, or `pending_signature`.
     pub status: String,
+    /// Submission surface that produced the receipt.
     pub transport: String,
+    /// Dataspace targeted by the operation.
     pub dataspace: String,
+    /// Optional contract alias used for the operation.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_alias: Option<String>,
+    /// Optional canonical contract address.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
+    /// Optional code hash of the deployed or invoked artifact.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
+    /// Optional ABI hash of the deployed or invoked artifact.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub abi_hash_hex: Option<String>,
+    /// Optional submitted transaction hash.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
+    /// Optional contract entrypoint for calls.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Optional transaction entrypoint hash.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint_hash_hex: Option<String>,
+    /// Optional gas limit attached to the operation.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_limit: Option<u64>,
+    /// Optional gas actually consumed when available.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_used: Option<u64>,
+    /// Optional gas asset identifier.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee_sponsor: Option<String>,
+    /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
 }
 
@@ -34733,7 +34811,7 @@ fn deploy_operation_receipt(
         gas_used: None,
         gas_asset_id: None,
         fee_sponsor: None,
-        payload_digest_hex: hex::encode(blake3_hash(contract.code_hash_hex.as_bytes()).as_bytes()),
+        payload_digest_hex: contract.code_hash_hex.clone(),
     }
 }
 
@@ -88819,6 +88897,47 @@ mod nexus_lane_lifecycle_tests {
             queue.queue_limits().for_lane(LaneId::SINGLE),
             before_limits,
             "rejected default-lane retire plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_same_plan_default_lane_replacement_without_queue_refresh()
+    {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                LaneId::SINGLE,
+                "fresh-default-route",
+                987_654,
+            )],
+            retire: vec![LaneId::SINGLE],
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("same-plan default-lane replacement must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("lane lifecycle plan cannot replace routing default lane 0")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected default-lane replacement plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(LaneId::SINGLE),
+            before_limits,
+            "rejected default-lane replacement plan must not refresh queue limits"
         );
     }
 

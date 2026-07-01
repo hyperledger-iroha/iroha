@@ -45,10 +45,30 @@ use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
     validate_governance_dag_head_against_chain_v1,
 };
-use tempfile::tempdir;
+use tempfile::TempDir;
 
 fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
+}
+
+struct CanonicalTempDir {
+    _inner: TempDir,
+    path: PathBuf,
+}
+
+impl CanonicalTempDir {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn tempdir() -> std::io::Result<CanonicalTempDir> {
+    let inner = tempfile::tempdir()?;
+    let path = inner.path().canonicalize()?;
+    Ok(CanonicalTempDir {
+        _inner: inner,
+        path,
+    })
 }
 
 fn deterministic_ed25519_authority_and_private_key() -> (String, String) {

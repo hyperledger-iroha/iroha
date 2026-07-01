@@ -18,6 +18,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use blake3::Hash;
 use hex::ToHex;
 use iroha_data_model::da::{ingest::DaStripeLayout, manifest::ChunkRole};
@@ -1851,22 +1854,174 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("missing parent directory"))?;
-    fs::create_dir_all(parent)?;
+    validate_atomic_output_path(path)?;
+    fs::create_dir_all(parent).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to create output parent `{}`: {err}",
+                parent.display()
+            ),
+        )
+    })?;
+    validate_atomic_output_path(path)?;
     let tmp = atomic_temp_path(path);
 
-    let mut file = File::create(&tmp)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
+    let write_result = (|| -> io::Result<()> {
+        let mut file = open_atomic_temp_file(&tmp)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        validate_atomic_output_path(path)?;
+        fs::rename(&tmp, path)?;
+        Ok(())
+    })();
 
-    fs::rename(&tmp, path)?;
-    Ok(())
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    write_result
 }
 
 fn atomic_temp_path(path: &Path) -> PathBuf {
     let pid = std::process::id();
     let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
     path.with_added_extension(format!("{ATOMIC_EXT}.{pid}.{counter}"))
+}
+
+fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    set_no_follow_flag(&mut options);
+    let file = options.open(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to create atomic temp `{}`: {err}", path.display()),
+        )
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to inspect atomic temp `{}` after open: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "atomic temp `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a symlink",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a directory",
+                    path.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!("failed to inspect output `{}`: {err}", path.display()),
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        )));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        )));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to inspect output parent `{}`: {err}",
+                            ancestor.display()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 fn write_manifest_metadata(
@@ -1979,10 +2134,15 @@ mod tests {
     use super::*;
 
     fn temp_config(temp_dir: &TempDir) -> StorageConfig {
+        let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
         StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(temp_path.join("storage"))
             .build()
+    }
+
+    fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
+        temp_dir.path().canonicalize().expect("canonical tempdir")
     }
 
     fn single_file_plan(bytes: &[u8]) -> Result<CarBuildPlan, CarPlanError> {
@@ -2759,7 +2919,8 @@ mod tests {
     #[test]
     fn write_atomic_uses_added_extension_and_cleans_up_temp_file() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let target_with_ext = temp_dir.path().join("bundle.car");
+        let temp_path = canonical_temp_path(&temp_dir);
+        let target_with_ext = temp_path.join("bundle.car");
 
         write_atomic(&target_with_ext, b"hello").expect("write with extension");
         assert_eq!(fs::read(&target_with_ext).expect("read bundle"), b"hello");
@@ -2768,7 +2929,7 @@ mod tests {
             "temporary file should not remain on disk"
         );
 
-        let target_no_ext = temp_dir.path().join("manifest");
+        let target_no_ext = temp_path.join("manifest");
         write_atomic(&target_no_ext, b"x").expect("write without extension");
         assert_eq!(fs::read(&target_no_ext).expect("read manifest"), b"x");
         assert!(
@@ -2780,7 +2941,8 @@ mod tests {
     #[test]
     fn write_atomic_allows_concurrent_writes_to_same_target() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let target = temp_dir.path().join("index.norito");
+        let temp_path = canonical_temp_path(&temp_dir);
+        let target = temp_path.join("index.norito");
         let payloads = (0..16)
             .map(|idx| format!("payload-{idx}").into_bytes())
             .collect::<Vec<_>>();
@@ -2795,7 +2957,7 @@ mod tests {
         let final_payload = fs::read(&target).expect("read final payload");
         assert!(payloads.iter().any(|payload| payload == &final_payload));
 
-        let leftovers = fs::read_dir(temp_dir.path())
+        let leftovers = fs::read_dir(temp_path)
             .expect("read temp dir")
             .filter_map(Result::ok)
             .filter(|entry| {
@@ -2809,5 +2971,69 @@ mod tests {
             leftovers.is_empty(),
             "temporary files should not remain after concurrent writes"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_rejects_symlink_output() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_path = canonical_temp_path(&temp_dir);
+        let target_path = temp_path.join("target.norito");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("index.norito");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_atomic(&output_path, b"replace").expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_rejects_symlink_parent() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_path = canonical_temp_path(&temp_dir);
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("index.norito");
+
+        let err = write_atomic(&output_path, b"replace").expect_err("reject symlink parent");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join("index.norito").exists(),
+            "symlink parent should not receive output"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_atomic_temp_file_rejects_preexisting_symlink() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_path = canonical_temp_path(&temp_dir);
+        let target_path = temp_path.join("target.tmp");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let tmp_path = temp_path.join("index.norito.tmp");
+        std::os::unix::fs::symlink(&target_path, &tmp_path).expect("create symlink");
+
+        let err = open_atomic_temp_file(&tmp_path).expect_err("reject temp symlink");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("failed to create atomic temp"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
 }

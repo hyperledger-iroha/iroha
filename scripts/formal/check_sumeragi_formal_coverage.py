@@ -160,9 +160,15 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Undefined helper scans preserve standard TLA set/operator identifiers",
     "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
     "Undefined helper scans preserve CASE branch scope",
+    "Undefined helper scans preserve relation operand scope",
+    "Undefined helper scans preserve operator-call argument scope",
+    "Undefined helper scans preserve arithmetic/set infix operand scope",
+    "Undefined helper scans preserve explicit set literal element scope",
+    "Undefined helper scans preserve unary set-operator operand scope",
     "Undefined helper scans preserve set-comprehension binding scope",
     "Undefined helper scans preserve set-comprehension outer enclosure scope",
     "Undefined helper scans preserve function-constructor binding scope",
+    "Undefined helper scans preserve function-set domain and range scope",
     "Undefined helper scans preserve record field label scope",
     "Undefined helper scans preserve record set field label scope",
     "Undefined helper scans preserve record update field label scope",
@@ -276,9 +282,15 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Undefined helper scans preserve standard TLA set/operator identifiers",
     "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
     "Undefined helper scans preserve CASE branch scope",
+    "Undefined helper scans preserve relation operand scope",
+    "Undefined helper scans preserve operator-call argument scope",
+    "Undefined helper scans preserve arithmetic/set infix operand scope",
+    "Undefined helper scans preserve explicit set literal element scope",
+    "Undefined helper scans preserve unary set-operator operand scope",
     "Undefined helper scans preserve set-comprehension binding scope",
     "Undefined helper scans preserve set-comprehension outer enclosure scope",
     "Undefined helper scans preserve function-constructor binding scope",
+    "Undefined helper scans preserve function-set domain and range scope",
     "Undefined helper scans preserve record field label scope",
     "Undefined helper scans preserve record set field label scope",
     "Undefined helper scans preserve record update field label scope",
@@ -469,6 +481,19 @@ TLA_QUANTIFIED_BODY_PREDICATE_SELECTION_RE = re.compile(
     r"^(IF|CASE|LET|CHOOSE|ENABLED|UNCHANGED)\b"
 )
 TLA_QUANTIFIER_IDENTIFIER_TOKENS = {"A", "E"}
+TLA_UNARY_SET_OPERATOR_IDENTIFIERS = {"DOMAIN", "SUBSET", "UNION"}
+TLA_STATIC_INFIX_OPERATORS = (
+    "\\div",
+    "\\cup",
+    "\\cap",
+    "\\X",
+    "..",
+    "\\",
+    "+",
+    "-",
+    "*",
+    "%",
+)
 TLA_STANDARD_OPERATOR_IDENTIFIERS = {
     "Any",
     "Append",
@@ -3801,6 +3826,13 @@ def tla_free_static_identifiers(
         )
         return identifiers
 
+    set_elements = tla_explicit_set_elements(normalized)
+    if set_elements is not None:
+        identifiers: set[str] = set()
+        for element in set_elements:
+            identifiers.update(tla_free_static_identifiers(element, bound))
+        return identifiers
+
     function_scope = tla_function_constructor_scope(normalized)
     if function_scope is not None:
         domains, body, local_bound = function_scope
@@ -3810,6 +3842,14 @@ def tla_free_static_identifiers(
         identifiers.update(
             tla_free_static_identifiers(body, bound | frozenset(local_bound))
         )
+        return identifiers
+
+    function_set_scope = tla_function_set_scope(normalized)
+    if function_set_scope is not None:
+        domain, range_expression = function_set_scope
+        identifiers: set[str] = set()
+        identifiers.update(tla_free_static_identifiers(domain, bound))
+        identifiers.update(tla_free_static_identifiers(range_expression, bound))
         return identifiers
 
     record_values = tla_record_literal_values(normalized)
@@ -3929,11 +3969,41 @@ def tla_free_static_identifiers(
     if action_operand is not None:
         return tla_free_static_identifiers(action_operand, bound)
 
+    unary_set_operand = tla_unary_set_operator_operand(normalized)
+    if unary_set_operand is not None:
+        return tla_free_static_identifiers(unary_set_operand, bound)
+
     if_parts = tla_top_level_if_parts(normalized)
     if if_parts is not None:
         identifiers: set[str] = set()
         for part in if_parts:
             identifiers.update(tla_free_static_identifiers(part, bound))
+        return identifiers
+
+    relation_parts = tla_top_level_relation_parts(normalized)
+    if relation_parts is not None:
+        left, _, right = relation_parts
+        identifiers: set[str] = set()
+        identifiers.update(tla_free_static_identifiers(left, bound))
+        identifiers.update(tla_free_static_identifiers(right, bound))
+        return identifiers
+
+    infix_operands = tla_top_level_static_infix_operands(normalized)
+    if infix_operands is not None:
+        identifiers: set[str] = set()
+        for operand in infix_operands:
+            identifiers.update(tla_free_static_identifiers(operand, bound))
+        return identifiers
+
+    call_arguments = tla_direct_operator_call_arguments(normalized)
+    if call_arguments is not None:
+        callee = tla_direct_operator_call_name(normalized)
+        identifiers: set[str] = set()
+        if callee is not None and callee not in bound:
+            identifiers.add(callee)
+        for argument in tla_top_level_argument_parts(call_arguments):
+            if argument:
+                identifiers.update(tla_free_static_identifiers(argument, bound))
         return identifiers
 
     selector_scope = tla_selector_scope(normalized)
@@ -4252,6 +4322,20 @@ def tla_top_level_symbol_index(text: str, symbol: str, start: int = 0) -> int | 
     return None
 
 
+def tla_top_level_function_set_arrow_index(text: str) -> int | None:
+    """Return a top-level function-set arrow, excluding record/function constructors."""
+
+    start = 0
+    while True:
+        index = tla_top_level_symbol_index(text, "->", start=start)
+        if index is None:
+            return None
+        previous = text[index - 1] if index > 0 else ""
+        if previous != "|":
+            return index
+        start = index + len("->")
+
+
 def tla_delimited_expression_end(
     text: str,
     start: int,
@@ -4486,6 +4570,25 @@ def tla_function_constructor_scope(
     if not domains or not bound:
         return None
     return domains, body, bound
+
+
+def tla_function_set_scope(expression: str) -> tuple[str, str] | None:
+    """Return domain and range expressions for whole-expression function sets."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if not tla_outer_square_brackets_enclose_expression(text):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+    arrow_index = tla_top_level_function_set_arrow_index(inner)
+    if arrow_index is None:
+        return None
+    domain = inner[:arrow_index].strip()
+    range_expression = inner[arrow_index + len("->") :].strip()
+    if not domain or not range_expression:
+        return None
+    return domain, range_expression
 
 
 def tla_record_literal_values(expression: str) -> list[str] | None:
@@ -9098,6 +9201,19 @@ def tla_top_level_membership_parts(
     return None
 
 
+def tla_top_level_relation_parts(expression: str) -> tuple[str, str, str] | None:
+    """Return top-level relation operands from a static expression."""
+
+    for relation in (
+        tla_top_level_membership_parts(expression),
+        tla_top_level_equality_relation_parts(expression),
+        tla_top_level_order_relation_parts(expression),
+    ):
+        if relation is not None:
+            return relation
+    return None
+
+
 def tla_top_level_equality_relation_parts(
     expression: str,
 ) -> tuple[str, str, str] | None:
@@ -9160,11 +9276,180 @@ def tla_top_level_equality_relation_parts(
     return None
 
 
+def tla_top_level_order_relation_parts(
+    expression: str,
+) -> tuple[str, str, str] | None:
+    """Return top-level ordering relation operands from a static expression."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        for operator in ("<=", ">=", "<", ">"):
+            if not text.startswith(operator, index):
+                continue
+            if operator == "<=":
+                next_char = text[index + 2] if index + 2 < len(text) else ""
+                if next_char == ">":
+                    continue
+            if operator == "<":
+                next_char = text[index + 1] if index + 1 < len(text) else ""
+                if next_char in "<=>":
+                    continue
+            if operator == ">":
+                previous_char = text[index - 1] if index > 0 else ""
+                if previous_char in "<>=":
+                    continue
+            left = text[:index].strip()
+            right = text[index + len(operator) :].strip()
+            if left and right:
+                return left, operator, right
+        index += 1
+    return None
+
+
+def tla_top_level_static_infix_operands(expression: str) -> list[str] | None:
+    """Return operands split by supported top-level static infix operators."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    operands: list[str] = []
+    start = 0
+    found = False
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        matched_operator = None
+        for operator in TLA_STATIC_INFIX_OPERATORS:
+            if not text.startswith(operator, index):
+                continue
+            if not tla_static_infix_operator_is_binary(text, index, operator):
+                continue
+            matched_operator = operator
+            break
+        if matched_operator is None:
+            index += 1
+            continue
+        operand = text[start:index].strip()
+        if not operand:
+            return None
+        operands.append(operand)
+        start = index + len(matched_operator)
+        found = True
+        index = start
+    if not found:
+        return None
+    final_operand = text[start:].strip()
+    if not final_operand:
+        return None
+    operands.append(final_operand)
+    return operands
+
+
+def tla_static_infix_operator_is_binary(text: str, index: int, operator: str) -> bool:
+    """Return whether a supported infix operator occurrence is binary."""
+
+    left = text[:index].strip()
+    right = text[index + len(operator) :].strip()
+    if not left or not right:
+        return False
+    previous = text[index - 1] if index > 0 else ""
+    next_char = text[index + len(operator)] if index + len(operator) < len(text) else ""
+    if operator == "-":
+        if next_char == ">":
+            return False
+        previous_nonspace = left[-1]
+        if previous_nonspace in "([{+-*/%<>=#":
+            return False
+    if operator == "\\":
+        if next_char.isalpha():
+            return False
+    if operator.startswith("\\") and len(operator) > 1:
+        after = text[index + len(operator)] if index + len(operator) < len(text) else ""
+        if after.isalnum() or after == "_":
+            return False
+    if operator == "..":
+        before = text[index - 1] if index > 0 else ""
+        after = text[index + 2] if index + 2 < len(text) else ""
+        if before == "." or after == ".":
+            return False
+    return previous != "\\" or operator.startswith("\\")
+
+
 def tla_explicit_set_elements(expression: str) -> list[str] | None:
     """Return normalized top-level elements from an explicit set literal."""
 
     text = strip_static_outer_parentheses(" ".join(expression.split()))
-    if not (text.startswith("{") and text.endswith("}")):
+    if not tla_outer_curly_braces_enclose_expression(text):
         return None
     inner = text[1:-1].strip()
     if not inner:
@@ -10832,6 +11117,21 @@ def tla_unary_action_operand(expression: str) -> str | None:
     if not operand:
         return None
     return strip_static_outer_parentheses(operand)
+
+
+def tla_unary_set_operator_operand(expression: str) -> str | None:
+    """Return the operand of a static unary set operator, if present."""
+
+    stripped = strip_static_outer_parentheses(expression).strip()
+    for operator in sorted(TLA_UNARY_SET_OPERATOR_IDENTIFIERS):
+        match = re.match(rf"^{operator}\b", stripped)
+        if match is None:
+            continue
+        operand = stripped[match.end() :].strip()
+        if not operand:
+            return None
+        return strip_static_outer_parentheses(operand)
+    return None
 
 
 def tla_unary_temporal_operator_operand(expression: str) -> tuple[str, str] | None:

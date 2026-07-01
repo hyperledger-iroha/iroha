@@ -166,7 +166,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
           fn main() {{
             let key = 7;
             PoolAsset[key] = asset_definition("{asset_literal}");
-            transfer_asset(authority(), authority(), PoolAsset[key], 1);
+            transfer_asset(authority(), authority(), PoolAsset[key], 1, dataspace_id("0"));
           }}
         }}
     "#
@@ -266,7 +266,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
           state PoolAsset: Map<Name, AssetDefinitionId>;
           fn main() {{
             let key = name!("pool");
-            transfer_asset(authority(), authority(), PoolAsset[key], 1);
+            transfer_asset(authority(), authority(), PoolAsset[key], 1, dataspace_id("0"));
           }}
         }}
     "#
@@ -342,7 +342,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
           fn main() {
             let key = name!("pool");
             let vault = VaultAccount[key];
-            transfer_asset(authority(), vault, PoolAsset[key], 1);
+            transfer_asset(authority(), vault, PoolAsset[key], 1, dataspace_id("0"));
           }
         }
     "#;

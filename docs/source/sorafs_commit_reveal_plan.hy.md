@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_commit_reveal_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3da47b337de51ecb453165a9297dd60eb72286d804343d8f698c961ec82bbf35
+source_hash: f6f2f915fd1ed0ba7c9aed7b8137a29396147bf5e936be99b13c96baed7d2daf
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -19,10 +19,12 @@ commit/reveal payloads in the SoraFS data model and a local `sorafs_node`
 ballot lifecycle runtime exposed through local Torii JSON endpoints. Accepted
 local ballot lifecycle events can also be materialized into the SoraFS
 Governance DAG filesystem publisher and optional signed runtime DAG. The
-repository does not yet ship the SoraFS moderation voting contract, durable
-ballot orchestrator, juror CLI, challenge monitor, or production service needed
-to run appeal-panel ballots end to end. The shared SFM-4b moderation-panel
-rollout evidence gate now validates a dedicated
+repository now ships local ballot CLI/client readback, signed commit/reveal/tally
+submission, and payload-free executor automation for the local Torii API. It
+does not yet ship the SoraFS moderation voting contract, contract-backed durable
+ballot orchestrator, challenge monitor, public juror portal, or deployed
+production service needed to run appeal-panel ballots end to end. The shared
+SFM-4b moderation-panel rollout evidence gate now validates a dedicated
 `sorafs.moderation_panel.commit_reveal_canary.v1` artifact for this boundary,
 including authenticated commit/reveal routes, digest recomputation, duplicate
 commit rejection, mismatched reveal rejection, late commit/reveal rejection,
@@ -63,6 +65,13 @@ durable service or contract-backed workflow.
   to match the canonical juror id in the payload. Ballot list/detail readbacks
   bound embedded commit and reveal arrays with `limit` (default 50, max 500)
   while preserving full counts and truncation metadata.
+- `iroha::client` and `iroha sorafs moderation ballots
+  list|get|events|commit|reveal|tally` wrap the local readback and signed
+  committee lifecycle endpoints, validating JSON or Norito commit/reveal payloads
+  and submitting canonical Norito bytes to Torii.
+- `iroha sorafs moderation ballots execute|executor-bundle|executor-canary`
+  provide local payload-free commit/reveal executor automation and scheduled-job
+  bundle/canary evidence without copying private commit or reveal payload files.
 - `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
   `sorafs_node::FilesystemGovernancePublisher` publish local announcement,
   commit-accepted, reveal-accepted, and tally events into the local
@@ -103,8 +112,9 @@ The production service still targets this flow:
   durable contested-outcome workflows.
 - Implement the on-chain contract or ledger workflow that records commitments,
   reveals, challenges, outcomes, and juror penalties.
-- Provide juror-facing CLI or portal commands for listing ballots, committing,
-  revealing, challenging, and exporting audit evidence through the Torii API.
+- Promote the shipped local CLI/client bridge and executor automation into
+  audited juror-facing deployment workflows, including challenge evidence export,
+  portal UX, and public operations runbooks.
 - Extend Governance DAG publication beyond local lifecycle events to durable
   challenge/dispute records, contract-backed decisions, and public IPFS/IPNS
   rollout evidence.
@@ -129,6 +139,8 @@ cargo test -p iroha_torii moderation_ballot --features app_api
 cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
 ```
 
-Add CLI and end-to-end `sorafs` moderation voting suites when the production
-service lands. Until then, do not document `sorafs-juror` or SoraFS ballot
-service commands as shipped.
+Keep the local CLI bridge and executor coverage in `cargo test -p iroha_cli
+moderation_ballots`; add deployed service and end-to-end suites when the
+contract-backed/portal workflow lands. Until then, do not document
+`sorafs-juror`, portal-only commands, or deployed ballot service commands as
+shipped.

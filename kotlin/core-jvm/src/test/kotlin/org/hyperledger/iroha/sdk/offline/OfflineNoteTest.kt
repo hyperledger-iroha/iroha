@@ -1267,6 +1267,38 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun issuedClaimsRejectNonCanonicalAssetIdsAndAmounts() {
+        val claim = audit(loadFixture()).inputClaims.first()
+        val accountId = accountFromAssetId(claim.assetId)
+        val alternateAccountId =
+            AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.toI105(1)
+        val nonCanonicalAssetId = "${assetDefinitionFromAssetId(claim.assetId)}#$alternateAccountId"
+
+        assertTrue(claim.assetId != nonCanonicalAssetId)
+        assertEquals(claim.assetId, OfflineNote.canonicalAssetId(nonCanonicalAssetId))
+        assertIllegalArgumentContains("asset_id must be canonical") {
+            OfflineNote.IssuedClaim(
+                noteCommitment = claim.noteCommitment(),
+                keyCertificatePayloadHash = claim.keyCertificatePayloadHash(),
+                assetId = nonCanonicalAssetId,
+                amount = claim.amount,
+            )
+        }
+
+        val nonCanonicalAmount = "0${claim.amount}"
+        assertTrue(claim.amount != nonCanonicalAmount)
+        assertEquals(claim.amount, OfflineNote.canonicalAmountString(nonCanonicalAmount))
+        assertIllegalArgumentContains("amount must be canonical") {
+            OfflineNote.IssuedClaim(
+                noteCommitment = claim.noteCommitment(),
+                keyCertificatePayloadHash = claim.keyCertificatePayloadHash(),
+                assetId = claim.assetId,
+                amount = nonCanonicalAmount,
+            )
+        }
+    }
+
+    @Test
     fun offlineNoteDomainsRejectSubstitutionAndPadding() {
         val fixture = loadFixture()
         val certificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
@@ -3001,6 +3033,102 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun walletCanonicalizesLoadAndReceiveAmounts() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val issue = obj(chain, "issue")
+        val senderCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val loadContext = OfflineNoteLoadContext(
+            operationId = string(derivation, "issuer_load_operation_id"),
+            lineageId = string(derivation, "issuer_load_lineage_id"),
+            localRevision = long(derivation, "issuer_load_local_revision"),
+            keyCertificate = senderCertificate,
+        )
+        val issuerClient = RecordingIssuerClient(loadContext)
+        val assetDefinitionId = assetDefinitionFromAssetId(string(issue, "asset_id"))
+        val loadWallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(issue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            ownerCertificateSigner = TestOwnerCertificateSigner(),
+            issuerClient = issuerClient,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-canonical-load"),
+            clock = { 1_700_000_012_220L },
+        )
+
+        val loaded = loadWallet.load(assetDefinitionId, "001.2300").get(5, TimeUnit.SECONDS)
+
+        assertEquals("1.2300", issuerClient.lastPrepareAmount)
+        assertEquals("1.2300", issuerClient.lastIssueRequest?.amount)
+        assertEquals("1.2300", loaded.amount)
+        assertEquals("1.2300", loaded.canonicalAmount)
+
+        val testIssuer = TestIssuerCertificateSigner()
+        val recipientSigner = TestOwnerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val receiveStore = InMemoryOfflineNoteStore()
+        val receiveWallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = recipientSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(recipientSigner.accountId)),
+            store = receiveStore,
+            ownerCertificateSigner = recipientSigner,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(listOf(ByteArray(32) { 0x42.toByte() })),
+            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-canonical-receive"),
+            clock = { 1_700_000_012_230L },
+        )
+
+        val receiveRequest = receiveWallet.prepareReceive(assetDefinitionId, "+10")
+
+        assertEquals("10", receiveRequest.amount)
+        assertEquals("10", receiveRequest.canonicalAmount)
+        assertEquals("10", receiveStore.listNotes().single().amount)
+        assertEquals("10", receiveStore.listNotes().single().canonicalAmount)
+
+        listOf("010", "+10").forEach { nonCanonicalAmount ->
+            assertIllegalArgumentContains("amount must be canonical") {
+                OfflineNoteReceiveRequest(
+                    chainId = receiveRequest.chainId,
+                    paymentRequestId = "${receiveRequest.paymentRequestId}-$nonCanonicalAmount",
+                    accountId = receiveRequest.accountId,
+                    assetDefinitionId = receiveRequest.assetDefinitionId,
+                    assetId = receiveRequest.assetId,
+                    amount = nonCanonicalAmount,
+                    keyCertificate = receiveRequest.keyCertificate,
+                    outputCommitment = receiveRequest.outputCommitment(),
+                )
+            }
+        }
+        val alternateAccountId =
+            AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId, null).address.toI105(1)
+        val nonCanonicalAssetId = "${assetDefinitionFromAssetId(receiveRequest.assetId)}#$alternateAccountId"
+        assertTrue(receiveRequest.assetId != nonCanonicalAssetId)
+        assertEquals(receiveRequest.assetId, OfflineNote.canonicalAssetId(nonCanonicalAssetId))
+        assertIllegalArgumentContains("asset_id must be canonical") {
+            OfflineNoteReceiveRequest(
+                chainId = receiveRequest.chainId,
+                paymentRequestId = "${receiveRequest.paymentRequestId}-asset",
+                accountId = receiveRequest.accountId,
+                assetDefinitionId = receiveRequest.assetDefinitionId,
+                assetId = nonCanonicalAssetId,
+                amount = receiveRequest.amount,
+                keyCertificate = receiveRequest.keyCertificate,
+                outputCommitment = receiveRequest.outputCommitment(),
+            )
+        }
+    }
+
+    @Test
     fun walletLoadDoesNotBlockIssuerCompletionThread() {
         val fixture = loadFixture()
         val token = obj(fixture, "payment_token")
@@ -3681,34 +3809,18 @@ class OfflineNoteTest {
                 createdAtMs = 1_700_000_012_160L,
             )
         )
-        val senderWallet = OfflineNoteWallet(
-            chainId = chainId,
-            accountId = senderSigner.accountId,
-            attestationProvider = StaticAttestationProvider(senderCertificate),
-            ownerCertificateSigner = senderSigner,
-            store = senderStore,
-            transactionSubmitter = RecordingTransactionSubmitter(),
-            proofProvider = BindingProofProvider,
-            proofVerifier = BindingProofVerifier,
-            certificateVerifier = verifier,
-            randomSource = QueueRandomSource(emptyList()),
-            idGenerator = FixedIdGenerator("${string(derivation, "payment_request_id")}-positive-amount"),
-            clock = { 1_700_000_012_170L },
-        )
-
         listOf("0", "-1").forEach { invalidAmount ->
-            val forgedRequest = OfflineNoteReceiveRequest(
-                chainId = receiveRequest.chainId,
-                paymentRequestId = "${receiveRequest.paymentRequestId}-$invalidAmount",
-                accountId = receiveRequest.accountId,
-                assetDefinitionId = receiveRequest.assetDefinitionId,
-                assetId = receiveRequest.assetId,
-                amount = invalidAmount,
-                keyCertificate = receiveRequest.keyCertificate,
-                outputCommitment = receiveRequest.outputCommitment(),
-            )
             assertIllegalArgumentContains("Offline Note payment amount must be positive") {
-                senderWallet.pay(forgedRequest)
+                OfflineNoteReceiveRequest(
+                    chainId = receiveRequest.chainId,
+                    paymentRequestId = "${receiveRequest.paymentRequestId}-$invalidAmount",
+                    accountId = receiveRequest.accountId,
+                    assetDefinitionId = receiveRequest.assetDefinitionId,
+                    assetId = receiveRequest.assetId,
+                    amount = invalidAmount,
+                    keyCertificate = receiveRequest.keyCertificate,
+                    outputCommitment = receiveRequest.outputCommitment(),
+                )
             }
             assertEquals(1, senderStore.listNotes().size)
             assertEquals(OfflineNoteWalletNoteState.SPENDABLE, senderStore.listNotes().single().state)
@@ -6005,6 +6117,7 @@ class OfflineNoteTest {
         private val loadContext: OfflineNoteLoadContext,
     ) : OfflineNoteIssuerClient {
         var prepareLoadCount = 0
+        var lastPrepareAmount: String? = null
         var lastIssueRequest: OfflineNoteIssueRequest? = null
 
         override fun prepareLoad(
@@ -6014,6 +6127,7 @@ class OfflineNoteTest {
             amount: String,
         ): CompletableFuture<OfflineNoteLoadContext> {
             prepareLoadCount += 1
+            lastPrepareAmount = amount
             return CompletableFuture.completedFuture(loadContext)
         }
 

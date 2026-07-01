@@ -21,6 +21,8 @@ from check_sorafs_production_readiness import (  # noqa: E402
     GATE_BY_NAME,
     SUMMARY_SCHEMA,
     canonical_string,
+    is_production_ready_environment,
+    require_reviewed_deployment_id_value,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_gates,
@@ -32,9 +34,11 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_runner_preflight import (  # noqa: E402
+    PLAN_RENDERED_PATH_ERROR,
     emit_runner_error_block,
     emit_runner_error_lines,
     emit_runner_exception,
+    plan_rendered_path_is_safe,
     require_existing_files,
     require_runner_non_negative_int,
     require_runner_positive_int,
@@ -110,6 +114,12 @@ SUMMARY_FLAGS_BY_GATE = {
 }
 
 
+def summary_input_path_is_plan_safe(path: Path) -> bool:
+    """Return whether a summary input path can be rendered in runner plans."""
+
+    return plan_rendered_path_is_safe(path)
+
+
 def summary_paths_by_gate(args: argparse.Namespace) -> dict[str, list[Path]]:
     """Return supplied lane summary paths keyed by gate name."""
 
@@ -152,6 +162,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
                 seen=seen_input_files,
             )
         )
+    if any(
+        not summary_input_path_is_plan_safe(path)
+        for paths in paths_by_gate.values()
+        for path in paths
+    ):
+        errors.append(
+            "production readiness runner summary input paths must not contain "
+            "secret-looking, control-character, parent, current, or "
+            "platform-specific components"
+        )
     require_runner_positive_int(args, "now_unix", errors, allow_none=True)
     require_runner_non_negative_int(args, "max_summary_artifact_age_secs", errors)
     if args.deployment_id is None or args.environment is None:
@@ -165,6 +185,14 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors.append(
             "production readiness runner deployment context must use canonical labels"
         )
+    else:
+        require_reviewed_deployment_id_value(
+            args.deployment_id,
+            errors,
+            "production readiness runner deployment_id",
+        )
+        if not is_production_ready_environment(args.environment):
+            errors.append("production readiness runner environment must be production")
     return errors
 
 

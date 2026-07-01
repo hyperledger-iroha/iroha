@@ -120,13 +120,13 @@ def _summary_hex_bytes(
 ) -> bytes:
     value = record.get(field)
     if not isinstance(value, str):
-        raise ValueError(f"{label} must be an exact hex string")
+        raise ValueError(f"{label} must be an exact hex string") from None
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
     if value != _hex(raw):
-        raise ValueError(f"{label} must be canonical lowercase 0x hex")
+        raise ValueError(f"{label} must be canonical lowercase 0x hex") from None
     return raw
 
 
@@ -138,12 +138,19 @@ def _summary_address(record: dict[str, Any], field: str, *, label: str) -> bytes
     return _summary_hex_bytes(record, field, label=label, byte_length=20)
 
 
+def _summary_exact_string(record: dict[str, Any], field: str, *, label: str) -> str:
+    value = record.get(field)
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{label} must be an exact non-empty string") from None
+    return value
+
+
 def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) -> bytes:
     value = record.get(field)
     if not isinstance(value, str) or not value.startswith("0x"):
-        raise ValueError(f"{label} must be exact 0x-prefixed hex")
+        raise ValueError(f"{label} must be exact 0x-prefixed hex") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
-        raise ValueError(f"{label} must not contain whitespace")
+        raise ValueError(f"{label} must not contain whitespace") from None
     invalid_metadata_errors = {
         "bridge runtime bytecode": "EVM bridge runtime bytecode metadata is invalid",
         "verifier runtime bytecode": "EVM verifier runtime bytecode metadata is invalid",
@@ -155,7 +162,7 @@ def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) ->
             invalid_metadata_errors.get(label, f"EVM {label} metadata is invalid")
         ) from None
     if value != "0x" + raw.hex():
-        raise ValueError(f"{label} must be canonical lowercase 0x hex")
+        raise ValueError(f"{label} must be canonical lowercase 0x hex") from None
     return raw
 
 
@@ -1319,25 +1326,29 @@ def _collect_route_canary_transaction_evidence(
         }
     else:
         finalized_block = {"receipt_block_finalized": False}
-    bridge_address = _parse_hex_bytes(
-        str(destination["bridge_address"]),
+    bridge_address = _summary_address(
+        destination,
+        "bridge_address",
         label="destination bridge address",
-        byte_length=20,
     )
-    expected_destination_binding_hash = _parse_hex32(
-        str(destination["destination_binding_hash"]),
+    expected_destination_binding_hash = _summary_hex32(
+        destination,
+        "destination_binding_hash",
         label="destination binding hash",
     )
-    expected_verifier_backend_hash = _parse_hex32(
-        str(destination["verifier_backend_hash"]),
+    expected_verifier_backend_hash = _summary_hex32(
+        destination,
+        "verifier_backend_hash",
         label="verifier backend hash",
     )
-    expected_proof_family_hash = _parse_hex32(
-        str(destination["proof_family_hash"]),
+    expected_proof_family_hash = _summary_hex32(
+        destination,
+        "proof_family_hash",
         label="proof family hash",
     )
-    expected_network_id = _parse_hex32(
-        str(destination["network_id"]),
+    expected_network_id = _summary_hex32(
+        destination,
+        "network_id",
         label="destination bridge network id",
     )
     logs = receipt.get("logs")
@@ -1357,8 +1368,9 @@ def _collect_route_canary_transaction_evidence(
             log,
             expected_log_index=log_index,
             transaction_hash=transaction_hash,
-            expected_block_hash=_parse_hex32(
-                str(receipt_block["block_hash"]),
+            expected_block_hash=_summary_hex32(
+                receipt_block,
+                "block_hash",
                 label="route-canary receipt block hash",
             ),
             expected_block_number=int(receipt_block["block_number"]),
@@ -1397,8 +1409,9 @@ def _collect_route_canary_transaction_evidence(
         transaction,
         transaction_hash=transaction_hash,
         bridge_address=bridge_address,
-        expected_block_hash=_parse_hex32(
-            str(receipt_block["block_hash"]),
+        expected_block_hash=_summary_hex32(
+            receipt_block,
+            "block_hash",
             label="route-canary receipt block hash",
         ),
         expected_block_number=int(receipt_block["block_number"]),
@@ -1412,7 +1425,7 @@ def _collect_route_canary_transaction_evidence(
     )
     used_summary = _route_canary_used_message_proof_summary(
         rpc_url,
-        bridge_address=str(destination["bridge_address"]),
+        bridge_address=_hex(bridge_address),
         message_id=message_id,
         block_tag=block_tag,
         opener=opener,
@@ -1424,12 +1437,14 @@ def _collect_route_canary_transaction_evidence(
         transaction_hash=transaction_hash,
         log_index=int(event_summary["log_index"]),
         receipt_block_number=int(receipt_block["block_number"]),
-        receipt_block_hash=_parse_hex32(
-            str(receipt_block["block_hash"]),
+        receipt_block_hash=_summary_hex32(
+            receipt_block,
+            "block_hash",
             label="route-canary receipt block hash",
         ),
-        block_receipts_root=_parse_hex32(
-            str(receipt_block["block_receipts_root"]),
+        block_receipts_root=_summary_hex32(
+            receipt_block,
+            "block_receipts_root",
             label="route-canary block receiptsRoot",
         ),
         call_data_sha256=_parse_hex32(
@@ -1564,8 +1579,9 @@ def _route_canary_finalized_block_summary(
         raise RuntimeError(
             "route-canary receipt block is newer than the finalized execution block"
         )
-    receipt_block_hash = _parse_hex32(
-        str(receipt_block["block_hash"]),
+    receipt_block_hash = _summary_hex32(
+        receipt_block,
+        "block_hash",
         label="route-canary receipt block hash",
     )
     if (
@@ -1586,29 +1602,45 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
     destination = summary["destination_bridge"]
     args = [
         "--domain",
-        str(destination["chain"]),
+        _summary_exact_string(destination, "chain", label="destination chain"),
         "--network-id",
-        str(destination["network_id"]),
+        _hex(_summary_hex32(destination, "network_id", label="network id")),
         "--verifier-address",
-        str(destination["verifier_address"]),
+        _hex(_summary_address(destination, "verifier_address", label="verifier address")),
         "--bridge-address",
-        str(destination["bridge_address"]),
+        _hex(_summary_address(destination, "bridge_address", label="bridge address")),
         "--bridge-code-hash",
-        str(destination["bridge_code_hash"]),
+        _hex(_summary_hex32(destination, "bridge_code_hash", label="bridge code hash")),
         "--bridge-runtime-bytecode-hex",
-        str(destination["bridge_runtime_bytecode_hex"]),
+        _summary_exact_string(
+            destination,
+            "bridge_runtime_bytecode_hex",
+            label="bridge runtime bytecode",
+        ),
         "--verifier-code-hash",
-        str(destination["verifier_code_hash"]),
+        _hex(
+            _summary_hex32(destination, "verifier_code_hash", label="verifier code hash")
+        ),
         "--verifier-runtime-bytecode-hex",
-        str(destination["verifier_runtime_bytecode_hex"]),
+        _summary_exact_string(
+            destination,
+            "verifier_runtime_bytecode_hex",
+            label="verifier runtime bytecode",
+        ),
         "--verifier-key-hash",
-        str(destination["verifier_key_hash"]),
+        _hex(_summary_hex32(destination, "verifier_key_hash", label="verifier key hash")),
     ]
     if destination.get("expected_destination_binding_hash_matches") is True:
         args.extend(
             [
                 "--expected-destination-binding-hash",
-                str(destination["destination_binding_hash"]),
+                _hex(
+                    _summary_hex32(
+                        destination,
+                        "destination_binding_hash",
+                        label="destination binding hash",
+                    )
+                ),
             ]
         )
     route_hash = summary.get("route_allowlist_hash")
@@ -1616,16 +1648,39 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
         isinstance(route_hash, str)
         and destination.get("expected_destination_binding_hash_matches") is True
     ):
-        args.extend(["--route-allowlist-hash", route_hash])
+        args.extend(
+            [
+                "--route-allowlist-hash",
+                _hex(
+                    _summary_hex32(
+                        summary,
+                        "route_allowlist_hash",
+                        label="route allowlist hash",
+                    )
+                ),
+            ]
+        )
         source_record_hashes = summary.get("source_record_hashes")
         if not isinstance(source_record_hashes, dict):
             raise ValueError("route allowlist TOML requires source record hashes")
         args.extend(
             [
                 "--source-verifier-material-hash",
-                str(source_record_hashes["source_verifier_material_hash"]),
+                _hex(
+                    _summary_hex32(
+                        source_record_hashes,
+                        "source_verifier_material_hash",
+                        label="source verifier material hash",
+                    )
+                ),
                 "--source-adapter-engine-deployment-hash",
-                str(source_record_hashes["source_adapter_engine_deployment_hash"]),
+                _hex(
+                    _summary_hex32(
+                        source_record_hashes,
+                        "source_adapter_engine_deployment_hash",
+                        label="source adapter engine deployment hash",
+                    )
+                ),
             ]
         )
         route_canary = summary.get("route_canary")
@@ -1633,7 +1688,13 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
             args.extend(
                 [
                     "--route-canary-evidence-hash",
-                    str(route_canary["evidence_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary,
+                            "evidence_hash",
+                            label="route canary evidence hash",
+                        )
+                    ),
                 ]
             )
         route_canary_transaction = summary.get("route_canary_transaction")
@@ -1692,13 +1753,27 @@ def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] |
     if destination.get("expected_destination_binding_hash_matches") is not True:
         return None
     return {
-        "network_id_hex": str(destination["network_id"]),
-        "verifier_address_hex": str(destination["verifier_address"]),
-        "bridge_address_hex": str(destination["bridge_address"]),
-        "verifier_code_hash_hex": str(destination["verifier_code_hash"]),
-        "verifier_key_hash_hex": str(destination["verifier_key_hash"]),
-        "expected_destination_binding_hash_hex": str(
-            destination["destination_binding_hash"]
+        "network_id_hex": _hex(
+            _summary_hex32(destination, "network_id", label="network id")
+        ),
+        "verifier_address_hex": _hex(
+            _summary_address(destination, "verifier_address", label="verifier address")
+        ),
+        "bridge_address_hex": _hex(
+            _summary_address(destination, "bridge_address", label="bridge address")
+        ),
+        "verifier_code_hash_hex": _hex(
+            _summary_hex32(destination, "verifier_code_hash", label="verifier code hash")
+        ),
+        "verifier_key_hash_hex": _hex(
+            _summary_hex32(destination, "verifier_key_hash", label="verifier key hash")
+        ),
+        "expected_destination_binding_hash_hex": _hex(
+            _summary_hex32(
+                destination,
+                "destination_binding_hash",
+                label="destination binding hash",
+            )
         ),
     }
 
@@ -1883,6 +1958,31 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
     )
 
 
+def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
+    route_hash = summary.get("route_allowlist_hash")
+    if route_hash is not None:
+        _summary_hex32(summary, "route_allowlist_hash", label="route allowlist hash")
+    source_record_hashes = summary.get("source_record_hashes")
+    if isinstance(source_record_hashes, dict):
+        _summary_hex32(
+            source_record_hashes,
+            "source_verifier_material_hash",
+            label="source verifier material hash",
+        )
+        _summary_hex32(
+            source_record_hashes,
+            "source_adapter_engine_deployment_hash",
+            label="source adapter engine deployment hash",
+        )
+    route_canary = summary.get("route_canary")
+    if isinstance(route_canary, dict):
+        _summary_hex32(
+            route_canary,
+            "evidence_hash",
+            label="route canary evidence hash",
+        )
+
+
 def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     missing: list[str] = []
     destination = summary.get("destination_bridge")
@@ -1919,13 +2019,15 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     """Render governed destination rollout TOML from a live-evidence summary."""
 
     _validate_destination_summary(summary)
+    _validate_copied_route_summary_metadata(summary)
     missing = _full_toml_prerequisites(summary)
     if missing:
         raise ValueError("TOML output requires " + ", ".join(missing))
     destination = summary["destination_bridge"]
     parser = evidence.build_parser()
+    offline_args = _offline_args(summary)
     try:
-        args = parser.parse_args([*_offline_args(summary), "--toml"])
+        args = parser.parse_args([*offline_args, "--toml"])
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "generated EVM destination TOML arguments are invalid"
@@ -1994,8 +2096,9 @@ def _validate_route_allowlist_hash(
         raise ValueError(
             "--route-allowlist-hash requires --expected-destination-binding-hash"
         )
-    destination_binding_hash = _parse_hex32(
-        destination["destination_binding_hash"],
+    destination_binding_hash = _summary_hex32(
+        destination,
+        "destination_binding_hash",
         label="destination binding hash",
     )
     expected_hash = evidence.evm_route_allowlist_hash(
@@ -2196,14 +2299,15 @@ def collect_live_evidence(
                 "MessageProofAccepted transaction receipt block"
             )
         args.route_canary_evidence_hash = derived_canary_hash
-        args.network_id = _parse_hex32(
-            str(destination["network_id"]),
+        args.network_id = _summary_hex32(
+            destination,
+            "network_id",
             label="destination bridge network id",
         )
-        args.bridge_address = _parse_hex_bytes(
-            str(destination["bridge_address"]),
+        args.bridge_address = _summary_address(
+            destination,
+            "bridge_address",
             label="destination bridge address",
-            byte_length=20,
         )
         args.route_canary_message_id = _parse_hex32(
             str(route_canary_transaction["message_id"]),

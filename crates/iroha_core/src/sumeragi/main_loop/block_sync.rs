@@ -8831,6 +8831,11 @@ impl Actor {
                 response.view,
                 "block_body_response_payload_ready",
             );
+            self.retry_rbc_progress_after_block_created_hydration((
+                response.block_hash,
+                response.height,
+                response.view,
+            ));
         }
         let materialized_at = Instant::now();
         if body_materialized

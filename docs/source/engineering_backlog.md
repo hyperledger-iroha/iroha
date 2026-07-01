@@ -105,6 +105,36 @@ with named
 `SCCP_DOMAIN_*` and `SCCP_DOMAIN_SORA` constants, and the readiness plus strict
 bundle inventories pin those negative diagnostics so active source-to-SORA
 routes cannot regress to numeric-only drift checks.
+TON live account-snapshot imports now also require exact string address, hash,
+and code BoC metadata before parser dispatch, and the hostile non-string
+regression proves copied evidence cannot trigger stringification or leak
+operator-controlled scalar text while the live TON verifier deployment evidence
+remains open.
+Solana live account/program imports now enforce the same boundary for verifier
+program id, ProgramData address, verifier code hash, ProgramData metadata hash,
+and copied base64 account/program bytes, with hostile non-string regressions
+pinning that copied evidence cannot be stringified into production metadata.
+TRON copied summary hashes that join source bridge, destination verifier, and
+route allowlist readiness now also require exact string metadata before hash
+parsing: source bridge config/network ids, destination network and binding
+hashes, source material hashes, and source deployment hashes reject hostile
+non-string copied values without stringification.
+EVM live destination summaries now mirror that copied-metadata boundary for
+destination, source-record, route allowlist, route-canary, and Torii query
+fields: copied non-string hashes or addresses are rejected before parser
+dispatch or generated TOML argument emission, with hostile-object coverage
+pinning that no operator scalar text is stringified.
+EVM source-live summaries now enforce the same exact copied-metadata boundary
+for source bridge, deployment receipt, expected bridge-code, and source-record
+hashes before TOML prerequisites or generated source-material output can mask a
+malformed scalar.
+EVM receipt-proof source-event logs now require `removed` to be absent or exact
+`false`; literal `true` and non-boolean copied/RPC values fail before
+receipt-trie or source-event evidence can be accepted. JavaScript/browser,
+Swift, Kotlin/JVM, and Java Android receipt RLP/source-event helpers now mirror
+that exactness and pin explicit `null`, numeric, and secret-bearing string
+regressions; native .NET parity remains on the Windows-machine recertification
+handoff path.
 Deployment-backed Rust readiness
 coverage now also opens only matching governed ETH, BSC, Solana, TON, and TRON
 source material plus SORA-targeted source-adapter deployment descriptors, and it
@@ -4894,7 +4924,7 @@ redistributable schemas, and official trust/revocation bundles.
   `try_sign` and routes `Signature::try_new` through the fallible helper,
   deterministic secp256k1 key generation now rejects explicit all-zero
   32-byte seed material before DRBG expansion, direct secp256k1 verification
-  maps malformed and all-zero compact signatures
+  maps malformed, all-zero, and zero-`r`/zero-`s` compact signatures
   to `Error::BadSignature`, the compatibility `sign` helper no longer falls
   back to an empty signature if checked signing fails, and
   secp256k1 recoverable prehash signing now checks the low-S recovery-id parity

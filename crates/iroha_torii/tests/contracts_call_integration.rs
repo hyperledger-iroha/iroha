@@ -234,7 +234,7 @@ seiyaku ContractCallNestedTransferCallerTest {{
   }}
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -265,7 +265,7 @@ seiyaku ContractCallNestedTransferVaultTest {{
   }}
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }}
 }}
@@ -716,6 +716,49 @@ async fn contracts_call_enqueues_transaction() {
             .unwrap_or(false),
         true
     );
+    let call_receipt = call_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("operation_receipt present");
+    assert_eq!(
+        call_receipt
+            .get("operation_kind")
+            .and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        call_receipt.get("status").and_then(json::Value::as_str),
+        Some("submitted")
+    );
+    assert_eq!(
+        call_receipt.get("transport").and_then(json::Value::as_str),
+        Some("torii")
+    );
+    assert_eq!(
+        call_receipt.get("dataspace").and_then(json::Value::as_str),
+        Some("universal")
+    );
+    assert_eq!(
+        call_receipt
+            .get("contract_address")
+            .and_then(json::Value::as_str),
+        Some(contract_address.as_str())
+    );
+    assert_eq!(
+        call_receipt
+            .get("tx_hash_hex")
+            .and_then(json::Value::as_str),
+        Some(tx_hash_hex)
+    );
+    assert_eq!(
+        call_receipt
+            .get("payload_digest_hex")
+            .and_then(json::Value::as_str)
+            .map(str::len),
+        Some(64)
+    );
+    assert!(!call_receipt.contains_key("private_key"));
+    assert!(!call_receipt.contains_key("payload"));
 
     let applied_call =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
@@ -759,6 +802,26 @@ async fn contracts_call_enqueues_transaction() {
             .and_then(json::Value::as_u64),
         Some(transaction_ttl_ms)
     );
+    let draft_receipt = draft_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("draft operation_receipt present");
+    assert_eq!(
+        draft_receipt
+            .get("operation_kind")
+            .and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        draft_receipt.get("status").and_then(json::Value::as_str),
+        Some("pending_signature")
+    );
+    assert_eq!(
+        draft_receipt.get("transport").and_then(json::Value::as_str),
+        Some("torii")
+    );
+    assert!(!draft_receipt.contains_key("private_key"));
+    assert!(!draft_receipt.contains_key("payload"));
     let transaction_scaffold_b64 = draft_json
         .get("transaction_scaffold_b64")
         .and_then(json::Value::as_str)
@@ -844,6 +907,28 @@ async fn contracts_call_enqueues_transaction() {
         .and_then(json::Value::as_str)
         .expect("detached submit tx hash present");
     assert_eq!(detached_submit_hash.len(), 64);
+    let detached_receipt = detached_submit_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("detached operation_receipt present");
+    assert_eq!(
+        detached_receipt
+            .get("operation_kind")
+            .and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        detached_receipt.get("status").and_then(json::Value::as_str),
+        Some("submitted")
+    );
+    assert_eq!(
+        detached_receipt
+            .get("tx_hash_hex")
+            .and_then(json::Value::as_str),
+        Some(detached_submit_hash)
+    );
+    assert!(!detached_receipt.contains_key("private_key"));
+    assert!(!detached_receipt.contains_key("payload"));
     assert_eq!(
         detached_submit_json
             .get("transaction_ttl_ms")

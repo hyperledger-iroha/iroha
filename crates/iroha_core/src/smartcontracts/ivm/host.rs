@@ -20789,7 +20789,7 @@ seiyaku Vault {
         let ptr_asset = ivm::Memory::INPUT_START + off_asset;
         let ptr_amount = ivm::Memory::INPUT_START + off_amount;
 
-        // Assemble: SCALL TRANSFER_ASSET; HALT (set arg registers from host side)
+        // Assemble: SCALL TRANSFER_ASSET_SCOPED; HALT (set arg registers from host side)
         let mut code = Vec::new();
         code.extend_from_slice(
             &encoding::wide::encode_sys(

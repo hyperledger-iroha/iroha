@@ -224,11 +224,15 @@ fn host_rejects_insufficient_asset_transfer() {
         "coin".parse().unwrap(),
     );
 
-    // Build program: TRANSFER_ASSET(&from, &to, &asset_def, 1000) -> expect rejection when applying queued ISIs
+    // Build program: TRANSFER_ASSET_SCOPED(&from, &to, &asset_def, 1000, &dataspace) -> expect rejection when applying queued ISIs
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
     let to_tlv = tlv_blob(&to, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
     let amount_tlv = norito_bytes_tlv(&Numeric::from(1000_u64));
+    let dataspace_tlv = tlv_blob(
+        &iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        PointerType::DataSpaceId as u16,
+    );
 
     let mut vm = IVM::new(50_000);
     vm.set_host(CoreHost::new(from.clone()));
@@ -237,6 +241,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let ptr_to = load_input_blob(&mut vm, &mut cursor, &to_tlv);
     let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
     let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
+    let ptr_dataspace = load_input_blob(&mut vm, &mut cursor, &dataspace_tlv);
     run_syscall(
         &mut vm,
         ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
@@ -245,6 +250,7 @@ fn host_rejects_insufficient_asset_transfer() {
             (11, ptr_to),
             (12, ptr_asset),
             (13, ptr_amount),
+            (14, ptr_dataspace),
         ],
     );
 
@@ -358,7 +364,7 @@ fn host_batches_transfer_v1_calls() {
     run_syscall(&mut vm, ivm_sys::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &[]);
     run_syscall(
         &mut vm,
-        ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
+        ivm_sys::SYSCALL_TRANSFER_V1,
         &[
             (10, ptr_from),
             (11, ptr_to_a),
@@ -368,7 +374,7 @@ fn host_batches_transfer_v1_calls() {
     );
     run_syscall(
         &mut vm,
-        ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED,
+        ivm_sys::SYSCALL_TRANSFER_V1,
         &[
             (10, ptr_from),
             (11, ptr_to_b),

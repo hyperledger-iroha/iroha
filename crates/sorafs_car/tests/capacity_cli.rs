@@ -1,6 +1,6 @@
 #![cfg(feature = "cli")]
 
-use std::fs;
+use std::{env, fs};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
@@ -12,7 +12,19 @@ use sorafs_manifest::capacity::{
     CapacityDeclarationV1, CapacityDisputeKind, CapacityDisputeV1, CapacityTelemetryV1,
     ReplicationOrderV1,
 };
-use tempfile::tempdir;
+use tempfile::{Builder, TempDir};
+
+fn canonical_temp_base() -> std::path::PathBuf {
+    env::temp_dir()
+        .canonicalize()
+        .expect("canonical system temp dir")
+}
+
+fn tempdir() -> Result<TempDir, std::io::Error> {
+    Builder::new()
+        .prefix("sorafs-capacity-cli-")
+        .tempdir_in(canonical_temp_base())
+}
 
 #[test]
 fn capacity_declaration_cli_produces_canonical_outputs() {

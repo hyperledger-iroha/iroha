@@ -42,7 +42,11 @@ Implemented locally:
   replay, governance/repair, observability, and governance approval evidence to
   carry a `proof_summary_digest_hex` matching a valid proof-generation artifact
   in the same bundle. Proof-summary mismatches are recorded on the offending
-  artifact in the JSON summary before required-kind validity is reported.
+  artifact in the JSON summary before required-kind validity is reported. The
+  checker exports its required top-level payload fields as
+  `EVIDENCE_REQUIRED_FIELDS`, and the collection runner includes the
+  checker-backed `evidence_contract` map in dry-run output for the selected
+  required kinds.
 - `fixtures/sorafs_manifest/pdp/` now contains canonical PDP commitment,
   challenge, and proof `.to`/JSON pairs plus negative fixtures for duplicate
   hot-leaf challenge material and missing proof signatures. The fixture bundle

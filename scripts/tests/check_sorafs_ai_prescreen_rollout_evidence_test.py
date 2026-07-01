@@ -25,6 +25,7 @@ MANIFEST_ID = "12" * 16
 QUARANTINE_ID = "34" * 16
 DEPLOYMENT_ID = "ai-prescreen-staging-a"
 ENVIRONMENT = "staging"
+GENERATED_AT = 1_800_000_200
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -33,6 +34,7 @@ def write_json(path: Path, payload: dict) -> Path:
 
 
 def with_context(payload: dict) -> dict:
+    payload.setdefault("generated_at_unix", GENERATED_AT)
     payload["deployment_id"] = DEPLOYMENT_ID
     payload["environment"] = ENVIRONMENT
     payload["deployment_context_reviewed"] = True

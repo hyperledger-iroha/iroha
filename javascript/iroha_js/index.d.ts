@@ -19224,26 +19224,6 @@ export function normalizeCryptoAlgorithm(
   algorithm?: string | null,
 ): CryptoAlgorithm;
 
-export function generateRecoveryPhrase(options?: {
-  wordCount?: RecoveryPhraseWordCount;
-}): RecoveryPhrase;
-
-export function normalizeRecoveryPhrase(phrase: string): string;
-
-export function validateRecoveryPhrase(phrase: string): boolean;
-
-export function entropyToRecoveryPhrase(
-  entropy: ArrayBufferView | ArrayBuffer | Buffer,
-): RecoveryPhrase;
-
-export function recoveryPhraseToEntropy(phrase: string): Buffer;
-
-export function deriveEd25519SeedFromRecoveryPhrase(phrase: string): Buffer;
-
-export function ed25519SeedToRecoveryPhrase(
-  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
-): RecoveryPhrase;
-
 export function generateKeyPair(options?: {
   seed?: ArrayBufferView | ArrayBuffer | Buffer;
   algorithm?: string | null;
@@ -19330,6 +19310,26 @@ export function verifyEd25519(
   signature: ArrayBufferView | ArrayBuffer | Buffer,
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): boolean;
+
+export function normalizeRecoveryPhrase(phrase: string): RecoveryPhrase;
+
+export function validateRecoveryPhrase(phrase: string): boolean;
+
+export function generateRecoveryPhrase(
+  wordCount?: RecoveryPhraseWordCount,
+): RecoveryPhrase;
+
+export function entropyToRecoveryPhrase(
+  entropy: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
+
+export function recoveryPhraseToEntropy(phrase: string): Buffer;
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase: string): Buffer;
+
+export function ed25519SeedToRecoveryPhrase(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
 
 export function canonicalQueryString(
   query?: string | URLSearchParams | null,

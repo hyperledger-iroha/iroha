@@ -240,6 +240,37 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert str(missing) not in captured.err
 
 
+def test_service_url_rejects_secret_bearing_url_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    url = "https://notifications.example/private_key/hook?token=secret"
+    args[args.index("--notification-webhook-url") + 1] = url
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner URL arguments must not contain" in captured.err
+    assert "private_key" not in captured.err
+    assert "token=secret" not in captured.err
+    assert captured.out == ""
+
+
+def test_iroha_arg_rejects_secret_bearing_value_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--iroha-arg", "--bearer-token=runtime-secret"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner passthrough arguments must not contain" in captured.err
+    assert "bearer-token" not in captured.err
+    assert "runtime-secret" not in captured.err
+    assert captured.out == ""
+
+
 def test_committee_results_must_satisfy_quorum(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     quorum_index = args.index("--quorum") + 1

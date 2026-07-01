@@ -101,9 +101,15 @@ Undefined helper scans preserve LAMBDA binding scope.
 Undefined helper scans preserve standard TLA set/operator identifiers.
 Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
 Undefined helper scans preserve CASE branch scope.
+Undefined helper scans preserve relation operand scope.
+Undefined helper scans preserve operator-call argument scope.
+Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve explicit set literal element scope.
+Undefined helper scans preserve unary set-operator operand scope.
 Undefined helper scans preserve set-comprehension binding scope.
 Undefined helper scans preserve set-comprehension outer enclosure scope.
 Undefined helper scans preserve function-constructor binding scope.
+Undefined helper scans preserve function-set domain and range scope.
 Undefined helper scans preserve record field label scope.
 Undefined helper scans preserve record set field label scope.
 Undefined helper scans preserve record update field label scope.
@@ -239,9 +245,15 @@ Undefined helper scans preserve LAMBDA binding scope.
 Undefined helper scans preserve standard TLA set/operator identifiers.
 Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
 Undefined helper scans preserve CASE branch scope.
+Undefined helper scans preserve relation operand scope.
+Undefined helper scans preserve operator-call argument scope.
+Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve explicit set literal element scope.
+Undefined helper scans preserve unary set-operator operand scope.
 Undefined helper scans preserve set-comprehension binding scope.
 Undefined helper scans preserve set-comprehension outer enclosure scope.
 Undefined helper scans preserve function-constructor binding scope.
+Undefined helper scans preserve function-set domain and range scope.
 Undefined helper scans preserve record field label scope.
 Undefined helper scans preserve record set field label scope.
 Undefined helper scans preserve record update field label scope.
@@ -30680,13 +30692,28 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   `CASE` branches must be split before boolean traversal, so branch conditions
   and results keep nested record, selector, action-wrapper, and tuple scope while
   free helper obligations inside branches remain visible.
+  Top-level relation operands and direct operator-call arguments must recurse
+  before raw identifier scanning too, so selector field labels and record-field
+  labels inside operands or arguments stay local while missing callees and free
+  helper obligations remain visible.
+  Top-level arithmetic and set infix operands must recurse the same way, so
+  `ConcreteRecord.MissingField + FreeMissing` and
+  `ConcreteRecord.MissingField \cup {FreeMissing}` report the free helper
+  obligation without treating `MissingField` as a helper.
+  Explicit set literals must recurse through their elements, and unary set
+  operators such as `DOMAIN`, `SUBSET`, and `UNION` must recurse through their
+  operands, so nested record labels stay local while element, domain, or operand
+  helper obligations remain visible.
   Set-comprehension and function-constructor binding scope must likewise keep
   local helper-like binders out of undefined-helper diagnostics while leaving
   helper references in their domains and surrounding bodies visible, including
   comma-shared binders such as `{x, y \in S: P}` and
   `[x, y \in S |-> e]`. Set-comprehension scope is only applied when the
   outer braces enclose the whole expression, so adjacent brace expressions split
-  through boolean traversal before local binders are applied. Record-literal and
+  through boolean traversal before local binders are applied. Function-set
+  expressions such as `[S -> T]` must recurse through both domain and range, so
+  nested record labels in range expressions stay local while domain and range
+  helper obligations remain visible. Record-literal and
   record-set field labels are not helper
   references, so `[MissingField |-> FreeMissing]` and
   `[MissingField: FreeMissing]` report the value or domain obligation but not the

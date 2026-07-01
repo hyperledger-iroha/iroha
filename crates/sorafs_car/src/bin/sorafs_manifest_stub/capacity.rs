@@ -1803,14 +1803,9 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .map_err(|err| format!("failed to write binary payload to stdout: {err}"))?;
         return Ok(());
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create directory `{}`: {err}", parent.display()))?;
-    }
-    fs::write(path, bytes).map_err(|err| format!("failed to write `{}`: {err}", path.display()))
+    let mut file = super::open_output_file(path, "capacity binary payload")?;
+    file.write_all(bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
 }
 
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
@@ -1826,16 +1821,7 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create directory `{}`: {err}", parent.display()))?;
-    }
-
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("failed to create `{}`: {err}", path.display()))?;
+    let mut file = super::open_output_file(path, "capacity text output")?;
     file.write_all(text.as_bytes())
         .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
     if !text.ends_with('\n') {
@@ -1850,4 +1836,70 @@ fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
         .map_err(|err| format!("failed to serialize JSON: {err}"))?
         + "\n";
     write_text(path, &json_text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::{TempDir, tempdir};
+
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
+
+    #[test]
+    fn write_binary_creates_parent_and_writes_all_bytes() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("nested").join("payload.to");
+
+        write_binary(&output_path, b"sorafs-capacity").expect("write binary");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            b"sorafs-capacity"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("target.txt");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("payload.txt");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_json_file_rejects_symlink_parent() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("request.json");
+
+        let err = write_json_file(&output_path, &Value::Object(Map::new()))
+            .expect_err("reject symlink parent");
+
+        assert!(
+            err.contains("parent") && err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !real_dir.join("request.json").exists(),
+            "symlink parent should not receive output"
+        );
+    }
 }

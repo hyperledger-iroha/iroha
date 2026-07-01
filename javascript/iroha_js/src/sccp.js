@@ -16487,6 +16487,20 @@ const bscMainnetReceiptSourceEventValidationRequested = (input, options) =>
     "source_verifier_material",
   ) !== undefined;
 
+const requireEvmLogNotRemoved = (log, label, removedMessage) => {
+  if (!Object.hasOwn(log, "removed")) {
+    return;
+  }
+  const removed = log.removed;
+  if (removed === false) {
+    return;
+  }
+  if (removed === true) {
+    throw new TypeError(removedMessage);
+  }
+  throw new TypeError(`${label}.removed must be a boolean`);
+};
+
 const ethereumMainnetReceiptLogSourceEventDigest = (
   receipt,
   { sourceEventDigest, sourceBridgeEmitterAddress },
@@ -16515,9 +16529,11 @@ const ethereumMainnetReceiptLogSourceEventDigest = (
     if (!log || typeof log !== "object" || Array.isArray(log)) {
       throw new TypeError(`receipt.logs[${index}] must be an object`);
     }
-    if (log.removed === true) {
-      throw new TypeError("receipt.logs must not contain removed logs");
-    }
+    requireEvmLogNotRemoved(
+      log,
+      `receipt.logs[${index}]`,
+      "receipt.logs must not contain removed logs",
+    );
     const logAddress = requireEthereumRpcHexData(
       log.address,
       `receipt.logs[${index}].address`,
@@ -24220,9 +24236,11 @@ const evmReceiptLogsForRlp = (receipt) => {
     if (!log || typeof log !== "object" || Array.isArray(log)) {
       throw new TypeError(`receipt.logs[${index}] must be an object`);
     }
-    if (log.removed === true) {
-      throw new TypeError(`receipt.logs[${index}] must not be removed`);
-    }
+    requireEvmLogNotRemoved(
+      log,
+      `receipt.logs[${index}]`,
+      `receipt.logs[${index}] must not be removed`,
+    );
     const topics = log.topics;
     if (!Array.isArray(topics)) {
       throw new TypeError(`receipt.logs[${index}].topics must be an array`);

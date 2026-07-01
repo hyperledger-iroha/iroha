@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 04184b558958fdc24b754cd6b01706d54034cec84c19d023398f81db72a4d1ac
+source_hash: fe30132592db1a078d052725a719009f3330e9a8bc8ef0fc1e73ccbd142b4f75
 source_last_modified: "2026-06-25T18:08:03+00:00"
 translation_last_reviewed: 2026-06-25
 title: Reserve+Rent & Lifecycle Policy
@@ -25,12 +25,30 @@ sorafs-reserve-matrix` emits quote matrices; and
 dashboards and Alertmanager rules. `scripts/check_sorafs_reserve_rent_rollout_evidence.py`
 now provides the fail-closed rollout evidence gate for staged SFM-6 promotion
 packets, and `scripts/run_sorafs_reserve_rent_rollout_evidence.py` provides the
-matching reviewed evidence collection planner/runner.
+matching reviewed evidence collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
+collection planner dry-run JSON includes the checker-backed `evidence_contract`
+map for selected required kinds.
 
-The production reserve/rent control plane is still outstanding. There is no
-reserve daemon, no Torii REST surface for reserve lifecycle management, no
-authenticated runtime credit-line drawdown/accrual engine, and no shipped CLI
-for provider status, top-ups, withdrawals, appeals, or policy updates.
+The production reserve/rent control plane is still incomplete. Signed local
+movement routes now authenticate and record transfer intents, but they do not
+submit reserve transfers or verify chain finality. Operators can now attach
+submitted, confirmed, or rejected transaction evidence to the local movement
+ledger, rejected custody evidence now reconciles the local balance view, and
+confirmed custody evidence now updates a separate chain-confirmed balance view.
+Lifecycle updates now materialize local credit-line draw/accrual state, but
+live chain submission, automatic finality polling, and live account mutation
+for credit lines are still target service work. There is
+now a local authenticated appeal/policy handoff surface, local accepted-appeal
+lifecycle overrides, local governance source-entry handoff, and reserve
+lifecycle default-state plus rejected movement-custody application to the
+gateway compliance denylist, plus local already-effective lifecycle-policy
+reprojection into provider denylist state. Local signed lifecycle advancement
+is available for operator-driven time progression, and the opt-in
+config-backed scheduler can drive the same advancement path on a production
+cadence. Broader governance source-entry effects beyond current provider
+denylist projection and live scheduler canary evidence remain target downstream
+work.
 
 ## Goals & Scope
 - Track the implemented financial policy for provider reserves and recurring rent.
@@ -281,5 +299,7 @@ projection, and the new alerts fire as soon as a digest omits the required rent
 or reserve top-up transfers.
 
 ## Rollout Status
-- Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger/lifecycle CLI helpers, local lifecycle/credit projection, matrix generation, ledger digest conversion, dashboards, alert rules, fail-closed rollout evidence gate, collection planner, operator argfile templates, and focused tests for those local paths.
-- Remaining: reserve lifecycle service, signed Torii routes, runtime reserve movement/authentication, persisted lifecycle-stage automation, appeal/policy-update payloads, live credit-line mutation/accrual, and staged provider bake evidence that passes the rollout gate.
+- Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger/lifecycle CLI helpers, signed reserve top-up/withdrawal/status/movement/custody/credit-line/appeal/policy CLI commands, local lifecycle/credit projection, local accepted-appeal lifecycle overrides, already-effective lifecycle-policy provider reprojection, signed local lifecycle advancement, config-backed reserve lifecycle scheduler automation, reserve-adjusted reputation snapshot publication, local orderbook reserve-lifecycle ask admission, reserve lifecycle, lifecycle-policy, and rejected movement-custody gateway compliance denylist sync, local `sorafs_node` provider-summary, lifecycle-event, credit-line, appeal, lifecycle-policy, and movement-ledger runtime with separate local and chain-confirmed balance projections, signed Torii lifecycle, local movement/readback, custody-status, credit-line, appeal, lifecycle-policy, and lifecycle-advance routes, matrix generation, ledger digest conversion, dashboards, alert rules, fail-closed rollout evidence gate with scheduled lifecycle canary provider-bake checks, live chain submission/finality-poll reserve-movement evidence checks, custody/finality reserve-movement checks, live credit-line account-state evidence checks, downstream governance compliance evidence checks, and dry-run evidence-contract export, collection planner, operator argfile templates, and focused tests for those local paths.
+- Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.
+
+The SFM-6 rollout gate remains fail-closed: provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion, advanced defaulting providers, synced gateway compliance, and preserved orderbook rejection; reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling, confirmed-status polling, timeout rejection, and submitted/confirmed/rejected custody evidence; credit-line artifacts prove live account-state mutation/readback, accrual posting, manual-approval tier non-mutation, and account-state reconciliation; governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage, handoff verification, and non-reserve compliance-entry preservation.

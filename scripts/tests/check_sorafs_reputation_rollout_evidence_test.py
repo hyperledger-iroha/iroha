@@ -204,6 +204,10 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         assert row["present"] is True
         assert row["artifact_count"] == len(row["artifacts"])
         for artifact in row["artifacts"]:
+            assert not artifact["path"].startswith("/")
+            assert "\\" not in artifact["path"]
+            assert "." not in artifact["path"].split("/")
+            assert ".." not in artifact["path"].split("/")
             assert artifact["fingerprint"]["deployment_id"] == DEPLOYMENT_ID
             assert artifact["fingerprint"]["environment"] == ENVIRONMENT
             assert artifact["fingerprint"]["deployment_context_reviewed"] is True

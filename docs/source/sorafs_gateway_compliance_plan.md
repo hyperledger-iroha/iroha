@@ -10,11 +10,12 @@ summary: SFM-4 implementation status for gateway denylist enforcement, GAR polic
 SFM-4 is partially implemented. The gateway enforcement path, denylist helpers,
 GAR policy payloads, proof-token utilities, honey-audit probing, operator bundle
 tooling, and payload-free rollout evidence gate exist. The repository does not
-yet ship an always-on central compliance controller daemon, moderation toggle
-service, SFM-4c transparency ledger builder, public receipt explorer, or full
-appeal-driven override workflow; promotion evidence now has to prove the
-controller runtime and moderation-toggle boundaries before gateway compliance
-can be marked ready.
+yet ship an always-on central compliance controller daemon, deployed moderation
+toggle service, deployed public receipt explorer, or full appeal-driven override
+workflow. The local SFM-4c transparency ledger builder and readback surface are
+shipped, but promotion evidence now has to prove controller runtime,
+moderation-toggle, deployed-publication, and multi-gateway boundaries before
+gateway compliance can be marked ready.
 
 ## Shipped Foundations
 
@@ -41,11 +42,12 @@ can be marked ready.
   payload-free SFM-4 promotion evidence for feed promotion, controller runtime,
   moderation-toggle canaries, gateway reload, enforcement probes, honey-audit
   denial proof, appeal override, transparency publication, observability, and
-  governance approval artifacts. The companion
+  governance approval artifacts. The checker exports its required top-level
+  payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the companion
   `scripts/run_sorafs_gateway_compliance_rollout_evidence.py` runner emits the
   verifier command and dry-run collection plan from reviewed artifact paths,
-  including an `evidence_contract` map with the schema and required payload
-  fields for each selected evidence kind.
+  including a checker-backed `evidence_contract` map with the schema and
+  required payload fields for each selected evidence kind.
   Controller, moderation-toggle, reload, enforcement, honey-audit, appeal,
   transparency, observability, and governance artifacts must carry the same
   `bundle_digest_hex` as a valid feed-promotion artifact in the same bundle, so
@@ -157,8 +159,9 @@ parsing response strings.
 - Connect appeal outcomes to gateway policy overrides and cache invalidation.
   The existing appeal-override canary remains required for promotion evidence,
   but the full workflow is still production work.
-- Publish GAR receipts, proof-token indexes, and moderation events through the
-  SFM-4c transparency ledger once that builder exists.
+- Wire deployed GAR receipts, proof-token indexes, and moderation events through
+  the shipped local SFM-4c transparency source-entry and publication paths, then
+  capture deployed publication evidence.
 - Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence
   gate before promoting gateway compliance changes to production.
 

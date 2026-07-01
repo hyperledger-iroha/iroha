@@ -1,3 +1,4 @@
+use curve25519_dalek::edwards::CompressedEdwardsY;
 /// Digital signature verification helpers used by the VM.
 ///
 /// This module provides wrappers around common signature libraries so that
@@ -59,6 +60,22 @@ pub(crate) fn signature_bytes_are_all_zero(signature: &[u8]) -> bool {
     signature.iter().all(|byte| *byte == 0)
 }
 
+/// Returns true when an Ed25519 signature carries a noncanonical or small-order `R`.
+#[must_use]
+pub(crate) fn signature_has_invalid_ed25519_r(signature: &[u8]) -> bool {
+    let Some(r_bytes) = signature.get(..32) else {
+        return false;
+    };
+    let Ok(r_bytes) = <[u8; 32]>::try_from(r_bytes) else {
+        return false;
+    };
+    let compressed = CompressedEdwardsY(r_bytes);
+    let Some(point) = compressed.decompress() else {
+        return true;
+    };
+    point.is_small_order() || point.compress().as_bytes() != &r_bytes
+}
+
 /// Ed25519 batch verification input.
 #[derive(Clone, Debug)]
 pub struct Ed25519BatchItem<'a> {
@@ -111,6 +128,9 @@ pub fn verify_signature(
                 Err(_) => return false,
             };
             if signature_bytes_are_all_zero(signature) {
+                return false;
+            }
+            if signature_has_invalid_ed25519_r(signature) {
                 return false;
             }
             let sig = match Ed25519Signature::from_slice(signature) {
@@ -173,6 +193,9 @@ pub fn verify_ed25519_batch(
         if signature_bytes_are_all_zero(&entry.signature) {
             return Err(Ed25519BatchError::SignatureFailed { index });
         }
+        if signature_has_invalid_ed25519_r(&entry.signature) {
+            return Err(Ed25519BatchError::SignatureFailed { index });
+        }
     }
 
     let messages: Vec<&[u8]> = request
@@ -196,6 +219,9 @@ pub fn verify_ed25519_batch(
         Err(_) => {
             for (index, entry) in request.entries.iter().enumerate() {
                 if signature_bytes_are_all_zero(&entry.signature) {
+                    return Err(Ed25519BatchError::SignatureFailed { index });
+                }
+                if signature_has_invalid_ed25519_r(&entry.signature) {
                     return Err(Ed25519BatchError::SignatureFailed { index });
                 }
                 let sig = match Ed25519Signature::from_slice(entry.signature.as_slice()) {
@@ -247,6 +273,10 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
 
     for item in items {
         if signature_bytes_are_all_zero(&item.signature) {
+            parsed.push(None);
+            continue;
+        }
+        if signature_has_invalid_ed25519_r(&item.signature) {
             parsed.push(None);
             continue;
         }

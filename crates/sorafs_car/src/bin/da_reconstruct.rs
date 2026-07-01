@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, File},
-    io::{BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -13,6 +13,9 @@ use norito::{
     decode_from_bytes,
     json::{Map, Value},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 const DEFAULT_CHUNK_TEMPLATE: &str = "chunk_{index:05}.bin";
 
@@ -116,17 +119,7 @@ fn reconstruct_payload(
     let mut ordered_chunks = manifest.chunks.iter().collect::<Vec<_>>();
     ordered_chunks.sort_by_key(|chunk| chunk.index);
 
-    if let Some(parent) = output_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).wrap_err_with(|| {
-            format!("failed to create output directory `{}`", parent.display())
-        })?;
-    }
-    let mut writer = BufWriter::new(
-        File::create(output_path)
-            .wrap_err_with(|| format!("failed to create `{}`", output_path.display()))?,
-    );
+    let mut writer = BufWriter::new(open_output_file(output_path, "reconstructed payload")?);
 
     let mut hasher = blake3::Hasher::new();
     let mut buffer = Vec::new();
@@ -313,13 +306,6 @@ fn write_summary_json(
     manifest: &DaManifestV1,
     path: &Path,
 ) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).wrap_err_with(|| {
-            format!("failed to create summary directory `{}`", parent.display())
-        })?;
-    }
     let mut obj = Map::new();
     obj.insert(
         "chunk_count".into(),
@@ -348,8 +334,137 @@ fn write_summary_json(
     );
     let rendered = norito::json::to_json_pretty(&Value::Object(obj))
         .wrap_err("failed to render summary JSON")?;
-    fs::write(path, rendered.as_bytes())
+    let mut file = open_output_file(path, "summary JSON")?;
+    file.write_all(rendered.as_bytes())
         .wrap_err_with(|| format!("failed to write summary `{}`", path.display()))
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<File> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
+    let metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect {label} `{}` after open", path.display()))?;
+    if !metadata.is_file() {
+        return Err(eyre!(
+            "failed to write {label} `{}`: output must be a regular file",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("failed to create output parent `{}`", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(eyre!("output `{}` must not be a symlink", path.display()));
+            }
+            if metadata.is_dir() {
+                return Err(eyre!("output `{}` must not be a directory", path.display()));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err)
+                .wrap_err_with(|| format!("failed to inspect output `{}`", path.display()));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(eyre!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        ));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(eyre!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        ));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err).wrap_err_with(|| {
+                        format!("failed to inspect output parent `{}`", ancestor.display())
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 #[cfg(test)]
@@ -378,9 +493,15 @@ mod tests {
     };
     use sorafs_car::{CarBuildPlan, CarChunk, ChunkStore, build_plan_from_da_manifest};
     use sorafs_chunker::ChunkProfile;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
+
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
 
     #[test]
     fn render_chunk_template_supports_width() {
@@ -412,18 +533,17 @@ mod tests {
         let (manifest, payload) = sample_manifest();
         let plan = build_plan_from_da_manifest(&manifest).expect("plan");
 
-        let dir = tempdir().expect("tempdir");
+        let (_dir, dir_path) = canonical_tempdir();
         for (index, chunk) in plan.chunks.iter().enumerate() {
-            let path = dir
-                .path()
+            let path = dir_path
                 .join(render_chunk_template(DEFAULT_CHUNK_TEMPLATE, index).expect("render"));
             let start = chunk.offset as usize;
             let end = start + chunk.length as usize;
             fs::write(path, &payload[start..end]).expect("write chunk");
         }
 
-        let out_path = dir.path().join("reconstructed.bin");
-        let summary = reconstruct_payload(&manifest, dir.path(), &out_path, DEFAULT_CHUNK_TEMPLATE)
+        let out_path = dir_path.join("reconstructed.bin");
+        let summary = reconstruct_payload(&manifest, &dir_path, &out_path, DEFAULT_CHUNK_TEMPLATE)
             .expect("reconstruct");
 
         let reconstructed = fs::read(&out_path).expect("read reconstructed");
@@ -442,20 +562,15 @@ mod tests {
         let manifest_path = fixture_root.join("manifest.norito.hex");
         let manifest = load_manifest(&manifest_path).expect("fixture manifest");
         let chunks_src = fixture_root.join("chunks");
-        let temp_dir = tempdir().expect("temp dir");
+        let (_temp_dir, temp_path) = canonical_tempdir();
         for entry in fs::read_dir(&chunks_src).expect("chunks dir") {
             let entry = entry.expect("chunk entry");
-            let dst = temp_dir.path().join(entry.file_name());
+            let dst = temp_path.join(entry.file_name());
             fs::copy(entry.path(), dst).expect("copy chunk file");
         }
-        let out_path = temp_dir.path().join("reconstructed.bin");
-        let summary = reconstruct_payload(
-            &manifest,
-            temp_dir.path(),
-            &out_path,
-            DEFAULT_CHUNK_TEMPLATE,
-        )
-        .expect("reconstruct fixture");
+        let out_path = temp_path.join("reconstructed.bin");
+        let summary = reconstruct_payload(&manifest, &temp_path, &out_path, DEFAULT_CHUNK_TEMPLATE)
+            .expect("reconstruct fixture");
         assert_eq!(
             summary.parity_chunks,
             manifest.chunks.iter().filter(|chunk| chunk.parity).count()
@@ -467,6 +582,69 @@ mod tests {
         let reconstructed = fs::read(&out_path).expect("read reconstructed");
         let expected = fs::read(fixture_root.join("payload.bin")).expect("read fixture payload");
         assert_eq!(reconstructed, expected);
+    }
+
+    #[test]
+    fn open_output_file_creates_parent_and_writes_all_bytes() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("nested").join("payload.bin");
+        let mut file = open_output_file(&output_path, "test output").expect("open output");
+
+        file.write_all(b"da-reconstruct").expect("write output");
+        drop(file);
+
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            b"da-reconstruct"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_summary_json_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("summary.json");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+        let (manifest, _) = sample_manifest();
+        let summary = sample_summary();
+
+        let err = write_summary_json(&summary, &manifest, &output_path)
+            .expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_output_file_rejects_symlink_parent() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("payload.bin");
+
+        let err = match open_output_file(&output_path, "test output") {
+            Ok(_) => panic!("symlink parent should be rejected"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join("payload.bin").exists(),
+            "symlink parent should not receive output"
+        );
     }
 
     #[test]
@@ -713,6 +891,17 @@ mod tests {
         let rendered =
             norito_json::to_json_pretty(&JsonValue::Array(rows)).expect("render chunk matrix json");
         fs::write(output, rendered.as_bytes()).expect("write chunk matrix json");
+    }
+
+    fn sample_summary() -> ReconstructionSummary {
+        ReconstructionSummary {
+            chunk_count: 1,
+            data_chunks: 1,
+            parity_chunks: 0,
+            payload_bytes: 16,
+            expected_blob_hash_hex: hex::encode([0x11; 32]),
+            output_path: "payload.bin".to_owned(),
+        }
     }
 
     fn sample_manifest() -> (DaManifestV1, Vec<u8>) {
