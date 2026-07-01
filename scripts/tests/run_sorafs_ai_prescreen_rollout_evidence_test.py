@@ -148,6 +148,7 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
         "sorafs.moderation.runner.rollout_evidence.v1"
     )
     assert "manifest_id_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
+    assert "policy_digest_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
     assert (
         "workflow_digest_hex"
         in plan["evidence_contract"]["operator_workflow"]["required_payload_fields"]
@@ -160,6 +161,68 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
         ]
     )
     assert "config_source" in plan["evidence_contract"]["governance_dag"]["required_payload_fields"]
+
+
+def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    assert MODULE.validate_plan_json(rendered, plan, args) == []
+
+    assert MODULE.validate_plan_json(["step"], plan, args) == [
+        "AI pre-screen rollout runner plan must be an object"
+    ]
+
+    rendered["schema"] = "sorafs.moderation.ai_prescreen.rollout_evidence_collection_plan.v0"
+    rendered["unexpected"] = True
+    rendered["external_evidence"] = {}
+    rendered["evidence_contract"] = {}
+    rendered["steps"] = []
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "AI pre-screen rollout runner plan fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert "AI pre-screen rollout runner plan schema must match the contract" in diagnostics
+    assert (
+        "AI pre-screen rollout runner plan external_evidence must match args"
+        in diagnostics
+    )
+    assert (
+        "AI pre-screen rollout runner plan evidence_contract must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+    assert "runner-payload.bin" not in diagnostics
+
+
+def test_execution_rejects_plan_validation_drift_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    ran_plan = False
+
+    def fake_validate_plan_json(rendered, plan, args):
+        return ["AI pre-screen rollout runner plan schema must match the contract"]
+
+    def fake_run_plan(plan, out_dir):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "validate_plan_json", fake_validate_plan_json)
+    monkeypatch.setattr(MODULE, "run_plan", fake_run_plan)
+
+    assert MODULE.main(complete_args(tmp_path)) == 2
+
+    assert not ran_plan
+    assert (
+        "AI pre-screen rollout runner plan schema must match the contract"
+        in capsys.readouterr().err
+    )
 
 
 def test_response_file_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None:
@@ -195,6 +258,40 @@ def test_missing_transparency_source_kind_fails_before_plan(tmp_path: Path, caps
     captured = capsys.readouterr()
     assert "missing required source-entry coverage" in captured.err
     assert "dataset_manifest" not in captured.err
+    assert captured.out == ""
+
+
+def test_unknown_source_kind_fails_before_plan_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    source_kind = "source-entry-private-key-placeholder"
+    path = write_payload(tmp_path / "payloads" / "unsupported-source.json")
+    args.extend(["--source-entry", f"{source_kind}={path}"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "source-entry supplied for unsupported kind" in captured.err
+    assert source_kind not in captured.err
+    assert str(path) not in captured.err
+    assert captured.out == ""
+
+
+def test_duplicate_source_kind_fails_before_plan_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    duplicate = MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS[0]
+    path = write_payload(tmp_path / "payloads" / "duplicate-source.json")
+    args.extend(["--source-entry", f"{duplicate}={path}"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "duplicate source-entry kind" in captured.err
+    assert duplicate not in captured.err
+    assert str(path) not in captured.err
     assert captured.out == ""
 
 

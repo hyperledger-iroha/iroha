@@ -14,7 +14,15 @@ CLI verification and publication helpers, SDK convenience clients, and
 observability assets. Remaining rollout work is deploying the live
 ingest/publisher service and archiving production evidence that passes the
 rollout evidence gate, not the local scoring, proof, API, CLI, SDK, dashboard,
-or verifier foundations.
+or verifier foundations. `scripts/build_sorafs_reputation_canary.py` builds
+individual payload-free SFM-3 canary artifacts for publish/latest snapshots,
+provider proofs, events, proof verification, metrics, transport, and
+routing/incentive consumption evidence. The builder requires reviewed
+deployment context, snapshot id/root bindings, provider proof inputs where
+applicable, unique provider proof sibling hashes, snapshot-age and ingest-lag
+threshold facts, and validates every generated artifact through
+`scripts/check_sorafs_reputation_rollout_evidence.py` before writing.
+Checked-in response-file examples cover provider and metrics canaries.
 
 ## Goals & Scope
 - Produce deterministic, governance-auditable reputation scores for each SoraFS provider to inform routing, incentives, staking, and compliance decisions.
@@ -214,7 +222,9 @@ CREATE TABLE reputation_snapshots (
   proof coverage before touching a live Torii endpoint, and then runs the
   evidence gate. Its `--dry-run` output includes the checker-backed
   `evidence_contract` map for publish/latest, provider, events, verify,
-  metrics, transport, and consumption artifacts.
+  metrics, transport, and consumption artifacts, and the runner validates the
+  schema-closed collection plan, external evidence map, evidence contract, and
+  command steps before dry-run output or live collection.
   `scripts/examples/sorafs_reputation_rollout_evidence.args.example` provides
   a payload-free operator template.
 - Operator workflow notes live in
@@ -351,6 +361,10 @@ Completed local foundations:
   artifacts. The gate now fails closed when any recognized artifact is invalid,
   including stale duplicate artifacts or optional artifacts outside the required
   subset.
+- `scripts/build_sorafs_reputation_canary.py` provides checked-in payload-free
+  canary generation for the local SFM-3 rollout gate. Provider proof canaries
+  reject duplicate Merkle sibling hashes before writing, and the rollout checker
+  enforces the same uniqueness on externally supplied provider proof evidence.
 - Rollout evidence collection harness that publishes, reads back, watches, proof
   replays, and verifies the deployed reputation evidence bundle from one
   response-file driven operator command.

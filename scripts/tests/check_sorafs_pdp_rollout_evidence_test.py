@@ -101,6 +101,7 @@ def proof_generation(
             "hardware_determinism_reviewed": True,
             "max_proof_latency_ms": proof_latency_ms,
             "proof_summary_digest_hex": DIGEST,
+            "policy_digest_hex": DIGEST,
             "raw_challenge_bytes_included": False,
             "raw_proof_bytes_included": False,
         }
@@ -218,6 +219,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.pdp.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["provider_transport"]["valid"] is True
+    assert payload["valid_policy_digests"] == [DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -313,6 +315,22 @@ def test_validator_replay_requires_proof_summary_binding(tmp_path: Path) -> None
     assert run_gate(tmp_path) == 1
 
 
+def test_proof_generation_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
 def test_governance_repair_proof_summary_digest_must_match(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = governance_repair()
@@ -330,6 +348,29 @@ def test_governance_repair_proof_summary_digest_must_match(tmp_path: Path) -> No
     assert artifact["errors"] == [
         "governance_repair proof_summary_digest_hex must reference a valid "
         "proof_generation proof_summary_digest_hex"
+    ]
+
+
+def test_governance_approval_policy_digest_must_match_proof_generation(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "proof_generation policy_digest_hex"
     ]
 
 
@@ -352,6 +393,29 @@ def test_stale_proof_generation_does_not_anchor_bound_evidence(tmp_path: Path) -
         "validator_replay proof_summary_digest_hex requires a valid "
         "proof_generation proof_summary_digest_hex"
     ]
+
+
+def test_stale_proof_generation_does_not_anchor_policy_bound_evidence(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["generated_at_unix"] = NOW_UNIX - MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS - 1
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex requires a valid "
+        "proof_generation policy_digest_hex"
+    ) in artifact["errors"]
 
 
 def test_governance_repair_requires_handoff(tmp_path: Path) -> None:

@@ -141,6 +141,7 @@ WORKFLOW_BOUND_KINDS = (
     "transparency_publication",
     "governance_dag",
 )
+POLICY_BOUND_KINDS = ("governance_dag",)
 SENSITIVE_KEYS = {
     "authorization",
     "bearer_token",
@@ -237,6 +238,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "checked_at_unix",
         "combined_score_bps",
         "verdict",
+        "policy_digest_hex",
     ),
     "committee": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -281,6 +283,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "artifact_count",
         "passed_artifact_count",
         "execution_summary_present",
+        "execution_summary_digest_hex",
         "payload_bytes_included",
         "private_payloads_included",
         "private_payload_files_copied",
@@ -345,6 +348,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "runner_hash_hex",
     "subject_digest_hex",
     "workflow_digest_hex",
+    "manifest_body_blake3",
+    "execution_summary_digest_hex",
     "policy_digest_hex",
 )
 
@@ -366,7 +371,7 @@ def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
     require_score_bps(payload, "combined_score_bps", errors)
     require_string(payload, "verdict", errors)
     require_optional_hex(payload, "evidence_digest_hex", HEX64_LEN, errors)
-    require_optional_hex(payload, "policy_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
 
 
 def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
@@ -496,6 +501,9 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
         payload, "artifact_count", "passed_artifact_count", errors
     )
     require_bool_true(payload, "execution_summary_present", errors)
+    execution_summary_digest = require_hex(
+        payload, "execution_summary_digest_hex", HEX64_LEN, errors
+    )
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
     require_false(payload, "private_payload_files_copied", errors)
@@ -521,7 +529,15 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
     if not summary:
         return
     require_bool_true(summary, "passed", errors)
-    require_hex(summary, "body_blake3", HEX64_LEN, errors)
+    summary_digest = require_hex(summary, "body_blake3", HEX64_LEN, errors)
+    if (
+        execution_summary_digest
+        and summary_digest
+        and execution_summary_digest != summary_digest
+    ):
+        errors.append(
+            "execution_summary.body_blake3 must match execution_summary_digest_hex"
+        )
     action_count = require_positive_int(summary, "action_count", errors)
     require_minimum_value(
         action_count,
@@ -659,7 +675,11 @@ def build_summary(
     valid_runner_bindings: set[tuple[str, str, str]] = set()
     runner_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_workflow_digests: set[str] = set()
+    valid_notification_manifest_digests: set[str] = set()
+    valid_executor_summary_digests: set[str] = set()
     workflow_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_digests: set[str] = set()
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -695,6 +715,7 @@ def build_summary(
                 manifest_id = fingerprint.get("manifest_id_hex")
                 runner_hash = fingerprint.get("runner_hash_hex")
                 subject_digest = fingerprint.get("subject_digest_hex")
+                policy_digest = fingerprint.get("policy_digest_hex")
                 if (
                     isinstance(manifest_id, str)
                     and isinstance(runner_hash, str)
@@ -703,14 +724,26 @@ def build_summary(
                     valid_runner_bindings.add(
                         (manifest_id.lower(), runner_hash.lower(), subject_digest.lower())
                     )
-            elif kind_name in RUNNER_BOUND_KINDS:
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+            if kind_name in RUNNER_BOUND_KINDS:
                 runner_bound_artifacts.append((kind_name, artifact))
-            elif kind_name == "end_to_end_workflow":
+            if kind_name == "end_to_end_workflow":
                 digest = fingerprint.get("workflow_digest_hex")
                 if isinstance(digest, str):
                     valid_workflow_digests.add(digest.lower())
-            elif kind_name in WORKFLOW_BOUND_KINDS:
+            if kind_name == "notification_transport":
+                digest = fingerprint.get("manifest_body_blake3")
+                if isinstance(digest, str):
+                    valid_notification_manifest_digests.add(digest.lower())
+            if kind_name == "commit_reveal_executor":
+                digest = fingerprint.get("execution_summary_digest_hex")
+                if isinstance(digest, str):
+                    valid_executor_summary_digests.add(digest.lower())
+            if kind_name in WORKFLOW_BOUND_KINDS:
                 workflow_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
 
@@ -748,6 +781,23 @@ def build_summary(
         ),
     )
 
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("runner",),
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "runner policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "runner policy_digest_hex"
+        ),
+    )
+
     required = build_required_evidence_summary(
         required_kinds,
         artifacts_by_kind,
@@ -775,6 +825,11 @@ def build_summary(
             for manifest_id, runner_hash, subject_digest in sorted(valid_runner_bindings)
         ],
         "valid_workflow_digests": sorted(valid_workflow_digests),
+        "valid_notification_manifest_digests": sorted(
+            valid_notification_manifest_digests
+        ),
+        "valid_executor_summary_digests": sorted(valid_executor_summary_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

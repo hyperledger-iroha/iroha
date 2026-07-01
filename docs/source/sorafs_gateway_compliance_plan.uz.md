@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 79c99590f9f670f894d08a84fc839f7b92e7dac9de0c1f08a7e2c1b4c0a23af0
+source_hash: 5f60ae4378454be41100957d7c5685a189e614fae29cd478a7ef1d8c3acd9976
 source_last_modified: "2026-06-25T17:24:16+00:00"
 translation_last_reviewed: 2026-06-25
 title: Gateway Compliance, Moderation & Transparency
@@ -60,9 +60,11 @@ gateway compliance can be marked ready.
   transparency, observability, and governance artifacts must carry the same
   `bundle_digest_hex` as a valid feed-promotion artifact in the same bundle, so
   promotion evidence cannot mix probes, dashboards, approvals, or controller
-  and toggle reports from different denylist bundle runs. Bundle mismatches are
-  recorded on the offending artifact in the JSON summary before required-kind
-  validity is reported.
+  and toggle reports from different denylist bundle runs. Feed-promotion
+  artifacts must also carry `policy_digest_hex`, and governance approval
+  artifacts must match that promoted policy digest before promotion. Bundle and
+  policy mismatches are recorded on the offending artifact in the JSON summary
+  before required-kind validity is reported.
 - `ci/check_sorafs_gateway_denylist.sh` guards the denylist bundle tooling.
 
 ## Operator Commands

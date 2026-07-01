@@ -31,6 +31,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     render_runner_plan,
     require_existing_dirs,
     require_existing_files,
+    require_no_unrequired_evidence,
     require_runner_passthrough_args,
     require_runner_non_negative_int,
     require_runner_positive_int,
@@ -260,6 +261,83 @@ def test_require_runner_non_negative_int_rejects_malformed_field_name() -> None:
             assert errors == []
         else:
             raise AssertionError(f"accepted malformed field {field!r}")
+
+
+def test_require_no_unrequired_evidence_accepts_required_and_empty_extra_kinds() -> None:
+    errors: list[str] = []
+
+    require_no_unrequired_evidence(
+        {
+            "required": [Path("required.json")],
+            "optional": [],
+        },
+        ["required"],
+        errors,
+        diagnostic="rollout evidence supplied for unrequired kind",
+    )
+
+    assert errors == []
+
+
+def test_require_no_unrequired_evidence_rejects_extra_kind_without_leaking() -> None:
+    errors: list[str] = []
+
+    require_no_unrequired_evidence(
+        {
+            "required": [Path("required.json")],
+            "private_key_kind": [Path("operator/private-key-evidence.json")],
+        },
+        ["required"],
+        errors,
+        diagnostic="rollout evidence supplied for unrequired kind",
+    )
+
+    assert errors == ["rollout evidence supplied for unrequired kind"]
+    diagnostics = "\n".join(errors)
+    assert "private_key_kind" not in diagnostics
+    assert "private-key-evidence" not in diagnostics
+
+
+def test_require_no_unrequired_evidence_deduplicates_diagnostics() -> None:
+    errors: list[str] = []
+
+    require_no_unrequired_evidence(
+        {
+            "required": [Path("required.json")],
+            "optional_a": [Path("a.json")],
+            "optional_b": [Path("b.json")],
+        },
+        ["required"],
+        errors,
+        diagnostic="release evidence supplied for unrequired kind",
+    )
+
+    assert errors == ["release evidence supplied for unrequired kind"]
+
+
+def test_require_no_unrequired_evidence_rejects_malformed_internal_inputs() -> None:
+    malformed_inputs = [
+        ("not-a-map", ["required"], []),
+        ({"required": []}, "required", []),
+        ({"": []}, ["required"], []),
+        ({"required": []}, [""], []),
+        ({"required": []}, ["required"], ()),
+    ]
+
+    for paths_by_kind, required_kinds, errors in malformed_inputs:
+        try:
+            require_no_unrequired_evidence(
+                paths_by_kind,
+                required_kinds,
+                errors,
+                diagnostic="rollout evidence supplied for unrequired kind",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "accepted malformed unrequired-evidence preflight inputs"
+            )
 
 
 def test_validate_runner_output_dir_rejects_non_path_without_traceback() -> None:

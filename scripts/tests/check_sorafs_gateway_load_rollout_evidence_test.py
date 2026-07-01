@@ -75,6 +75,7 @@ def staging_load(*, duration: int = 3_600, p95: int = 1_200) -> dict:
             "suite_report_digest_hex": SUITE_DIGEST,
             "staging_report_digest_hex": STAGING_DIGEST,
             "fixture_bundle_digest_hex": POLICY_DIGEST,
+            "policy_digest_hex": POLICY_DIGEST,
             "gateway_version": "iroha-gateway 1.0.0-rc.1",
             "hardware_profile": {"name": "staging-c6i-2xlarge"},
             "cache_state": {"mode": "cold-cache"},
@@ -170,6 +171,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["staging_load"]["valid"] is True
     assert payload["valid_suite_report_digests"] == [SUITE_DIGEST]
     assert payload["valid_staging_report_digests"] == [STAGING_DIGEST]
+    assert payload["valid_policy_digests"] == [POLICY_DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -250,4 +252,43 @@ def test_staging_digest_binding_must_match_load_report(tmp_path: Path) -> None:
     assert (
         "governance_approval staging_report_digest_hex must reference a valid "
         "staging_load staging_report_digest_hex"
+    ) in artifact["errors"]
+
+
+def test_staging_load_policy_digest_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload.pop("policy_digest_hex")
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_policy_digests"] == []
+
+
+def test_governance_approval_policy_digest_must_match_staging_load(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = "12" * 32
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert (
+        "governance_approval policy_digest_hex must reference a valid "
+        "staging_load policy_digest_hex"
     ) in artifact["errors"]

@@ -31,7 +31,7 @@ use iroha_data_model::{
         },
         prelude::DaProofPolicy,
     },
-    nexus::LaneId,
+    nexus::{AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneId},
 };
 pub use proofs::{DaProofVerificationError, build_da_commitment_proof, verify_da_commitment_proof};
 pub use replay_cache::{
@@ -369,9 +369,28 @@ fn active_lane_config_entry<'a>(
     nexus: &'a Nexus,
     lane_id: LaneId,
 ) -> Result<&'a LaneConfigEntry, DaProofPolicyError> {
+    active_lane_config_entry_at_height(nexus, lane_id, None)
+}
+
+fn active_lane_config_entry_at_height(
+    nexus: &Nexus,
+    lane_id: LaneId,
+    block_height: Option<u64>,
+) -> Result<&LaneConfigEntry, DaProofPolicyError> {
     let Some(current) = nexus.lane_config.entry(lane_id) else {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     };
+    let Some(catalog_lane) = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+    else {
+        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
+    };
+    if !catalog_lane_is_da_active(catalog_lane, nexus, block_height) {
+        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
+    }
     let expected_config = LaneConfig::from_catalog(&nexus.lane_catalog);
     let Some(expected) = expected_config.entry(lane_id) else {
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
@@ -387,6 +406,39 @@ fn active_lane_config_entry<'a>(
         return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
     }
     Ok(current)
+}
+
+fn catalog_lane_is_da_active(
+    lane: &iroha_data_model::nexus::LaneConfig,
+    nexus: &Nexus,
+    block_height: Option<u64>,
+) -> bool {
+    let inside_elastic_range = lane_id_inside_enabled_autoscale_range(lane.id, nexus);
+    if lane_uses_reserved_autoscale_metadata(lane) {
+        return inside_elastic_range
+            && lane.is_autoscale_managed_elastic()
+            && lane.dataspace_id == nexus.routing_policy.default_dataspace
+            && block_height.is_none_or(|height| {
+                lane.autoscale_created_height()
+                    .is_some_and(|created| created <= height)
+            });
+    }
+    !inside_elastic_range
+}
+
+fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
+    lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
+        || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+}
+
+fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> bool {
+    if !nexus.enabled || !nexus.autoscale.enabled {
+        return false;
+    }
+    let min = nexus.autoscale.min_lanes.get();
+    let max = nexus.autoscale.max_lanes.get();
+    let lane_id = lane_id.as_u32();
+    min < max && lane_id >= min && lane_id < max
 }
 
 fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry) -> bool {
@@ -428,6 +480,27 @@ pub fn active_lane_proof_policy(
     })
 }
 
+/// Return the active DA proof policy for a catalog-backed lane at a block height.
+///
+/// # Errors
+///
+/// Returns [`DaProofPolicyError::UnknownLane`] when the lane is not active for
+/// DA at `block_height`, including autoscale elastic lanes whose declared
+/// creation height is still in the future.
+pub fn active_lane_proof_policy_at_height(
+    nexus: &Nexus,
+    lane_id: LaneId,
+    block_height: u64,
+) -> Result<DaProofPolicy, DaProofPolicyError> {
+    let entry = active_lane_config_entry_at_height(nexus, lane_id, Some(block_height))?;
+    Ok(DaProofPolicy {
+        lane_id: entry.lane_id,
+        dataspace_id: entry.dataspace_id,
+        alias: entry.alias.clone(),
+        proof_scheme: entry.proof_scheme,
+    })
+}
+
 /// Enforce that a commitment's proof policy matches an active catalog-backed lane.
 ///
 /// # Errors
@@ -440,6 +513,22 @@ pub fn enforce_active_lane_proof_policy(
     nexus: &Nexus,
 ) -> Result<(), DaProofPolicyError> {
     active_lane_config_entry(nexus, record.lane_id)?;
+    enforce_lane_proof_policy(record, &nexus.lane_config)
+}
+
+/// Enforce that a commitment's proof policy matches an active lane at a block height.
+///
+/// # Errors
+///
+/// Returns [`DaProofPolicyError`] when the lane is inactive at `block_height`,
+/// the derived runtime geometry drifted from the authoritative catalog, or the
+/// commitment violates the active lane proof scheme.
+pub fn enforce_active_lane_proof_policy_at_height(
+    record: &DaCommitmentRecord,
+    nexus: &Nexus,
+    block_height: u64,
+) -> Result<(), DaProofPolicyError> {
+    active_lane_config_entry_at_height(nexus, record.lane_id, Some(block_height))?;
     enforce_lane_proof_policy(record, &nexus.lane_config)
 }
 
@@ -478,6 +567,27 @@ pub fn sanitize_pin_intents_against_nexus(
     sanitize_pin_intents_with_lane_check(
         intents,
         |lane_id| active_lane_config_entry(nexus, lane_id).is_ok(),
+        account_exists,
+    )
+}
+
+/// Filter DA pin intents using the active Nexus lane catalog at a block height.
+///
+/// Returns `(kept, rejected)` where `kept` contains intents that passed
+/// validation and `rejected` lists every validation failure. Autoscale elastic
+/// lanes are only active after their declared creation height.
+pub fn sanitize_pin_intents_against_nexus_at_height(
+    intents: impl IntoIterator<Item = iroha_data_model::da::pin_intent::DaPinIntent>,
+    nexus: &Nexus,
+    block_height: u64,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> (
+    Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
+    Vec<DaPinIntentValidationError>,
+) {
+    sanitize_pin_intents_with_lane_check(
+        intents,
+        |lane_id| active_lane_config_entry_at_height(nexus, lane_id, Some(block_height)).is_ok(),
         account_exists,
     )
 }
@@ -673,6 +783,41 @@ pub fn validate_pin_intent_bundle_against_nexus(
     Ok(())
 }
 
+/// Validate a DA pin-intent bundle against active Nexus lane catalogs at a block height.
+///
+/// # Errors
+///
+/// Returns the first [`DaPinIntentValidationError`] observed in the bundle.
+pub fn validate_pin_intent_bundle_against_nexus_at_height(
+    bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    nexus: &Nexus,
+    block_height: u64,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> Result<(), DaPinIntentValidationError> {
+    if bundle.version != iroha_data_model::da::pin_intent::DaPinIntentBundle::VERSION_V1 {
+        return Err(DaPinIntentValidationError::UnsupportedVersion {
+            version: bundle.version,
+        });
+    }
+
+    let (_kept, rejected) = sanitize_pin_intents_against_nexus_at_height(
+        bundle.intents.clone(),
+        nexus,
+        block_height,
+        account_exists,
+    );
+    if let Some(error) = rejected.into_iter().next() {
+        return Err(error);
+    }
+    let canonical =
+        iroha_data_model::da::pin_intent::DaPinIntentBundle::new(bundle.intents.clone());
+    if let Some(index) = first_pin_intent_order_mismatch(&bundle.intents, &canonical.intents) {
+        return Err(DaPinIntentValidationError::NonCanonicalOrder { index });
+    }
+
+    Ok(())
+}
+
 fn first_pin_intent_order_mismatch(
     actual: &[iroha_data_model::da::pin_intent::DaPinIntent],
     canonical: &[iroha_data_model::da::pin_intent::DaPinIntent],
@@ -716,6 +861,24 @@ pub fn validate_commitment_bundle_against_nexus(
 ) -> Result<(), DaCommitmentValidationError> {
     validate_commitment_bundle_with_policy(bundle, |record| {
         enforce_active_lane_proof_policy(record, nexus)?;
+        validate_confidential_compute_record(&nexus.lane_config, record)?;
+        Ok(())
+    })
+}
+
+/// Validate commitment bundle invariants against active Nexus lanes at a block height.
+///
+/// # Errors
+///
+/// Returns a [`DaCommitmentValidationError`] when invariants are violated or a
+/// commitment targets a lane that is inactive at `block_height`.
+pub fn validate_commitment_bundle_against_nexus_at_height(
+    bundle: &DaCommitmentBundle,
+    nexus: &Nexus,
+    block_height: u64,
+) -> Result<(), DaCommitmentValidationError> {
+    validate_commitment_bundle_with_policy(bundle, |record| {
+        enforce_active_lane_proof_policy_at_height(record, nexus, block_height)?;
         validate_confidential_compute_record(&nexus.lane_config, record)?;
         Ok(())
     })
@@ -1108,6 +1271,17 @@ pub fn active_proof_policies(nexus: &Nexus) -> Vec<DaProofPolicy> {
         .collect()
 }
 
+/// Snapshot active proof policies for catalog-backed Nexus lanes at a block height.
+#[must_use]
+pub fn active_proof_policies_at_height(nexus: &Nexus, block_height: u64) -> Vec<DaProofPolicy> {
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter_map(|lane| active_lane_proof_policy_at_height(nexus, lane.id, block_height).ok())
+        .collect()
+}
+
 /// Snapshot the configured proof policies as a versioned bundle.
 #[must_use]
 pub fn proof_policy_bundle(lane_config: &LaneConfig) -> DaProofPolicyBundle {
@@ -1118,6 +1292,15 @@ pub fn proof_policy_bundle(lane_config: &LaneConfig) -> DaProofPolicyBundle {
 #[must_use]
 pub fn active_proof_policy_bundle(nexus: &Nexus) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(active_proof_policies(nexus))
+}
+
+/// Snapshot active proof policies as a versioned bundle at a block height.
+#[must_use]
+pub fn active_proof_policy_bundle_at_height(
+    nexus: &Nexus,
+    block_height: u64,
+) -> DaProofPolicyBundle {
+    DaProofPolicyBundle::new(active_proof_policies_at_height(nexus, block_height))
 }
 
 /// Compute the hash for the current proof policy bundle.
@@ -1131,6 +1314,16 @@ pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolic
 #[must_use]
 pub fn active_proof_policy_bundle_hash(nexus: &Nexus) -> HashOf<DaProofPolicyBundle> {
     let bundle = active_proof_policy_bundle(nexus);
+    HashOf::new(&bundle)
+}
+
+/// Compute the hash for the active proof policy bundle at a block height.
+#[must_use]
+pub fn active_proof_policy_bundle_hash_at_height(
+    nexus: &Nexus,
+    block_height: u64,
+) -> HashOf<DaProofPolicyBundle> {
+    let bundle = active_proof_policy_bundle_at_height(nexus, block_height);
     HashOf::new(&bundle)
 }
 
@@ -1415,6 +1608,199 @@ mod tests {
         assert!(matches!(
             err,
             DaPinIntentValidationError::UnknownLane { lane } if lane == inactive_lane
+        ));
+    }
+
+    #[test]
+    fn active_proof_policy_rejects_manual_lane_inside_autoscale_elastic_range() {
+        let lane = LaneId::new(1);
+        let lane_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: lane,
+                alias: "manual-elastic-slot".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let mut nexus = nexus_with_catalog(lane_catalog);
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+
+        let bundle = active_proof_policy_bundle(&nexus);
+        assert!(
+            bundle.policies.iter().all(|policy| policy.lane_id != lane),
+            "manual occupants of the autoscale elastic range must not advertise DA policy"
+        );
+        assert!(matches!(
+            active_lane_proof_policy(&nexus, lane),
+            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
+        ));
+        let commitment_bundle = DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]);
+        let err = validate_commitment_bundle_against_nexus(&commitment_bundle, &nexus)
+            .expect_err("manual elastic-range lane must not validate DA commitments");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane {
+                lane: rejected
+            }) if rejected == lane
+        ));
+    }
+
+    #[test]
+    fn active_proof_policy_accepts_valid_autoscale_elastic_lane() {
+        let lane = LaneId::new(1);
+        let mut autoscale_lane = ModelLaneConfig {
+            id: lane,
+            alias: "elastic-lane-1".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
+        let mut nexus = nexus_with_catalog(lane_catalog);
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+
+        let policy = active_lane_proof_policy(&nexus, lane)
+            .expect("valid autoscale elastic lanes must advertise DA policy");
+        assert_eq!(policy.lane_id, lane);
+        validate_commitment_bundle_against_nexus(
+            &DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]),
+            &nexus,
+        )
+        .expect("valid autoscale elastic lane should validate DA commitments");
+    }
+
+    #[test]
+    fn active_proof_policy_at_height_rejects_future_created_autoscale_lane() {
+        let lane = LaneId::new(1);
+        let mut autoscale_lane = ModelLaneConfig {
+            id: lane,
+            alias: "elastic-lane-1".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
+        let mut nexus = nexus_with_catalog(lane_catalog);
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        let bundle = DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]);
+
+        assert!(
+            active_lane_proof_policy(&nexus, lane).is_ok(),
+            "heightless policy snapshots keep well-formed autoscale lanes visible"
+        );
+        assert!(matches!(
+            active_lane_proof_policy_at_height(&nexus, lane, 6),
+            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
+        ));
+        let early_bundle = active_proof_policy_bundle_at_height(&nexus, 6);
+        assert!(
+            early_bundle
+                .policies
+                .iter()
+                .all(|policy| policy.lane_id != lane),
+            "future-created autoscale lanes must not appear in height-aware policy bundles"
+        );
+        let err = validate_commitment_bundle_against_nexus_at_height(&bundle, &nexus, 6)
+            .expect_err("future-created autoscale lane must not validate DA commitments");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane {
+                lane: rejected
+            }) if rejected == lane
+        ));
+
+        active_lane_proof_policy_at_height(&nexus, lane, 7)
+            .expect("autoscale DA policy should activate at the declared creation height");
+        let active_bundle = active_proof_policy_bundle_at_height(&nexus, 7);
+        assert!(
+            active_bundle
+                .policies
+                .iter()
+                .any(|policy| policy.lane_id == lane),
+            "autoscale DA policy should appear at the declared creation height"
+        );
+        validate_commitment_bundle_against_nexus_at_height(&bundle, &nexus, 7)
+            .expect("autoscale DA commitments should validate at the declared creation height");
+    }
+
+    #[test]
+    fn pin_intent_policy_at_height_rejects_future_created_autoscale_lane() {
+        let lane = LaneId::new(1);
+        let mut autoscale_lane = ModelLaneConfig {
+            id: lane,
+            alias: "elastic-lane-1".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
+        let mut nexus = nexus_with_catalog(lane_catalog);
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        let bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
+            iroha_data_model::da::pin_intent::DaPinIntent::new(
+                lane,
+                1,
+                1,
+                StorageTicketId::new([0x61; 32]),
+                iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x63; 32]),
+            ),
+        ]);
+
+        validate_pin_intent_bundle_against_nexus(&bundle, &nexus, |_| true)
+            .expect("heightless policy snapshots keep well-formed autoscale lanes visible");
+        let err = validate_pin_intent_bundle_against_nexus_at_height(&bundle, &nexus, 6, |_| true)
+            .expect_err("future-created autoscale lane must not validate DA pin intents");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::UnknownLane { lane: rejected } if rejected == lane
+        ));
+        validate_pin_intent_bundle_against_nexus_at_height(&bundle, &nexus, 7, |_| true)
+            .expect("autoscale DA pin intents should validate at the declared creation height");
+    }
+
+    #[test]
+    fn active_proof_policy_rejects_malformed_autoscale_reserved_lane() {
+        let lane = LaneId::new(1);
+        let mut malformed = ModelLaneConfig {
+            id: lane,
+            alias: "not-elastic".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        malformed
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        malformed
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+        let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), malformed]);
+        let mut nexus = nexus_with_catalog(lane_catalog);
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+
+        assert!(matches!(
+            active_lane_proof_policy(&nexus, lane),
+            Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
         ));
     }
 

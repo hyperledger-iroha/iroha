@@ -69,8 +69,9 @@ use iroha_data_model::{
     isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
     merge::MergeCommitteeSignature,
     nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneFastpqProofMaterial, LaneId,
-        LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+        LaneConfig as ModelLaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope,
+        LaneStorageProfile, LaneVisibility,
         staking::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     },
     parameter::TransactionParameters,
@@ -2382,6 +2383,37 @@ fn install_stale_runtime_lane_geometry(state: &State, stale_lane: LaneId) {
     assert!(
         nexus.lane_config.entry(stale_lane).is_some(),
         "fixture must retain stale runtime geometry for removed lane"
+    );
+}
+
+fn install_future_created_autoscale_lane(state: &State, lane_id: LaneId, created_height: u64) {
+    let mut elastic_lane = ModelLaneConfig {
+        id: lane_id,
+        alias: format!("elastic-lane-{}", lane_id.as_u32()),
+        ..ModelLaneConfig::default()
+    };
+    elastic_lane
+        .metadata
+        .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+    elastic_lane.metadata.insert(
+        AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+        created_height.to_string(),
+    );
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![ModelLaneConfig::default(), elastic_lane],
+    )
+    .expect("future-created autoscale lane catalog");
+    let mut nexus = state.nexus.write();
+    nexus.enabled = true;
+    nexus.autoscale.enabled = true;
+    nexus.autoscale.min_lanes = nonzero!(1_u32);
+    nexus.autoscale.max_lanes = nonzero!(3_u32);
+    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    nexus.lane_catalog = lane_catalog;
+    assert!(
+        nexus.lane_config.entry(lane_id).is_some(),
+        "fixture must retain committed geometry for the future-created autoscale lane"
     );
 }
 
@@ -71918,6 +71950,67 @@ async fn assemble_proposal_rejects_stale_geometry_da_pin_intent_file() {
             intent.sequence
         )),
         "stale-lane pin intent must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_future_created_autoscale_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let future_created_lane = LaneId::new(1);
+    install_future_created_autoscale_lane(
+        actor.state.as_ref(),
+        future_created_lane,
+        height.saturating_add(4),
+    );
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        future_created_lane,
+        1,
+        5,
+        StorageTicketId::new([0x97; 32]),
+        ManifestDigest::new([0x98; 32]),
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0x99; 32]);
+
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("future-created autoscale DA pin intent lane must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid DA pin intent in spool"),
+        "expected DA pin-intent validation failure, got {message}"
+    );
+    assert!(
+        message.contains("configured lane catalog"),
+        "error should identify the inactive lane catalog: {message}"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
+            intent.lane_id.as_u32(),
+            intent.epoch,
+            intent.sequence
+        )),
+        "future-created lane pin intent must not be marked sealed after assembly rejection"
     );
 
     harness.shutdown.send();

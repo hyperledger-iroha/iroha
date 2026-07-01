@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -40,11 +41,26 @@ from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_exception,
     run_command_plan,
     require_existing_files,
+    require_no_unrequired_evidence,
     require_runner_non_negative_int,
     require_runner_positive_int,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
+)
+
+
+PLAN_SCHEMA = "sorafs.moderation_panel.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "required_kinds",
+        "thresholds",
+        "external_evidence",
+        "evidence_contract",
+        "steps",
+    }
 )
 
 
@@ -55,8 +71,6 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
-
-
 
 
 EVIDENCE_OPTIONS_BY_KIND = {
@@ -109,6 +123,12 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append(
                 "missing required rollout evidence input"
             )
+    require_no_unrequired_evidence(
+        paths_by_kind,
+        args.required_kinds,
+        errors,
+        diagnostic="rollout evidence supplied for unrequired kind",
+    )
 
     for kind, paths in paths_by_kind.items():
         errors.extend(require_existing_files(paths, EVIDENCE_FLAGS_BY_KIND[kind], seen=seen_input_files))
@@ -155,7 +175,9 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     return [CommandPlan("rollout_evidence_gate", summary_out, verifier_command)]
 
 
-def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
+def threshold_values(args: argparse.Namespace) -> dict[str, int]:
+    """Return threshold values rendered in dry-run plans."""
+
     thresholds: dict[str, int] = {
         "max_canary_age_secs": args.max_canary_age_secs,
         "max_event_lag_secs": args.max_event_lag_secs,
@@ -165,24 +187,39 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
     }
     if args.now_unix is not None:
         thresholds["now_unix"] = args.now_unix
+    return thresholds
+
+
+def external_evidence(args: argparse.Namespace) -> dict[str, list[str]]:
+    """Return reviewed external evidence paths rendered in dry-run plans."""
 
     return {
-        "schema": "sorafs.moderation_panel.rollout_evidence_collection_plan.v1",
+        kind: [str(path) for path in paths]
+        for kind, paths in evidence_paths_by_kind(args).items()
+        if paths
+    }
+
+
+def evidence_contract(args: argparse.Namespace) -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in args.required_kinds
+    }
+
+
+def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "required_kinds": list(args.required_kinds),
-        "thresholds": thresholds,
-        "external_evidence": {
-            kind: [str(path) for path in paths]
-            for kind, paths in evidence_paths_by_kind(args).items()
-            if paths
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in args.required_kinds
-        },
+        "thresholds": threshold_values(args),
+        "external_evidence": external_evidence(args),
+        "evidence_contract": evidence_contract(args),
         "steps": [
             {
                 "label": step.label,
@@ -192,6 +229,46 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the moderation panel collection-plan envelope before use."""
+
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return ["moderation panel rollout runner plan must be an object"]
+    if set(rendered) != PLAN_FIELDS:
+        errors.append(
+            "moderation panel rollout runner plan fields must match the schema-closed contract"
+        )
+    if rendered.get("schema") != PLAN_SCHEMA:
+        errors.append(
+            "moderation panel rollout runner plan schema must match the contract"
+        )
+    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
+        errors.append(
+            "moderation panel rollout runner plan verifier schema must match checker summary"
+        )
+    if rendered.get("required_kinds") != list(args.required_kinds):
+        errors.append(
+            "moderation panel rollout runner plan required_kinds must match args"
+        )
+    if rendered.get("thresholds") != threshold_values(args):
+        errors.append("moderation panel rollout runner plan thresholds must match args")
+    if rendered.get("external_evidence") != external_evidence(args):
+        errors.append(
+            "moderation panel rollout runner plan external_evidence must match args"
+        )
+    if rendered.get("evidence_contract") != evidence_contract(args):
+        errors.append(
+            "moderation panel rollout runner plan evidence_contract must match checker fields"
+        )
+    errors.extend(validate_runner_plan_steps(rendered, plan))
+    return errors
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -308,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     rendered_plan = plan_json(plan, args)
-    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
     if plan_errors:
         emit_runner_error_lines(plan_errors)
         return 2

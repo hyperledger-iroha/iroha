@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_gateway_dns_design_attendance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 20e4dbd95067574ead4e1e9afc8875739e83813b2ff6b7b1e4850655906021c5
+source_hash: f0e4088baf9aee69528681a6355f01256c33bf000e69651698e547bebc8357e1
 source_last_modified: "2026-01-03T18:08:00.652776+00:00"
 translation_last_reviewed: 2026-01-30
 ---

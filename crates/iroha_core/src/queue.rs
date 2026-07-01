@@ -68,9 +68,9 @@ pub use router::{
     RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
     evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_plan_with_nexus_and_world_at,
-    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
-    evaluate_policy_with_catalog_and_world_at, resolve_query_routing_decision,
-    resolve_routing_decision,
+    evaluate_policy_plan_with_nexus_and_world_at_block_height, evaluate_policy_with_catalog,
+    evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
+    resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -6025,6 +6025,21 @@ pub mod tests {
 
     static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
 
+    fn seed_committed_height_for_queue_test(state: &State, height: u64) {
+        let mut block_hashes = state.block_hashes.block();
+        while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < height {
+            let next = u8::try_from(block_hashes.len() % usize::from(u8::MAX))
+                .expect("modulo u8::MAX fits u8")
+                .saturating_add(1);
+            block_hashes.push_for_tests(
+                HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([next; Hash::LENGTH]),
+                ),
+            );
+        }
+        block_hashes.commit_for_tests();
+    }
+
     fn unique_test_domain_name(prefix: &str) -> String {
         let suffix = NEXT_TEST_DOMAIN_SUFFIX.fetch_add(1, Ordering::Relaxed);
         format!("{prefix}{suffix}")
@@ -6559,6 +6574,7 @@ pub mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.last_transition_height = 2;
         }
+        seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
 
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
@@ -6638,6 +6654,7 @@ pub mod tests {
             nexus.autoscale.max_lanes = nonzero!(8_u32);
             nexus.autoscale.last_transition_height = 3;
         }
+        seed_committed_height_for_queue_test(&state, 3);
         let initial_nexus = state.nexus_snapshot();
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -8606,6 +8623,7 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        seed_committed_height_for_queue_test(&state, 2);
 
         let queue = Queue::test(config_factory(), &time_source);
         queue

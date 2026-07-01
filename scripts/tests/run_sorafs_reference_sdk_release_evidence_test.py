@@ -109,6 +109,10 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
         in plan["evidence_contract"]["signed_manifest"]["required_payload_fields"]
     )
     assert (
+        "policy_digest_hex"
+        in plan["evidence_contract"]["signed_manifest"]["required_payload_fields"]
+    )
+    assert (
         "validation_outcome_contract_verified"
         in plan["evidence_contract"]["downstream_bindings"][
             "required_payload_fields"
@@ -130,6 +134,12 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
             "required_payload_fields"
         ]
     )
+    assert (
+        "policy_digest_hex"
+        in plan["evidence_contract"]["governance_approval"][
+            "required_payload_fields"
+        ]
+    )
     assert [step["label"] for step in plan["steps"]] == ["release_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_reference_sdk_release_evidence.py" in verifier[1]
@@ -139,6 +149,69 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert verifier.count("--require-kind") == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert "--max-smoke-duration-secs" in verifier
     assert "--now-unix" in verifier
+
+
+def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    assert MODULE.validate_plan_json(rendered, plan, args) == []
+
+    assert MODULE.validate_plan_json(["step"], plan, args) == [
+        "reference SDK release runner plan must be an object"
+    ]
+
+    rendered["schema"] = "sorafs.reference_sdk.release_evidence_collection_plan.v0"
+    rendered["unexpected"] = True
+    rendered["required_kinds"] = []
+    rendered["thresholds"] = {}
+    rendered["external_evidence"] = {}
+    rendered["evidence_contract"] = {}
+    rendered["steps"] = []
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "reference SDK release runner plan fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert "reference SDK release runner plan schema must match the contract" in diagnostics
+    assert "reference SDK release runner plan required_kinds must match args" in diagnostics
+    assert "reference SDK release runner plan thresholds must match args" in diagnostics
+    assert "reference SDK release runner plan external_evidence must match args" in diagnostics
+    assert (
+        "reference SDK release runner plan evidence_contract must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+    assert "cookbook-smoke.json" not in diagnostics
+
+
+def test_execution_rejects_plan_validation_drift_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    ran_plan = False
+
+    def fake_validate_plan_json(rendered, plan, args):
+        return ["reference SDK release runner plan schema must match the contract"]
+
+    def fake_run_plan(plan, out_dir):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "validate_plan_json", fake_validate_plan_json)
+    monkeypatch.setattr(MODULE, "run_plan", fake_run_plan)
+
+    assert MODULE.main(complete_args(tmp_path)) == 2
+
+    assert not ran_plan
+    assert (
+        "reference SDK release runner plan schema must match the contract"
+        in capsys.readouterr().err
+    )
 
 
 def test_response_file_dry_run_prints_complete_reference_sdk_plan(
@@ -221,6 +294,34 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "release_archive" in verifier
+
+
+def test_subset_gate_rejects_evidence_for_unrequired_kind(
+    tmp_path: Path, capsys
+) -> None:
+    release_payload = write_payload(tmp_path / "release-archive.json")
+    extra_payload = write_payload(tmp_path / "signed-manifest.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "evidence"),
+            "--require-kind",
+            "release_archive",
+            "--release-archive-evidence",
+            str(release_payload),
+            "--signed-manifest-evidence",
+            str(extra_payload),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "release evidence supplied for unrequired kind" in captured.err
+    assert "signed_manifest" not in captured.err
+    assert str(extra_payload) not in captured.err
+    assert captured.out == ""
 
 
 def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None:

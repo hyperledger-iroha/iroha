@@ -2922,7 +2922,11 @@ def require_string_in(
 
 ALLOWED_ROLLOUT_ENVIRONMENTS = {"prod", "production", "release", "staging"}
 FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS = {
+    "alpha",
+    "beta",
+    "canary",
     "changeme",
+    "candidate",
     "demo",
     "dev",
     "example",
@@ -2930,21 +2934,31 @@ FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS = {
     "localnet",
     "mock",
     "placeholder",
+    "pre",
     "preprod",
     "preview",
+    "pilot",
     "qa",
+    "rc",
     "sample",
     "sandbox",
     "test",
     "testnet",
+    "trial",
     "uat",
     "zero",
 }
 FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
+    "alpha",
+    "beta",
+    "canary",
     "changeme",
     "development",
+    "dryrun",
     "dummy",
     "example",
+    "experiment",
+    "experimental",
     "fake",
     "localnet",
     "mock",
@@ -2955,7 +2969,11 @@ FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
     "notprod",
     "notproductionready",
     "placeholder",
+    "pilot",
     "preprod",
+    "preview",
+    "prerelease",
+    "releasecandidate",
     "replacebeforedeploy",
     "replacebeforeproduction",
     "replacebeforeprod",
@@ -2966,7 +2984,36 @@ FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
     "testnet",
     "testing",
     "todo",
+    "trial",
 }
+ROLLOUT_DEPLOYMENT_REVIEW_LABELS = frozenset({"prod", "production", "release"})
+FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS = frozenset(
+    {
+        "alpha",
+        "beta",
+        "canary",
+        "demo",
+        "dev",
+        "local",
+        "localnet",
+        "mock",
+        "pre",
+        "preprod",
+        "preview",
+        "pilot",
+        "qa",
+        "candidate",
+        "rc",
+        "sandbox",
+        "stage",
+        "staging",
+        "test",
+        "testnet",
+        "trial",
+        "uat",
+        "zero",
+    }
+)
 ROLLOUT_DEPLOYMENT_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
 )
@@ -3020,10 +3067,32 @@ def require_rollout_deployment_id(
         return ""
     tokens = [token for token in re.split(r"[._-]+", value.lower()) if token]
     compact = "".join(tokens)
+    token_forbidden = {
+        token for token in tokens if token in FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS
+    }
+    joined_forbidden = {
+        joined
+        for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS
+        for label in ROLLOUT_DEPLOYMENT_REVIEW_LABELS
+        for joined in (f"{marker}{label}", f"{label}{marker}")
+        if marker not in tokens and joined in compact
+        if not any(
+            token != marker and (token.startswith(marker) or marker.startswith(token))
+            for token in token_forbidden
+        )
+    }
     compact_forbidden = {
         marker
         for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS
         if marker in compact
+    } | joined_forbidden
+    compact_forbidden = {
+        marker
+        for marker in compact_forbidden
+        if not any(
+            marker != token and marker.startswith(token)
+            for token in token_forbidden
+        )
     }
     compact_forbidden = {
         marker
@@ -3033,8 +3102,7 @@ def require_rollout_deployment_id(
         )
     }
     forbidden = sorted(
-        {token for token in tokens if token in FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS}
-        | compact_forbidden
+        token_forbidden | compact_forbidden
     )
     if forbidden:
         errors.append(

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_dns_owner_runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 19f43d387ad49962c51a8d9565cc7c92bdff1f3d1af23b11392e66e120af92d4
+source_hash: 17d45bd15ed73f59323ef94510d93e80dfcb8591a67a548747308aaa002b39c4
 source_last_modified: "2025-11-18T09:03:32.952411+00:00"
 translation_last_reviewed: "2026-01-30"
 ---

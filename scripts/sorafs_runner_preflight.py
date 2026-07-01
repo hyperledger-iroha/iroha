@@ -774,6 +774,43 @@ def validate_runner_preflight(
     return errors
 
 
+def require_no_unrequired_evidence(
+    paths_by_kind: Mapping[str, Sequence[Path]],
+    required_kinds: Iterable[str],
+    errors: list[str],
+    *,
+    diagnostic: str,
+) -> None:
+    """Reject evidence supplied for kinds excluded by --require-kind."""
+
+    error_list = _require_error_list(errors)
+    message = _runner_notice_message(diagnostic)
+    if not isinstance(paths_by_kind, Mapping):
+        raise ValueError("runner evidence paths must be keyed by evidence kind")
+    if isinstance(required_kinds, (str, bytes, bytearray, Mapping)) or not isinstance(
+        required_kinds,
+        Iterable,
+    ):
+        raise ValueError("required evidence kinds must be an iterable of strings")
+    required = frozenset(required_kinds)
+    if not all(isinstance(kind, str) and kind for kind in required):
+        raise ValueError("required evidence kinds must be non-empty strings")
+    for kind, paths in paths_by_kind.items():
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("runner evidence kind keys must be non-empty strings")
+        if kind in required:
+            continue
+        if isinstance(paths, (str, bytes, bytearray, Mapping)) or not isinstance(
+            paths,
+            Sequence,
+        ):
+            if message not in error_list:
+                error_list.append(message)
+            continue
+        if paths and message not in error_list:
+            error_list.append(message)
+
+
 def resolve_runner_input_file(path: Path, errors: list[str]) -> Path | None:
     """Return a canonical runner input path identity, recording resolver failures."""
 

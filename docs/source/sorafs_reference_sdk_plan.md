@@ -463,14 +463,39 @@ failed published-archive cookbook smoke, missing fixture bundle or manifest/CAR
 replay, smoke duration above threshold, FFI header drift, and governance packets
 not bound to the governed release key roster, targets, downstream packages,
 smoke evidence, and a `release_manifest_digest_hex` matching a valid signed
-manifest artifact in the same bundle. Release-manifest binding failures are
-recorded on the offending artifact before required-kind validity is computed,
-so the JSON summary matches the fail-closed release decision. The runner's
-dry-run plan includes an `evidence_contract` map that operators can review
-before collecting release evidence.
+manifest artifact in the same bundle. Signed manifests also publish a
+`policy_digest_hex`, governance approval must reference that same digest, and
+the gate summary emits `valid_policy_digests` only from valid signed-manifest
+artifacts. Valid downstream release-archive, downstream-binding,
+cookbook-smoke, FFI/header-contract, and governance-approval references now
+publish their reviewed `release_manifest_digest_hex` values as
+`valid_release_manifest_reference_digests`; the aggregate
+production-readiness gate accepts those reference digests only as payload-free
+metadata tethered to recognized artifact fingerprints. Release-manifest and
+policy binding failures are recorded on the
+offending artifact before required-kind validity is computed, so the JSON
+summary matches the fail-closed release decision. The runner's dry-run plan
+includes an `evidence_contract` map that operators can review before collecting
+release evidence, and the runner validates the schema-closed collection-plan
+envelope, required kinds, thresholds, external evidence map, evidence contract,
+and command steps before dry-run output or verifier execution. Narrowed
+`--require-kind` release runs also reject evidence supplied for excluded kinds
+before the plan is rendered or the verifier starts.
+`scripts/build_sorafs_reference_sdk_release_canary.py` is the checked-in
+payload-free SF-11 release evidence builder for reviewed release-archive,
+signed-manifest, downstream-binding, cookbook-smoke, FFI/header-contract, and
+governance-approval artifacts. It requires complete target and downstream
+package coverage where applicable, release-manifest digest bindings,
+threshold-reviewed smoke duration, signed-manifest policy digests,
+governed-release approval markers, and checker-backed validation before
+atomically writing JSON without following output symlinks. The release-archive
+and signed-manifest response-file examples are
+`scripts/examples/sorafs_reference_sdk_release_archive_canary.args.example` and
+`scripts/examples/sorafs_reference_sdk_signed_manifest_canary.args.example`.
 
 The release evidence scripts have focused Python coverage in:
 
+- `scripts/tests/build_sorafs_reference_sdk_release_canary_test.py`
 - `scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py`
 - `scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py`
 
@@ -498,7 +523,8 @@ Implemented locally:
   `evidence_contract` schema/field output, operator argfile templates, and
   focused tests for release archives, signed manifests, downstream bindings,
   cookbook smoke, FFI/header contract, and governance approval, including
-  cross-artifact signed-manifest digest binding.
+  cross-artifact signed-manifest digest and policy-digest binding plus
+  aggregate-ready release-manifest reference digest metadata.
 
 Remaining production gates:
 - Run the packaging helper for the supported release targets and publish signed

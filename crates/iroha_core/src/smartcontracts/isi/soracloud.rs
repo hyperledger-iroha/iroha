@@ -567,6 +567,7 @@ fn require_active_public_lane_validator(
                 public_lane_validator_record_matches_key(key, record)
                     && key.1 == *authority
                     && record.status == PublicLaneValidatorStatus::Active
+                    && state_transaction.is_lane_active_for_authority(key.0)
             });
     if is_active_validator {
         Ok(())
@@ -8271,6 +8272,9 @@ fn hf_active_validator_stakes(
             continue;
         }
         if record.status != PublicLaneValidatorStatus::Active {
+            continue;
+        }
+        if !state_transaction.is_lane_active_for_authority(key.0) {
             continue;
         }
         let stake = numeric_to_u128(&record.total_stake)?;
@@ -17857,7 +17861,11 @@ mod tests {
         domain::Domain,
         isi::{Grant, Mint},
         metadata::Metadata,
-        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+            LaneConfig, LaneId, LaneVisibility, PublicLaneValidatorRecord,
+            PublicLaneValidatorStatus,
+        },
         permission::Permission,
         prelude::Register,
         soracloud::{
@@ -18165,6 +18173,97 @@ mod tests {
         );
     }
 
+    fn install_future_created_autoscale_lane(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        lane_id: LaneId,
+        created_height: u64,
+    ) {
+        let mut lane = LaneConfig {
+            id: lane_id,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        lane.metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        lane.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
+            .expect("future-created lane count must be nonzero");
+        state_transaction.nexus.enabled = true;
+        state_transaction.nexus.autoscale.enabled = true;
+        state_transaction.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
+        state_transaction.nexus.autoscale.max_lanes = lane_count;
+        state_transaction.nexus.lane_catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default(), lane])
+                .expect("future-created autoscale lane catalog");
+        state_transaction.nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(
+                &state_transaction.nexus.lane_catalog,
+            );
+    }
+
+    fn insert_active_public_lane_validator_on_lane(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        lane_id: LaneId,
+        validator: AccountId,
+        total_stake: u64,
+    ) {
+        state_transaction.world.public_lane_validators.insert(
+            (lane_id, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
+                stake_account: validator,
+                total_stake: Numeric::new(total_stake, 0),
+                self_stake: Numeric::new(total_stake, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+    }
+
+    #[test]
+    fn soracloud_active_validator_authority_rejects_future_created_autoscale_lane_record()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+
+        let future_lane = LaneId::new(1);
+        install_future_created_autoscale_lane(&mut state_transaction, future_lane, 7);
+        insert_active_public_lane_validator_on_lane(
+            &mut state_transaction,
+            future_lane,
+            BOB_ID.clone(),
+            9_000,
+        );
+
+        assert!(
+            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+            "active validator rows on future-created autoscale lanes must not grant Soracloud runtime authority before activation"
+        );
+        let stakes = hf_active_validator_stakes(&state_transaction)?;
+        assert!(
+            !stakes.contains_key(&BOB_ID),
+            "future-created autoscale lane validator rows must not contribute HF placement stake"
+        );
+        Ok(())
+    }
+
     #[test]
     fn hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows()
     -> Result<(), eyre::Report> {
@@ -18178,6 +18277,14 @@ mod tests {
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         insert_active_public_lane_validator(&mut state_transaction, BOB_ID.clone(), 700);
+        let future_lane = LaneId::new(1);
+        install_future_created_autoscale_lane(&mut state_transaction, future_lane, 7);
+        insert_active_public_lane_validator_on_lane(
+            &mut state_transaction,
+            future_lane,
+            BOB_ID.clone(),
+            9_000,
+        );
 
         state_transaction.world.public_lane_validators.insert(
             (LaneId::new(2), BOB_ID.clone()),

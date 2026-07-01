@@ -15,14 +15,30 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > invariants/signatures through `sorafs_manifest::potr`, and replays cached
 > receipts through `/v1/sorafs/proof/stream` with `proof_kind=potr`. Remaining
 > SF-14 work is live multi-provider rollout evidence and PQ provider-signature
-> key distribution, not local receipt capture, validation, or replay wiring.
+> key distribution, now represented by governance-bound key-roster and
+> reputation-weight policy digests in rollout evidence, not local receipt
+> capture, validation, or replay wiring.
 > `scripts/check_sorafs_potr_rollout_evidence.py` now provides the fail-closed
 > SF-14 rollout evidence gate, and
 > `scripts/run_sorafs_potr_rollout_evidence.py` provides the reviewed
 > collection planner/runner. The checker exports its required top-level
 > payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
 > checker-backed `evidence_contract` map in dry-run output for the selected
-> required kinds.
+> required kinds, and validates the schema-closed collection plan, required
+> kinds, thresholds, external evidence map, evidence contract, and command steps
+> before dry-run output or verifier execution.
+> `scripts/build_sorafs_potr_canary.py` builds individual payload-free SF-14
+> canary artifacts for multi-provider probes, receipt validation, proof-stream
+> replay, reputation integration, observability, and governance approval
+> evidence. The builder requires reviewed deployment context, complete
+> hot/warm tier, proof-stream route, and metric coverage where applicable,
+> receipt-summary digest bindings, provider and receipt minimum counts,
+> route and hot/warm latency threshold facts, governed PQ key-roster and
+> reputation-weight policy digest bindings, config-backed governance metadata,
+> reviewed governance policy digests surfaced as `valid_policy_digests`,
+> and validates every generated artifact through
+> `scripts/check_sorafs_potr_rollout_evidence.py` before writing. Checked-in
+> response-file examples cover multi-provider-probe and proof-stream canaries.
 
 ## Workflow
 1. Orchestrator/gateway issues a timed retrieval request with
@@ -138,15 +154,22 @@ signature validation, missing governed ML-DSA provider key evidence, non-Norito
 proof-stream routes, missing proof-stream filters, missing reputation-weight
 governance, missing PoTR metrics or deadline-breach alert checks, critical
 alerts, receipt summary digest drift across validation/proof-stream/reputation/
-observability/governance artifacts, and governance packets not bound to
-`iroha_config`. Receipt summary binding failures are recorded on the offending
-artifact before required-kind validity is computed, so the JSON summary matches
-the fail-closed process result. The collection planner exposes those exact
-required payload fields through `--dry-run` before contacting live PoTR
-services.
+observability/governance artifacts, PQ key-roster digest drift between receipt
+validation and governance approval, reputation-weight policy digest drift
+between reputation integration and governance approval, and governance packets
+not bound to `iroha_config`. Valid governance approval artifacts publish their
+reviewed `policy_digest_hex` values as `valid_policy_digests` for the aggregate
+production-readiness gate. Receipt summary, PQ key-roster, and reputation-weight
+policy binding failures are recorded on the offending artifact before
+required-kind validity is computed, so the JSON summary matches the fail-closed
+process result. The collection planner exposes those exact required payload
+fields through `--dry-run` and validates the schema-closed collection plan,
+required kinds, thresholds, external evidence map, evidence contract, and
+command steps before contacting live PoTR services.
 
 The rollout evidence scripts have focused Python coverage in:
 
+- `scripts/tests/build_sorafs_potr_canary_test.py`
 - `scripts/tests/check_sorafs_potr_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_potr_rollout_evidence_test.py`
 
@@ -154,5 +177,8 @@ This status page is now a reference for the shipped local PoTR surface. Future
 updates should track live rollout evidence, governed provider PQ keys, and
 reputation-weight changes that pass the SF-14 gate with validation,
 proof-stream, reputation, observability, and governance artifacts bound to the
-same multi-provider probe receipt summary digest rather than reintroducing draft
-local wiring tasks.
+same multi-provider probe receipt summary digest, plus receipt-validation and
+reputation artifacts bound to governance-approved PQ key-roster and
+reputation-weight policy digests, rather than reintroducing draft local wiring
+tasks. Governance policy digests remain exposed as `valid_policy_digests`
+readiness metadata from the same governed approval artifacts.

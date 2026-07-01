@@ -24,7 +24,10 @@ use super::EpochScheduleSnapshot;
 use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::staking::{apply_slash_to_validator, max_slash_amount},
-    state::{State, WorldReadOnly, WorldTransaction, public_lane_validator_record_matches_key},
+    state::{
+        State, StateTransaction, WorldReadOnly, WorldTransaction,
+        public_lane_validator_record_matches_key,
+    },
     sumeragi::consensus::ValidatorIndex,
 };
 
@@ -77,6 +80,7 @@ impl<'a> PenaltyApplier<'a> {
 
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
         let world = self.state.world_view();
+        let nexus_enabled = self.state.nexus_snapshot().enabled;
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
 
         for (key, record) in world.public_lane_validators().iter() {
@@ -84,6 +88,9 @@ impl<'a> PenaltyApplier<'a> {
                 continue;
             }
             let (lane_id, validator_id) = key;
+            if nexus_enabled && !self.state.is_lane_active_for_authority(*lane_id) {
+                continue;
+            }
             candidates_map
                 .entry(record.peer_id.public_key().clone())
                 .or_default()
@@ -350,7 +357,7 @@ impl<'a> PenaltyApplier<'a> {
 }
 
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
-    tx: &mut WorldTransaction<'_, '_>,
+    tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
     dataspace_catalog: &DataSpaceCatalog,
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
@@ -361,17 +368,20 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
 ) -> Result<PenaltyOutcome> {
     let mut outcome = PenaltyOutcome::default();
     for record in &effects.vrf_epoch_seals {
-        tx.vrf_epochs.insert(record.epoch, record.clone());
+        tx.world.vrf_epochs.insert(record.epoch, record.clone());
     }
     for action in &effects.penalty_actions {
         match action {
             NposPenaltyAction::VrfJail(action) => {
+                if !tx.is_lane_active_for_authority(action.lane_id) {
+                    continue;
+                }
                 let locator = ValidatorLocator {
                     lane_id: action.lane_id,
                     validator: action.validator.clone(),
                 };
                 if jail_in_transaction(
-                    tx,
+                    &mut tx.world,
                     &locator,
                     &action.reason,
                     #[cfg(feature = "telemetry")]
@@ -384,8 +394,11 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 }
             }
             NposPenaltyAction::ConsensusSlash(action) => {
+                if !tx.is_lane_active_for_authority(action.lane_id) {
+                    continue;
+                }
                 apply_slash_to_validator(
-                    tx,
+                    &mut tx.world,
                     dataspace_catalog,
                     staking_cfg,
                     action.lane_id,
@@ -399,19 +412,24 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 outcome.slashed = outcome.slashed.saturating_add(1);
             }
             NposPenaltyAction::MarkVrfPenaltiesApplied(action) => {
-                let mut record = tx.vrf_epochs.get(&action.epoch).cloned();
+                let mut record = tx.world.vrf_epochs.get(&action.epoch).cloned();
                 if let Some(record) = record.as_mut() {
                     record.penalties_applied = true;
                     record.penalties_applied_at_height = Some(action.height);
-                    tx.vrf_epochs.insert(action.epoch, record.clone());
+                    tx.world.vrf_epochs.insert(action.epoch, record.clone());
                 }
             }
             NposPenaltyAction::MarkConsensusEvidenceApplied(action) => {
-                let mut record = tx.consensus_evidence.get(&action.evidence_key).cloned();
+                let mut record = tx
+                    .world
+                    .consensus_evidence
+                    .get(&action.evidence_key)
+                    .cloned();
                 if let Some(record) = record.as_mut() {
                     record.penalty_applied = true;
                     record.penalty_applied_at_height = Some(action.height);
-                    tx.consensus_evidence
+                    tx.world
+                        .consensus_evidence
                         .insert(action.evidence_key.clone(), record.clone());
                 }
             }
@@ -675,6 +693,9 @@ fn max_slash_amount_for_validator_from_state(
     locator: &ValidatorLocator,
     max_bps: u16,
 ) -> Result<Option<Numeric>> {
+    if state.nexus_snapshot().enabled && !state.is_lane_active_for_authority(locator.lane_id) {
+        return Ok(None);
+    }
     let world = state.world_view();
     let Some(record) = world
         .public_lane_validators()
@@ -747,7 +768,10 @@ mod tests {
         common::Owned,
         consensus::{Qc, ValidatorSetCheckpoint, VrfEpochRecord},
         domain::Domain,
-        nexus::{LaneCatalog, LaneConfig},
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+            LaneConfig, LaneVisibility,
+        },
         parameter::system::SumeragiConsensusMode,
         prelude::{BlockHeader, DomainId, PeerId},
         transaction::{TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload},
@@ -1455,6 +1479,34 @@ mod tests {
         validator
     }
 
+    fn install_future_created_autoscale_lane(state: &State, lane_id: LaneId, created_height: u64) {
+        let mut lane = LaneConfig {
+            id: lane_id,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        lane.metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        lane.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+
+        let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
+            .expect("future-created lane count must be nonzero");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
+        nexus.autoscale.max_lanes = lane_count;
+        nexus.lane_catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default(), lane])
+            .expect("future-created autoscale lane catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+
     fn derive_penalty_actions_for_test(
         state: &State,
         config: &SumeragiConfig,
@@ -1490,7 +1542,7 @@ mod tests {
         let nexus = state.nexus_snapshot();
         let mut tx = state_block.transaction();
         let outcome = apply_npos_consensus_effects_to_transaction(
-            &mut tx.world,
+            &mut tx,
             effects,
             &nexus.dataspace_catalog,
             &nexus.staking,
@@ -1831,6 +1883,99 @@ mod tests {
             PublicLaneValidatorStatus::Jailed(ref reason)
                 if reason == "vrf_penalty_epoch_1"
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn vrf_penalties_ignore_future_created_autoscale_lane_records() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+
+        let kp = checked_keypair();
+        let peer = PeerId::from(kp.public_key().clone());
+        {
+            let mut block = state.commit_topology.block();
+            block.get_mut().push(peer.clone());
+            block.commit();
+        }
+
+        let future_lane = LaneId::new(1);
+        install_future_created_autoscale_lane(&state, future_lane, 7);
+        add_public_lane_validator(&state, &peer, future_lane, Numeric::new(100, 0));
+
+        let vrf_record = VrfEpochRecord {
+            epoch: 9,
+            seed: [0xA9; 32],
+            epoch_length: 10,
+            commit_deadline_offset: 3,
+            reveal_deadline_offset: 6,
+            roster_len: 1,
+            finalized: true,
+            updated_at_height: 1,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: vec![0],
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        {
+            let mut block = state.world.vrf_epochs.block();
+            block.insert(vrf_record.epoch, vrf_record.clone());
+            block.commit();
+        }
+
+        let actions = derive_penalty_actions_for_test(&state, &config, 6)?;
+        assert!(
+            actions.is_empty(),
+            "future-created autoscale lane rows must not map VRF offenders before creation height"
+        );
+
+        let view = state.world.vrf_epochs.view();
+        let updated = view.get(&vrf_record.epoch).expect("vrf record present");
+        assert!(!updated.penalties_applied);
+        assert_eq!(updated.penalties_applied_at_height, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn applying_penalty_effects_ignores_future_created_autoscale_lane_slash() -> Result<()> {
+        let state = fresh_state();
+        let kp = checked_keypair();
+        let peer = PeerId::from(kp.public_key().clone());
+        let future_lane = LaneId::new(1);
+        install_future_created_autoscale_lane(&state, future_lane, 7);
+        let validator = add_public_lane_validator(&state, &peer, future_lane, Numeric::new(100, 0));
+        let slash_id = Hash::prehashed([0x5A; iroha_crypto::Hash::LENGTH]);
+        let evidence_key = vec![0xE7, 0x01];
+        let effects = NposConsensusEffects {
+            vrf_epoch_seals: Vec::new(),
+            penalty_actions: vec![NposPenaltyAction::ConsensusSlash(
+                NposConsensusSlashAction {
+                    evidence_key,
+                    signer: 0,
+                    peer_id: peer,
+                    lane_id: future_lane,
+                    validator: validator.clone(),
+                    slash_id,
+                    amount: Numeric::new(10, 0),
+                },
+            )],
+        };
+
+        let outcome = apply_effects_for_test(&state, &effects, 6)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+
+        let validators = state.world.public_lane_validators.view();
+        let retained = validators
+            .get(&(future_lane, validator))
+            .expect("validator present");
+        assert!(matches!(retained.status, PublicLaneValidatorStatus::Active));
 
         Ok(())
     }

@@ -50,6 +50,19 @@ fn ensure_lane_allows_staking(
     lane_id: LaneId,
     context: &str,
 ) -> Result<(), Error> {
+    if !state_transaction.is_lane_active_for_authority(lane_id) {
+        #[cfg(feature = "telemetry")]
+        state_transaction
+            .telemetry
+            .record_public_lane_validator_reject("lane_inactive");
+        return Err(Error::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "{context} rejected: lane {lane_id} is not active at block height {}",
+                state_transaction.block_height()
+            )),
+        ));
+    }
+
     if !matches!(
         state_transaction.lane_validator_mode(lane_id),
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected
@@ -1819,7 +1832,10 @@ mod tests {
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
         domain::Domain,
         isi::error::InvalidParameterError,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneVisibility, PublicLaneRewardShare},
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+            LaneConfig, LaneVisibility, PublicLaneRewardShare,
+        },
         parameter::{Parameter, system::SumeragiNposParameters},
         peer::Peer,
         prelude::*,
@@ -1912,6 +1928,12 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         State::new(World::default(), kura, query_handle)
+    }
+
+    fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog: LaneCatalog) {
+        stx.nexus.lane_catalog = lane_catalog;
+        stx.nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&stx.nexus.lane_catalog);
     }
 
     fn register_peer_for_account(
@@ -2427,17 +2449,20 @@ mod tests {
 
         let lane_id = LaneId::new(7);
         stx.nexus.enabled = true;
-        stx.nexus.lane_catalog = LaneCatalog::new(
-            nonzero!(8_u32),
-            vec![LaneConfig {
-                id: lane_id,
-                alias: "restricted".to_string(),
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                visibility: LaneVisibility::Restricted,
-                ..LaneConfig::default()
-            }],
-        )
-        .expect("lane catalog");
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(
+                nonzero!(8_u32),
+                vec![LaneConfig {
+                    id: lane_id,
+                    alias: "restricted".to_string(),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                }],
+            )
+            .expect("lane catalog"),
+        );
         stx.nexus.staking.public_validator_mode =
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
         stx.nexus.staking.restricted_validator_mode =
@@ -2469,6 +2494,71 @@ mod tests {
     }
 
     #[test]
+    fn staking_rejects_future_created_autoscale_lane_before_creation_height() {
+        let state = setup_state();
+        let block = new_block_with_height(6);
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let future_lane = LaneId::new(1);
+        let mut autoscale_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+
+        stx.nexus.enabled = true;
+        stx.nexus.autoscale.enabled = true;
+        stx.nexus.autoscale.min_lanes = nonzero!(1_u32);
+        stx.nexus.autoscale.max_lanes = nonzero!(2_u32);
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), autoscale_lane])
+                .expect("future-created autoscale catalog"),
+        );
+        stx.nexus.staking.public_validator_mode =
+            iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+
+        let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let err = RegisterPublicLaneValidator {
+            lane_id: future_lane,
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator,
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("future-created autoscale lane must reject staking before creation height");
+
+        assert!(matches!(
+            err,
+            Error::InvalidParameter(InvalidParameterError::SmartContract(msg))
+                if msg.contains("not active at block height 6")
+        ));
+        assert!(
+            stx.world
+                .public_lane_validators
+                .iter()
+                .all(|((lane, _), _)| lane != &future_lane),
+            "rejected future-created autoscale lane must not create validator records"
+        );
+        let escrow_asset = AssetId::new(asset_def_id, escrow);
+        assert!(
+            stx.world.assets.get(&escrow_asset).is_none(),
+            "rejected future-created autoscale lane must not touch escrow"
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn mixed_mode_respects_lane_validator_modes() {
         let mut state = setup_state();
@@ -2481,26 +2571,29 @@ mod tests {
         let stake_lane = LaneId::new(0);
         let admin_lane = LaneId::new(1);
         stx.nexus.enabled = true;
-        stx.nexus.lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![
-                LaneConfig {
-                    id: stake_lane,
-                    alias: "public-stake".to_string(),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Public,
-                    ..LaneConfig::default()
-                },
-                LaneConfig {
-                    id: admin_lane,
-                    alias: "restricted-admin".to_string(),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Restricted,
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("lane catalog");
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig {
+                        id: stake_lane,
+                        alias: "public-stake".to_string(),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: admin_lane,
+                        alias: "restricted-admin".to_string(),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        visibility: LaneVisibility::Restricted,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog"),
+        );
         stx.nexus.staking.public_validator_mode =
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
         stx.nexus.staking.restricted_validator_mode =
@@ -2601,17 +2694,20 @@ mod tests {
         let mut stx = state_block.transaction();
 
         stx.nexus.enabled = true;
-        stx.nexus.lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![LaneConfig {
-                id: LaneId::new(1),
-                alias: "restricted".to_string(),
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                visibility: LaneVisibility::Restricted,
-                ..LaneConfig::default()
-            }],
-        )
-        .expect("lane catalog");
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "restricted".to_string(),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                }],
+            )
+            .expect("lane catalog"),
+        );
         stx.nexus.staking.restricted_validator_mode =
             iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
 

@@ -219,8 +219,9 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::{self, Name},
     nexus::{
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, UniversalAccountId,
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+        DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
+        UniversalAccountId,
     },
     peer::{Peer, PeerId},
     role::RoleId,
@@ -17557,10 +17558,12 @@ impl Nexus {
                             );
                             lane_errors = true;
                             None
-                        } else if key == AUTOSCALE_META_MANAGED {
+                        } else if key == AUTOSCALE_META_MANAGED
+                            || key == AUTOSCALE_META_CREATED_HEIGHT
+                        {
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
-                                    "lane[{idx}] metadata key `{AUTOSCALE_META_MANAGED}` is reserved for the consensus autoscaler"
+                                    "lane[{idx}] metadata key `{key}` is reserved for the consensus autoscaler"
                                 ),
                             ));
                             lane_errors = true;
@@ -24741,6 +24744,41 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert!(
             report.contains(
                 "metadata key `autoscale.managed` is reserved for the consensus autoscaler"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_reserved_created_height_metadata() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        let mut default_lane = Table::new();
+        default_lane.insert("index".into(), Value::Integer(0));
+        default_lane.insert("alias".into(), Value::String("default".to_owned()));
+        let mut metadata = Table::new();
+        metadata.insert(
+            "autoscale.created_height".into(),
+            Value::String("42".to_owned()),
+        );
+        default_lane.insert("metadata".into(), Value::Table(metadata));
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                Value::Table(default_lane),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("operators must not set reserved autoscale marker metadata");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "metadata key `autoscale.created_height` is reserved for the consensus autoscaler"
             ),
             "{report}"
         );

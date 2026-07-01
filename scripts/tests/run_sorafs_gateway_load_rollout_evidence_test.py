@@ -118,6 +118,10 @@ def test_dry_run_prints_complete_gateway_load_rollout_plan(
         "staging_report_digest_hex"
         in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
     )
+    assert (
+        "policy_digest_hex"
+        in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    )
     assert "metrics" in plan["evidence_contract"]["telemetry_slo"]["required_payload_fields"]
     assert (
         "http3_endpoint_committed"
@@ -136,6 +140,69 @@ def test_dry_run_prints_complete_gateway_load_rollout_plan(
     assert verifier.count("--require-kind") == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert "--min-staging-duration-secs" in verifier
     assert "--now-unix" in verifier
+
+
+def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    assert MODULE.validate_plan_json(rendered, plan, args) == []
+
+    assert MODULE.validate_plan_json(["step"], plan, args) == [
+        "gateway load rollout runner plan must be an object"
+    ]
+
+    rendered["schema"] = "sorafs.gateway_load.rollout_evidence_collection_plan.v0"
+    rendered["unexpected"] = True
+    rendered["required_kinds"] = []
+    rendered["thresholds"] = {}
+    rendered["external_evidence"] = {}
+    rendered["evidence_contract"] = {}
+    rendered["steps"] = []
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "gateway load rollout runner plan fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert "gateway load rollout runner plan schema must match the contract" in diagnostics
+    assert "gateway load rollout runner plan required_kinds must match args" in diagnostics
+    assert "gateway load rollout runner plan thresholds must match args" in diagnostics
+    assert "gateway load rollout runner plan external_evidence must match args" in diagnostics
+    assert (
+        "gateway load rollout runner plan evidence_contract must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+    assert "staging-load.json" not in diagnostics
+
+
+def test_execution_rejects_plan_validation_drift_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    ran_plan = False
+
+    def fake_validate_plan_json(rendered, plan, args):
+        return ["gateway load rollout runner plan schema must match the contract"]
+
+    def fake_run_plan(plan, out_dir):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "validate_plan_json", fake_validate_plan_json)
+    monkeypatch.setattr(MODULE, "run_plan", fake_run_plan)
+
+    assert MODULE.main(complete_args(tmp_path)) == 2
+
+    assert not ran_plan
+    assert (
+        "gateway load rollout runner plan schema must match the contract"
+        in capsys.readouterr().err
+    )
 
 
 def test_response_file_dry_run_prints_complete_gateway_load_plan(

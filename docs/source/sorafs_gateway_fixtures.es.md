@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_fixtures.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4fa6bff21db4a389a869499b8ff325637c05dc0332513dfaf9f863587bf5018e
+source_hash: 86d85849252661a6703f1160d8f6235a779ee114553425616d136ac325ce3136
 source_last_modified: "2025-11-21T13:40:07.390645+00:00"
 translation_last_reviewed: "2026-01-30"
 ---

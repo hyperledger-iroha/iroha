@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_evidence_viewer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b42ba81039228f2ff2ca3b03f68ea368a06640b884cb0ccaf7686990a23d5ddd
+source_hash: 4af4a229eca9b31d1f31603a67cc47aaf810b69a9ec1ccf1c80086936ed9b6fd
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-06-25
 ---

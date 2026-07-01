@@ -68,7 +68,7 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_plan_with_nexus_and_world_at,
+    queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -3693,11 +3693,12 @@ impl StateBlock<'_> {
             Some(decision) => decision,
             None => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_plan_with_nexus_and_world_at(
+                evaluate_policy_plan_with_nexus_and_world_at_block_height(
                     &state_transaction.nexus,
                     &accepted,
                     &state_transaction.world,
                     state_transaction.block_unix_timestamp_ms(),
+                    state_transaction.block_height(),
                 )
                 .map(|plan| plan.coordinator_route())
                 .map_err(|err| {
@@ -11389,7 +11390,7 @@ pub mod tests {
                 .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
             elastic_lane
                 .metadata
-                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -11461,13 +11462,15 @@ pub mod tests {
                     ledger_time_ms,
                 )
                 .expect("catalog-only route resolves");
-                let live_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
-                    &view.nexus,
-                    &accepted,
-                    view.world(),
-                    ledger_time_ms,
-                )
-                .expect("live autoscale route resolves");
+                let live_plan =
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        ledger_time_ms,
+                        1,
+                    )
+                    .expect("live autoscale route resolves");
                 (catalog_only, live_plan)
             };
             if catalog_only.lane_id == TestLaneId::SINGLE
@@ -11510,7 +11513,7 @@ pub mod tests {
                 .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
             elastic_lane
                 .metadata
-                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -11576,11 +11579,12 @@ pub mod tests {
                 drop(nexus);
                 let enabled_plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         0,
+                        1,
                     )
                     .expect("enabled Nexus autoscale route resolves")
                 };
@@ -11589,11 +11593,12 @@ pub mod tests {
                 drop(nexus);
                 let disabled_plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         0,
+                        1,
                     )
                     .expect("disabled Nexus default route resolves")
                 };

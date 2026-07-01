@@ -614,7 +614,13 @@ macro_rules! build_world_block {
 }
 
 macro_rules! build_world_transaction {
-    ($state:expr, $telemetry:expr, $axt_lane_config:expr, $axt_current_slot:expr) => {
+    (
+        $state:expr,
+        $telemetry:expr,
+        $axt_lane_config:expr,
+        $axt_current_slot:expr,
+        $axt_lane_map:expr
+    ) => {
         WorldTransaction {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.transaction(),
@@ -824,6 +830,7 @@ macro_rules! build_world_transaction {
             merge_global_state_root: $state.merge_global_state_root.transaction(),
             axt_lane_config: $axt_lane_config,
             axt_current_slot: $axt_current_slot,
+            axt_lane_map: $axt_lane_map,
             current_dataspace_id: None,
             external_event_sink: &mut $state.external_event_buf,
             external_event_buf: Vec::new(),
@@ -1673,6 +1680,7 @@ fn validate_merge_snapshot_against_nexus(
     nexus: &iroha_config::parameters::actual::Nexus,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    block_height: u64,
 ) -> Result<(), MergeLedgerCommitError> {
     if !nexus.enabled {
         return Err(MergeLedgerCommitError::NexusDisabled);
@@ -1690,6 +1698,9 @@ fn validate_merge_snapshot_against_nexus(
     if nexus.dataspace_catalog.by_id(dataspace_id).is_none() {
         return Err(MergeLedgerCommitError::UnknownDataspace { dataspace_id });
     }
+    if nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height) != Some(dataspace_id) {
+        return Err(MergeLedgerCommitError::UnknownLane { lane_id });
+    }
     Ok(())
 }
 
@@ -1699,6 +1710,9 @@ pub enum LaneLifecycleError {
     /// Lane lifecycle updates require Nexus to be enabled.
     #[error("lane lifecycle updates require nexus.enabled=true")]
     NexusDisabled,
+    /// Lifecycle plans must add or retire at least one lane.
+    #[error("lane lifecycle plan must add or retire at least one lane")]
+    EmptyPlan,
     /// A dependent Nexus feature was enabled while Nexus itself is disabled.
     #[error("{0} requires nexus.enabled=true")]
     NexusDisabledFeature(&'static str),
@@ -1747,7 +1761,7 @@ pub enum LaneLifecycleError {
     #[error("lane lifecycle plan references unknown dataspace {0}")]
     UnknownDataspace(DataSpaceId),
     /// External lane configuration attempted to claim an autoscale-managed lane.
-    #[error("lane {0} uses reserved autoscale-managed metadata")]
+    #[error("lane {0} uses reserved autoscale metadata")]
     ReservedAutoscaleManagedLane(LaneId),
     /// External lane configuration attempted to occupy an autoscale elastic lane id.
     #[error(
@@ -3495,6 +3509,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) axt_lane_config: LaneConfig,
     /// Current slot snapshot used when deriving AXT policy caches.
     pub(crate) axt_current_slot: u64,
+    /// Dataspace-to-lane map used when deriving AXT policy caches.
+    pub(crate) axt_lane_map: BTreeMap<DataSpaceId, LaneId>,
     /// Dataspace context for this world-transaction execution scope.
     pub(crate) current_dataspace_id: Option<DataSpaceId>,
     /// State telemetry handle used to mirror data events into metrics.
@@ -8042,7 +8058,8 @@ impl<'state> StateBlock<'state> {
     }
 
     fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
-        let lane_config = self.nexus.lane_config.clone();
+        let valid_lanes =
+            axt_active_lane_ids_at_height(&self.nexus, self._curr_block.height().get());
         let mut snapshot =
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
                 self,
@@ -8058,11 +8075,6 @@ impl<'state> StateBlock<'state> {
                 .any(|(_, set)| set.iter().any(|(_, record)| record.is_active()));
 
             if !has_directory_data || has_active_manifest {
-                let valid_lanes: BTreeSet<LaneId> = lane_config
-                    .entries()
-                    .iter()
-                    .map(|entry| entry.lane_id)
-                    .collect();
                 let stale: Vec<_> = self
                     .world
                     .axt_policies
@@ -8992,6 +9004,53 @@ pub(crate) fn nexus_active_lane_dataspace(
         .map(|_| dataspace_id)
 }
 
+pub(crate) fn nexus_active_lane_dataspace_at_height(
+    lane_id: LaneId,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> Option<DataSpaceId> {
+    let dataspace_id = nexus_active_lane_dataspace(lane_id, nexus)?;
+    nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height)
+        .then_some(dataspace_id)
+}
+
+fn axt_lane_map_from_lane_config(lane_config: &LaneConfig) -> BTreeMap<DataSpaceId, LaneId> {
+    let mut lane_for_dataspace = BTreeMap::new();
+    for entry in lane_config.entries() {
+        lane_for_dataspace
+            .entry(entry.dataspace_id)
+            .or_insert(entry.lane_id);
+    }
+    lane_for_dataspace
+}
+
+pub(crate) fn axt_active_lane_map_at_height(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> BTreeMap<DataSpaceId, LaneId> {
+    let mut lane_for_dataspace = BTreeMap::new();
+    for entry in nexus.lane_config.entries() {
+        let Some(dataspace_id) =
+            nexus_active_lane_dataspace_at_height(entry.lane_id, nexus, block_height)
+        else {
+            continue;
+        };
+        lane_for_dataspace
+            .entry(dataspace_id)
+            .or_insert(entry.lane_id);
+    }
+    lane_for_dataspace
+}
+
+fn axt_active_lane_ids_at_height(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> BTreeSet<LaneId> {
+    axt_active_lane_map_at_height(nexus, block_height)
+        .into_values()
+        .collect()
+}
+
 pub(crate) fn nexus_active_lane_ids(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> BTreeSet<LaneId> {
@@ -8999,6 +9058,8 @@ pub(crate) fn nexus_active_lane_ids(
         .lane_catalog
         .lanes()
         .iter()
+        .filter(|lane| !lane_uses_reserved_autoscale_metadata(lane))
+        .filter(|lane| !nexus_lane_id_in_active_autoscale_elastic_range(lane.id, nexus))
         .filter_map(|lane| nexus_active_lane_dataspace(lane.id, nexus).map(|_| lane.id))
         .collect()
 }
@@ -9683,6 +9744,112 @@ mod stake_snapshot_tests {
         assert_eq!(
             nexus_active_lane_dataspace(stale_lane, &mismatched_geometry),
             None
+        );
+    }
+
+    #[test]
+    fn nexus_active_lane_ids_exclude_autoscale_reserved_lanes() {
+        let manual_elastic_lane = LaneId::new(1);
+        let autoscale_lane = LaneId::new(2);
+        let manual_sidecar = LaneId::new(9);
+        let mut autoscale_config = LaneConfig {
+            id: autoscale_lane,
+            alias: "elastic-lane-2".to_owned(),
+            ..LaneConfig::default()
+        };
+        autoscale_config
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_config
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(10).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: manual_elastic_lane,
+                    alias: "manual-elastic-slot".to_owned(),
+                    ..LaneConfig::default()
+                },
+                autoscale_config,
+                LaneConfig {
+                    id: manual_sidecar,
+                    alias: "manual-sidecar".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("mixed autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..Default::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
+
+        assert_eq!(
+            nexus_active_lane_ids(&nexus),
+            BTreeSet::from([LaneId::SINGLE, manual_sidecar]),
+            "stake-active lane filters must exclude autoscale-owned lanes and manual occupants of the elastic range"
+        );
+    }
+
+    #[test]
+    fn nexus_active_lane_dataspace_at_height_respects_autoscale_created_height() {
+        let autoscale_lane = LaneId::new(1);
+        let manual_elastic_lane = LaneId::new(2);
+        let mut autoscale_config = LaneConfig {
+            id: autoscale_lane,
+            alias: "elastic-lane-1".to_owned(),
+            ..LaneConfig::default()
+        };
+        autoscale_config
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_config
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(3).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                autoscale_config,
+                LaneConfig {
+                    id: manual_elastic_lane,
+                    alias: "manual-elastic-slot".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..Default::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
+
+        assert_eq!(
+            nexus_active_lane_dataspace_at_height(autoscale_lane, &nexus, 6),
+            None,
+            "future-created autoscale lane must be inactive before creation height"
+        );
+        assert_eq!(
+            nexus_active_lane_dataspace_at_height(autoscale_lane, &nexus, 7),
+            Some(DataSpaceId::UNIVERSAL),
+            "valid autoscale lane must become active at creation height"
+        );
+        assert_eq!(
+            nexus_active_lane_dataspace_at_height(manual_elastic_lane, &nexus, 7),
+            None,
+            "manual occupants of the autoscale elastic range must stay inactive"
         );
     }
 
@@ -17387,7 +17554,30 @@ impl<'world> WorldBlock<'world> {
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
     ) -> WorldTransaction<'_, 'world> {
-        build_world_transaction!(self, telemetry, axt_lane_config, axt_current_slot)
+        let axt_lane_map = axt_lane_map_from_lane_config(&axt_lane_config);
+        self.trasaction_with_axt_lane_map(
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            axt_lane_config,
+            axt_current_slot,
+            axt_lane_map,
+        )
+    }
+
+    fn trasaction_with_axt_lane_map(
+        &mut self,
+        #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
+        axt_lane_config: LaneConfig,
+        axt_current_slot: u64,
+        axt_lane_map: BTreeMap<DataSpaceId, LaneId>,
+    ) -> WorldTransaction<'_, 'world> {
+        build_world_transaction!(
+            self,
+            telemetry,
+            axt_lane_config,
+            axt_current_slot,
+            axt_lane_map
+        )
     }
 
     /// Create struct to apply transaction changes without passing telemetry explicitly.
@@ -18126,14 +18316,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .collect();
 
         let mut had_active_manifest = false;
-        let mut lane_for_dataspace = BTreeMap::new();
-        for entry in lane_config.entries() {
-            lane_for_dataspace
-                .entry(entry.dataspace_id)
-                .or_insert(entry.lane_id);
-        }
+        let lane_for_dataspace = self.axt_lane_map.clone();
+        let active_lanes: BTreeSet<_> = lane_for_dataspace.values().copied().collect();
 
         if lane_for_dataspace.is_empty() {
+            let stale: Vec<_> = self
+                .axt_policies
+                .view()
+                .iter()
+                .map(|(dsid, _)| *dsid)
+                .collect();
+            for dsid in stale {
+                self.axt_policies.remove(dsid);
+            }
             return None;
         }
 
@@ -18238,6 +18433,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
         if bindings.is_empty() {
             if had_active_manifest {
+                let stale: Vec<_> = self
+                    .axt_policies
+                    .view()
+                    .iter()
+                    .filter(|(_, policy)| !active_lanes.contains(&policy.target_lane))
+                    .map(|(dsid, _)| *dsid)
+                    .collect();
+                for dsid in stale {
+                    self.axt_policies.remove(dsid);
+                }
                 return None;
             }
             let stale: Vec<_> = self
@@ -18642,6 +18847,41 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     > {
         &mut self.proofs
     }
+
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Test helper: get mutable access to public lane validators for direct seeding.
+    pub fn public_lane_validators_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>
+    {
+        &mut self.public_lane_validators
+    }
+
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Test helper: get mutable access to public lane stake shares for direct seeding.
+    pub fn public_lane_stake_shares_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>
+    {
+        &mut self.public_lane_stake_shares
+    }
+
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Test helper: get mutable access to public lane rewards for direct seeding.
+    pub fn public_lane_rewards_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, (LaneId, u64), PublicLaneRewardRecord> {
+        &mut self.public_lane_rewards
+    }
+
+    #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
+    /// Test helper: get mutable access to public lane reward claims for direct seeding.
+    pub fn public_lane_reward_claims_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, (LaneId, AccountId, AssetId), u64> {
+        &mut self.public_lane_reward_claims
+    }
+
     /// Test helper: get mutable access to stored proof tags for direct seeding.
     pub fn proof_tags_mut_for_testing(
         &mut self,
@@ -20437,7 +20677,12 @@ impl State {
             let account_exists = |account: &iroha_data_model::account::AccountId| {
                 world.accounts().get(account).is_some()
             };
-            crate::da::sanitize_pin_intents_against_nexus(intents, &nexus, account_exists)
+            crate::da::sanitize_pin_intents_against_nexus_at_height(
+                intents,
+                &nexus,
+                block_height,
+                account_exists,
+            )
         };
         self.insert_sanitized_pin_intents(block_height, intents, rejected, context, &positions)
     }
@@ -20453,8 +20698,12 @@ impl State {
         let nexus = self.nexus_snapshot();
         let account_exists =
             |account: &iroha_data_model::account::AccountId| world.accounts.get(account).is_some();
-        let (intents, rejected) =
-            crate::da::sanitize_pin_intents_against_nexus(intents, &nexus, account_exists);
+        let (intents, rejected) = crate::da::sanitize_pin_intents_against_nexus_at_height(
+            intents,
+            &nexus,
+            block_height,
+            account_exists,
+        );
         self.insert_sanitized_pin_intents(block_height, intents, rejected, context, &positions)
     }
 
@@ -20465,8 +20714,12 @@ impl State {
     ) -> Vec<DaPinIntentWithLocation> {
         let positions = Self::pin_intent_bundle_positions(&intents);
         let nexus = self.nexus_snapshot();
-        let (intents, rejected) =
-            crate::da::sanitize_pin_intents_against_nexus(intents, &nexus, |_| true);
+        let (intents, rejected) = crate::da::sanitize_pin_intents_against_nexus_at_height(
+            intents,
+            &nexus,
+            block_height,
+            |_| true,
+        );
         self.insert_sanitized_pin_intents(
             block_height,
             intents,
@@ -20810,21 +21063,28 @@ impl State {
 
             if let Some(bundle) = block.as_ref().da_commitments() {
                 saw_da_commitments = true;
+                let nexus = self.nexus_snapshot();
                 let active_commitments = self
                     .active_da_commitments_for_current_nexus(height as u64, &bundle.commitments);
+                let query_visible_keys: BTreeSet<_> = active_commitments
+                    .iter()
+                    .map(DaCommitmentKey::from_record)
+                    .collect();
                 let identity_visible_keys: BTreeSet<_> = bundle
                     .commitments
                     .iter()
                     .filter(|record| {
+                        let key = DaCommitmentKey::from_record(record);
                         self.da_lane_visible_after_reset(
                             block.as_ref().header().height().get(),
                             record.lane_id,
-                        )
+                        ) && (query_visible_keys.contains(&key)
+                            || nexus
+                                .lane_catalog
+                                .lanes()
+                                .iter()
+                                .all(|lane| lane.id != record.lane_id))
                     })
-                    .map(DaCommitmentKey::from_record)
-                    .collect();
-                let query_visible_keys: BTreeSet<_> = active_commitments
-                    .iter()
                     .map(DaCommitmentKey::from_record)
                     .collect();
                 self.da_commitments
@@ -21056,7 +21316,9 @@ impl State {
     /// target lanes that no longer exist in the current lane catalog.
     pub fn refresh_axt_policies_from_directory(&self) -> Option<AxtPolicySnapshot> {
         let view = self.view();
-        let lane_config = view.nexus.lane_config.clone();
+        let nexus = view.nexus.clone();
+        let block_height = self.block_hashes.view().len() as u64;
+        let valid_lanes = axt_active_lane_ids_at_height(&nexus, block_height);
         let mut snapshot =
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
                 &view,
@@ -21074,11 +21336,6 @@ impl State {
                 (has_directory_data, has_active_manifest)
             };
             if !has_directory_data || has_active_manifest {
-                let valid_lanes: BTreeSet<LaneId> = lane_config
-                    .entries()
-                    .iter()
-                    .map(|entry| entry.lane_id)
-                    .collect();
                 let mut block = self.world.axt_policies.block();
                 let mut tx = block.transaction();
                 let stale: Vec<_> = tx
@@ -21898,7 +22155,13 @@ impl State {
         // Seed AXT policy cache from any persisted Space Directory manifests on startup.
         let manifest_view = s.world.space_directory_manifests.view();
         let has_manifests = manifest_view.iter().next().is_some();
-        let lane_config = s.nexus.read().lane_config.clone();
+        let (lane_config, axt_lane_map) = {
+            let nexus = s.nexus.read();
+            (
+                nexus.lane_config.clone(),
+                axt_active_lane_map_at_height(&nexus, 0),
+            )
+        };
         let has_lane_overlap = lane_config.entries().iter().any(|entry| {
             manifest_view
                 .iter()
@@ -21908,9 +22171,14 @@ impl State {
         if has_manifests && has_lane_overlap {
             let mut wblock = s.world.block();
             #[cfg(feature = "telemetry")]
-            let mut wtx = wblock.trasaction(Some(&s.telemetry), lane_config.clone(), 0);
+            let mut wtx = wblock.trasaction_with_axt_lane_map(
+                Some(&s.telemetry),
+                lane_config.clone(),
+                0,
+                axt_lane_map,
+            );
             #[cfg(not(feature = "telemetry"))]
-            let mut wtx = wblock.trasaction(lane_config.clone(), 0);
+            let mut wtx = wblock.trasaction_with_axt_lane_map(lane_config.clone(), 0, axt_lane_map);
             let _ = wtx.rebuild_axt_policies_from_space_directory(&lane_config, 0);
             wtx.apply();
             wblock.commit();
@@ -22258,11 +22526,13 @@ impl State {
             current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
         let transitions = collect_confidential_transitions(&sb.world, now_h);
         {
-            let mut wtx = sb.world.trasaction(
+            let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
+            let mut wtx = sb.world.trasaction_with_axt_lane_map(
                 #[cfg(feature = "telemetry")]
                 Some(sb.telemetry),
                 sb.nexus.lane_config.clone(),
                 current_slot,
+                axt_lane_map,
             );
             let _expired_manifests = wtx.expire_due_space_directory_manifests(
                 now_h.saturating_sub(1),
@@ -23876,12 +24146,14 @@ impl State {
         let manifest_registry = self.lane_manifests.read().clone();
         let nexus = self.nexus_snapshot();
         let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        let block_height = self.lane_authority_height();
         Self::authoritative_lane_validator_accounts_from_sources(
             &self.world.view(),
             lane_id,
             validator_mode,
             manifest_registry.as_ref(),
             &nexus,
+            block_height,
         )
     }
 
@@ -23890,18 +24162,7 @@ impl State {
         let manifest_registry = self.lane_manifests.read().clone();
         let nexus = self.nexus_snapshot();
         let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
-        let block_height = self
-            .latest_block_header_fast()
-            .map(|header| header.height().get())
-            .unwrap_or_else(|| {
-                self.world
-                    .view()
-                    .consensus_keys()
-                    .iter()
-                    .map(|(_, record)| record.activation_height)
-                    .max()
-                    .unwrap_or(0)
-            });
+        let block_height = self.lane_authority_height();
         let commit_topology = self.commit_topology_snapshot();
         Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
@@ -23914,6 +24175,29 @@ impl State {
         )
     }
 
+    /// Return whether a lane is active at the committed lane-authority height.
+    pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
+        let nexus = self.nexus_snapshot();
+        let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, &nexus) else {
+            return false;
+        };
+        nexus_lane_active_for_authority(lane_id, dataspace_id, &nexus, self.lane_authority_height())
+    }
+
+    fn lane_authority_height(&self) -> u64 {
+        self.latest_block_header_fast()
+            .map(|header| header.height().get())
+            .unwrap_or_else(|| {
+                self.world
+                    .view()
+                    .consensus_keys()
+                    .iter()
+                    .map(|(_, record)| record.activation_height)
+                    .max()
+                    .unwrap_or(0)
+            })
+    }
+
     /// Return the explicit manifest validator bindings configured for a lane, if any.
     pub fn manifest_lane_validator_bindings(
         &self,
@@ -23923,6 +24207,14 @@ impl State {
         let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, &nexus) else {
             return Vec::new();
         };
+        if !nexus_lane_active_for_authority(
+            lane_id,
+            dataspace_id,
+            &nexus,
+            self.lane_authority_height(),
+        ) {
+            return Vec::new();
+        }
         let lane_manifests = self.lane_manifests.read();
         if !Self::manifest_registry_matches_lane_dataspace(
             lane_id,
@@ -23987,12 +24279,14 @@ impl State {
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Vec<AccountId> {
+        let block_height = self.lane_authority_height();
         Self::authoritative_lane_validator_accounts_from_sources(
             &self.world.view(),
             lane_id,
             validator_mode,
             manifest_registry,
             nexus,
+            block_height,
         )
     }
 
@@ -24002,10 +24296,14 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
     ) -> Vec<AccountId> {
         let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, nexus) else {
             return Vec::new();
         };
+        if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
+            return Vec::new();
+        }
 
         if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
             && let Some(mut validators) = manifest_registry.lane_validators(lane_id)
@@ -24068,6 +24366,9 @@ impl State {
         let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, nexus) else {
             return Vec::new();
         };
+        if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
+            return Vec::new();
+        }
 
         if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
             && let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id)
@@ -24103,7 +24404,12 @@ impl State {
                 .collect();
         }
 
-        if autoscale_managed_lane_inherits_commit_topology_authority(lane_id, dataspace_id, nexus) {
+        if autoscale_managed_lane_inherits_commit_topology_authority(
+            lane_id,
+            dataspace_id,
+            nexus,
+            block_height,
+        ) {
             return Self::live_commit_topology_peers(world, commit_topology, block_height);
         }
 
@@ -24515,6 +24821,11 @@ impl State {
                 actual: envelope.dataspace_id,
             });
         }
+        if nexus_active_lane_dataspace_at_height(envelope.lane_id, &nexus, envelope.block_height)
+            != Some(envelope.dataspace_id)
+        {
+            return Err(LaneRelayError::UnknownLane(envelope.lane_id));
+        }
 
         let fault_tolerance = nexus
             .dataspace_catalog
@@ -24706,6 +25017,7 @@ impl State {
                     &nexus,
                     latest_admissible.lane_id,
                     latest_admissible.dataspace_id,
+                    latest_admissible.block_height,
                 )
                 .is_err()
                 {
@@ -25056,11 +25368,21 @@ impl State {
         let mut world_block = self.world.block();
         world_block.dataspace_catalog = nexus.dataspace_catalog.clone();
         {
+            let block_height = self.block_hashes.view().len() as u64;
+            let axt_lane_map = axt_active_lane_map_at_height(&nexus, block_height);
             #[cfg(feature = "telemetry")]
-            let mut tx =
-                world_block.trasaction(Some(&self.telemetry), nexus.lane_config.clone(), 0);
+            let mut tx = world_block.trasaction_with_axt_lane_map(
+                Some(&self.telemetry),
+                nexus.lane_config.clone(),
+                0,
+                axt_lane_map,
+            );
             #[cfg(not(feature = "telemetry"))]
-            let mut tx = world_block.trasaction(nexus.lane_config.clone(), 0);
+            let mut tx = world_block.trasaction_with_axt_lane_map(
+                nexus.lane_config.clone(),
+                0,
+                axt_lane_map,
+            );
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             for (asset_id, amount) in &aggregate {
                 tx.withdraw_numeric_asset(asset_id, amount)
@@ -25100,7 +25422,12 @@ impl State {
         let nexus = self.nexus_snapshot();
         let relays = self.lane_relays.read();
         for snapshot in &entry.lane_snapshots {
-            validate_merge_snapshot_against_nexus(&nexus, snapshot.lane_id, snapshot.dataspace_id)?;
+            validate_merge_snapshot_against_nexus(
+                &nexus,
+                snapshot.lane_id,
+                snapshot.dataspace_id,
+                snapshot.lane_block_height,
+            )?;
             let envelope = relays
                 .get(
                     snapshot.lane_id,
@@ -25648,6 +25975,7 @@ impl State {
         }
         ensure_autoscale_runtime_lane_bounds(&nexus.autoscale)?;
         ensure_autoscale_default_lane_outside_elastic_range(&nexus)?;
+        let current_block_height = self.block_hashes.view().len() as u64;
         let protected_autoscale_lanes: BTreeMap<LaneId, iroha_data_model::nexus::LaneConfig> = self
             .nexus
             .read()
@@ -25679,7 +26007,12 @@ impl State {
             }
             if lane_claims_autoscale_managed(lane) {
                 ensure_autoscale_managed_lane_owned_by_nexus(lane, &nexus)?;
+                ensure_autoscale_managed_lane_created_height_not_future(
+                    lane,
+                    current_block_height,
+                )?;
             } else {
+                ensure_manual_lane_has_no_reserved_autoscale_metadata(lane)?;
                 ensure_manual_lane_outside_autoscale_elastic_range(lane.id, &nexus)?;
             }
         }
@@ -25980,15 +26313,21 @@ impl State {
         let lanes_to_reset = {
             let _state_commit_lock = self.state_commit_lock.lock();
             let _lifecycle_lock = self.lane_lifecycle_lock.lock();
+            let current_block_height = self.block_hashes.view().len() as u64;
             let lifecycle_update = {
                 let nexus = self.nexus.read();
-                prepare_lane_lifecycle_update(&nexus, plan, allow_autoscale_managed_changes)?
+                prepare_lane_lifecycle_update(
+                    &nexus,
+                    plan,
+                    current_block_height,
+                    allow_autoscale_managed_changes,
+                )?
             };
             let active_reset_lanes = Self::active_reset_lanes(
                 &lifecycle_update.lanes_to_reset,
                 &lifecycle_update.updated_lane_config,
             );
-            let reset_height = self.block_hashes.view().len() as u64;
+            let reset_height = current_block_height;
             self.apply_lane_geometry_updates(
                 &lifecycle_update.previous_lane_config,
                 &lifecycle_update.updated_lane_config,
@@ -26222,7 +26561,12 @@ impl State {
                 return Err(LaneLifecycleError::UnknownDataspace(lane.dataspace_id));
             }
         }
-        ensure_catalog_autoscale_lanes_consistent(&nexus, &update.updated_catalog)?;
+        ensure_catalog_autoscale_lanes_consistent(
+            &nexus,
+            &update.updated_catalog,
+            pending.transition_height,
+            &BTreeSet::new(),
+        )?;
         validate_nexus_routing_policy(
             &nexus.routing_policy,
             &update.updated_catalog,
@@ -26239,7 +26583,12 @@ impl State {
         records
             .iter()
             .filter_map(|record| {
-                let validation = crate::da::enforce_active_lane_proof_policy(record, &nexus)
+                let validation =
+                    crate::da::enforce_active_lane_proof_policy_at_height(
+                        record,
+                        &nexus,
+                        block_height,
+                    )
                     .map_err(crate::da::DaCommitmentValidationError::from)
                     .and_then(|()| {
                         crate::da::validate_confidential_compute_record(&nexus.lane_config, record)
@@ -26279,16 +26628,26 @@ impl State {
     fn apply_committed_da_commitment_bundle(&self, pending: &PendingDaCommitmentBundle) {
         let height = pending.block_height;
         let bundle = &pending.bundle;
+        let nexus = self.nexus_snapshot();
         let active_commitments =
             self.active_da_commitments_for_current_nexus(height, &bundle.commitments);
+        let query_visible_keys: BTreeSet<_> = active_commitments
+            .iter()
+            .map(DaCommitmentKey::from_record)
+            .collect();
         let identity_visible_keys: BTreeSet<_> = bundle
             .commitments
             .iter()
-            .filter(|record| self.da_lane_visible_after_reset(height, record.lane_id))
-            .map(DaCommitmentKey::from_record)
-            .collect();
-        let query_visible_keys: BTreeSet<_> = active_commitments
-            .iter()
+            .filter(|record| {
+                let key = DaCommitmentKey::from_record(record);
+                self.da_lane_visible_after_reset(height, record.lane_id)
+                    && (query_visible_keys.contains(&key)
+                        || nexus
+                            .lane_catalog
+                            .lanes()
+                            .iter()
+                            .all(|lane| lane.id != record.lane_id))
+            })
             .map(DaCommitmentKey::from_record)
             .collect();
         {
@@ -26904,10 +27263,14 @@ impl PendingAutoscaleTransition {
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+    current_block_height: u64,
     allow_autoscale_managed_changes: bool,
 ) -> core::result::Result<LaneLifecycleCatalogUpdate, LaneLifecycleError> {
     if !nexus.enabled {
         return Err(LaneLifecycleError::NexusDisabled);
+    }
+    if plan.additions.is_empty() && plan.retire.is_empty() {
+        return Err(LaneLifecycleError::EmptyPlan);
     }
     ensure_autoscale_runtime_lane_bounds(&nexus.autoscale)?;
     let dataspace_ids: BTreeSet<_> = nexus
@@ -26930,6 +27293,7 @@ fn prepare_lane_lifecycle_update(
         } else if allow_autoscale_managed_changes {
             return Err(LaneLifecycleError::AutoscaleAddUnmanagedLane(addition.id));
         } else {
+            ensure_manual_lane_has_no_reserved_autoscale_metadata(addition)?;
             ensure_manual_lane_outside_autoscale_elastic_range(addition.id, nexus)?;
         }
     }
@@ -26951,6 +27315,8 @@ fn prepare_lane_lifecycle_update(
         } else if let Some(lane) = existing_lane
             && lane_claims_autoscale_managed(lane)
             && ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus).is_ok()
+            && ensure_autoscale_managed_lane_created_height_not_future(lane, current_block_height)
+                .is_ok()
         {
             return Err(LaneLifecycleError::ReservedAutoscaleManagedLane(*retire_id));
         }
@@ -26963,7 +27329,13 @@ fn prepare_lane_lifecycle_update(
         .collect();
 
     let updated_catalog = nexus.lane_catalog.apply_lifecycle(plan)?;
-    ensure_catalog_autoscale_lanes_consistent(nexus, &updated_catalog)?;
+    let added_lane_ids: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
+    ensure_catalog_autoscale_lanes_consistent(
+        nexus,
+        &updated_catalog,
+        current_block_height,
+        &added_lane_ids,
+    )?;
     validate_nexus_routing_policy(
         &nexus.routing_policy,
         &updated_catalog,
@@ -26999,6 +27371,20 @@ fn prepare_lane_lifecycle_update(
 
 fn lane_claims_autoscale_managed(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
     lane.claims_autoscale_managed()
+}
+
+fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
+    lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
+        || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+}
+
+fn ensure_manual_lane_has_no_reserved_autoscale_metadata(
+    lane: &iroha_data_model::nexus::LaneConfig,
+) -> Result<(), LaneLifecycleError> {
+    if lane_uses_reserved_autoscale_metadata(lane) {
+        return Err(LaneLifecycleError::ReservedAutoscaleManagedLane(lane.id));
+    }
+    Ok(())
 }
 
 fn ensure_autoscale_managed_lane_shape(
@@ -27050,6 +27436,42 @@ fn ensure_autoscale_managed_lane_owned_by_nexus(
         nexus.autoscale.max_lanes.get(),
     )?;
     ensure_autoscale_managed_lane_default_dataspace(lane, nexus.routing_policy.default_dataspace)
+}
+
+fn ensure_autoscale_managed_lane_created_height_not_future(
+    lane: &iroha_data_model::nexus::LaneConfig,
+    block_height: u64,
+) -> Result<(), LaneLifecycleError> {
+    let created_height =
+        lane.autoscale_created_height()
+            .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                lane: lane.id,
+                reason: "autoscale.created_height must be a positive integer",
+            })?;
+    if created_height > block_height {
+        return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
+            lane: lane.id,
+            reason: "autoscale.created_height must not exceed the current block height",
+        });
+    }
+    Ok(())
+}
+
+fn ensure_autoscale_managed_created_heights_not_future(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> Result<(), LaneLifecycleError> {
+    if !nexus.enabled || !nexus.autoscale.enabled {
+        return Ok(());
+    }
+    for lane in nexus.lane_catalog.lanes() {
+        if !lane_claims_autoscale_managed(lane) {
+            continue;
+        }
+        ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus)?;
+        ensure_autoscale_managed_lane_created_height_not_future(lane, block_height)?;
+    }
+    Ok(())
 }
 
 fn nexus_fee_asset_selector_is_xor(value: &str) -> bool {
@@ -27156,10 +27578,13 @@ fn ensure_autoscale_runtime_elastic_range(
         if lane_id < min_lanes || lane_id >= max_lanes {
             if lane_claims_autoscale_managed(lane) {
                 ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus)?;
+            } else {
+                ensure_manual_lane_has_no_reserved_autoscale_metadata(lane)?;
             }
             continue;
         }
         if !lane_claims_autoscale_managed(lane) {
+            ensure_manual_lane_has_no_reserved_autoscale_metadata(lane)?;
             return Err(LaneLifecycleError::ReservedAutoscaleElasticLaneId {
                 lane: lane.id,
                 min_lanes,
@@ -27174,12 +27599,21 @@ fn ensure_autoscale_runtime_elastic_range(
 fn ensure_catalog_autoscale_lanes_consistent(
     nexus: &iroha_config::parameters::actual::Nexus,
     lane_catalog: &LaneCatalog,
+    current_block_height: u64,
+    skip_future_height_lanes: &BTreeSet<LaneId>,
 ) -> Result<(), LaneLifecycleError> {
     ensure_autoscale_default_lane_outside_elastic_range(nexus)?;
     for lane in lane_catalog.lanes() {
         if lane_claims_autoscale_managed(lane) {
             ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus)?;
+            if !skip_future_height_lanes.contains(&lane.id) {
+                ensure_autoscale_managed_lane_created_height_not_future(
+                    lane,
+                    current_block_height,
+                )?;
+            }
         } else {
+            ensure_manual_lane_has_no_reserved_autoscale_metadata(lane)?;
             ensure_manual_lane_outside_autoscale_elastic_range(lane.id, nexus)?;
         }
     }
@@ -27204,6 +27638,7 @@ fn autoscale_managed_lane_inherits_commit_topology_authority(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
 ) -> bool {
     if !nexus.enabled
         || !nexus.autoscale.enabled
@@ -27219,7 +27654,52 @@ fn autoscale_managed_lane_inherits_commit_topology_authority(
         .lanes()
         .iter()
         .find(|lane| lane.id == lane_id)
-        .is_some_and(|lane| ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus).is_ok())
+        .is_some_and(|lane| nexus_autoscale_lane_active_for_authority(lane, nexus, block_height))
+}
+
+fn nexus_lane_active_for_authority(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> bool {
+    let Some(lane) = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+    else {
+        return false;
+    };
+    if !lane_uses_reserved_autoscale_metadata(lane) {
+        return !nexus_lane_id_in_active_autoscale_elastic_range(lane.id, nexus);
+    }
+    dataspace_id == nexus.routing_policy.default_dataspace
+        && nexus_autoscale_lane_active_for_authority(lane, nexus, block_height)
+}
+
+fn nexus_lane_id_in_active_autoscale_elastic_range(
+    lane_id: LaneId,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> bool {
+    if !nexus.enabled
+        || !nexus.autoscale.enabled
+        || ensure_autoscale_runtime_lane_bounds(&nexus.autoscale).is_err()
+    {
+        return false;
+    }
+    let lane_id = lane_id.as_u32();
+    lane_id >= nexus.autoscale.min_lanes.get() && lane_id < nexus.autoscale.max_lanes.get()
+}
+
+fn nexus_autoscale_lane_active_for_authority(
+    lane: &iroha_data_model::nexus::LaneConfig,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> bool {
+    lane_claims_autoscale_managed(lane)
+        && ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus).is_ok()
+        && ensure_autoscale_managed_lane_created_height_not_future(lane, block_height).is_ok()
 }
 
 fn validate_nexus_routing_policy(
@@ -30265,8 +30745,8 @@ fn autoscale_default_route_capacity_lanes(
         .iter()
         .filter(|lane| {
             lane.dataspace_id == policy.default_dataspace
-                && lane.id.as_u32() < min_lanes
-                && !lane_claims_autoscale_managed(lane)
+                && !lane_uses_reserved_autoscale_metadata(lane)
+                && (lane.id == policy.default_lane || lane.id.as_u32() < min_lanes)
         })
         .count();
     let elastic_lanes = lanes
@@ -30516,7 +30996,7 @@ impl<'state> StateBlock<'state> {
         height: u64,
         bundle: &iroha_data_model::da::commitment::DaCommitmentBundle,
     ) -> Result<(), BlockValidationError> {
-        crate::da::validate_commitment_bundle_against_nexus(bundle, &self.nexus)
+        crate::da::validate_commitment_bundle_against_nexus_at_height(bundle, &self.nexus, height)
             .map_err(BlockValidationError::DaCommitmentBundle)?;
         self.validate_da_commitment_uniqueness(bundle)?;
         self.da_receipt_cursors
@@ -30816,11 +31296,14 @@ impl<'state> StateBlock<'state> {
         let axt_current_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
         let implicit_account_creations_in_block_so_far = self.implicit_account_creations_in_block;
-        let mut world = self.world.trasaction(
+        let axt_lane_map =
+            axt_active_lane_map_at_height(&self.nexus, self._curr_block.height().get());
+        let mut world = self.world.trasaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             Some(self.telemetry),
             self.nexus.lane_config.clone(),
             axt_current_slot,
+            axt_lane_map,
         );
         world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
         let zk = self.zk.clone();
@@ -31377,7 +31860,7 @@ impl<'state> StateBlock<'state> {
             let telemetry = None;
             let mut transaction = self.transaction();
             crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
-                &mut transaction.world,
+                &mut transaction,
                 effects,
                 &dataspace_catalog,
                 &staking_cfg,
@@ -31665,7 +32148,12 @@ impl<'state> StateBlock<'state> {
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
         transition: PendingAutoscaleTransition,
     ) -> core::result::Result<(), LaneLifecycleError> {
-        let lifecycle_update = prepare_lane_lifecycle_update(&self.nexus, plan, true)?;
+        let lifecycle_update = prepare_lane_lifecycle_update(
+            &self.nexus,
+            plan,
+            self._curr_block.height().get(),
+            true,
+        )?;
         self.nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         self.nexus.lane_config = lifecycle_update.updated_lane_config.clone();
 
@@ -31761,6 +32249,7 @@ impl<'state> StateBlock<'state> {
         if !self.nexus.enabled || !autoscale.enabled {
             return;
         }
+        let block_height = block.as_ref().header().height().get();
         if let Err(err) = ensure_autoscale_runtime_lane_bounds(&autoscale) {
             warn!(
                 ?err,
@@ -31775,8 +32264,16 @@ impl<'state> StateBlock<'state> {
             );
             return;
         }
-
-        let block_height = block.as_ref().header().height().get();
+        if let Err(err) =
+            ensure_autoscale_managed_created_heights_not_future(&self.nexus, block_height)
+        {
+            warn!(
+                ?err,
+                height = block_height,
+                "skipping deterministic lane autoscale transition because autoscale lane creation metadata is invalid"
+            );
+            return;
+        }
         if autoscale_cooldown_active(
             autoscale.last_transition_height,
             autoscale.cooldown_blocks.get(),
@@ -31785,10 +32282,6 @@ impl<'state> StateBlock<'state> {
             return;
         }
 
-        let active_lanes = match u64::try_from(self.nexus.lane_catalog.lanes().len()) {
-            Ok(value) if value > 0 => value,
-            _ => return,
-        };
         let autoscale_capacity_lanes = autoscale_default_route_capacity_lanes(
             &self.nexus.routing_policy,
             self.nexus.lane_catalog.lanes(),
@@ -31798,6 +32291,7 @@ impl<'state> StateBlock<'state> {
         if autoscale_capacity_lanes == 0 {
             return;
         }
+        let active_lanes = autoscale_capacity_lanes;
 
         let next_scale_out_lane_id =
             self.next_autoscale_lane_id(autoscale.min_lanes.get(), autoscale.max_lanes.get());
@@ -37737,6 +38231,15 @@ impl StateTransaction<'_, '_> {
         self._curr_block.height().get()
     }
 
+    /// Return whether a lane is active for authority checks at this transaction's block height.
+    #[inline]
+    pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
+        if !self.nexus.enabled {
+            return true;
+        }
+        nexus_active_lane_dataspace_at_height(lane_id, &self.nexus, self.block_height()).is_some()
+    }
+
     /// Load a committed block by height from Kura for the current transaction context.
     #[must_use]
     pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
@@ -37774,6 +38277,8 @@ impl StateTransaction<'_, '_> {
     /// Refresh AXT policy cache from Space Directory manifests using the current lane catalog.
     #[inline]
     pub fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
+        let block_height = self.block_height();
+        self.world.axt_lane_map = axt_active_lane_map_at_height(&self.nexus, block_height);
         self.world.rebuild_axt_policies_from_space_directory(
             &self.nexus.lane_config,
             self.axt_current_slot(),
@@ -44855,6 +45360,23 @@ mod tests {
                 max_lanes: 3
             } if lane == LaneId::new(3)
         ));
+
+        let mut marker_only = LaneConfig {
+            id: LaneId::new(8),
+            alias: "marked-manual-sidecar".to_owned(),
+            ..LaneConfig::default()
+        };
+        marker_only
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+        let marker_only_out_of_range =
+            autoscale_transition_test_nexus(vec![LaneConfig::default(), marker_only], 1, 3, 100);
+        let err = ensure_autoscale_runtime_elastic_range(&marker_only_out_of_range)
+            .expect_err("runtime autoscale precheck must reject marker-only manual lanes");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(8)
+        ));
     }
 
     #[test]
@@ -44897,6 +45419,32 @@ mod tests {
                 min_lanes: 1,
                 max_lanes: 3
             } if lane == LaneId::SINGLE
+        ));
+    }
+
+    #[test]
+    fn autoscale_managed_created_height_rejects_future_marker() {
+        let nexus = autoscale_transition_test_nexus(
+            vec![
+                LaneConfig::default(),
+                autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 3),
+            ],
+            1,
+            3,
+            100,
+        );
+
+        ensure_autoscale_managed_created_heights_not_future(&nexus, 3)
+            .expect("managed lane created at current height should be accepted");
+        ensure_autoscale_managed_created_heights_not_future(&nexus, 4)
+            .expect("managed lane created at a past height should be accepted");
+        let err = ensure_autoscale_managed_created_heights_not_future(&nexus, 2)
+            .expect_err("managed lane created in the future must fail closed");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                if lane == LaneId::new(1)
+                    && reason == "autoscale.created_height must not exceed the current block height"
         ));
     }
 
@@ -45298,6 +45846,16 @@ mod tests {
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "later".to_owned());
             lane
         };
+        let marker_only_default_dataspace = {
+            let mut lane = LaneConfig {
+                id: LaneId::new(9),
+                alias: "created-height-only".to_owned(),
+                ..LaneConfig::default()
+            };
+            lane.metadata
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+            lane
+        };
 
         let lanes = vec![
             LaneConfig::default(),
@@ -45312,6 +45870,7 @@ mod tests {
             manual_default_dataspace,
             malformed_default_dataspace,
             restricted_default_dataspace,
+            marker_only_default_dataspace,
         ];
 
         assert_eq!(
@@ -45371,6 +45930,34 @@ mod tests {
             ),
             2,
             "out-of-range managed lanes must not shadow valid elastic capacity"
+        );
+    }
+
+    #[test]
+    fn autoscale_default_route_capacity_counts_default_anchor_outside_elastic_range() {
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(9),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lanes = [
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 41),
+            LaneConfig {
+                id: LaneId::new(9),
+                alias: "base-default".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(10),
+                alias: "manual-sidecar".to_owned(),
+                ..LaneConfig::default()
+            },
+        ];
+
+        assert_eq!(
+            autoscale_default_route_capacity_lanes(&policy, &lanes, 1, 3),
+            2,
+            "a valid default-route anchor above the elastic range must still count as default-route capacity"
         );
     }
 
@@ -45851,6 +46438,19 @@ mod tests {
         nexus.autoscale.enabled = true;
     }
 
+    fn seed_committed_height_for_state_test(state: &State, height: u64) {
+        let mut block_hashes = state.block_hashes.block();
+        while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < height {
+            let next = u8::try_from(block_hashes.len() % usize::from(u8::MAX))
+                .expect("modulo u8::MAX fits u8")
+                .saturating_add(1);
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([next; Hash::LENGTH]),
+            ));
+        }
+        block_hashes.commit_for_tests();
+    }
+
     fn dataspace_catalog_with_extra(dataspace_id: DataSpaceId) -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -45995,6 +46595,60 @@ mod tests {
         assert!(
             pending.catalog_update.replaced_lane_ids.is_empty(),
             "scale-out of a fresh elastic lane must not be staged as a replacement"
+        );
+    }
+
+    #[test]
+    fn autoscale_transition_active_lane_telemetry_ignores_unrelated_dataspaces() {
+        let other_dataspace = DataSpaceId::new(9);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let mut nexus = autoscale_transition_test_nexus(
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(5),
+                    dataspace_id: other_dataspace,
+                    alias: "analytics-manual".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+            1,
+            3,
+            100,
+        );
+        nexus.dataspace_catalog = dataspace_catalog_with_extra(other_dataspace);
+        state
+            .set_nexus(nexus)
+            .expect("apply autoscale telemetry test nexus config");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        state_block.add_committed_fragments(20);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let pending = state_block
+            .pending_autoscale_lifecycle
+            .as_ref()
+            .expect("successful scale-out must stage a lifecycle update");
+        assert_eq!(
+            pending.transition,
+            PendingAutoscaleTransition::ScaleOut {
+                lane: LaneId::new(1),
+                active_lanes: 1,
+                autoscale_capacity_lanes: 1,
+                out_latency_ratio_permille: 1_000,
+                out_utilization_p95_permille: autoscale_utilization_permille(20, 100, 1, 10),
+            },
+            "transition telemetry must not count unrelated configured lanes as active autoscale capacity"
         );
     }
 
@@ -48142,6 +48796,66 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_transition_scale_out_counts_default_anchor_above_elastic_range() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let mut nexus = autoscale_transition_test_nexus(
+            vec![
+                LaneConfig {
+                    id: LaneId::new(9),
+                    alias: "base-default".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(10),
+                    alias: "manual-sidecar".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+            1,
+            3,
+            100,
+        );
+        nexus.routing_policy.default_lane = LaneId::new(9);
+        state
+            .set_nexus(nexus)
+            .expect("apply autoscale high-default-lane test nexus config");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        state_block.add_committed_fragments(20);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        let lane = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == LaneId::new(1))
+            .expect("high default-route anchor should leave autoscale able to scale out");
+        assert_eq!(lane.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(lane.alias, "elastic-lane-1");
+        assert_eq!(
+            lane.metadata.get(AUTOSCALE_META_MANAGED),
+            Some(&"true".to_owned())
+        );
+        assert_eq!(
+            lane.metadata.get(AUTOSCALE_META_CREATED_HEIGHT),
+            Some(&"2".to_owned())
+        );
+        assert_eq!(nexus.routing_policy.default_lane, LaneId::new(9));
+        assert_eq!(nexus.autoscale.last_transition_height, 2);
+    }
+
+    #[test]
     fn autoscale_transition_scale_out_rejects_manual_lane_inside_runtime_elastic_range() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -48314,6 +49028,125 @@ mod tests {
         assert_eq!(
             nexus.autoscale.last_transition_height, 0,
             "out-of-range autoscale-owned corruption must not record a transition"
+        );
+    }
+
+    #[test]
+    fn autoscale_transition_rejects_future_created_height_managed_lane() {
+        let future_height = 100_u64;
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale future-height scale-out test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        LaneId::new(1),
+                        DataSpaceId::UNIVERSAL,
+                        future_height,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed future-created internally managed elastic lane");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        state_block.add_committed_fragments(100);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, LaneId::new(1)],
+            "future-created managed lane must block hot scale-out until the catalog is repaired"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "future-created managed lane must not record a scale-out transition"
+        );
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "future-created managed lane must not stage a scale-out lifecycle update"
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale future-height scale-in test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        LaneId::new(1),
+                        DataSpaceId::UNIVERSAL,
+                        future_height,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed future-created internally managed elastic lane for scale-in");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, LaneId::new(1)],
+            "future-created managed lane must block cold scale-in until the catalog is repaired"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "future-created managed lane must not record a scale-in transition"
+        );
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "future-created managed lane must not stage a scale-in lifecycle update"
         );
     }
 
@@ -54747,6 +55580,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_lane_lifecycle_rejects_empty_plan_without_mutating_catalog() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let before_catalog = state.nexus_snapshot().lane_catalog;
+        let before_lane_config = state.nexus_snapshot().lane_config;
+
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: Vec::new(),
+        };
+        let err = state
+            .apply_lane_lifecycle(&plan)
+            .expect_err("empty lifecycle plan must fail");
+        assert!(matches!(err, LaneLifecycleError::EmptyPlan));
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_catalog,
+            "rejected empty lifecycle plan must not mutate the lane catalog"
+        );
+        assert!(
+            lane_config_entries_match(&nexus.lane_config, &before_lane_config),
+            "rejected empty lifecycle plan must not refresh lane config"
+        );
+    }
+
+    #[test]
     fn apply_lane_lifecycle_rejects_unknown_lane() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -54912,6 +55773,61 @@ mod tests {
         let err = state
             .apply_lane_lifecycle(&plan)
             .expect_err("external lifecycle must not claim autoscale ownership");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
+        ));
+        assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_rejects_external_valid_autoscale_managed_addition() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        enable_nexus_autoscale_for_testing(&state);
+
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![autoscale_elastic_lane_config(
+                LaneId::new(1),
+                DataSpaceId::UNIVERSAL,
+                42,
+            )],
+            retire: Vec::new(),
+        };
+
+        let err = state
+            .apply_lane_lifecycle(&plan)
+            .expect_err("external lifecycle must reject even well-formed autoscale lanes");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
+        ));
+        assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_rejects_external_autoscale_created_height_marker() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+
+        let mut lane = LaneConfig {
+            id: LaneId::new(1),
+            alias: "created-height-spoof".to_string(),
+            ..LaneConfig::default()
+        };
+        lane.metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![lane],
+            retire: Vec::new(),
+        };
+
+        let err = state
+            .apply_lane_lifecycle(&plan)
+            .expect_err("external lifecycle must not inject autoscale marker metadata");
         assert!(matches!(
             err,
             LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
@@ -55667,6 +56583,7 @@ mod tests {
         state
             .apply_lane_lifecycle_with_options(&add_plan, false, true)
             .expect("test setup may add internal autoscale lane");
+        seed_committed_height_for_state_test(&state, 2);
 
         let retire_plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
@@ -55691,6 +56608,57 @@ mod tests {
     }
 
     #[test]
+    fn apply_lane_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let future_created =
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 42);
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_created])
+                .expect("future-created managed catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let unrelated = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: LaneId::new(8),
+                alias: "outside-range-before-repair".to_owned(),
+                ..LaneConfig::default()
+            }],
+            retire: Vec::new(),
+        };
+        let err = state
+            .apply_lane_lifecycle(&unrelated)
+            .expect_err("future-created autoscale lane must block unrelated lifecycle changes");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                if lane == LaneId::new(1)
+                    && reason == "autoscale.created_height must not exceed the current block height"
+        ));
+
+        let repair = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::new(1)],
+        };
+        state
+            .apply_lane_lifecycle(&repair)
+            .expect("future-created autoscale lane should be explicitly repair-retirable");
+        assert_eq!(
+            state.nexus_snapshot().lane_catalog.lanes(),
+            &[LaneConfig::default()],
+            "repair retire must remove the future-created autoscale lane"
+        );
+    }
+
+    #[test]
     fn apply_lane_lifecycle_internal_autoscale_allows_managed_retire() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -55705,6 +56673,7 @@ mod tests {
         state
             .apply_lane_lifecycle_with_options(&add_plan, false, true)
             .expect("test setup may add internal autoscale lane");
+        seed_committed_height_for_state_test(&state, 2);
 
         let retire_plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
@@ -56942,6 +57911,67 @@ mod tests {
     }
 
     #[test]
+    fn set_nexus_rejects_external_autoscale_created_height_marker() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut lane = LaneConfig {
+            id: LaneId::new(1),
+            alias: "created-height-spoof".to_string(),
+            ..LaneConfig::default()
+        };
+        lane.metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "42".to_owned());
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane])
+            .expect("lane catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let err = state
+            .set_nexus(nexus)
+            .expect_err("external config must not use autoscale marker metadata");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
+        ));
+        assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
+    }
+
+    #[test]
+    fn set_nexus_rejects_external_valid_autoscale_managed_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 42);
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane])
+            .expect("lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+
+        let err = state
+            .set_nexus(nexus)
+            .expect_err("external config must not inject well-formed autoscale-owned lanes");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
+        ));
+        assert_eq!(
+            state.nexus_snapshot().lane_catalog.lanes(),
+            &[LaneConfig::default()],
+            "rejected config swap must preserve the previous lane catalog"
+        );
+    }
+
+    #[test]
     fn set_nexus_rejects_manual_lane_inside_active_autoscale_range() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -57128,6 +58158,7 @@ mod tests {
         state
             .apply_lane_lifecycle_with_options(&add_plan, false, true)
             .expect("test setup may add internal autoscale lane");
+        seed_committed_height_for_state_test(&state, 2);
 
         let preserved = state.nexus_snapshot();
         state
@@ -57162,6 +58193,7 @@ mod tests {
         state
             .apply_lane_lifecycle_with_options(&add_plan, false, true)
             .expect("test setup may add internal autoscale lane");
+        seed_committed_height_for_state_test(&state, 2);
 
         let mut updated = state.nexus_snapshot();
         updated.routing_policy.rules = vec![iroha_config::parameters::actual::LaneRoutingRule {
@@ -57265,6 +58297,48 @@ mod tests {
             .expect("rejected config swap leaves current lane untouched");
         assert_eq!(lane.alias, "not-elastic-lane-1");
         assert!(lane.claims_autoscale_managed());
+    }
+
+    #[test]
+    fn set_nexus_rejects_preserved_future_created_autoscale_managed_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let future_created =
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 42);
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_created])
+                .expect("future-created managed catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let preserved = state.nexus_snapshot();
+        let err = state
+            .set_nexus(preserved)
+            .expect_err("config swap must fail closed on future-created autoscale lanes");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
+                if lane == LaneId::new(1)
+                    && reason == "autoscale.created_height must not exceed the current block height"
+        ));
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(
+                    |lane| lane.id == LaneId::new(1) && lane.autoscale_created_height() == Some(42)
+                ),
+            "rejected config swap must leave the future-created lane for explicit repair"
+        );
     }
 
     #[test]
@@ -64418,6 +65492,36 @@ mod tests {
     }
 
     #[test]
+    fn merge_candidates_ignore_verified_lane_relay_record_for_future_created_autoscale_lane() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let lane_id = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+        );
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let envelope = sample_lane_relay_envelope(2, lane_id, &signers, signers_bitmap)
+            .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+
+        insert_verified_lane_relay_record_state(
+            &state,
+            State::verified_lane_relay_state_key(&envelope).expect("state key"),
+            &record,
+        );
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "persisted relays for future-created autoscale lanes must not hydrate or merge"
+        );
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "persisted future-created autoscale relays must not enter the runtime cache"
+        );
+    }
+
+    #[test]
     fn merge_candidates_restart_hydrates_only_active_verified_lane_relay_records() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let validator_ids: Vec<_> = validator_keypairs
@@ -64432,12 +65536,23 @@ mod tests {
         let stale_unknown_envelope =
             sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap)
                 .with_manifest_root(Some([0x77; 32]));
+        let future_created_lane = LaneId::new(1);
+        let future_created_envelope = sample_lane_relay_envelope(
+            2,
+            future_created_lane,
+            &signers,
+            full_signer_bitmap(validator_keypairs.len()),
+        )
+        .with_manifest_root(Some([0x88; 32]));
         let active_record = sample_verified_lane_relay_record(&active_envelope);
         let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope);
+        let future_created_record = sample_verified_lane_relay_record(&future_created_envelope);
         let active_key =
             State::verified_lane_relay_state_key(&active_envelope).expect("active state key");
         let stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope)
             .expect("stale unknown state key");
+        let future_created_key = State::verified_lane_relay_state_key(&future_created_envelope)
+            .expect("future-created state key");
 
         insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record);
         insert_verified_lane_relay_record_state(
@@ -64445,12 +65560,17 @@ mod tests {
             stale_unknown_key.clone(),
             &stale_unknown_record,
         );
+        insert_verified_lane_relay_record_state(
+            &state,
+            future_created_key.clone(),
+            &future_created_record,
+        );
         assert_eq!(
             state
                 .verified_lane_relay_records_from_contract_state()
                 .len(),
-            2,
-            "test setup must persist both relay records before restart"
+            3,
+            "test setup must persist all relay records before restart"
         );
         assert!(
             state.lane_relay_snapshot().is_empty(),
@@ -64474,6 +65594,10 @@ mod tests {
             nexus.fees.fee_receipts_activation_height = 2;
             nexus.fees.canonical_sponsor_account_id = Some("canonical-sponsor".to_owned());
         }
+        install_autoscale_elastic_catalog_for_test(
+            &restarted,
+            autoscale_elastic_catalog_lane_for_test(future_created_lane, 7),
+        );
         install_lane_manifest_registry(
             &restarted,
             &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],
@@ -64483,7 +65607,7 @@ mod tests {
             restarted
                 .verified_lane_relay_records_from_contract_state()
                 .len(),
-            2,
+            3,
             "restart should recover all persisted canonical relay records before hydration filters apply"
         );
         assert!(restarted.lane_relay_snapshot().is_empty());
@@ -64511,6 +65635,10 @@ mod tests {
         assert!(
             contract_state.get(&stale_unknown_key).is_some(),
             "unknown-lane relay state should remain persisted but inert after restart hydration"
+        );
+        assert!(
+            contract_state.get(&future_created_key).is_some(),
+            "future-created relay state should remain persisted but inert after restart hydration"
         );
     }
 
@@ -65814,6 +66942,31 @@ mod tests {
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     }
 
+    fn seed_latest_lane_authority_height_for_test(state: &State, height: u64) {
+        let height = NonZeroU64::new(height).expect("test authority height must be nonzero");
+        let header = BlockHeader::new(height, None, None, None, 0, 0);
+        state.update_latest_block_header_cache_for_tests(header);
+    }
+
+    #[test]
+    fn lane_active_for_authority_respects_future_created_autoscale_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+        );
+
+        seed_latest_lane_authority_height_for_test(&state, 6);
+        assert!(!state.is_lane_active_for_authority(lane_id));
+        assert!(state.is_lane_active_for_authority(LaneId::SINGLE));
+
+        seed_latest_lane_authority_height_for_test(&state, 7);
+        assert!(state.is_lane_active_for_authority(lane_id));
+    }
+
     fn commit_topology_signers_for_lane_relay_test(
         state: &State,
         lane_id: LaneId,
@@ -65831,7 +66984,20 @@ mod tests {
         }
 
         let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, lane_id, block_height);
-        let base_pool = state.authoritative_lane_peer_ids(lane_id);
+        let manifest_registry = LaneManifestRegistry::empty();
+        let nexus = state.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        let commit_topology = state.commit_topology_snapshot();
+        let world = state.world.view();
+        let base_pool = State::authoritative_lane_peer_ids_from_sources(
+            &world,
+            lane_id,
+            validator_mode,
+            &manifest_registry,
+            &nexus,
+            &commit_topology,
+            block_height,
+        );
         let committee = State::lane_relay_committee_from_pool(&base_pool, keypairs.len(), seed)
             .expect("derive autoscale relay committee");
         let keypairs_by_peer: BTreeMap<PeerId, KeyPair> = keypairs
@@ -65857,8 +67023,9 @@ mod tests {
         let lane_id = LaneId::new(1);
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, 1);
 
         let keypairs: Vec<_> = (0..3)
             .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
@@ -65899,8 +67066,9 @@ mod tests {
         let lane_id = LaneId::new(1);
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, 1);
 
         let (manifest_validator, manifest_keypair) = bls_account_in("validators");
         let topology_keypairs: Vec<_> = (0..3)
@@ -65942,8 +67110,9 @@ mod tests {
         let lane_id = LaneId::new(1);
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, 1);
 
         let (stale_validator, _) = bls_account_in("validators");
         install_lane_manifest_registry(
@@ -65985,9 +67154,10 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         let lane_id = LaneId::new(1);
-        let mut malformed = autoscale_elastic_catalog_lane_for_test(lane_id, 7);
+        let mut malformed = autoscale_elastic_catalog_lane_for_test(lane_id, 1);
         malformed.alias = "not-elastic".to_owned();
         install_autoscale_elastic_catalog_for_test(&state, malformed);
+        seed_latest_lane_authority_height_for_test(&state, 1);
 
         let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
@@ -66013,7 +67183,7 @@ mod tests {
         let height = 1;
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
 
         let topology_keypairs: Vec<_> = (0..4)
@@ -66054,8 +67224,9 @@ mod tests {
         let height = 1;
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, height);
 
         let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
         let topology_keypairs: Vec<_> = (0..4)
@@ -66111,8 +67282,9 @@ mod tests {
         let height = 1;
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, height);
 
         let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 1);
         let topology_keypairs: Vec<_> = (0..4)
@@ -66164,8 +67336,9 @@ mod tests {
         let height = 1;
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, height);
 
         let topology_keypairs: Vec<_> = (0..4)
             .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
@@ -66219,8 +67392,9 @@ mod tests {
             let lane_id = LaneId::new(1);
             install_autoscale_elastic_catalog_for_test(
                 &state,
-                autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+                autoscale_elastic_catalog_lane_for_test(lane_id, 1),
             );
+            seed_latest_lane_authority_height_for_test(&state, height);
 
             let topology_keypairs: Vec<_> = (0..4)
                 .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
@@ -66301,8 +67475,9 @@ mod tests {
         let height = 1;
         install_autoscale_elastic_catalog_for_test(
             &state,
-            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+            autoscale_elastic_catalog_lane_for_test(lane_id, 1),
         );
+        seed_latest_lane_authority_height_for_test(&state, height);
 
         let topology_keypairs: Vec<_> = (0..4)
             .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
@@ -66354,7 +67529,7 @@ mod tests {
             let lane_id = LaneId::new(1);
             install_autoscale_elastic_catalog_for_test(
                 &state,
-                autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+                autoscale_elastic_catalog_lane_for_test(lane_id, 1),
             );
 
             let topology_keypairs: Vec<_> = (0..4)
@@ -66414,6 +67589,285 @@ mod tests {
                 "{case}: rejected autoscale relay with non-live lifecycle signer must not be cached"
             );
         }
+    }
+
+    #[test]
+    fn authoritative_lane_peers_ignore_future_created_autoscale_elastic_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+        );
+        seed_latest_lane_authority_height_for_test(&state, 1);
+
+        let topology_keypairs: Vec<_> = (0..4)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
+        let mut live_keypairs = topology_keypairs.clone();
+        live_keypairs.extend(manifest_keypairs.iter().cloned());
+        seed_consensus_keys_with_pops(&state, &live_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(lane_id, DataSpaceId::UNIVERSAL, manifest_validators.clone())],
+        );
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for keypair in &topology_keypairs {
+                topology.push(PeerId::new(keypair.public_key().clone()));
+            }
+            topology.commit();
+        }
+
+        assert!(
+            state.manifest_lane_validator_bindings(lane_id).is_empty(),
+            "future-created autoscale lanes must not expose manifest bindings before activation"
+        );
+        assert_eq!(
+            state
+                .lane_manifests
+                .read()
+                .lane_validator_bindings(lane_id)
+                .unwrap_or_default()
+                .len(),
+            manifest_validators.len(),
+            "test fixture must still keep the future-created lane manifest installed"
+        );
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "future-created autoscale lanes must not inherit manifest or topology peer authority"
+        );
+        assert!(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .is_empty(),
+            "future-created autoscale lanes must not expose manifest validator accounts"
+        );
+
+        seed_latest_lane_authority_height_for_test(&state, 7);
+        assert_eq!(
+            state.manifest_lane_validator_bindings(lane_id).len(),
+            manifest_validators.len(),
+            "manifest bindings should activate at the declared creation height"
+        );
+        let manifest_peers: Vec<_> = manifest_keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        assert!(
+            state
+                .authoritative_lane_peer_ids(lane_id)
+                .iter()
+                .all(|peer| manifest_peers.contains(peer)),
+            "autoscale lane authority should activate at the declared creation height"
+        );
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(lane_id),
+            manifest_validators,
+            "manifest validator accounts should activate at the declared creation height"
+        );
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_future_created_autoscale_elastic_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let height = 1;
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+        );
+
+        let topology_keypairs: Vec<_> = (0..4)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        seed_consensus_keys_with_pops(&state, &topology_keypairs);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for keypair in &topology_keypairs {
+                topology.push(PeerId::new(keypair.public_key().clone()));
+            }
+            topology.commit();
+        }
+        let topology_signers: Vec<_> = topology_keypairs.iter().collect();
+        let topology_envelope = sample_lane_relay_envelope(
+            height,
+            lane_id,
+            &topology_signers,
+            full_signer_bitmap(topology_signers.len()),
+        );
+        let topology_err = state
+            .record_lane_relay(&topology_envelope)
+            .expect_err("future-created lane must not accept topology-signed relay");
+        assert!(matches!(
+            topology_err,
+            LaneRelayError::UnknownLane(rejected) if rejected == lane_id
+        ));
+
+        let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &manifest_keypairs);
+        install_lane_manifest_registry(
+            &state,
+            &[(lane_id, DataSpaceId::UNIVERSAL, manifest_validators)],
+        );
+        let manifest_signers: Vec<_> = manifest_keypairs.iter().collect();
+        let manifest_envelope = sample_lane_relay_envelope(
+            height,
+            lane_id,
+            &manifest_signers,
+            full_signer_bitmap(manifest_signers.len()),
+        );
+        let manifest_err = state
+            .record_lane_relay(&manifest_envelope)
+            .expect_err("future-created lane must not accept manifest-signed relay");
+        assert!(matches!(
+            manifest_err,
+            LaneRelayError::UnknownLane(rejected) if rejected == lane_id
+        ));
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "rejected future-created autoscale relays must not be cached"
+        );
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_future_created_autoscale_emergency_override() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let height = 1;
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+        );
+        state.nexus.write().lane_relay_emergency.enabled = true;
+
+        let emergency_keypairs: Vec<_> = (0..4)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        seed_consensus_keys_with_pops(&state, &emergency_keypairs);
+        let emergency_peers: Vec<_> = emergency_keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        {
+            let mut wb = state.world.block();
+            wb.lane_relay_emergency_validators.insert(
+                lane_id,
+                LaneRelayEmergencyValidatorSet {
+                    peers: emergency_peers.clone(),
+                    expires_at_height: 5,
+                    metadata: Metadata::default(),
+                },
+            );
+            wb.commit();
+        }
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, lane_id, height);
+        let committee =
+            State::lane_relay_committee_from_pool(&emergency_peers, emergency_peers.len(), seed)
+                .expect("emergency committee");
+        let keypairs: BTreeMap<PeerId, KeyPair> = emergency_keypairs
+            .into_iter()
+            .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair))
+            .collect();
+        let signers: Vec<_> = committee
+            .iter()
+            .map(|peer| keypairs.get(peer).expect("committee signer keypair"))
+            .collect();
+        let envelope = sample_lane_relay_envelope(
+            height,
+            lane_id,
+            &signers,
+            full_signer_bitmap(signers.len()),
+        );
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("future-created lane must not accept stale emergency override relay");
+        assert!(matches!(
+            err,
+            LaneRelayError::UnknownLane(rejected) if rejected == lane_id
+        ));
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "rejected future-created emergency relay must not be cached"
+        );
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_manual_lane_inside_autoscale_elastic_range() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let height = 1;
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane_id,
+                    alias: "manual-elastic-slot".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("corrupted manual lane catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(2_u32);
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        seed_latest_lane_authority_height_for_test(&state, height);
+
+        let topology_keypairs: Vec<_> = (0..4)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        seed_consensus_keys_with_pops(&state, &topology_keypairs);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for keypair in &topology_keypairs {
+                topology.push(PeerId::new(keypair.public_key().clone()));
+            }
+            topology.commit();
+        }
+
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "manual lanes inside the autoscale elastic range must not inherit relay authority"
+        );
+        let signers: Vec<_> = topology_keypairs.iter().collect();
+        let envelope = sample_lane_relay_envelope(
+            height,
+            lane_id,
+            &signers,
+            full_signer_bitmap(signers.len()),
+        );
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("manual elastic-range lane must not accept relays");
+        assert!(matches!(
+            err,
+            LaneRelayError::UnknownLane(rejected) if rejected == lane_id
+        ));
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "rejected manual elastic-range relay must not be cached"
+        );
     }
 
     #[test]
@@ -66806,6 +68260,34 @@ mod tests {
     }
 
     #[test]
+    fn merge_entry_candidates_reject_future_created_autoscale_relay() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let future_lane = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(future_lane, 7),
+        );
+
+        let (_, validator_keypair) = bls_account_in("validators");
+        let signers = [&validator_keypair];
+        let stale_relay =
+            sample_lane_relay_envelope(1, future_lane, &signers, full_signer_bitmap(signers.len()));
+        assert!(stale_relay.is_merge_admissible());
+        state
+            .lane_relays
+            .write()
+            .insert(stale_relay)
+            .expect("seed stale future-created relay cache");
+
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "merge candidates must ignore stale relays recorded before autoscale creation height"
+        );
+    }
+
+    #[test]
     fn merge_candidate_uses_max_view_change_index() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -67057,6 +68539,172 @@ mod tests {
         assert_eq!(collected[0].location.index_in_bundle, 0);
         drop(store);
         assert_eq!(state.da_pin_intents().all_sorted().count(), 1);
+    }
+
+    #[test]
+    fn da_pin_intents_kura_replay_rejects_future_created_autoscale_lane() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let future_created_lane = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(future_created_lane, DataSpaceId::UNIVERSAL, 7);
+        let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+            .expect("future-created autoscale lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.lane_config = lane_config;
+            nexus.lane_catalog = catalog;
+        }
+
+        let mut intent = DaPinIntent::new(
+            future_created_lane,
+            1,
+            0,
+            StorageTicketId::new([0xA7; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xB7; 32]),
+        );
+        intent.alias = Some("future-replay-pin".to_string());
+
+        let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
+        let keypair = crate::state::checked_keypair();
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_pin_intents(Some(bundle))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = new_block.into();
+        assert!(signed_block.header().height().get() < 7);
+        kura.store_block(Arc::new(signed_block.clone()))
+            .expect("store future-created pin-intent block");
+
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push(signed_block.hash());
+        block_hashes.commit_for_tests();
+
+        let store = state.da_pin_intents();
+        assert!(
+            store.get_by_alias("future-replay-pin").is_none(),
+            "Kura replay must not hydrate pin intents before autoscale lane creation height"
+        );
+        assert_eq!(store.all_sorted().count(), 0);
+    }
+
+    #[test]
+    fn da_commitments_kura_replay_rejects_future_created_autoscale_lane() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let future_created_lane = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(future_created_lane, DataSpaceId::UNIVERSAL, 7);
+        let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+            .expect("future-created autoscale lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.lane_config = lane_config;
+            nexus.lane_catalog = catalog;
+        }
+
+        let record = sample_da_commitment_record(future_created_lane, 1, 0, 0xC1);
+        let key = DaCommitmentKey::from_record(&record);
+        let bundle = DaCommitmentBundle::new(vec![record.clone()]);
+        let keypair = crate::state::checked_keypair();
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_commitments(Some(bundle))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = new_block.into();
+        assert!(signed_block.header().height().get() < 7);
+        kura.store_block(Arc::new(signed_block.clone()))
+            .expect("store future-created DA commitment block");
+
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push(signed_block.hash());
+        block_hashes.commit_for_tests();
+
+        let store = state.da_commitments();
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    future_created_lane.as_u32(),
+                    record.epoch,
+                    record.sequence
+                )
+                .is_none(),
+            "Kura replay must not hydrate query-visible DA commitments before autoscale lane creation height"
+        );
+        assert!(
+            store
+                .get_by_storage_ticket(&record.storage_ticket)
+                .is_none(),
+            "future-created DA commitment must not be visible by storage ticket"
+        );
+        assert!(
+            store.get_by_manifest(&record.manifest_hash).is_none(),
+            "future-created DA commitment must not be visible by manifest"
+        );
+        assert!(
+            store.get_committed_by_key(&key).is_none(),
+            "future-created DA commitment must not reserve committed identity before lane creation height"
+        );
+        assert!(
+            store
+                .bundle_at(signed_block.header().height().get())
+                .is_some(),
+            "canonical committed bundle remains available for block-level replay/proof material"
+        );
     }
 
     #[test]
@@ -71872,6 +73520,66 @@ mod tests {
     }
 
     #[test]
+    fn da_pin_intent_ingest_rejects_future_created_autoscale_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let future_created_lane = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(future_created_lane, DataSpaceId::UNIVERSAL, 7);
+        let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+            .expect("future-created autoscale lane catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+            nexus.lane_catalog = catalog;
+        }
+
+        let mut early = DaPinIntent::new(
+            future_created_lane,
+            1,
+            0,
+            StorageTicketId::new([0xE1; 32]),
+            ManifestDigest::new([0xE2; 32]),
+        );
+        early.alias = Some("future-created-autoscale-pin".to_owned());
+        let inserted = state.ingest_pin_intents(6, vec![early], "future-created-test");
+        assert!(
+            inserted.is_empty(),
+            "pin intents must not be indexed before the autoscale lane creation height"
+        );
+        assert!(
+            state
+                .da_pin_intents()
+                .get_by_alias("future-created-autoscale-pin")
+                .is_none()
+        );
+
+        let mut active = DaPinIntent::new(
+            future_created_lane,
+            1,
+            1,
+            StorageTicketId::new([0xE3; 32]),
+            ManifestDigest::new([0xE4; 32]),
+        );
+        active.alias = Some("active-autoscale-pin".to_owned());
+        let inserted = state.ingest_pin_intents(7, vec![active.clone()], "future-created-test");
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0].intent, active);
+        assert_eq!(inserted[0].location.block_height, 7);
+        assert!(
+            state
+                .da_pin_intents()
+                .get_by_alias("active-autoscale-pin")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn axt_policies_commit_with_world_block() {
         let world = World::new();
         let dsid = DataSpaceId::new(7);
@@ -71913,7 +73621,20 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query_handle);
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let lane_catalog = LaneCatalog::new(
+                nonzero!(4_u32),
+                vec![LaneConfig {
+                    id: policy.target_lane,
+                    dataspace_id: dsid,
+                    alias: "cached-axt".into(),
+                    ..LaneConfig::default()
+                }],
+            )
+            .expect("cached AXT lane catalog");
+            install_test_nexus_lane_catalog(state.nexus.get_mut(), lane_catalog);
+        }
         let snapshot =
             CoreHost::axt_policy_snapshot_from_state(&state.view()).expect("snapshot exists");
         let binding = snapshot
@@ -72107,6 +73828,256 @@ mod tests {
     }
 
     #[test]
+    fn axt_policy_snapshot_ignores_future_created_autoscale_lane() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::future-axt-snapshot"));
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let future_lane = LaneId::new(1);
+        let mut elastic_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".into(),
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![elastic_lane])
+            .expect("future-created autoscale catalog");
+
+        let domain_id: DomainId = DomainId::try_new("future-axt", "universal").expect("domain id");
+        let keypair = crate::state::checked_keypair();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let domain = Domain::new(domain_id).build(&account_id);
+
+        let mut world = World::with([domain], [account], []);
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            install_test_nexus_lane_catalog(nexus, lane_catalog);
+        }
+
+        let snapshot = CoreHost::derive_axt_policy_snapshot_from_directory(&state.view());
+        assert!(
+            snapshot.is_none(),
+            "future-created autoscale lanes must not produce AXT policy entries before activation"
+        );
+        let snapshot = CoreHost::axt_policy_snapshot_from_state(&state.view());
+        assert!(
+            snapshot.is_none(),
+            "future-created autoscale lanes must not be exposed through cached AXT policy snapshots"
+        );
+    }
+
+    #[test]
+    fn axt_policy_snapshot_filters_cached_future_created_autoscale_lane() {
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let future_lane = LaneId::new(1);
+        let mut elastic_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".into(),
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![elastic_lane])
+            .expect("future-created autoscale catalog");
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            install_test_nexus_lane_catalog(nexus, lane_catalog);
+        }
+        state.set_axt_policy(
+            dataspace,
+            AxtPolicyEntry {
+                manifest_root: [0xA5; 32],
+                target_lane: future_lane,
+                min_handle_era: 1,
+                min_sub_nonce: 0,
+                current_slot: 0,
+            },
+        );
+
+        let snapshot = CoreHost::axt_policy_snapshot_from_state(&state.view());
+        assert!(
+            snapshot.is_none(),
+            "cached AXT policy entries targeting future-created autoscale lanes must be ignored before activation"
+        );
+    }
+
+    #[test]
+    fn axt_policy_refresh_prunes_cached_future_created_autoscale_lane() {
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let future_lane = LaneId::new(1);
+        let mut elastic_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".into(),
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![elastic_lane])
+            .expect("future-created autoscale catalog");
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            install_test_nexus_lane_catalog(nexus, lane_catalog);
+        }
+        state.set_axt_policy(
+            dataspace,
+            AxtPolicyEntry {
+                manifest_root: [0xA6; 32],
+                target_lane: future_lane,
+                min_handle_era: 1,
+                min_sub_nonce: 0,
+                current_slot: 0,
+            },
+        );
+
+        let snapshot = state.refresh_axt_policies_from_directory();
+        assert!(
+            snapshot.is_none(),
+            "future-created autoscale policies must not produce a committed refresh snapshot"
+        );
+        assert!(
+            state.world.axt_policies.view().get(&dataspace).is_none(),
+            "committed refresh must prune cached policies targeting inactive autoscale lanes"
+        );
+    }
+
+    #[test]
+    fn axt_policy_refresh_does_not_cache_future_created_autoscale_lane() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::future-axt-refresh"));
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let future_lane = LaneId::new(1);
+        let mut elastic_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".into(),
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![elastic_lane])
+            .expect("future-created autoscale catalog");
+
+        let domain_id: DomainId =
+            DomainId::try_new("future-axt-refresh", "universal").expect("domain id");
+        let keypair = crate::state::checked_keypair();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let domain = Domain::new(domain_id).build(&account_id);
+
+        let mut world = World::with([domain], [account], []);
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            install_test_nexus_lane_catalog(nexus, lane_catalog);
+        }
+        state.set_axt_policy(
+            dataspace,
+            AxtPolicyEntry {
+                manifest_root: [0xA7; 32],
+                target_lane: future_lane,
+                min_handle_era: 1,
+                min_sub_nonce: 0,
+                current_slot: 0,
+            },
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let snapshot = stx.rebuild_space_directory_bindings(uaid);
+
+        assert!(
+            snapshot.is_none(),
+            "active manifests must not produce AXT snapshots for future-created autoscale lanes"
+        );
+        assert!(
+            stx.world.axt_policies().get(&dataspace).is_none(),
+            "block refresh must prune cached policies targeting inactive autoscale lanes"
+        );
+    }
+
+    #[test]
     fn axt_policy_refresh_clears_stale_entries_when_snapshot_missing() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -72139,11 +74110,9 @@ mod tests {
     fn state_block_axt_policy_snapshot_reads_block_scope() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::new(), kura, query_handle);
+        let mut state = State::new_for_testing(World::new(), kura, query_handle);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-
         let dsid = DataSpaceId::new(13);
         let entry = AxtPolicyEntry {
             manifest_root: [0x66; 32],
@@ -72152,6 +74121,21 @@ mod tests {
             min_sub_nonce: 4,
             current_slot: 99,
         };
+        {
+            let lane_catalog = LaneCatalog::new(
+                nonzero!(3_u32),
+                vec![LaneConfig {
+                    id: entry.target_lane,
+                    dataspace_id: dsid,
+                    alias: "block-scope-axt".into(),
+                    ..LaneConfig::default()
+                }],
+            )
+            .expect("block-scope AXT lane catalog");
+            install_test_nexus_lane_catalog(state.nexus.get_mut(), lane_catalog);
+        }
+
+        let mut block = state.block(header);
 
         block.world.axt_policies.insert(dsid, entry);
 
@@ -78277,16 +80261,12 @@ mod tests {
         install_lane_manifest_registry(state, &registry_entries);
         let commit_keypairs = configure_commit_topology(state, 1);
 
-        let chain_id = state.chain_id.clone();
-        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
-        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         for idx in 0..lane_count {
-            let envelope = sample_lane_relay_envelope_with_chain(
+            let envelope = sample_lane_relay_envelope_for_state(
+                state,
                 first_height.saturating_add(u64::from(idx)),
                 LaneId::new(idx),
-                &chain_id,
-                &signers,
-                signers_bitmap.clone(),
+                &validator_keypairs,
             );
             state
                 .record_lane_relay(&envelope)
@@ -78993,13 +80973,8 @@ mod tests {
             &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)],
         );
         let commit_keypairs = configure_commit_topology(&state, 1);
-        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
-        let envelope = sample_lane_relay_envelope(
-            1,
-            LaneId::new(0),
-            &signers,
-            full_signer_bitmap(validator_keypairs.len()),
-        );
+        let envelope =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
         let mut settlement = envelope.settlement_commitment.clone();
         settlement.nexus_fee_receipts = vec![NexusFeeReceipt {
             version: 1,
@@ -79410,6 +81385,41 @@ mod tests {
         assert!(matches!(
             err,
             MergeLedgerCommitError::UnknownLane { lane_id } if lane_id == stale_lane
+        ));
+        assert!(state.merge_ledger().is_empty());
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_future_created_autoscale_lane_snapshot() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let future_lane = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(future_lane, 7),
+        );
+
+        let commit_keypairs = configure_commit_topology(&state, 1);
+        let (_, validator_keypair) = bls_account_in("validators");
+        let signers = [&validator_keypair];
+        let stale_relay =
+            sample_lane_relay_envelope(1, future_lane, &signers, full_signer_bitmap(signers.len()));
+        state
+            .lane_relays
+            .write()
+            .insert(stale_relay.clone())
+            .expect("seed stale future-created relay cache");
+        let candidate = merge_candidate_from_relay(1, &stale_relay);
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+
+        let err = state
+            .commit_merge_entry(entry)
+            .expect_err("merge commit must reject future-created autoscale lane snapshots");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::UnknownLane { lane_id } if lane_id == future_lane
         ));
         assert!(state.merge_ledger().is_empty());
     }

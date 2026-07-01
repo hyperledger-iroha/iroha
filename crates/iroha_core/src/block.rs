@@ -977,7 +977,8 @@ use crate::{
     },
     prelude::*,
     queue::{
-        evaluate_policy_plan_with_nexus_and_world_at, resolve_routing_decision, routing_ledger,
+        evaluate_policy_plan_with_nexus_and_world_at_block_height, resolve_routing_decision,
+        routing_ledger,
     },
     smartcontracts::isi::triggers::{set::SetReadOnly, specialized::LoadedActionTrait},
     state::{
@@ -5817,8 +5818,10 @@ pub(crate) mod valid {
                 allow_missing_legacy_context,
             )?;
 
+            let block_height = block.header().height().get();
             let nexus = state.nexus();
-            let expected_policy_hash = crate::da::active_proof_policy_bundle_hash(nexus);
+            let expected_policy_hash =
+                crate::da::active_proof_policy_bundle_hash_at_height(nexus, block_height);
             if block.header().da_proof_policies_hash() != Some(expected_policy_hash) {
                 return Err(BlockValidationError::ProofPolicyHashMismatch {
                     expected: expected_policy_hash,
@@ -5826,7 +5829,6 @@ pub(crate) mod valid {
                 });
             }
 
-            let block_height = block.header().height().get();
             let computed_digest =
                 compute_confidential_feature_digest(state.world(), state.zk(), block_height);
             let expected_digest = if computed_digest.is_empty() {
@@ -5955,9 +5957,10 @@ pub(crate) mod valid {
             };
 
             let world = state.world();
-            crate::da::validate_pin_intent_bundle_against_nexus(
+            crate::da::validate_pin_intent_bundle_against_nexus_at_height(
                 bundle,
                 state.nexus(),
+                block.header().height().get(),
                 |account| world.accounts().get(account).is_some(),
             )?;
             for intent in &bundle.intents {
@@ -6404,11 +6407,12 @@ pub(crate) mod valid {
                 );
                 let routing_ledger_time_ms =
                     u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-                let plan = evaluate_policy_plan_with_nexus_and_world_at(
+                let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
                     nexus,
                     &accepted,
                     state.world(),
                     routing_ledger_time_ms,
+                    block.header().height().get(),
                 )
                 .map_err(|err| {
                     Self::execution_context_error(format!(
@@ -7408,11 +7412,12 @@ pub(crate) mod valid {
                     let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                         Cow::Borrowed(entrypoint),
                     );
-                    match evaluate_policy_plan_with_nexus_and_world_at(
+                    match evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &state_block.nexus,
                         &accepted,
                         &state_block.world,
                         routing_ledger_time_ms,
+                        height_u64,
                     ) {
                         Ok(plan) => {
                             decisions.push(plan.coordinator_route());
@@ -7841,11 +7846,12 @@ pub(crate) mod valid {
                                     let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                         Cow::Borrowed(*tx),
                                     );
-                                    evaluate_policy_plan_with_nexus_and_world_at(
+                                    evaluate_policy_plan_with_nexus_and_world_at_block_height(
                                         &state_block.nexus,
                                         &accepted,
                                         &state_block.world,
                                         routing_ledger_time_ms,
+                                        height,
                                     )
                                     .map(|plan| plan.coordinator_route())
                                 })
@@ -7857,11 +7863,12 @@ pub(crate) mod valid {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                     Cow::Borrowed(*tx),
                                 );
-                                evaluate_policy_plan_with_nexus_and_world_at(
+                                evaluate_policy_plan_with_nexus_and_world_at_block_height(
                                     &state_block.nexus,
                                     &accepted,
                                     &state_block.world,
                                     routing_ledger_time_ms,
+                                    height,
                                 )
                                 .map(|plan| plan.coordinator_route())
                             })
@@ -7872,11 +7879,12 @@ pub(crate) mod valid {
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                            evaluate_policy_plan_with_nexus_and_world_at(
+                            evaluate_policy_plan_with_nexus_and_world_at_block_height(
                                 &state_block.nexus,
                                 &accepted,
                                 &state_block.world,
                                 routing_ledger_time_ms,
+                                height,
                             )
                             .map(|plan| plan.coordinator_route())
                         })
@@ -12780,6 +12788,36 @@ pub(crate) mod valid {
             committed.as_ref().hash()
         }
 
+        fn install_future_created_autoscale_lane(
+            state: &State,
+            lane_id: LaneId,
+            created_height: u64,
+        ) {
+            let mut elastic_lane = LaneConfig {
+                id: lane_id,
+                alias: format!("elastic-lane-{}", lane_id.as_u32()),
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert("autoscale.managed".to_owned(), "true".to_owned());
+            elastic_lane.metadata.insert(
+                "autoscale.created_height".to_owned(),
+                created_height.to_string(),
+            );
+            let lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                    .expect("future-created autoscale lane catalog");
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            nexus.lane_catalog = lane_catalog;
+        }
+
         #[test]
         fn signature_verification_ok() {
             let key_pairs = core::iter::repeat_with(|| {
@@ -14325,11 +14363,12 @@ pub(crate) mod valid {
             let accepted_for_plan = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let plan = {
                 let view = state.view();
-                crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                     &view.nexus,
                     &accepted_for_plan,
                     view.world(),
                     u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                    2,
                 )
                 .expect("mixed dataspace write targets should build a native AMX plan")
             };
@@ -14436,11 +14475,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("default elastic route resolves")
                 };
@@ -14551,11 +14591,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("default elastic route resolves")
                 };
@@ -14684,6 +14725,146 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_rejects_future_created_autoscale_da_policy_hash() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let future_created_lane = LaneId::new(1);
+            install_future_created_autoscale_lane(&state, future_created_lane, 7);
+            let candidate_height = 2;
+            let nexus = state.nexus_snapshot();
+            let expected_policy_hash =
+                crate::da::active_proof_policy_bundle_hash_at_height(&nexus, candidate_height);
+            let heightless_policies = crate::da::active_proof_policy_bundle(&nexus);
+            assert!(
+                heightless_policies
+                    .policies
+                    .iter()
+                    .any(|policy| policy.lane_id == future_created_lane),
+                "fixture requires the heightless policy snapshot to include the future-created lane"
+            );
+            let heightless_policy_hash = Some(HashOf::new(&heightless_policies));
+            assert_ne!(
+                heightless_policy_hash,
+                Some(expected_policy_hash),
+                "height-aware block policy hash must exclude the not-yet-created autoscale lane"
+            );
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_proof_policies(Some(heightless_policies))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+            assert_eq!(signed.header().height().get(), candidate_height);
+
+            let view = state.query_view();
+            let err = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect_err("heightless future-created autoscale policy hash must be rejected");
+
+            assert!(matches!(
+                err,
+                BlockValidationError::ProofPolicyHashMismatch { expected, actual }
+                    if expected == expected_policy_hash && actual == heightless_policy_hash
+            ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_accepts_height_aware_da_policy_hash() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let future_created_lane = LaneId::new(1);
+            install_future_created_autoscale_lane(&state, future_created_lane, 7);
+            let candidate_height = 2;
+            let nexus = state.nexus_snapshot();
+            let height_aware_policies =
+                crate::da::active_proof_policy_bundle_at_height(&nexus, candidate_height);
+            assert!(
+                height_aware_policies
+                    .policies
+                    .iter()
+                    .all(|policy| policy.lane_id != future_created_lane),
+                "policy snapshot before creation height must exclude the autoscale lane"
+            );
+            let expected_policy_hash = Some(HashOf::new(&height_aware_policies));
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_proof_policies(Some(height_aware_policies))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+            assert_eq!(signed.header().height().get(), candidate_height);
+            assert_eq!(
+                signed.header().da_proof_policies_hash(),
+                expected_policy_hash
+            );
+
+            let view = state.query_view();
+            ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect("height-aware DA policy hash must validate before autoscale lane creation");
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -14747,11 +14928,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("enabled Nexus should resolve default elastic route")
                 };
@@ -14870,11 +15052,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("enabled Nexus should resolve default elastic route")
                 };
@@ -15320,6 +15503,99 @@ pub(crate) mod valid {
                 BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::UnknownLane {
                     lane
                 }) if *lane == stale_lane
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_future_created_autoscale_da_pin_intent_lane() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let future_created_lane = LaneId::new(1);
+            let mut elastic_lane = LaneConfig {
+                id: future_created_lane,
+                alias: "elastic-lane-1".to_owned(),
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert("autoscale.managed".to_owned(), "true".to_owned());
+            elastic_lane
+                .metadata
+                .insert("autoscale.created_height".to_owned(), "7".to_owned());
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.autoscale.enabled = true;
+                nexus.autoscale.min_lanes = nonzero!(1_u32);
+                nexus.autoscale.max_lanes = nonzero!(3_u32);
+                nexus.lane_catalog =
+                    LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                        .expect("future-created autoscale lane catalog");
+                nexus.lane_config =
+                    iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            }
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let intent = DaPinIntent::new(
+                future_created_lane,
+                1,
+                1,
+                StorageTicketId::new([0xBC; 32]),
+                ManifestDigest::new([0xBD; 32]),
+            );
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+            assert!(
+                signed.header().height().get() < 7,
+                "fixture block must precede the autoscale lane creation height"
+            );
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected future-created autoscale DA pin-intent rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::UnknownLane {
+                    lane
+                }) if *lane == future_created_lane
             ));
         }
 
@@ -20942,11 +21218,12 @@ mod tests {
         let accepted_for_plan = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
         let plan = {
             let view = state.view();
-            crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                 &view.nexus,
                 &accepted_for_plan,
                 view.world(),
                 u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                1,
             )
             .expect("mixed dataspace write targets should build a native AMX plan")
         };

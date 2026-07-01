@@ -1036,7 +1036,11 @@ fn main() -> Result<()> {
 
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let payload_digest_hex = hex::encode(blake3::hash(&code).as_bytes());
-    let operation_status = if args.emit_only { "prepared" } else { "committed" };
+    let operation_status = if args.emit_only {
+        "prepared"
+    } else {
+        "committed"
+    };
     let result = norito::json!({
         "ok": true,
         "submitted": (!args.emit_only),
@@ -1055,7 +1059,7 @@ fn main() -> Result<()> {
         "register_bytes_stage_tx_hashes": (register_stage_tx_hashes),
         "register_manifest_via_ivm_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
-        "operation_receipt": {
+        "operation_receipt": (norito::json!({
             "operation_kind": "contract_deploy",
             "status": (operation_status),
             "transport": "ivm-contract-deploy-helper",
@@ -1063,16 +1067,16 @@ fn main() -> Result<()> {
             "contract_alias": (contract_alias.to_string()),
             "contract_address": (contract_address.to_string()),
             "code_hash_hex": (code_hash_hex),
-            "abi_hash_hex": Option::<String>::None,
+            "abi_hash_hex": (Option::<String>::None),
             "tx_hash_hex": (activate_tx_hash.to_string()),
-            "entrypoint": Option::<String>::None,
-            "entrypoint_hash_hex": Option::<String>::None,
+            "entrypoint": (Option::<String>::None),
+            "entrypoint_hash_hex": (Option::<String>::None),
             "gas_limit": (args.gas_limit),
-            "gas_used": Option::<u64>::None,
+            "gas_used": (Option::<u64>::None),
             "gas_asset_id": (args.gas_asset_id.clone()),
-            "fee_sponsor": Option::<String>::None,
+            "fee_sponsor": (Option::<String>::None),
             "payload_digest_hex": (payload_digest_hex),
-        },
+        })),
         "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),
         "final": (if args.emit_only {
             norito::json!({

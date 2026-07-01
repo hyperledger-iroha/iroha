@@ -2,7 +2,13 @@ use std::{env, fs};
 
 use assert_cmd::Command;
 use norito::json::Value;
-use tempfile::tempdir;
+use tempfile::{Builder, TempDir};
+
+fn tempdir() -> Result<TempDir, std::io::Error> {
+    Builder::new()
+        .prefix("sorafs-provider-admission-fixtures-")
+        .tempdir_in(env::temp_dir().canonicalize()?)
+}
 
 #[test]
 fn provider_admission_fixture_generator_outputs_digests() {
@@ -48,28 +54,28 @@ fn provider_admission_fixture_generator_outputs_digests() {
             .get("proposal_digest_hex")
             .and_then(Value::as_str)
             .expect("proposal digest"),
-        "2bc1b6aa4269d8a1201064a935efedbe0b92dd29ad4de10b38507081ccc2d076"
+        "75ae7423ac495a9417be3b7a3ec3ef641a51632fbfa46833a3c68b43c9d1025a"
     );
     assert_eq!(
         metadata
             .get("envelope_digest_hex")
             .and_then(Value::as_str)
             .expect("envelope digest"),
-        "49a04ef708e0ac41e9c1a0dd7c44d5f264470425c5686cb6a00645d4d7374afc"
+        "80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf"
     );
     assert_eq!(
         metadata
             .get("renewal_envelope_digest_hex")
             .and_then(Value::as_str)
             .expect("renewal envelope digest"),
-        "5b5a18be046e3e0ed9af8be4fd6e718226c0c4481177f340c7e890fbb3bebcdd"
+        "e838cc856d1b70a34c8503154dd0f858328365a1b3f1c36f1560f002ee9494b1"
     );
     assert_eq!(
         metadata
             .get("revocation_digest_hex")
             .and_then(Value::as_str)
             .expect("revocation digest"),
-        "d524070c2162a6f4666be911a632afce7ead28f484c071c00d062296e2a08539"
+        "9c04ca10c8573ab653000a83388871beeb90b9b9f53f1208bc3b695521eda5c3"
     );
 
     let renewal_text =
@@ -79,7 +85,7 @@ fn provider_admission_fixture_generator_outputs_digests() {
         renewal
             .get("previous_envelope_digest_hex")
             .and_then(Value::as_str),
-        Some("49a04ef708e0ac41e9c1a0dd7c44d5f264470425c5686cb6a00645d4d7374afc")
+        Some("80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf")
     );
     assert_eq!(
         renewal.get("retention_epoch").and_then(Value::as_u64),
@@ -94,13 +100,13 @@ fn provider_admission_fixture_generator_outputs_digests() {
         revocation
             .get("envelope_digest_hex")
             .and_then(Value::as_str),
-        Some("49a04ef708e0ac41e9c1a0dd7c44d5f264470425c5686cb6a00645d4d7374afc")
+        Some("80b9f9285062bee7cc2d9b5f29948cbfd26c1cbfea274b6937f9e2f2279defbf")
     );
     assert_eq!(
         revocation
             .get("revocation_digest_hex")
             .and_then(Value::as_str),
-        Some("d524070c2162a6f4666be911a632afce7ead28f484c071c00d062296e2a08539")
+        Some("9c04ca10c8573ab653000a83388871beeb90b9b9f53f1208bc3b695521eda5c3")
     );
     assert_eq!(
         revocation.get("revoked_at").and_then(Value::as_u64),

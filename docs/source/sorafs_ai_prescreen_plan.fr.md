@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6aba6d76d6054bb6c201ed23837748523bf29cea32679cdcc668f50a0bdc0d57
+source_hash: 949c368256155de63ac22fad76c8186915ab2bdb7728db2dbe2e027ed6f769a9
 source_last_modified: "2026-06-25T17:14:40+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -55,9 +55,12 @@ subject digest, and requires operator workflow, notification transport,
 commit/reveal executor, transparency publication, and Governance DAG evidence
 to carry the same `workflow_digest_hex` as the end-to-end workflow artifact, so
 promotion packets cannot mix screening, operator, executor, transparency, or
-governance records from different deployed moderation runs. Runner-bound and
-workflow-bound mismatches mark the offending artifact invalid in the summary
-instead of only blocking the top-level promotion status.
+governance records from different deployed moderation runs. Governance DAG
+evidence must also carry a `policy_digest_hex` matching a valid runner
+artifact, so the DAG policy surface is tied to the screening policy that was
+actually deployed. Runner-bound, workflow-bound, and policy-bound mismatches
+mark the offending artifact invalid in the summary instead of only blocking the
+top-level promotion status.
 
 Implemented locally:
 
@@ -832,7 +835,11 @@ Completed local foundations:
   collection planner/runner that composes existing runner, committee, operator,
   notification, executor, and transparency canaries before invoking the gate;
   its dry-run JSON includes the checker-backed `evidence_contract` map with the
-  schema and required payload fields for every SFM-4a evidence kind.
+  schema and required payload fields for every SFM-4a evidence kind, and the
+  runner validates the schema-closed collection plan, external evidence map,
+  evidence contract, and command steps before dry-run output or live canaries.
+  It also rejects duplicate or unsupported `--source-entry` kinds before
+  dry-run output or live canaries.
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.

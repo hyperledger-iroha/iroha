@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -73,6 +75,17 @@ DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC = (
 DEPLOYMENT_CONTEXT_ARTIFACT_CONFLICT_DIAGNOSTIC = (
     "generated evidence artifact has conflicting deployment context"
 )
+CYCLE_ID_HEX_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+PLAN_SCHEMA = "sorafs.transparency.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "deployment_context",
+        "evidence_contract",
+        "steps",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -128,12 +141,22 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         except ValueError as error:
             errors.append(error_diagnostic_label(error))
 
-    present_source_kinds = {source_kind for source_kind, _ in source_entries}
+    allowed_source_kinds = set(DEFAULT_REQUIRED_SOURCE_KINDS)
+    present_source_kinds: set[str] = set()
+    source_paths: list[Path] = []
+    for source_kind, path in source_entries:
+        if source_kind not in allowed_source_kinds:
+            errors.append("source-entry supplied for unsupported kind")
+            continue
+        if source_kind in present_source_kinds:
+            errors.append("duplicate source-entry kind")
+            continue
+        present_source_kinds.add(source_kind)
+        source_paths.append(path)
     for source_kind in DEFAULT_REQUIRED_SOURCE_KINDS:
         if source_kind not in present_source_kinds:
             errors.append("missing required source-entry coverage")
 
-    source_paths = [path for _, path in source_entries]
     errors.extend(require_existing_files(source_paths, "--source-entry", seen=seen_input_files))
     errors.extend(require_existing_files(args.privacy_source_event, "--privacy-source-event", seen=seen_input_files))
     errors.extend(require_existing_files(args.privacy_publish_due, "--privacy-publish-due", seen=seen_input_files))
@@ -147,6 +170,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors.append("at least one --proof-token-issuance payload is required")
     if not args.cycle_id:
         errors.append("at least one --cycle-id is required for publication detail evidence")
+    elif any(CYCLE_ID_HEX_PATTERN.fullmatch(cycle_id) is None for cycle_id in args.cycle_id):
+        errors.append("--cycle-id must be a 16-byte lowercase hex string")
     require_runner_positive_int(args, "limit", errors)
     require_runner_positive_int(args, "timeout_secs", errors)
     return errors
@@ -252,22 +277,34 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     ]
 
 
+def evidence_contract() -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in DEFAULT_REQUIRED_KINDS
+    }
+
+
+def deployment_context(args: argparse.Namespace) -> dict[str, object]:
+    """Return the reviewed deployment context rendered in dry-run plans."""
+
+    return {
+        "deployment_id": args.deployment_id,
+        "environment": args.environment.lower(),
+        "deployment_context_reviewed": True,
+    }
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
-        "schema": "sorafs.transparency.rollout_evidence_collection_plan.v1",
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
-        "deployment_context": {
-            "deployment_id": args.deployment_id,
-            "environment": args.environment.lower(),
-            "deployment_context_reviewed": True,
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in DEFAULT_REQUIRED_KINDS
-        },
+        "deployment_context": deployment_context(args),
+        "evidence_contract": evidence_contract(),
         "steps": [
             {
                 "label": step.label,
@@ -277,6 +314,44 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the transparency collection-plan envelope before use."""
+
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return ["transparency rollout runner plan must be an object"]
+    if set(rendered) != PLAN_FIELDS:
+        errors.append(
+            "transparency rollout runner plan fields must match the schema-closed contract"
+        )
+    if rendered.get("schema") != PLAN_SCHEMA:
+        errors.append("transparency rollout runner plan schema must match the contract")
+    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
+        errors.append(
+            "transparency rollout runner plan verifier schema must match checker summary"
+        )
+    expected_context = deployment_context(args)
+    if rendered.get("deployment_context") != expected_context:
+        errors.append("transparency rollout runner plan deployment_context must match args")
+    else:
+        require_rollout_deployment_id(expected_context, errors)
+        require_rollout_environment(expected_context, errors)
+        if expected_context.get("deployment_context_reviewed") is not True:
+            errors.append(
+                "transparency rollout runner plan deployment_context must be reviewed"
+            )
+    if rendered.get("evidence_contract") != evidence_contract():
+        errors.append(
+            "transparency rollout runner plan evidence_contract must match checker fields"
+        )
+    errors.extend(validate_runner_plan_steps(rendered, plan))
+    return errors
 
 
 def deployment_context_write_open_flags() -> int:
@@ -533,7 +608,7 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     rendered_plan = plan_json(plan, args)
-    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
     if plan_errors:
         emit_runner_error_lines(plan_errors)
         return 2

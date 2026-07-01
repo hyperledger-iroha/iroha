@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -43,6 +44,19 @@ from sorafs_runner_preflight import (  # noqa: E402
 )
 
 
+PLAN_SCHEMA = "sorafs.reputation.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "external_evidence",
+        "evidence_contract",
+        "steps",
+    }
+)
+EXTERNAL_EVIDENCE_FIELDS = frozenset({"metrics", "transport", "consumption"})
+
+
 @dataclass(frozen=True)
 class CommandPlan:
     """One reputation rollout evidence command."""
@@ -50,8 +64,6 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
-
-
 
 
 def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
@@ -229,22 +241,34 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     return plan
 
 
+def external_evidence(args: argparse.Namespace) -> dict[str, str]:
+    """Return reviewed external evidence paths rendered in dry-run plans."""
+
+    return {
+        "metrics": str(args.metrics_evidence),
+        "transport": str(args.transport_evidence),
+        "consumption": str(args.consumption_evidence),
+    }
+
+
+def evidence_contract() -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in DEFAULT_REQUIRED_KINDS
+    }
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
-        "schema": "sorafs.reputation.rollout_evidence_collection_plan.v1",
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
-        "external_evidence": {
-            "metrics": str(args.metrics_evidence),
-            "transport": str(args.transport_evidence),
-            "consumption": str(args.consumption_evidence),
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in DEFAULT_REQUIRED_KINDS
-        },
+        "external_evidence": external_evidence(args),
+        "evidence_contract": evidence_contract(),
         "steps": [
             {
                 "label": step.label,
@@ -254,6 +278,44 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the reputation collection-plan envelope before use."""
+
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return ["reputation rollout runner plan must be an object"]
+    if set(rendered) != PLAN_FIELDS:
+        errors.append(
+            "reputation rollout runner plan fields must match the schema-closed contract"
+        )
+    if rendered.get("schema") != PLAN_SCHEMA:
+        errors.append("reputation rollout runner plan schema must match the contract")
+    if rendered.get("verifier_summary_schema") != SUMMARY_SCHEMA:
+        errors.append(
+            "reputation rollout runner plan verifier schema must match checker summary"
+        )
+    if rendered.get("external_evidence") != external_evidence(args):
+        errors.append(
+            "reputation rollout runner plan external_evidence must match args"
+        )
+    else:
+        external = rendered.get("external_evidence")
+        if not isinstance(external, Mapping) or set(external) != EXTERNAL_EVIDENCE_FIELDS:
+            errors.append(
+                "reputation rollout runner plan external_evidence must match required fields"
+            )
+    if rendered.get("evidence_contract") != evidence_contract():
+        errors.append(
+            "reputation rollout runner plan evidence_contract must match checker fields"
+        )
+    errors.extend(validate_runner_plan_steps(rendered, plan))
+    return errors
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -355,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     rendered_plan = plan_json(plan, args)
-    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
     if plan_errors:
         emit_runner_error_lines(plan_errors)
         return 2

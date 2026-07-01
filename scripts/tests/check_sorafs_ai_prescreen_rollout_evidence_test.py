@@ -212,6 +212,7 @@ def commit_reveal_executor(*, execution_summary_present: bool = True) -> dict:
         "artifact_count": len(artifacts),
         "passed_artifact_count": len(artifacts),
         "execution_summary_present": execution_summary_present,
+        "execution_summary_digest_hex": DIGEST,
         "execution_summary": {
             "passed": True,
             "path": "execution.json",
@@ -381,6 +382,9 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         }
     ]
     assert payload["valid_workflow_digests"] == [DIGEST]
+    assert payload["valid_notification_manifest_digests"] == [DIGEST]
+    assert payload["valid_executor_summary_digests"] == [DIGEST]
+    assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["runner"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -547,6 +551,25 @@ def test_executor_requires_execution_summary(tmp_path: Path) -> None:
     assert "execution_summary must be an object" in artifact["errors"]
 
 
+def test_executor_summary_digest_must_match_summary_body(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["execution_summary_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert payload["valid_executor_summary_digests"] == []
+    assert (
+        "execution_summary.body_blake3 must match execution_summary_digest_hex"
+        in artifact["errors"]
+    )
+
+
 def test_transparency_publication_requires_moderation_source_kinds(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
@@ -577,6 +600,27 @@ def test_governance_dag_requires_policy_digest(tmp_path: Path) -> None:
     artifact = payload["required"]["governance_dag"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "policy_digest_hex must be 64 hex characters" in artifact["errors"]
+
+
+def test_governance_dag_policy_digest_must_match_runner(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-dag.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["required"]["governance_dag"]["valid"] is False
+    assert payload["required"]["governance_dag"]["artifacts"][0]["valid"] is False
+    assert payload["valid_policy_digests"] == [DIGEST]
+    errors = "\n".join(payload["errors"])
+    assert (
+        "governance_dag policy_digest_hex must match a valid "
+        "runner policy_digest_hex"
+        in errors
+    )
 
 
 def test_e2e_workflow_requires_full_path(tmp_path: Path) -> None:

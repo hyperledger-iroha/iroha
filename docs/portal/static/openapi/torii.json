@@ -3000,6 +3000,71 @@
         ],
         "type": "object"
       },
+      "NexusLaneLifecycleResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_lane_count": {
+            "description": "Number of lanes active at the committed lane-authority height.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_lane_ids": {
+            "description": "Lane ids active at the committed lane-authority height.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "autoscale_capacity_lane_count": {
+            "description": "Number of active autoscale-managed elastic lanes that currently count as horizontal capacity.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "autoscale_capacity_lane_ids": {
+            "description": "Active autoscale-managed elastic lane ids that currently count as horizontal capacity.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "configured_lane_count": {
+            "description": "Configured lane namespace size after the lifecycle plan.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_count": {
+            "deprecated": true,
+            "description": "Legacy alias for `configured_lane_count`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "description": "True when the signed lane lifecycle plan was accepted and applied.",
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "configured_lane_count",
+          "lane_count",
+          "active_lane_count",
+          "active_lane_ids",
+          "autoscale_capacity_lane_count",
+          "autoscale_capacity_lane_ids"
+        ],
+        "type": "object"
+      },
       "NftListItem": {
         "additionalProperties": true,
         "properties": {
@@ -12610,7 +12675,8 @@
     },
     "/v1/nexus/lifecycle": {
       "post": {
-        "description": "Apply a Nexus lane lifecycle plan.",
+        "description": "Apply a Nexus lane lifecycle plan. Accepted responses report configured lane namespace size, active lane ids/count, and live autoscale-capacity lane ids/count separately.",
+        "operationId": "nexusLaneLifecycle",
         "requestBody": {
           "content": {
             "application/json": {
@@ -12622,22 +12688,52 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/NexusLaneLifecycleResponse"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Lane lifecycle plan accepted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Lane lifecycle plan failed validation."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator authentication is required or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operator is not authorized to apply lane lifecycle plans."
           }
         },
         "summary": "Apply a lane lifecycle plan.",
         "tags": [
           "Nexus"
         ],
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
@@ -15562,6 +15658,28 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/soracloud/status": {
+      "get": {
+        "description": "Fetch Soracloud service health, resource pressure, runtime manager, control-plane, and routing status. The routing section reports `configured_lane_count`/legacy `lane_count`, `declared_lane_count`, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch Soracloud status.",
+        "tags": [
+          "Soracloud"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/soradns/directory/events": {
       "get": {
         "description": "Stream SoraDNS directory events via SSE.",
@@ -16103,7 +16221,7 @@
     },
     "/v1/sorafs/appeals/pricing/status": {
       "get": {
-        "description": "Fetch SoraFS appeal finance API readiness, including which mutating deposit, report, and settlement paths are still pending runtime escrow and ledger integration.",
+        "description": "Fetch SoraFS appeal finance API readiness for the local quote, native deposit lifecycle, report/rollup publication, configured-signer settlement submission, moderation-derived settlement worker, reconciliation, and dashboard readback paths; hosted dashboard and multi-peer rollout evidence remain promotion gates.",
         "responses": {
           "200": {
             "content": {

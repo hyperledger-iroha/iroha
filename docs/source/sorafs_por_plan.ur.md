@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ab47380ee5f214b20198f21426d47e91566ce9c24f19c26532f39f9baf2af538
+source_hash: 71ebd73074ad192a5c941b66af825966483508f2b685c7cc54ab0fe15ff2e0de
 source_last_modified: "2026-06-25T17:41:33+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -28,14 +28,17 @@ fixtures. The reference validator also provides
 
 Remaining SF-9a rollout work is live deployment evidence for external drand,
 VRF, and auditor feeds, plus any production governance archive handoff required
-by the operator. `scripts/check_sorafs_por_rollout_evidence.py` now provides
+by the operator; each deployment's SQL/Parquet archive backend decision is now
+part of the checked reporting/archive evidence. `scripts/check_sorafs_por_rollout_evidence.py` now provides
 the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
 randomness, validator, reporting, archive, observability, and governance
 promotion packets, and `scripts/run_sorafs_por_rollout_evidence.py` provides
 the matching reviewed collection planner/runner. The checker exports its
 required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
 planner includes the checker-backed `evidence_contract` map in dry-run output
-for the selected required kinds. The gate now also requires
+for the selected required kinds, and validates the schema-closed collection
+plan, required kinds, thresholds, external evidence map, evidence contract, and
+command steps before dry-run output or verifier execution. The gate now also requires
 scheduler runtime, validator replay, reporting/archive, observability, and
 governance approval artifacts to carry a `seed_replay_digest_hex` matching a
 valid randomness artifact in the same evidence bundle. Seed-replay mismatches
@@ -335,7 +338,7 @@ Remaining production gates:
   all runtime/replay/reporting/governance evidence bound to the same seed replay
   digest and any binding failure marked on the offending artifact in the emitted
   summary.
-- Decide whether each deployment needs the SQL/Parquet warehouse layer in
-  addition to the node-local Norito snapshot.
+- Capture each deployment's reviewed SQL/Parquet archive backend selection in
+  the SF-9 reporting/archive evidence packet.
 - Capture governance DAG archive handoff evidence for production operators and
   include it in the SF-9 reporting/archive evidence packet.

@@ -145,6 +145,14 @@ def runner_names() -> list[str]:
     return [path.name for path in RUNNERS]
 
 
+def canary_builders_with_name_set_validator() -> list[Path]:
+    return [
+        path
+        for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py"))
+        if "def validate_name_set(" in read(path)
+    ]
+
+
 def bounded_json_checkers() -> list[Path]:
     return CHECKERS
 
@@ -475,7 +483,7 @@ def status_in_validation_checkers() -> set[str]:
 
 
 def string_in_validation_checkers() -> set[str]:
-    return {"check_sorafs_por_rollout_evidence.py"}
+    return set()
 
 
 def string_not_equal_validation_checkers() -> set[str]:
@@ -1648,6 +1656,45 @@ def test_rollout_runner_dry_run_commands_match_rendered_evidence_inputs() -> Non
     assert failures == {}
 
 
+def test_rollout_runners_reject_evidence_for_unrequired_kinds() -> None:
+    failures: dict[str, list[str]] = {}
+    checked: list[str] = []
+
+    for path in RUNNERS:
+        example = runner_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_unrequired_evidence_{path.stem}")
+        if not hasattr(module, "evidence_paths_by_kind"):
+            continue
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        supplied_kinds = [
+            kind
+            for kind, paths in module.evidence_paths_by_kind(args).items()
+            if paths
+        ]
+        if len(supplied_kinds) < 2:
+            continue
+        checked.append(path.name)
+        args.required_kinds = [supplied_kinds[0]]
+        errors = module.validate_inputs(args)
+        diagnostic = (
+            "release evidence supplied for unrequired kind"
+            if path.name == "run_sorafs_reference_sdk_release_evidence.py"
+            else "rollout evidence supplied for unrequired kind"
+        )
+        runner_failures: list[str] = []
+        if diagnostic not in errors:
+            runner_failures.append("unrequired evidence diagnostic")
+        diagnostics = "\n".join(errors)
+        if supplied_kinds[1] in diagnostics:
+            runner_failures.append("kind leak")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert checked
+    assert failures == {}
+
+
 def test_rollout_runner_generated_artifacts_are_under_verifier_evidence_dir() -> None:
     failures: dict[str, list[str]] = {}
 
@@ -1963,6 +2010,12 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "unrequested provider `" not in reputation_runner
     assert "--source-entry must use KIND=PATH form" in ai_runner
     assert "--source-entry must use KIND=PATH form" in transparency_runner
+    assert "source-entry supplied for unsupported kind" in ai_runner
+    assert "source-entry supplied for unsupported kind" in transparency_runner
+    assert "duplicate source-entry kind" in ai_runner
+    assert "duplicate source-entry kind" in transparency_runner
+    assert "CYCLE_ID_HEX_PATTERN" in transparency_runner
+    assert "--cycle-id must be a 16-byte lowercase hex string" in transparency_runner
     assert "got `{spec}`" not in ai_runner
     assert "got `{spec}`" not in transparency_runner
     assert "has conflicting " in transparency_runner
@@ -1975,10 +2028,22 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "test_duplicate_provider_proof_does_not_echo_provider_id" in reputation_test
     assert "test_malformed_source_entry_does_not_echo_spec" in ai_test
     assert "test_malformed_source_entry_does_not_echo_spec" in transparency_test
+    assert "test_unknown_source_kind_fails_before_plan_without_leaking" in ai_test
+    assert (
+        "test_unknown_source_kind_fails_before_plan_without_leaking"
+        in transparency_test
+    )
+    assert "test_duplicate_source_kind_fails_before_plan_without_leaking" in ai_test
+    assert (
+        "test_duplicate_source_kind_fails_before_plan_without_leaking"
+        in transparency_test
+    )
     assert (
         "test_generated_artifact_context_conflict_does_not_echo_existing_value"
         in transparency_test
     )
+    assert "test_cycle_id_must_be_lowercase_16_byte_hex" in transparency_test
+    assert "bad_cycle_id not in captured.err" in transparency_test
 
 
 def test_runner_missing_input_diagnostics_are_payload_free() -> None:
@@ -1989,12 +2054,20 @@ def test_runner_missing_input_diagnostics_are_payload_free() -> None:
         assert "for required `{kind}`" not in source, name
         assert "coverage for `{source_kind}`" not in source, name
         assert "missing {EVIDENCE_FLAGS_BY_KIND[kind]}" not in source, name
+        assert "for unrequired `{kind}`" not in source, name
 
     assert "missing required rollout evidence input" in "\n".join(
         runner_sources.values()
     )
+    assert "rollout evidence supplied for unrequired kind" in "\n".join(
+        runner_sources.values()
+    )
     assert (
         "missing required release evidence input"
+        in runner_sources["run_sorafs_reference_sdk_release_evidence.py"]
+    )
+    assert (
+        "release evidence supplied for unrequired kind"
         in runner_sources["run_sorafs_reference_sdk_release_evidence.py"]
     )
     assert (
@@ -2497,15 +2570,35 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
     assert "test_write_runner_plan_sanitizes_malformed_render_error" in helper_test
     assert all("validate_runner_plan_steps," in read(path) for path in RUNNERS)
     assert all("rendered_plan = plan_json(plan, args)" in read(path) for path in RUNNERS)
-    assert all(
-        "plan_errors = validate_runner_plan_steps(rendered_plan, plan)" in read(path)
-        for path in RUNNERS
-    )
-    assert all(
-        read(path).index("plan_errors = validate_runner_plan_steps(rendered_plan, plan)")
-        < read(path).index("if args.dry_run:")
-        for path in RUNNERS
-    )
+    for path in RUNNERS:
+        source = read(path)
+        direct_marker = "plan_errors = validate_runner_plan_steps(rendered_plan, plan)"
+        wrapped_marker = "plan_errors = validate_plan_json(rendered_plan, plan, args)"
+        if path.name in {
+            "run_sorafs_appeal_finance_rollout_evidence.py",
+            "run_sorafs_ai_prescreen_rollout_evidence.py",
+            "run_sorafs_gateway_compliance_rollout_evidence.py",
+            "run_sorafs_gateway_load_rollout_evidence.py",
+            "run_sorafs_governance_dag_rollout_evidence.py",
+            "run_sorafs_hedging_rollout_evidence.py",
+            "run_sorafs_moderation_panel_rollout_evidence.py",
+            "run_sorafs_orderbook_rollout_evidence.py",
+            "run_sorafs_pdp_rollout_evidence.py",
+            "run_sorafs_pop_credentials_rollout_evidence.py",
+            "run_sorafs_por_rollout_evidence.py",
+            "run_sorafs_potr_rollout_evidence.py",
+            "run_sorafs_reference_sdk_release_evidence.py",
+            "run_sorafs_repair_rollout_evidence.py",
+            "run_sorafs_reputation_rollout_evidence.py",
+            "run_sorafs_reserve_rent_rollout_evidence.py",
+            "run_sorafs_transparency_rollout_evidence.py",
+        }:
+            assert wrapped_marker in source
+            assert "errors.extend(validate_runner_plan_steps(rendered, plan))" in source
+            assert source.index(wrapped_marker) < source.index("if args.dry_run:")
+        else:
+            assert direct_marker in source
+            assert source.index(direct_marker) < source.index("if args.dry_run:")
     assert all("plan_errors = write_runner_plan" in read(path) for path in RUNNERS)
     assert all("write_runner_plan(rendered_plan)" in read(path) for path in RUNNERS)
     assert all("emit_runner_error_lines(plan_errors)" in read(path) for path in RUNNERS)
@@ -2608,6 +2701,431 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
         "test_deployment_context_write_rejects_parent_symlink_swap_before_open"
         in runner_test
     )
+
+
+def test_transparency_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_transparency_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def validate_plan_json" in runner
+    assert "transparency rollout runner plan must be an object" in runner
+    assert (
+        "transparency rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "transparency rollout runner plan deployment_context must match args" in runner
+    assert (
+        "transparency rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_plan_json_deployment_context_must_stay_reviewed" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_reputation_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_reputation_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_reputation_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "EXTERNAL_EVIDENCE_FIELDS" in runner
+    assert "def validate_plan_json" in runner
+    assert "reputation rollout runner plan must be an object" in runner
+    assert (
+        "reputation rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "reputation rollout runner plan external_evidence must match args" in runner
+    assert (
+        "reputation rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_gateway_load_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_gateway_load_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_gateway_load_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "gateway load rollout runner plan must be an object" in runner
+    assert (
+        "gateway load rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "gateway load rollout runner plan required_kinds must match args" in runner
+    assert "gateway load rollout runner plan thresholds must match args" in runner
+    assert "gateway load rollout runner plan external_evidence must match args" in runner
+    assert (
+        "gateway load rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_gateway_compliance_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_gateway_compliance_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_gateway_compliance_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "gateway compliance rollout runner plan must be an object" in runner
+    assert (
+        "gateway compliance rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "gateway compliance rollout runner plan required_kinds must match args" in runner
+    assert "gateway compliance rollout runner plan thresholds must match args" in runner
+    assert (
+        "gateway compliance rollout runner plan external_evidence must match args"
+        in runner
+    )
+    assert (
+        "gateway compliance rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_ai_prescreen_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_ai_prescreen_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def validate_plan_json" in runner
+    assert "AI pre-screen rollout runner plan must be an object" in runner
+    assert (
+        "AI pre-screen rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "AI pre-screen rollout runner plan external_evidence must match args" in runner
+    assert (
+        "AI pre-screen rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_pdp_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_pdp_rollout_evidence.py")
+    runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_pdp_rollout_evidence_test.py")
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "PDP rollout runner plan must be an object" in runner
+    assert (
+        "PDP rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "PDP rollout runner plan required_kinds must match args" in runner
+    assert "PDP rollout runner plan thresholds must match args" in runner
+    assert "PDP rollout runner plan external_evidence must match args" in runner
+    assert "PDP rollout runner plan evidence_contract must match checker fields" in runner
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_potr_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_potr_rollout_evidence.py")
+    runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_potr_rollout_evidence_test.py")
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "PoTR rollout runner plan must be an object" in runner
+    assert (
+        "PoTR rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "PoTR rollout runner plan required_kinds must match args" in runner
+    assert "PoTR rollout runner plan thresholds must match args" in runner
+    assert "PoTR rollout runner plan external_evidence must match args" in runner
+    assert "PoTR rollout runner plan evidence_contract must match checker fields" in runner
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_por_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_por_rollout_evidence.py")
+    runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_por_rollout_evidence_test.py")
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "PoR rollout runner plan must be an object" in runner
+    assert (
+        "PoR rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "PoR rollout runner plan required_kinds must match args" in runner
+    assert "PoR rollout runner plan thresholds must match args" in runner
+    assert "PoR rollout runner plan external_evidence must match args" in runner
+    assert "PoR rollout runner plan evidence_contract must match checker fields" in runner
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_repair_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_repair_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_repair_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "repair rollout runner plan must be an object" in runner
+    assert (
+        "repair rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "repair rollout runner plan required_kinds must match args" in runner
+    assert "repair rollout runner plan thresholds must match args" in runner
+    assert "repair rollout runner plan external_evidence must match args" in runner
+    assert "repair rollout runner plan evidence_contract must match checker fields" in runner
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_governance_dag_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_governance_dag_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_governance_dag_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "Governance DAG rollout runner plan must be an object" in runner
+    assert (
+        "Governance DAG rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "Governance DAG rollout runner plan required_kinds must match args" in runner
+    assert "Governance DAG rollout runner plan thresholds must match args" in runner
+    assert (
+        "Governance DAG rollout runner plan external_evidence must match args"
+        in runner
+    )
+    assert (
+        "Governance DAG rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_orderbook_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_orderbook_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_orderbook_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "orderbook rollout runner plan must be an object" in runner
+    assert (
+        "orderbook rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "orderbook rollout runner plan required_kinds must match args" in runner
+    assert "orderbook rollout runner plan thresholds must match args" in runner
+    assert "orderbook rollout runner plan external_evidence must match args" in runner
+    assert (
+        "orderbook rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_appeal_finance_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_appeal_finance_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_appeal_finance_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "appeal finance rollout runner plan must be an object" in runner
+    assert (
+        "appeal finance rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "appeal finance rollout runner plan required_kinds must match args" in runner
+    assert "appeal finance rollout runner plan thresholds must match args" in runner
+    assert (
+        "appeal finance rollout runner plan external_evidence must match args"
+        in runner
+    )
+    assert (
+        "appeal finance rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_reserve_rent_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_reserve_rent_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_reserve_rent_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "reserve/rent rollout runner plan must be an object" in runner
+    assert (
+        "reserve/rent rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "reserve/rent rollout runner plan required_kinds must match args" in runner
+    assert "reserve/rent rollout runner plan thresholds must match args" in runner
+    assert "reserve/rent rollout runner plan external_evidence must match args" in runner
+    assert (
+        "reserve/rent rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_pop_credentials_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_pop_credentials_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_pop_credentials_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "PoP credential rollout runner plan must be an object" in runner
+    assert (
+        "PoP credential rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "PoP credential rollout runner plan required_kinds must match args" in runner
+    assert "PoP credential rollout runner plan thresholds must match args" in runner
+    assert (
+        "PoP credential rollout runner plan external_evidence must match args"
+        in runner
+    )
+    assert (
+        "PoP credential rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_hedging_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_hedging_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_hedging_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "hedging/billing rollout runner plan must be an object" in runner
+    assert (
+        "hedging/billing rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "hedging/billing rollout runner plan required_kinds must match args" in runner
+    assert "hedging/billing rollout runner plan thresholds must match args" in runner
+    assert (
+        "hedging/billing rollout runner plan external_evidence must match args"
+        in runner
+    )
+    assert (
+        "hedging/billing rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+
+
+def test_moderation_panel_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_moderation_panel_rollout_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_moderation_panel_rollout_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def threshold_values" in runner
+    assert "def validate_plan_json" in runner
+    assert "moderation panel rollout runner plan must be an object" in runner
+    assert (
+        "moderation panel rollout runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert "moderation panel rollout runner plan required_kinds must match args" in runner
+    assert "moderation panel rollout runner plan thresholds must match args" in runner
+    assert (
+        "moderation panel rollout runner plan external_evidence must match args"
+        in runner
+    )
+    assert (
+        "moderation panel rollout runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> None:
@@ -5154,14 +5672,36 @@ def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
     assert "FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS" in helper
     assert "FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS" in helper
     assert '"development"' in helper
+    assert '"canary"' in helper
+    assert '"dryrun"' in helper
+    assert '"experimental"' in helper
     assert '"nonproduction"' in helper
     assert '"notprod"' in helper
+    assert "ROLLOUT_DEPLOYMENT_REVIEW_LABELS" in helper
+    assert "FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS" in helper
+    assert "joined_forbidden" in helper
+    assert 'f"{marker}{label}"' in helper
+    assert 'f"{label}{marker}"' in helper
+    assert "marker not in tokens and joined in compact" in helper
     assert "compact = \"\".join(tokens)" in helper
     assert "require_rollout_deployment_id(payload, errors)" in helper
     assert (
         "test_require_rollout_deployment_id_rejects_noncanonical_values"
         in helper_test
     )
+    assert (
+        "test_require_rollout_deployment_id_rejects_joined_nonproduction_aliases"
+        in helper_test
+    )
+    assert '"repair-testrelease-202606"' in helper_test
+    assert '"localproduction-gateway-202606"' in helper_test
+    assert '"releaselocal-reputation-202606"' in helper_test
+    assert (
+        "test_require_rollout_deployment_id_rejects_synthetic_rollout_markers"
+        in helper_test
+    )
+    assert '"gateway-prod-dry-run-202606"' in helper_test
+    assert '"reference-releaseexperimental-202606"' in helper_test
     assert missing_shared_context == []
     assert unexpected_shared_context == []
     assert unexpected_deployment_fingerprints == []
@@ -5909,7 +6449,7 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
         for path in CHECKERS
         if (
             path.name in string_in_validation_checkers()
-            and "manual_trigger_route_state must be `wired` or `retired`" in read(path)
+            and "archive_route_state must be `active` or `retired`" in read(path)
         )
     ]
     local_string_in_predicates = [
@@ -8014,6 +8554,7 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "prints a dry-run command plan with the checker-backed `evidence_contract` map for the selected required kinds",
         "The checker exports those required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS` for downstream automation.",
+        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8024,6 +8565,44 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_pop_credentials_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_pop_credentials_canary.py")
+    builder_test = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_pop_credentials_canary_test.py"
+    )
+    issuer_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_pop_credentials_issuer_canary.args.example"
+    )
+    verifier_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_pop_credentials_verifier_canary.args.example"
+    )
+    docs = read(SORAFS_POP_CREDENTIALS_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_ENROLLMENT_ROUTES" in builder
+    assert "REQUIRED_VERIFIER_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "credential_payloads_included" in builder
+    assert "holder_identities_included" in builder
+    assert "raw_proofs_included" in builder
+    assert "response_bodies_included" in builder
+    assert "test_generated_canaries_pass_full_pop_gate" in builder_test
+    assert "test_transcript_digest_privacy_backend_fails_before_write" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind issuer_bundle" in issuer_example
+    assert "--verified-claim issuer_key_policy_verified" in issuer_example
+    assert "--kind verifier_service" in verifier_example
+    assert "--route proof_verify" in verifier_example
+    assert "--policy-digest-hex" in verifier_example
+    assert "build_sorafs_pop_credentials_canary.py" in docs
+    assert "payload-free SFM-4b1 PoP credential canary builder" in docs
 
 
 def test_unshipped_pop_credentials_service_surface_is_not_exposed() -> None:
@@ -8198,7 +8777,8 @@ def test_ai_prescreen_deployed_workflow_services_stay_open_in_docs() -> None:
 def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.",
-        "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind.",
+        "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live canaries.",
+        "It also rejects duplicate or unsupported `--source-entry` kinds before dry-run output or live canaries.",
         "cross-artifact runner/workflow binding failures are reflected on the offending artifacts in the emitted summary.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -8210,6 +8790,38 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_ai_prescreen_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_ai_prescreen_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py")
+    plan = read(SORAFS_AI_PRESCREEN_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS AI pre-screening rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload)" in builder
+    assert "REQUIRED_OPERATOR_ROUTES" in builder
+    assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
+    assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
+    assert "REQUIRED_E2E_STEPS" in builder
+    assert "test_generated_canaries_pass_full_ai_prescreen_gate" in builder_tests
+    assert "scripts/build_sorafs_ai_prescreen_canary.py" in plan
+    assert "scripts/build_sorafs_ai_prescreen_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_ai_prescreen_notification_transport_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_ai_prescreen_commit_reveal_executor_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_ai_prescreen_end_to_end_canary.args.example"
+    ).is_file()
 
 
 def test_unshipped_ai_prescreen_deployed_workflow_surface_is_not_exposed() -> None:
@@ -8289,6 +8901,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "runner dry-run emits the checker-backed `evidence_contract` map listing each selected evidence kind's schema and required payload fields.",
         "Every recognized rollout artifact must also carry reviewed `deployment_id` and `environment` context",
         "blocks mixed reviewed deployment contexts across the same rollout bundle.",
+        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8299,6 +8912,49 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_moderation_panel_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_moderation_panel_canary.py")
+    builder_test = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_moderation_panel_canary_test.py"
+    )
+    intake_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_moderation_panel_appeal_intake_canary.args.example"
+    )
+    commit_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_moderation_panel_commit_reveal_canary.args.example"
+    )
+    docs = read(SORAFS_MODERATION_PANEL_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_INTAKE_ROUTES" in builder
+    assert "REQUIRED_BALLOT_ROUTES" in builder
+    assert "REQUIRED_VIEWER_EVENT_KINDS" in builder
+    assert "REQUIRED_PUBLICATION_TARGETS" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "raw_evidence_included" in builder
+    assert "commit_payloads_included" in builder
+    assert "signed_urls_included" in builder
+    assert "watermark_secrets_included" in builder
+    assert "test_generated_canaries_pass_full_moderation_panel_gate" in builder_test
+    assert "test_under_replicated_e2e_panel_fails_before_write" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind\nappeal_intake" in intake_example
+    assert "--verified-claim\nappellant_auth_enforced" in intake_example
+    assert "--kind\ncommit_reveal" in commit_example
+    assert "--verified-claim\nmismatched_reveal_rejected" in commit_example
+    assert "build_sorafs_moderation_panel_canary.py" in docs
+    assert "payload-free SFM-4b moderation panel canary builder" in docs
 
 
 def test_unshipped_moderation_panel_parent_service_surface_is_not_exposed() -> None:
@@ -8374,7 +9030,7 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "allowing dry-run collection plans and downstream automation to inspect the exact SFM-3 evidence contract before live collection.",
-        "Its `--dry-run` output includes the checker-backed `evidence_contract` map for publish/latest, provider, events, verify, metrics, transport, and consumption artifacts.",
+        "Its `--dry-run` output includes the checker-backed `evidence_contract` map for publish/latest, provider, events, verify, metrics, transport, and consumption artifacts, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live collection.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8429,6 +9085,50 @@ def test_unshipped_reputation_live_service_surface_is_not_exposed() -> None:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     assert exposed == {}
+
+
+def test_reputation_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_reputation_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_reputation_canary_test.py")
+    docs = read(SORAFS_REPUTATION_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS reputation rollout canary artifacts." in builder
+    assert "validate_evidence_set(" in builder
+    assert "SNAPSHOT_ANCHOR_KINDS" in builder
+    assert "SNAPSHOT_BOUND_KINDS" in builder
+    assert "duplicate --sibling-hex" in builder
+    assert "test_generated_canaries_pass_full_reputation_gate" in builder_tests
+    assert "test_duplicate_provider_proof_sibling_fails_before_write" in builder_tests
+    assert "scripts/build_sorafs_reputation_canary.py" in docs
+    assert "unique provider proof sibling hashes" in docs
+    assert "scripts/build_sorafs_reputation_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_reputation_provider_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_reputation_metrics_canary.args.example"
+    ).is_file()
+
+
+def test_canary_name_set_validators_reject_duplicate_operator_values() -> None:
+    validated: list[str] = []
+    for path in canary_builders_with_name_set_validator():
+        module = load_script_module(path, f"{path.stem}_duplicate_name_set_contract")
+        errors: list[str] = []
+
+        result = module.validate_name_set(
+            ["alpha", "alpha"],
+            allowed=("alpha",),
+            option="--duplicate-test",
+            errors=errors,
+        )
+
+        assert result == ["alpha"], path.name
+        assert errors == ["--duplicate-test must not contain duplicates"], path.name
+        validated.append(path.name)
+
+    assert validated
 
 
 def test_cli_sdk_distribution_and_live_governance_stay_open_in_docs() -> None:
@@ -8512,19 +9212,18 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     normalized_validator = re.sub(r"\s+", " ", validator)
 
     required_scheduler_open = (
-        "Remaining SF-9a rollout work is live deployment evidence for external drand, VRF, and auditor feeds, plus any production governance archive handoff required by the operator.",
+        "Remaining SF-9a rollout work is live deployment evidence for external drand, VRF, and auditor feeds, plus any production governance archive handoff required by the operator; each deployment's SQL/Parquet archive backend decision is now part of the checked reporting/archive evidence.",
         "The local SF-9 runtime integration is implemented. Remaining rollout work is live deployment evidence for external drand/VRF/auditor feeds and any production governance archive handoff required by the deployment operator.",
         "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
         "Archive a live drand/VRF/auditor run showing deterministic challenge generation and verdict replay that passes the SF-9 rollout evidence gate",
-        "Decide whether each deployment needs the SQL/Parquet warehouse layer in addition to the node-local Norito snapshot.",
+        "Capture each deployment's reviewed SQL/Parquet archive backend selection in the SF-9 reporting/archive evidence packet.",
         "Capture governance DAG archive handoff evidence for production operators and include it in the SF-9 reporting/archive evidence packet.",
     )
     required_validator_open = (
         "Remaining SF-9b work is live auditor rollout evidence, production archive handoff, and any richer proof-bundle inspection commands required by operators.",
         "The SF-9 validator/reporting release claim is tied to the same fail-closed gate used by the scheduler plan:",
-        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, and the explicit `retired` decision for the manual-trigger server route.",
-        "Include the manual-trigger route retirement decision in the SF-9 gate evidence.",
+        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, the exact `archive_backend` value (`sql` or `parquet`), and the explicit `retired` decision for the manual-trigger server route.",
         "Add proof-bundle fetch/show/offline replay commands if operators need them beyond `sorafs-validate por`.",
         "Archive live auditor, drand, VRF, report, and export evidence before treating SF-9 as fully released, and require that evidence to pass the SF-9 gate.",
     )
@@ -8544,7 +9243,7 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
 def test_por_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds.",
+        "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
         "binding with per-artifact summary invalidation and dry-run export of the checker-backed evidence contract.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -8558,10 +9257,33 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     assert missing_current == {}
 
 
+def test_por_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_por_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_por_canary_test.py")
+    plan = read(SORAFS_POR_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS PoR rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "REQUIRED_RUNTIME_ROUTES" in builder
+    assert "REQUIRED_REPORTING_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "SEED_REPLAY_BOUND_KINDS" in builder
+    assert "test_generated_canaries_pass_full_por_gate" in builder_tests
+    assert "scripts/build_sorafs_por_canary.py" in plan
+    assert "scripts/build_sorafs_por_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_por_randomness_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_por_scheduler_runtime_canary.args.example"
+    ).is_file()
+
+
 def test_por_validator_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The shared checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "planner includes the checker-backed `evidence_contract` map in `--dry-run` output so validator/reporting operators can review the exact SF-9 artifact contract before promotion.",
+        "planner includes the checker-backed `evidence_contract` map in `--dry-run` output so validator/reporting operators can review the exact SF-9 artifact contract before promotion, and the runner validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8632,13 +9354,14 @@ def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source.replace("> ", ""))
 
     required_open = (
-        "SF-14 work is live multi-provider rollout evidence and PQ provider-signature key distribution, not local receipt capture, validation, or replay wiring.",
+        "SF-14 work is live multi-provider rollout evidence and PQ provider-signature key distribution, now represented by governance-bound key-roster and reputation-weight policy digests in rollout evidence, not local receipt capture, validation, or replay wiring.",
         "Operators should keep SF-14 promotion fail-closed until payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.potr.*` SF-14 rollout schemas for multi-provider probes, receipt validation, proof-stream replay, reputation integration, observability, and governance approval.",
         "missing governed ML-DSA provider key evidence, non-Norito proof-stream routes, missing proof-stream filters, missing reputation-weight governance",
-        "The collection planner exposes those exact required payload fields through `--dry-run` before contacting live PoTR services.",
+        "PQ key-roster digest drift between receipt validation and governance approval, reputation-weight policy digest drift between reputation integration and governance approval",
+        "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
         "Future updates should track live rollout evidence, governed provider PQ keys, and reputation-weight changes that pass the SF-14 gate",
-        "proof-stream, reputation, observability, and governance artifacts bound to the same multi-provider probe receipt summary digest rather than reintroducing draft local wiring tasks.",
+        "proof-stream, reputation, observability, and governance artifacts bound to the same multi-provider probe receipt summary digest, plus receipt-validation and reputation artifacts bound to governance-approved PQ key-roster and reputation-weight policy digests, rather than reintroducing draft local wiring tasks.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -8648,8 +9371,8 @@ def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
 def test_potr_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds.",
-        "The collection planner exposes those exact required payload fields through `--dry-run` before contacting live PoTR services.",
+        "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8660,6 +9383,31 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_potr_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_potr_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_potr_canary_test.py")
+    plan = read(SORAFS_POTR_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS PoTR rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "REQUIRED_TIERS" in builder
+    assert "REQUIRED_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "RECEIPT_SUMMARY_BOUND_KINDS" in builder
+    assert "test_generated_canaries_pass_full_potr_gate" in builder_tests
+    assert "scripts/build_sorafs_potr_canary.py" in plan
+    assert "scripts/build_sorafs_potr_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_potr_multi_provider_probe_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_potr_proof_stream_canary.args.example"
+    ).is_file()
 
 
 def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
@@ -8718,6 +9466,7 @@ def test_repair_live_operator_evidence_work_stays_open_in_docs() -> None:
         "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
         "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
         "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
+        "governance approval artifacts carry a `handoff_digest_hex` that matches a valid governance handoff artifact",
         "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
         "Remaining rollout work is live operator evidence: collect production PoR failure, repair, and governance handoff artifacts once the deployed auditor roster and SF-9 coordinator publish their runbooks, then pass the SF-8b rollout evidence gate.",
     )
@@ -8729,8 +9478,8 @@ def test_repair_live_operator_evidence_work_stays_open_in_docs() -> None:
 def test_repair_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds.",
-        "Its collection planner exposes those exact required payload fields through `--dry-run` without touching live repair services.",
+        "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8741,6 +9490,31 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_repair_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_repair_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_repair_canary_test.py")
+    docs = read(SORAFS_REPAIR_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS repair rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "REQUIRED_AUDITOR_ROUTES" in builder
+    assert "REQUIRED_WORKER_ROUTES" in builder
+    assert "REQUIRED_EVENT_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "ROSTER_BOUND_KINDS" in builder
+    assert "FAILURE_BOUND_KINDS" in builder
+    assert "test_generated_canaries_pass_full_repair_gate" in builder_tests
+    assert "scripts/build_sorafs_repair_canary.py" in docs
+    assert "scripts/build_sorafs_repair_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_repair_auditor_roster_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_repair_worker_lifecycle_canary.args.example"
+    ).is_file()
 
 
 def test_unshipped_repair_live_operator_surface_is_not_exposed() -> None:
@@ -8802,6 +9576,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Cross-target release evidence is still a production gate; archive published checksums and smoke outputs for each supported release target and require the SF-11 release evidence gate to pass before declaring those artifacts production-ready.",
         "Final release-specific URLs, signatures, and package versions remain SF-11 release evidence.",
         "Operators should keep SF-11 release promotion fail-closed until payload-free release evidence passes the checked-in gate:",
+        "Narrowed `--require-kind` release runs also reject evidence supplied for excluded kinds before the plan is rendered or the verifier starts.",
         "The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for release archives, signed manifests, downstream bindings, cookbook smoke, FFI/header contract, and governance approval.",
         "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
@@ -8831,6 +9606,58 @@ def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
 
     assert stale == []
     assert missing_current == []
+
+
+def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_reference_sdk_release_canary.py")
+    builder_tests = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_reference_sdk_release_canary_test.py"
+    )
+    docs = read(SORAFS_REFERENCE_SDK_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS reference SDK release evidence artifacts." in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "REQUIRED_RELEASE_TARGETS" in builder
+    assert "REQUIRED_DOWNSTREAM_PACKAGES" in builder
+    assert "RELEASE_MANIFEST_BOUND_KINDS" in builder
+    assert "test_generated_canaries_pass_full_reference_sdk_release_gate" in builder_tests
+    assert "scripts/build_sorafs_reference_sdk_release_canary.py" in docs
+    assert "scripts/build_sorafs_reference_sdk_release_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_reference_sdk_release_archive_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_reference_sdk_signed_manifest_canary.args.example"
+    ).is_file()
+
+
+def test_reference_sdk_release_runner_plan_envelope_is_schema_closed() -> None:
+    runner = read(SCRIPTS_DIR / "run_sorafs_reference_sdk_release_evidence.py")
+    runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_reference_sdk_release_evidence_test.py"
+    )
+
+    assert "PLAN_SCHEMA" in runner
+    assert "PLAN_FIELDS" in runner
+    assert "def validate_plan_json" in runner
+    assert "reference SDK release runner plan must be an object" in runner
+    assert (
+        "reference SDK release runner plan fields must match the schema-closed contract"
+        in runner
+    )
+    assert (
+        "reference SDK release runner plan evidence_contract must match checker fields"
+        in runner
+    )
+    assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
+    assert "test_plan_json_shape_is_validated" in runner_test
+    assert "test_subset_gate_rejects_evidence_for_unrequired_kind" in runner_test
+    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
 
 
 def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
@@ -8917,7 +9744,8 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
         "Proof-summary mismatches are recorded on the offending artifact in the JSON summary before required-kind validity is reported.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "the collection runner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds",
+        "the collection runner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "with proof-summary digest binding and rejection of evidence supplied for excluded `--require-kind` values.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8928,6 +9756,28 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_pdp_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_pdp_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_pdp_canary_test.py")
+    plan = read(SORAFS_PDP_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS PDP rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "REQUIRED_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "PROOF_SUMMARY_BOUND_KINDS" in builder
+    assert "test_generated_canaries_pass_full_pdp_gate" in builder_tests
+    assert "scripts/build_sorafs_pdp_canary.py" in plan
+    assert "scripts/build_sorafs_pdp_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_pdp_provider_transport_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR / "examples" / "sorafs_pdp_proof_generation_canary.args.example"
+    ).is_file()
 
 
 def test_unshipped_pdp_provider_protocol_surface_is_not_exposed() -> None:
@@ -9011,9 +9861,9 @@ def test_governance_dag_ipfs_ipns_work_stays_unshipped_in_docs() -> None:
 def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "the runner dry-run emits the checker-backed `evidence_contract` map for selected SF-12 evidence kinds.",
+        "the runner dry-run emits the checker-backed `evidence_contract` map for selected SF-12 evidence kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
         "Mirror datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
-        "collection planner with dry-run evidence-contract export",
+        "collection planner with dry-run evidence-contract export and schema-closed plan validation",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -9024,6 +9874,44 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_governance_dag_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_governance_dag_canary.py")
+    builder_test = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_governance_dag_canary_test.py"
+    )
+    publisher_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_governance_dag_publisher_canary.args.example"
+    )
+    dashboard_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_governance_dag_dashboard_canary.args.example"
+    )
+    docs = read(SORAFS_GOVERNANCE_DAG_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_PAYLOAD_KINDS" in builder
+    assert "REQUIRED_DASHBOARD_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "raw_head_included" in builder
+    assert "raw_car_included" in builder
+    assert "raw_checkpoint_included" in builder
+    assert "response_bodies_included" in builder
+    assert "test_generated_canaries_pass_full_governance_dag_gate" in builder_test
+    assert "test_missing_dashboard_route_coverage_fails_closed" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind publisher_service" in publisher_example
+    assert "--verified-claim car_segments_pinned" in publisher_example
+    assert "--payload-kind orderbook-settlement-receipt" in publisher_example
+    assert "--kind dashboard_api" in dashboard_example
+    assert "--route checkpoint" in dashboard_example
+    assert "build_sorafs_governance_dag_canary.py" in docs
+    assert "payload-free Governance DAG canary builder" in docs
 
 
 def test_unshipped_governance_dag_public_service_surface_is_not_exposed() -> None:
@@ -9092,8 +9980,9 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SFM-2 evidence kinds.",
-        "Matcher, settlement, API gateway, event stream, SDK release, observability, and reconciliation artifacts must carry a `contract_digest_hex` that matches a valid contract-surface artifact",
+        "Matcher, settlement, API gateway, event stream, SDK release, observability, reconciliation, and governance approval artifacts must carry a `contract_digest_hex` that matches a valid contract-surface artifact",
         "collection planner with dry-run evidence-contract export",
+        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -9104,6 +9993,43 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_orderbook_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_orderbook_canary.py")
+    builder_test = read(SCRIPTS_DIR / "tests" / "build_sorafs_orderbook_canary_test.py")
+    contract_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_orderbook_contract_canary.args.example"
+    )
+    api_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_orderbook_api_canary.args.example"
+    )
+    docs = read(SORAFS_ORDERBOOK_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_API_ROUTES" in builder
+    assert "REQUIRED_STREAMS" in builder
+    assert "REQUIRED_SDK_LANGUAGES" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "raw_contract_state_included" in builder
+    assert "raw_snapshot_included" in builder
+    assert "raw_receipts_included" in builder
+    assert "response_bodies_included" in builder
+    assert "duplicate --artifact id" in builder
+    assert "test_generated_canaries_pass_full_orderbook_gate" in builder_test
+    assert "test_duplicate_sdk_artifact_id_fails_closed_without_leaking" in builder_test
+    assert "test_missing_api_route_coverage_fails_closed" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind contract_surface" in contract_example
+    assert "--verified-claim capability_policy_configured" in contract_example
+    assert "--kind api_gateway" in api_example
+    assert "--route events_get" in api_example
+    assert "build_sorafs_orderbook_canary.py" in docs
+    assert "payload-free SFM-2 orderbook canary builder" in docs
 
 
 def test_unshipped_orderbook_service_surface_is_not_exposed() -> None:
@@ -9171,6 +10097,7 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
         "Production promotion remains blocked unless the summary status is `ready`, including at least two distinct staged billing cycles whose reference-decision ids match a valid reference-price artifact in the same evidence bundle.",
+        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -9181,6 +10108,46 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_hedging_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_hedging_canary.py")
+    builder_test = read(SCRIPTS_DIR / "tests" / "build_sorafs_hedging_canary_test.py")
+    reference_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_hedging_reference_price_canary.args.example"
+    )
+    billing_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_billing_cycle_canary.args.example"
+    )
+    docs = read(SORAFS_HEDGING_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_PUBLICATION_ROUTES" in builder
+    assert "REQUIRED_RECONCILIATION_SOURCES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "payload_bytes_included" in builder
+    assert "raw_financial_records_included" in builder
+    assert "response_bodies_included" in builder
+    assert "debug_artifacts" in builder
+    assert "duplicate --artifact id" in builder
+    assert "test_generated_canaries_pass_full_hedging_gate" in builder_test
+    assert (
+        "test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking"
+        in builder_test
+    )
+    assert "test_hedge_execution_enabled_requires_governance_before_write" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind reference_price" in reference_example
+    assert "--verified-claim signed_payload_verified" in reference_example
+    assert "--kind billing_cycle" in billing_example
+    assert "--verified-claim acknowledgement_required" in billing_example
+    assert "build_sorafs_hedging_canary.py" in docs
+    assert "payload-free SFM-5 hedging/billing canary builder" in docs
 
 
 def test_unshipped_hedging_billing_service_surface_is_not_exposed() -> None:
@@ -9289,6 +10256,30 @@ def test_unshipped_evidence_viewer_service_surface_is_not_exposed() -> None:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     assert exposed == {}
+
+
+def test_evidence_viewer_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_evidence_viewer_canary.py")
+    builder_test = read(SCRIPTS_DIR / "tests" / "build_sorafs_evidence_viewer_canary_test.py")
+    example = read(SCRIPTS_DIR / "examples" / "sorafs_evidence_viewer_canary.args.example")
+    docs = read(SORAFS_EVIDENCE_VIEWER_PLAN)
+
+    assert "SCHEMA = KIND_BY_NAME[\"evidence_viewer\"].schema" in builder
+    assert "VERIFIED_TRUE_CLAIMS" in builder
+    assert "FORBIDDEN_PAYLOAD_CLAIMS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "session_tokens_included" in builder
+    assert "signed_urls_included" in builder
+    assert "watermark_secrets_included" in builder
+    assert "test_generated_canary_passes_existing_evidence_viewer_gate" in builder_test
+    assert "test_missing_verified_claim_fails_closed" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--verified-claim legal_hold_policy_bound" in example
+    assert "--session-manifest-digest-hex" in example
+    assert "build_sorafs_evidence_viewer_canary.py" in docs
+    assert "payload-free `evidence_viewer` canary builder" in docs
 
 
 def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
@@ -9417,6 +10408,7 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
         "its moderation settlement worker replays and subscribes to local tallied ballot events",
         "The checker also exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "`evidence_contract` map for the selected required kinds",
+        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     stale: dict[str, list[str]] = {}
     missing_current: dict[str, list[str]] = {}
@@ -9432,6 +10424,49 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
 
     assert stale == {}
     assert missing_current == {}
+
+
+def test_appeal_finance_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_appeal_finance_canary.py")
+    builder_test = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_appeal_finance_canary_test.py"
+    )
+    pricing_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_appeal_finance_pricing_config_canary.args.example"
+    )
+    reconciliation_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_appeal_finance_multi_peer_reconciliation_canary.args.example"
+    )
+    docs = read(SORAFS_APPEAL_PRICING_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_QUOTE_ROUTES" in builder
+    assert "REQUIRED_DEPOSIT_ROUTES" in builder
+    assert "REQUIRED_SETTLEMENT_ROUTES" in builder
+    assert "REQUIRED_PAYLOAD_KINDS" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "raw_instruction_included" in builder
+    assert "signed_transaction_included" in builder
+    assert "response_bodies_included" in builder
+    assert "raw_ledger_included" in builder
+    assert "test_generated_canaries_pass_full_appeal_finance_gate" in builder_test
+    assert "test_under_replicated_multi_peer_run_fails_before_write" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind\npricing_config" in pricing_example
+    assert "--verified-claim\npricing_config_present" in pricing_example
+    assert "--kind\nmulti_peer_reconciliation" in reconciliation_example
+    assert "--verified-claim\nqc_quorum_satisfied" in reconciliation_example
+    assert "build_sorafs_appeal_finance_canary.py" in docs
+    assert "payload-free SFM-4b2 appeal finance canary builder" in docs
 
 
 def test_unshipped_appeal_finance_public_promotion_surface_is_not_exposed() -> None:
@@ -9505,6 +10540,8 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "so dry-run collection plans and downstream automation can inspect the exact evidence contract before live collection.",
         "`--dry-run` emits the command plan plus the checker-backed `evidence_contract` field map without contacting live services.",
+        "It also rejects duplicate or unsupported `--source-entry` kinds before rendering the plan or contacting live services.",
+        "transparency rollout collection runner reject non-lowercase, wrong-length, or otherwise malformed `--cycle-id` values before rendering dry-run command plans or contacting deployed cycle-detail routes.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -9515,6 +10552,37 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_transparency_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_transparency_canary.py")
+    builder_tests = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_transparency_canary_test.py"
+    )
+    docs = read(SORAFS_TRANSPARENCY_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS transparency rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload)" in builder
+    assert "DEFAULT_REQUIRED_SOURCE_KINDS" in builder
+    assert "REQUIRED_PUBLICATION_ROUTES" in builder
+    assert "REQUIRED_EXPLORER_ROUTES" in builder
+    assert "REQUIRED_PRIVACY_AGGREGATE_ACTIONS" in builder
+    assert "SOURCE_BOUND_KINDS" in builder
+    assert "CYCLE_BOUND_KINDS" in builder
+    assert "test_generated_canaries_pass_full_transparency_gate" in builder_tests
+    assert "scripts/build_sorafs_transparency_canary.py" in docs
+    assert "scripts/build_sorafs_transparency_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_transparency_source_entry_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_transparency_publication_canary.args.example"
+    ).is_file()
 
 
 def test_transparency_docs_do_not_reopen_shipped_local_ledger_layer() -> None:
@@ -9654,6 +10722,44 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
     assert missing_current == {}
 
 
+def test_gateway_compliance_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_gateway_compliance_canary.py")
+    builder_test = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_gateway_compliance_canary_test.py"
+    )
+    controller_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_gateway_compliance_controller_canary.args.example"
+    )
+    toggle_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_gateway_compliance_moderation_toggle_canary.args.example"
+    )
+    docs = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
+
+    assert "CANARY_KINDS = (\"controller_runtime\", \"moderation_toggle\")" in builder
+    assert "CONTROLLER_TRUE_CLAIMS" in builder
+    assert "MODERATION_TRUE_CLAIMS" in builder
+    assert "FORBIDDEN_PAYLOAD_CLAIMS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "\"config_source\": \"iroha_config\"" in builder
+    assert "raw_feeds_included" in builder
+    assert "raw_toggle_payloads_included" in builder
+    assert "test_generated_canaries_pass_gateway_gate_with_feed_promotion_anchor" in builder_test
+    assert "test_missing_verified_claim_fails_closed" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind controller_runtime" in controller_example
+    assert "--verified-claim rollback_plan_verified" in controller_example
+    assert "--kind moderation_toggle" in toggle_example
+    assert "--verified-claim rollback_verified" in toggle_example
+    assert "build_sorafs_gateway_compliance_canary.py" in docs
+    assert "payload-free controller-runtime and moderation-toggle canary builder" in docs
+
+
 def test_unshipped_gateway_compliance_service_surface_is_not_exposed() -> None:
     route_patterns = (
         "/v1/sorafs/gateway/compliance/controller",
@@ -9713,10 +10819,36 @@ def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
         "Record cold-cache SLO baselines after the staging hardware profile is chosen.",
         "`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free local conformance, live staging load, telemetry/SLO, transport-scope, and governance approval evidence before SF-5a load promotion.",
         "`scripts/run_sorafs_gateway_load_rollout_evidence.py` emits the matching collection plan and dry-run evidence contract",
+        "runner validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+
+
+def test_gateway_load_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_gateway_load_canary.py")
+    builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_gateway_load_canary_test.py")
+    plan = read(SORAFS_GATEWAY_LOAD_PLAN)
+    roadmap = read(REPO_ROOT / "roadmap.md")
+
+    assert "Build payload-free SoraFS gateway load rollout canary artifacts." in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "REQUIRED_SCENARIOS" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "test_generated_canaries_pass_full_gateway_load_gate" in builder_tests
+    assert "scripts/build_sorafs_gateway_load_canary.py" in plan
+    assert "scripts/build_sorafs_gateway_load_canary.py" in roadmap
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_gateway_load_local_conformance_canary.args.example"
+    ).is_file()
+    assert (
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_gateway_load_staging_canary.args.example"
+    ).is_file()
 
 
 def test_unshipped_gateway_load_live_surface_is_not_exposed() -> None:
@@ -9801,6 +10933,8 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "validate the schema-closed aggregate summary envelope before writing the final production-readiness report",
         "require aggregate status to match canonical aggregate diagnostics",
         "ready aggregate summaries must carry complete deployment context with a reviewed deployment id, a final `prod`/`production` environment, and only present, valid required rows",
+        "aggregate required row deployment_id must match aggregate deployment_id",
+        "aggregate required row environment must match aggregate environment",
         "require aggregate recognized-summary counts to match present required rows",
         "validate final aggregate required rows for exact present and missing row output contracts",
         "validate invalid aggregate required-row metadata before blocked rows are emitted for release review",
@@ -9810,7 +10944,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "pin aggregate blockers for unknown schemas and explicit unrequired summaries",
         "reject unknown summary schemas discovered in summary directories",
         "rejects explicit summaries for lanes outside a narrowed `--require-gate` selection",
+        "require an explicit final `--deployment-id`/`--environment` pair even for direct checker invocations",
         "SoraFS production promotion now has an aggregate readiness gate over the existing per-lane rollout/release evidence summaries",
+        "The same shared validator now rejects compact and tokenized pre-release aliases such as `prerelease`, `releasecandidate`, `candidateproduction`, `productionpreview`, `preprodrelease`, `pre-production`, `production-candidate`, `prod-rc`, `prod-preview`, and `preprod-production`",
         "This does not close the live deployment gaps above",
     )
     missing = [
@@ -9984,15 +11120,48 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         in checker
     )
     assert "PRODUCTION_READY_ENVIRONMENTS" in checker
+    assert "FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS" in checker
     assert "def is_production_ready_environment" in checker
     assert "def require_reviewed_deployment_id_value" in checker
+    assert "def require_production_deployment_id_value" in checker
     assert "require_rollout_deployment_id" in checker
     assert "aggregate environment must be production" in checker
+    assert "aggregate row environment must be production" in checker
+    assert "Required final deployment id shared by every lane summary artifact" in checker
+    assert "Required final prod/production environment shared by every lane" in checker
+    assert "Optional expected deployment id" not in checker
+    assert "Optional expected environment" not in checker
+    assert (
+        "aggregate required row deployment_id must match aggregate deployment_id"
+        in checker
+    )
+    assert (
+        "aggregate required row environment must match aggregate environment"
+        in checker
+    )
+    assert (
+        "aggregate production readiness requires --deployment-id and --environment"
+        in checker
+    )
+    assert "test_direct_checker_requires_explicit_deployment_context" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "non-production deployment markers" in checker
     assert "--environment must be production for this gate" in checker
     assert "test_unreviewed_deployment_id_cannot_promote_production_readiness" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "test_staging_deployment_id_cannot_promote_production_readiness" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_joined_nonproduction_alias_cannot_promote_production_readiness"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "test_explicit_unreviewed_deployment_id_fails_before_validation" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_explicit_staging_deployment_id_fails_before_validation" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_staging_environment_cannot_promote_production_readiness" in read(
@@ -10002,14 +11171,33 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "is_production_ready_environment" in runner
-    assert "require_reviewed_deployment_id_value" in runner
+    assert "require_production_deployment_id_value" in runner
     assert "production readiness runner environment must be production" in runner
+    assert (
+        "Required final deployment id shared by every required lane summary"
+        in runner
+    )
+    assert (
+        "Required final prod/production environment shared by every required"
+        in runner
+    )
+    assert "Optional expected deployment id" not in runner
+    assert "Optional expected environment" not in runner
     assert (
         "production readiness runner deployment_id must not contain" in read(
             SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
         )
     )
+    assert "test_help_marks_final_deployment_context_required" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
     assert "test_nonproduction_environment_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_staging_deployment_id_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_joined_nonproduction_deployment_id_fails" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
     assert (
@@ -10129,6 +11317,11 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "production readiness runner plan must be strict JSON renderable" in runner
     assert "production readiness runner plan fields must match the schema-closed contract" in runner
     assert "production readiness runner plan steps must match command plan" in runner
+    assert "production readiness runner plan deployment_id" in runner
+    assert "production readiness runner plan environment must be production" in runner
+    assert "test_plan_json_deployment_context_must_be_final_production" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
     assert "def summary_input_path_is_plan_safe" in runner
     assert "plan_rendered_path_is_safe" in runner
     assert "PLAN_RENDERED_PATH_ERROR" in runner
@@ -10313,6 +11506,7 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
         "provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion",
         "reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
         "governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage",
+        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -10323,6 +11517,47 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+
+def test_reserve_rent_canary_builder_is_checked_in() -> None:
+    builder = read(SCRIPTS_DIR / "build_sorafs_reserve_rent_canary.py")
+    builder_test = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_reserve_rent_canary_test.py"
+    )
+    policy_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_reserve_rent_policy_config_canary.args.example"
+    )
+    bake_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_reserve_rent_provider_bake_canary.args.example"
+    )
+    docs = read(SORAFS_RESERVE_RENT_PLAN)
+
+    assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
+    assert "TRUE_CLAIMS" in builder
+    assert "FORCED_FALSE_FIELDS" in builder
+    assert "REQUIRED_LIFECYCLE_ROUTES" in builder
+    assert "REQUIRED_SIGNED_ROUTES" in builder
+    assert "REQUIRED_METRICS" in builder
+    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "write_payload_atomic" in builder
+    assert "must not be a symlink" in builder
+    assert "raw_transfer_included" in builder
+    assert "raw_ledger_included" in builder
+    assert "response_bodies_included" in builder
+    assert "payloads_included" in builder
+    assert "test_generated_canaries_pass_full_reserve_rent_gate" in builder_test
+    assert "test_stale_scheduler_tick_fails_before_write" in builder_test
+    assert "test_output_symlink_is_rejected" in builder_test
+    assert "--kind\npolicy_config" in policy_example
+    assert "--verified-claim\ngovernance_approved" in policy_example
+    assert "--kind\nprovider_bake" in bake_example
+    assert "--verified-claim\nscheduled_lifecycle_canary_passed" in bake_example
+    assert "build_sorafs_reserve_rent_canary.py" in docs
+    assert "payload-free SFM-6 reserve/rent canary builder" in docs
 
 
 def test_unshipped_reserve_rent_live_control_plane_surface_is_not_exposed() -> None:

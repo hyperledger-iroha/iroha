@@ -9,7 +9,7 @@ use std::{
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
-use iroha_data_model::Encode as _;
+use iroha_data_model::{Encode as _, nexus::LaneId};
 use iroha_logger::prelude::*;
 
 use super::locked_qc::qc_satisfies_locked_with_lookup;
@@ -9921,7 +9921,20 @@ impl Actor {
         world: &impl WorldReadOnly,
         candidates: &[PeerId],
     ) -> Vec<election::CandidateProfile> {
-        collect_candidate_profiles_from_world(world, candidates)
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus.enabled.then(|| {
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .filter_map(|lane| {
+                    self.state
+                        .is_lane_active_for_authority(lane.id)
+                        .then_some(lane.id)
+                })
+                .collect::<BTreeSet<_>>()
+        });
+        collect_candidate_profiles_from_world(world, candidates, active_lane_ids.as_ref())
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -10221,13 +10234,11 @@ impl Actor {
 fn collect_candidate_profiles_from_world(
     world: &impl WorldReadOnly,
     candidates: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Vec<election::CandidateProfile> {
-    use iroha_data_model::{
-        account::AccountId,
-        nexus::{LaneId, staking::PublicLaneStakeShare},
-    };
+    use iroha_data_model::{account::AccountId, nexus::staking::PublicLaneStakeShare};
 
-    let record_map = public_lane_validator_records_by_peer(world);
+    let record_map = public_lane_validator_records_by_peer(world, active_lane_ids);
 
     let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> = BTreeMap::new();
     for (key, share) in world.public_lane_stake_shares().iter() {
@@ -10235,6 +10246,11 @@ fn collect_candidate_profiles_from_world(
             continue;
         }
         let (lane_id, validator, _staker) = key;
+        if let Some(active_lane_ids) = active_lane_ids
+            && !active_lane_ids.contains(lane_id)
+        {
+            continue;
+        }
         share_map
             .entry((*lane_id, validator.clone()))
             .or_default()
@@ -10264,10 +10280,16 @@ fn collect_candidate_profiles_from_world(
 
 fn public_lane_validator_records_by_peer(
     world: &impl WorldReadOnly,
+    active_lane_ids: Option<&BTreeSet<iroha_data_model::nexus::LaneId>>,
 ) -> BTreeMap<PeerId, iroha_data_model::nexus::staking::PublicLaneValidatorRecord> {
     let mut record_map = BTreeMap::new();
     for (key, record) in world.public_lane_validators().iter() {
         if !crate::state::public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
+        if let Some(active_lane_ids) = active_lane_ids
+            && !active_lane_ids.contains(&key.0)
+        {
             continue;
         }
         record_map
@@ -10310,7 +10332,9 @@ mod tests {
         block::{BlockSignature, SignedBlock},
         metadata::Metadata,
         nexus::{
-            LaneId, PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+            LaneConfig, LaneId, LaneVisibility, PublicLaneStakeShare, PublicLaneValidatorRecord,
+            PublicLaneValidatorStatus,
         },
         peer::{Peer, PeerId},
         prelude::{Account, AccountId, Domain, EventBox, Level, Log, TransactionBuilder},
@@ -10390,7 +10414,7 @@ mod tests {
             block.commit();
         }
 
-        let records = public_lane_validator_records_by_peer(&world.view());
+        let records = public_lane_validator_records_by_peer(&world.view(), None);
         assert!(records.contains_key(&valid_peer));
         assert!(!records.contains_key(&mismatched_lane_peer));
         assert!(!records.contains_key(&mismatched_account_peer));
@@ -10456,10 +10480,99 @@ mod tests {
             block.commit();
         }
 
-        let profiles = collect_candidate_profiles_from_world(&world.view(), &[peer]);
+        let profiles = collect_candidate_profiles_from_world(&world.view(), &[peer], None);
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].stake_shares.len(), 1);
         assert_eq!(profiles[0].stake_shares[0].staker, staker);
+    }
+
+    #[test]
+    fn collect_candidate_profiles_excludes_future_created_autoscale_lane_rows() {
+        let world = World::default();
+        let validator_keypair = KeyPair::try_random().expect("validator test keypair");
+        let staker_keypair = KeyPair::try_random().expect("staker test keypair");
+        let validator = AccountId::new(validator_keypair.public_key().clone());
+        let staker = AccountId::new(staker_keypair.public_key().clone());
+        let peer = PeerId::new(validator_keypair.public_key().clone());
+        let future_lane = LaneId::new(1);
+        let mut autoscale_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = core::num::NonZeroU32::new(1).expect("nonzero min");
+        nexus.autoscale.max_lanes = core::num::NonZeroU32::new(2).expect("nonzero max");
+        nexus.lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("lane count"),
+            vec![LaneConfig::default(), autoscale_lane],
+        )
+        .expect("future-created autoscale catalog");
+        nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+
+        {
+            let mut block = world.public_lane_validators.block();
+            block.insert(
+                (future_lane, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: future_lane,
+                    validator: validator.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: Numeric::new(30, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: Some(1),
+                    activation_height: Some(1),
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+        {
+            let mut block = world.public_lane_stake_shares.block();
+            block.insert(
+                (future_lane, validator.clone(), staker.clone()),
+                PublicLaneStakeShare {
+                    lane_id: future_lane,
+                    validator,
+                    staker,
+                    bonded: Numeric::new(10, 0),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Metadata::default(),
+                },
+            );
+            block.commit();
+        }
+
+        let active_lane_ids: BTreeSet<_> = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter_map(|lane| {
+                crate::state::nexus_active_lane_dataspace_at_height(lane.id, &nexus, 6)
+                    .map(|_| lane.id)
+            })
+            .collect();
+        assert!(!active_lane_ids.contains(&future_lane));
+
+        let profiles =
+            collect_candidate_profiles_from_world(&world.view(), &[peer], Some(&active_lane_ids));
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].record.is_none());
+        assert!(profiles[0].stake_shares.is_empty());
     }
 
     #[test]

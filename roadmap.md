@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-30
+Last updated: 2026-07-01
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -5438,14 +5438,23 @@ and completed history lives in [`status.md`](./status.md).
   full `required_kinds`, top-level evidence/artifact counts, required-row
   `present`/`artifact_count` fields, and reviewed deployment-context
   fingerprints on every required artifact so the final SoraFS production
-  aggregate gate can consume real SFM-3 summaries directly. The static rollout
+  aggregate gate can consume real SFM-3 summaries directly, while the final
+  aggregate deployment id must be reviewed and free of staging markers even when
+  earlier per-lane rollout summaries came from staging. The static rollout
   contract now imports every SoraFS rollout/release checker and the aggregate
   gate together, requiring the aggregate schema list, default required gates,
   checker `DEFAULT_REQUIRED_KINDS`, and collection-runner summary flags to stay
   in lockstep before production readiness can be claimed. Narrowed aggregate
   runs now also reject explicit summaries for unrequired lanes at both the
   checker and collection-runner layers, so failed or stale lane evidence cannot
-  be hidden behind a smaller `--require-gate` selection.
+  be hidden behind a smaller `--require-gate` selection. Narrowed per-lane
+  rollout/release collection runs now also reject typed evidence supplied for
+  excluded `--require-kind` entries before dry-run output or verifier
+  execution, keeping the external evidence map aligned with the requested gate
+  surface. The SFM-3 reputation
+  collection runner now also validates its schema-closed collection-plan
+  envelope, external evidence map, checker-backed evidence contract, and
+  command steps before dry-run output or live collection.
   The repository-wide rollout-gate static contract now also requires every
   SoraFS rollout/release checker and collection runner to keep checked-in
   operator argfile examples; every tool must use the shared bounded response
@@ -5502,7 +5511,11 @@ and completed history lives in [`status.md`](./status.md).
 	  final-component flags where available, and argfile stat/read/UTF-8 plus
 	  response-line parser exception text must route through the shared
 	  path/error-label sanitizer so malformed multi-line diagnostics cannot leak
-	  through reviewed `@ARGFILE` expansion; checker evidence discovery now removes
+	  through reviewed `@ARGFILE` expansion; every checked-in SoraFS canary builder
+  that accepts required route, metric, claim, role, target, package, or other
+  name-set options now rejects duplicate operator values before writing canary
+  evidence, so repeated comma-separated or repeated-flag inputs cannot silently
+  collapse into valid coverage; checker evidence discovery now removes
   duplicate or aliased evidence identities from the returned parse list after
   recording the collision, so ambiguous files cannot still appear as parsed
   rollout artifacts beside their load errors, and duplicate or aliased reserved
@@ -5687,9 +5700,9 @@ and completed history lives in [`status.md`](./status.md).
   exactness, bool-true, path-qualified indexed bool-true, transparency
   publication publisher-identity policy flags, non-negative-int,
   count-equality, including hedging reconciliation line-item parity, and
-  moderation evidence-viewer logged-session parity, string-membership
-  validation for PoR manual trigger route states, exact string-equality
-  validation with canonical payload values, string-exclusion validation for the
+  moderation evidence-viewer logged-session parity, exact string-equality
+  validation for the PoR manual-trigger route `retired` state with canonical
+  payload values, string-exclusion validation for the
   PoP privacy proof backend, and string-value equality validation for
   reputation provider proof identity now use shared helpers with canonical
   field, path, expected-value, disallowed-value, comparison-label, and
@@ -5958,6 +5971,12 @@ and completed history lives in [`status.md`](./status.md).
   checker summary and runner dry-run plan rendering now use strict
   `allow_nan=False` JSON output and report non-finite or non-serializable
   summary/plan values before writing stdout or summary files,
+  the aggregate production-readiness runner help now labels
+  `--deployment-id` and `--environment` as required final deployment context so
+  operator review cannot drift from the enforced fail-closed promotion gate,
+  and aggregate collection-plan validation independently rechecks that the
+  rendered deployment context is a reviewed production deployment before
+  dry-run output or verifier launch,
   collection-runner direct namespace threshold and timeout checks now use
   shared runner preflight validators that reject malformed diagnostic
   containers and non-snake-case namespace fields before non-integer and `bool`
@@ -6149,6 +6168,31 @@ and completed history lives in [`status.md`](./status.md).
   non-comment runtime secret option/field material, and the transparency
   collection example must cover every default source-entry kind required by the
   checker.
+  The shared rollout deployment-id validator and final aggregate readiness
+  preflight now also reject glued non-production aliases such as
+  `testproduction`, `stageproduction`, `productionuat`, `testrelease`, and
+  `localproduction`, so short marker families cannot be hidden by joining them
+  to production/release labels before per-lane summaries or the final SoraFS
+  production gate consume the reviewed deployment context. The same shared
+  validator now rejects compact and tokenized pre-release aliases such as
+  `prerelease`, `releasecandidate`, `candidateproduction`,
+  `productionpreview`, `preprodrelease`, `pre-production`,
+  `production-candidate`, `prod-rc`, `prod-preview`, and
+  `preprod-production`, so release-candidate, preview, or pre-production
+  evidence cannot satisfy reviewed production deployment context by leaning on
+  allowed `release`/`prod` labels.
+  Provider-admission fixture validation now stages generated artifacts under a
+  canonical temp root, preserving symlink-parent rejection in the production
+  writer while keeping macOS validation runs out of `/var` symlink paths.
+  `scripts/build_sorafs_reputation_canary.py` now builds payload-free
+  publish/latest, provider, events, verify, metrics, transport, and
+  consumption canary artifacts through the SFM-3 checker before rollout review,
+  requiring reviewed deployment context, snapshot id/root bindings, provider
+  proof inputs where applicable, unique provider proof sibling hashes, and
+  snapshot-age/ingest-lag threshold facts before writing. The SFM-3 rollout
+  checker also rejects duplicate provider proof sibling hashes in externally
+  supplied evidence, so reviewed Merkle proof paths stay schema-closed outside
+  the local canary builder.
   Remaining SFM-3 rollout work is deploying the ingest/publisher service and
   capturing live run evidence that passes this gate, not the scoring, proof,
   local Torii API, cache validators, SSE/WebSocket push, SDK convenience
@@ -6264,7 +6308,7 @@ and completed history lives in [`status.md`](./status.md).
   validation succeeds, and emit the same reference outcome contract. Committed
   fixtures now include deterministic orderbook/streaming-settlement payloads
   plus runtime replay snapshot bytes, PDP commitment/challenge/proof payloads
-  plus initial negative fixtures, PoTR receipt, and repair task payloads under
+  plus expanded negative fixtures, PoTR receipt, and repair task payloads under
   `fixtures/sorafs_manifest/orderbook/`, `fixtures/sorafs_manifest/pdp/`,
   `fixtures/sorafs_manifest/potr/`, and `fixtures/sorafs_manifest/repair/`, so
   orderbook and PDP fixture tests cover the committed bytes and bundle
@@ -6272,17 +6316,29 @@ and completed history lives in [`status.md`](./status.md).
   repair payloads directly from a clean checkout. PDP proof validation now
   rejects empty segment and hot-leaf Merkle paths, focused validator tests cover
   late proofs, wrong providers, wrong manifests, and witness coverage
-  mismatches, and `generate_pdp_fixtures` emits the expanded negative set for
-  the next fixture regeneration. The SF-13 rollout evidence gate now requires
+  mismatches, and the committed fixture inventory now includes the expanded
+  negative set with `.to`/JSON parity checks. The SF-13 rollout evidence gate now requires
   payload-free provider-transport, proof-generation, validator-replay,
   governance/repair, observability, and governed-approval artifacts before PDP
   promotion, and requires replay/governance/observability/approval artifacts to
   bind back to a valid proof-generation `proof_summary_digest_hex` in the same
-  evidence bundle, with binding failures marked on the offending artifact
-  through the shared scalar binding error recorder before required-kind summary
-  validity is reported. The PDP collection planner now emits the
+  evidence bundle, requires governance approval `policy_digest_hex` to match a
+  valid proof-generation `policy_digest_hex`, publishes valid PDP policy
+  digests as `valid_policy_digests`, with binding failures marked on the
+  offending artifact through the shared scalar binding error recorder before
+  required-kind summary validity is reported. The PDP collection planner now emits the
   checker-backed `evidence_contract` map for the selected required kinds during
-  dry-run review. PDP remains fail-closed in embedded Torii proof streaming until
+  dry-run review, and validates the schema-closed collection-plan envelope,
+  required kinds, thresholds, external evidence map, checker-backed evidence
+  contract, and command steps before dry-run output or verifier execution.
+  `scripts/build_sorafs_pdp_canary.py` now builds payload-free checked-in
+  canary artifacts for each SF-13 gate kind, requires complete PDP route and
+  metric coverage where applicable, enforces proof-summary digest bindings plus
+  proof-generation/governance policy-digest input, provider/challenge/proof
+  count, and latency thresholds before writing, validates every generated
+  artifact through the PDP rollout checker, and ships provider-transport and
+  proof-generation response-file examples. PDP
+  remains fail-closed in embedded Torii proof streaming until
   provider transport, live signature/inclusion verification, regenerated
   negative fixture artifacts, governance archival, repair handoff, and deployed
   evidence that passes the gate land. The rollout-gate static contract now pins
@@ -6295,7 +6351,7 @@ and completed history lives in [`status.md`](./status.md).
   subcommands as unshipped while preserving `sorafs_cli proof stream
   --proof-kind=pdp` for external PDP-capable gateways, `sorafs-validate pdp`,
   PDP fixture/bundle validation, reserved telemetry labels, the fail-closed
-  rollout evidence gate, and the collection planner.
+  rollout evidence gate, collection planner, and payload-free canary builder.
   `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
   committed fixtures, exercises advert/order/governance signing, checks
   orderbook receipt validation and bundle cross-links, and emits manifest/CAR
@@ -6373,12 +6429,30 @@ and completed history lives in [`status.md`](./status.md).
   FFI/header/governance artifacts to bind back to a valid signed-manifest
   `release_manifest_digest_hex` in the same evidence bundle, with binding
   failures marked on the offending artifact through the shared scalar binding
-  error recorder before required-kind summary validity is reported; the
+  error recorder before required-kind summary validity is reported, requires
+  signed-manifest evidence to carry `policy_digest_hex`, publishes valid
+  signed-manifest policy digests as `valid_policy_digests`, publishes valid
+  downstream `release_manifest_digest_hex` references as
+  `valid_release_manifest_reference_digests`, requires the aggregate
+  production-readiness gate to tether those reference digests to recognized
+  artifact fingerprints, and requires
+  governance approval `policy_digest_hex` to bind back to that signed-manifest
+  policy before SF-11 promotion can report ready; the
   matching collection planner accepts reviewed
   release evidence paths, supports
   `@ARGFILE`, forwards age, release-target, downstream-package, and
   smoke-duration thresholds, and emits a dry-run-visible verifier command,
-  selected-kind `evidence_contract`, and operator example args. The SF-11 plan
+  selected-kind `evidence_contract`, and operator example args; it now validates
+  the schema-closed collection-plan envelope, required kinds, thresholds,
+  external evidence map, evidence contract, and command steps before dry-run
+  output or verifier execution. The SF-11 plan
+  now also ships
+  `scripts/build_sorafs_reference_sdk_release_canary.py`, a fail-closed
+  payload-free release evidence builder for release archives, signed manifests,
+  downstream bindings, cookbook smoke, FFI/header contract, and governance
+  approval artifacts, with signed-manifest and governance policy-digest inputs
+  plus response-file examples for release-archive and signed-manifest
+  generation. The SF-11 plan
   now also publishes the operator,
   metrics, and binding-generation guides for packaging, telemetry extraction,
   C FFI header synchronization, selector parity, and downstream package
@@ -6414,20 +6488,32 @@ and completed history lives in [`status.md`](./status.md).
   lookup while still capping returned samples by manifest leaves, and adds PoR
   scheduler panels plus alert fixtures. The SF-9 rollout evidence gate now
   validates payload-free randomness, scheduler runtime, validator replay,
-  reporting/archive handoff, manual-trigger route-state, observability, and
+  reporting/archive handoff, exact SQL/Parquet archive-backend selection,
+  exact manual-trigger retired route-state,
+  observability, and
   governance approval evidence, and requires scheduler/replay/reporting/
   observability/governance artifacts to bind back to a valid randomness
-  `seed_replay_digest_hex` in the same evidence bundle, with binding failures
-  marked on the offending artifact through the shared scalar binding error
-  recorder before required-kind summary validity is reported;
+  `seed_replay_digest_hex` in the same evidence bundle, requires governance
+  approval `policy_digest_hex` to match a valid randomness `policy_digest_hex`,
+  publishes valid PoR policy digests as `valid_policy_digests`, with binding
+  failures marked on the offending artifact through the shared scalar binding
+  error recorder before required-kind summary validity is reported;
   the matching collection planner accepts reviewed staged evidence paths,
   supports `@ARGFILE`, forwards age, route-latency, scheduler-lag,
   report-latency, provider-count, and challenge-count thresholds, and emits a
   dry-run-visible verifier command, checker-backed `evidence_contract` map for
-  the selected required kinds, plus operator example args. Remaining SF-9
-  work is live drand/VRF/auditor run evidence that passes this gate, a
-  deployment-specific SQL/Parquet archive decision, and governance archive
-  handoff evidence, not the local Torii runtime, status/export/report endpoints,
+  the selected required kinds, plus operator example args; it now validates the
+  schema-closed collection-plan envelope, required kinds, thresholds, external
+  evidence map, checker-backed evidence contract, and command steps before
+  dry-run output or verifier execution, and
+  `scripts/build_sorafs_por_canary.py` builds payload-free randomness,
+  scheduler-runtime, validator-replay, reporting/archive, observability, and
+  governance-approval canary artifacts with randomness/governance policy-digest
+  input through the same checker before rollout review. Remaining SF-9
+  work is live drand/VRF/auditor run evidence that passes this gate and
+  governance archive handoff evidence with the deployment-specific
+  SQL/Parquet `archive_backend` recorded in reporting/archive artifacts, not
+  the local Torii runtime, status/export/report endpoints,
   bounded ingestion readback, explicit manual-trigger retirement route,
   reference PoR validator command, or local scheduler observability. The
   rollout-gate static contract now also pins live external drand/VRF/auditor
@@ -6452,9 +6538,25 @@ and completed history lives in [`status.md`](./status.md).
   route-latency, hot/warm deadline, provider-count, and receipt-count
   thresholds, and emits a dry-run-visible verifier command, checker-backed
   `evidence_contract` map for the selected required kinds, plus operator
-  example args. Remaining SF-14 work is live multi-provider receipt evidence,
+  example args; it now validates the schema-closed collection-plan envelope,
+  required kinds, thresholds, external evidence map, checker-backed evidence
+  contract, and command steps before dry-run output or verifier execution.
+  `scripts/build_sorafs_potr_canary.py` builds payload-free
+  multi-provider-probe, receipt-validation, proof-stream,
+  reputation-integration, observability, and governance-approval canary
+  artifacts through the same checker before rollout review, requiring complete
+  tier, route, and metric coverage plus receipt-summary, PQ key-roster, and
+  reputation-weight policy digest bindings, governance policy-digest metadata,
+  and deadline threshold facts before writing. The SF-14 gate summary now also
+  publishes governance approval `policy_digest_hex` values as
+  `valid_policy_digests` so aggregate production readiness can tether PoTR
+  promotion policy metadata to recognized governance artifacts.
+  Remaining SF-14 work is live multi-provider receipt evidence,
   governed provider ML-DSA key distribution, reputation weighting evidence, and
-  governance approval that passes this gate, not local receipt capture,
+  governance approval that passes this gate with receipt-validation artifacts
+  bound to governance-approved `pq_key_roster_digest_hex` values and
+  reputation artifacts bound to governance-approved
+  `reputation_weight_policy_digest_hex` values, not local receipt capture,
   validation, or proof-stream replay. The rollout-gate static contract now also
   pins live multi-provider probe rollout, governed provider key-distribution,
   reputation-weight governance, SF-14 approval, and PoTR promotion routes or
@@ -6462,7 +6564,7 @@ and completed history lives in [`status.md`](./status.md).
   `Sora-PoTR-*` headers, embedded-node receipt recording, local receipt
   validation, proof-stream replay through `/v1/sorafs/proof/stream` with
   `proof_kind=potr`, `sorafs_cli proof stream --proof-kind=potr`, proof-stream
-  metrics, and deadline-breach alert fixtures.
+  metrics, deadline-breach alert fixtures, and the payload-free canary builder.
 - SoraFS provider admission observability now has a checked-in Grafana board
   (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
   rules and test vectors for missing admission envelopes, stale admission
@@ -6490,10 +6592,21 @@ and completed history lives in [`status.md`](./status.md).
   transport-scope, and governance approval artifacts. The gate binds live
   staging evidence back to the signed local conformance digest, requires
   telemetry and governance artifacts to reference the staged load report,
+  requires governance approval `policy_digest_hex` to match a valid
+  staging-load `policy_digest_hex`,
   rejects raw reports/response bodies/fixture payloads/runtime secrets, and
   keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
   gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
-  emits the matching collection dry-run plan and evidence contract, while the
+  emits the matching collection dry-run plan and evidence contract, and now
+  validates the schema-closed collection-plan envelope, required kinds,
+  thresholds, external evidence map, checker-backed evidence contract, and
+  command steps before dry-run output or verifier execution, while the
+  new `scripts/build_sorafs_gateway_load_canary.py` helper builds payload-free
+  checked-in canary artifacts for each SF-5a gate kind, requires complete
+  deterministic scenario and gateway metric coverage where applicable, enforces
+  suite/staging digest bindings and SLO threshold facts before writing,
+  validates every generated artifact through the gateway-load checker, and
+  ships local conformance and staging-load response-file examples. The
   static rollout contract keeps live gateway-load, staging-load, HTTP/3 soak,
   and promotion route/subcommand surfaces unshipped until deployed evidence
   passes this gate.
@@ -6734,7 +6847,9 @@ and completed history lives in [`status.md`](./status.md).
   requires committee evidence to match the valid runner manifest/hash/subject
   tuple, and requires operator workflow, notification transport, executor,
   transparency, and Governance DAG artifacts to bind back to the valid
-  end-to-end `workflow_digest_hex`, with workflow scalar binding failures
+  end-to-end `workflow_digest_hex`. Governance DAG artifacts now also bind
+  their `policy_digest_hex` to a valid runner policy digest, with workflow and
+  policy scalar binding failures
   recorded through the shared scalar binding error recorder and runner tuple
   binding failures recorded through the shared string-tuple binding error
   recorder so artifact invalidation cannot drift from other rollout gates,
@@ -6746,7 +6861,25 @@ and completed history lives in [`status.md`](./status.md).
   Governance DAG and end-to-end workflow evidence files.
   Its dry-run JSON now exports the SFM-4a `evidence_contract` map so operators
   can inspect each required schema and payload field before collecting staged
-  screening rollout evidence. The rollout-gate static contract now also keeps
+  screening rollout evidence, and the runner validates the schema-closed
+  collection-plan envelope, external evidence map, checker-backed evidence
+  contract, and command steps before dry-run output or live canaries. It also
+  rejects duplicate or unsupported `--source-entry` kinds before dry-run output
+  or live canaries.
+  `scripts/build_sorafs_ai_prescreen_canary.py` now builds payload-free
+  checked-in SFM-4a canary artifacts for each gate kind, fails closed on
+  missing runner/workflow binding inputs or incomplete operator-route,
+  transparency-source, Governance DAG producer, and workflow-step coverage,
+  validates every generated artifact through the AI pre-screen rollout checker,
+  and ships response-file examples for the end-to-end workflow anchor, juror
+  notification transport, and commit/reveal executor canaries. Valid
+  notification-transport artifacts now publish their reviewed
+  `manifest_body_blake3` values as `valid_notification_manifest_digests`, and
+  valid commit/reveal executor artifacts publish their top-level
+  `execution_summary_digest_hex` values as `valid_executor_summary_digests`;
+  the final SoraFS aggregate gate accepts both metadata fields only when they
+  match recognized artifact fingerprints. The
+  rollout-gate static contract now also keeps
   unshipped moderation portal commands such as `sorafs moderation jury-accept`
   and `sorafs moderation open-case` warning-only in SoraFS docs until the
   corresponding service and CLI handlers exist. It now also pins deployed AI
@@ -6785,8 +6918,9 @@ and completed history lives in [`status.md`](./status.md).
   CLI automation, local supervised commit/reveal executor job bundle
   generation, local commit/reveal executor canary evidence tooling, local
   operator workflow canary evidence tooling, the local AI pre-screening rollout
-  evidence gate and collection planner, the local quarantine operator role gate,
-  or the documented production role-provisioning runbook.
+  evidence gate, collection planner, and payload-free canary artifact builder,
+  the local quarantine operator role gate, or the documented production
+  role-provisioning runbook.
 - SFM-4 gateway compliance now has a payload-free rollout evidence gate:
   `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` validates feed
   promotion, controller runtime, moderation-toggle canaries, gateway reload,
@@ -6805,19 +6939,29 @@ and completed history lives in [`status.md`](./status.md).
   moderation-toggle, reload, enforcement, honey-audit, appeal, transparency,
   observability, and governance evidence to bind back to the valid
   feed-promotion `bundle_digest_hex` in the
-  same evidence bundle, and bundle mismatches mark the offending artifact
-  invalid through the shared scalar binding error recorder before required-kind
-  validity is reported. The
+  same evidence bundle, requires governance approval `policy_digest_hex` to
+  match a valid feed-promotion `policy_digest_hex`, and bundle/policy
+  mismatches mark the offending artifact invalid through the shared scalar
+  binding error recorder before required-kind validity is reported. The
   matching collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
 	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
 	  a dry-run-visible verifier command, selected-kind `evidence_contract`, and
-	  operator example args. The gateway denylist CI guard now copies sample and
+	  operator example args; it now validates the schema-closed collection-plan
+  envelope, required kinds, thresholds, external evidence map, checker-backed
+  evidence contract, and command steps before dry-run output or verifier
+  execution. The gateway denylist CI guard now copies sample and
 	  evidence JSON, writes generated old-snapshot JSON, discovers bundles, and
 	  reads generated diff/evidence reports through symlink-checked no-follow
 	  descriptors plus complete byte-write loops before those artifacts can feed
-	  promotion checks. Remaining
-	  SFM-4 gateway compliance production work is the always-on compliance
+	  promotion checks. A new
+  `scripts/build_sorafs_gateway_compliance_canary.py` helper now builds
+  payload-free controller-runtime and moderation-toggle canaries from reviewed
+  deployment facts, requires every positive proof claim explicitly, forces raw
+  feed/toggle payload and response-body flags to `false`, validates the generated
+  artifact through the SFM-4 checker contract, and writes atomically without
+  following output symlinks. Remaining
+		  SFM-4 gateway compliance production work is the always-on compliance
   controller daemon, persisted production catalog state, moderation
   toggle/override service deployment,
   deployed SFM-4c receipt publication, and captured staged multi-gateway
@@ -6860,7 +7004,10 @@ and completed history lives in [`status.md`](./status.md).
   raw Ed25519 signer key, and Torii lists those local issuance entries at
   `/v1/sorafs/transparency/tokens` with action-code, signer, token,
   bound-entry, expiry, evidence-digest summaries, total/returned counts, and a
-  bounded `limit` query for returned entries. `sorafs_node` also now
+  bounded `limit` query for returned entries. Torii SoraFS publish-index
+  coverage now pins no-query governance DAG and proof-token issuance readback
+  responses to the shared bounded default list limit while preserving explicit
+  missing-digest negative controls. `sorafs_node` also now
   exposes a generic local transparency source-entry worker via
   `TransparencyLedgerSourceEntry`,
   `record_transparency_ledger_source_entry(...)`, and
@@ -6928,7 +7075,10 @@ and completed history lives in [`status.md`](./status.md).
   list and optional cycle-detail readback, requires publisher identity fields
   unless waived, checks anchor metadata plus verification flags, and emits
   payload-free `sorafs.transparency.publication_canary.v1` evidence with
-  response sizes and BLAKE3 hashes without archiving publication bodies.
+  response sizes and BLAKE3 hashes without archiving publication bodies. The
+  CLI canary and transparency collection runner now reject non-lowercase,
+  wrong-length, or otherwise malformed `--cycle-id` values before dry-run
+  command plans or deployed cycle-detail probes are emitted.
   `iroha sorafs transparency explorer-canary` now probes deployed/public
   explorer snapshot, browser UI, and proof-token issuance index routes, verifies
   expected schemas/HTML markers, rejects ledger payload bodies and private
@@ -6957,9 +7107,10 @@ and completed history lives in [`status.md`](./status.md).
   before contacting live services.
   `scripts/run_sorafs_transparency_rollout_evidence.py` now provides the
   operator collection harness for those gates: it requires every supported
-  source-entry kind, privacy source-event/publish-due payloads, proof-token
-  issuance payloads, and publication cycle ids before running the canaries, then
-  invokes the verifier over the collected artifact directory. Repeated
+  source-entry kind, rejects duplicate or unsupported `--source-entry` kinds,
+  and requires privacy source-event/publish-due payloads, proof-token issuance
+  payloads, and publication cycle ids before running the canaries, then invokes
+  the verifier over the collected artifact directory. Repeated
   `--iroha-arg ARG` values pass runtime-only client config/signing options
   before `sorafs`, shell-style `@ARGFILE` response files keep reviewed
   operator inputs reproducible without embedding secrets, and `--dry-run` emits
@@ -6970,6 +7121,11 @@ and completed history lives in [`status.md`](./status.md).
   runtime-only client config, and
   `scripts/examples/sorafs_transparency_rollout_evidence.args.example` remains
   the direct verifier argfile for captured payload-free artifacts.
+  `scripts/build_sorafs_transparency_canary.py` now provides the fail-closed
+  payload-free SFM-4c canary builder for reviewed source-entry, publication,
+  privacy-aggregate, proof-token issuance, and explorer rollout artifacts,
+  with response-file examples for source-entry and publication canary generation
+  and checker-backed validation before atomic JSON writes.
   The rollout-gate static contract now pins deployed source-entry producers,
   deployed publisher identities/anchoring, deployed proof API hardening,
   public receipt explorer rollout, deployed proof-token producer/explorer
@@ -7033,11 +7189,13 @@ and completed history lives in [`status.md`](./status.md).
 	  replay evidence stays payload-free while publication and explorer route
 	  evidence also requires response BLAKE3 hashes to bind exact deployed
 	  exchanges. The transparency rollout gate now also requires reviewed
-	  `deployment_id`/`environment` context on every artifact, and the collection
-	  runner stamps that context onto generated canary artifacts before invoking
-	  the verifier. The remaining aggregate work is deployed source-event producers,
-	  deployed scheduler jobs, and captured rollout evidence using those wrappers
-	  and the canary.
+  `deployment_id`/`environment` context on every artifact, and the collection
+  runner stamps that context onto generated canary artifacts and now validates
+  the schema-closed collection-plan envelope, reviewed deployment context,
+  evidence contract, and command steps before dry-run output or live canaries.
+  The remaining aggregate work is deployed source-event producers,
+  deployed scheduler jobs, and captured rollout evidence using those wrappers
+  and the canary.
 - SoraFS economics/governance plan status is current for the remaining local
   production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito
   payloads and validators in `sorafs_manifest::orderbook` plus Rust reference
@@ -7085,18 +7243,33 @@ and completed history lives in [`status.md`](./status.md).
   matcher service, streaming-settlement service, authenticated API gateway,
   durable event streams, SDK release, observability, contract/mirror
   reconciliation, and governance approval evidence, requires matcher,
-  settlement, API, stream, SDK, observability, and reconciliation artifacts to
-  carry a `contract_digest_hex` matching a valid contract-surface artifact in
-  the same rollout bundle, and marks contract-digest mismatches on the
-  offending artifact through the shared scalar binding error recorder before
-  required-kind summary validity is reported. The
+  settlement, API, stream, SDK, observability, reconciliation, and governance
+  approval artifacts to carry a `contract_digest_hex` matching a valid
+  contract-surface artifact in the same rollout bundle, requires
+  contract-surface artifacts to carry `policy_digest_hex`, publishes valid
+  contract-surface policies as `valid_policy_digests`, requires governance
+  approval `policy_digest_hex` to match one of those valid policy digests, and
+  marks contract-digest and policy-digest mismatches on the offending artifact
+  through the shared scalar binding error recorder before required-kind summary
+  validity is reported. The
   matching collection planner accepts reviewed
   staged evidence paths, supports `@ARGFILE`, forwards
   age, route-latency, stream-lag, matcher-lag, and reconciliation-peer
   thresholds, and emits a dry-run-visible verifier command plus operator
   example args. It now also mirrors the checker's required payload fields in
   dry-run `evidence_contract` output so operators can preflight live orderbook
-  artifact shape before collection. The rollout-gate static contract now pins
+  artifact shape before collection, and validates the schema-closed
+  collection-plan envelope, required kinds, thresholds, external evidence map,
+  checker-backed evidence contract, and command steps before dry-run output or
+  verifier execution. A new `scripts/build_sorafs_orderbook_canary.py` helper
+  builds payload-free SFM-2 canaries for every orderbook evidence kind from
+  reviewed deployment facts, requires every positive proof claim and required
+  coverage set explicitly, forces raw contract/snapshot/receipt/response/ledger
+  payload flags to `false`, requires reviewed `--policy-digest-hex` input for
+  contract-surface and governance-approval canaries, validates generated artifacts through the orderbook
+  checker contract, rejects duplicate SDK release artifact ids, and writes
+  atomically without following output symlinks. The
+  rollout-gate static contract now pins
   the on-chain contract, durable matcher, daemonized settlement, escrow-custody,
   contract-stream, and live-dashboard orderbook service surfaces as unshipped
   in the SFM-2 plan and rejects matching public routes or operator subcommands
@@ -7140,7 +7313,14 @@ and completed history lives in [`status.md`](./status.md).
 	  juror sync, verifier service, moderation integration, metrics, and governance
 	  approval to agree on the active root/revocation-list digests, marks root and
   revocation disagreements on the offending artifacts through the shared
-  scalar binding error recorder, and blocks promotion when governance still
+  scalar binding error recorder, requires verifier-service artifacts to carry
+  `policy_digest_hex`, publishes valid verifier policy digests as
+  `valid_policy_digests`, publishes valid juror-client root/revocation sync
+  tuples as `valid_juror_sync_bindings`, publishes moderation
+  `pop_snapshot_digest_hex` values as `valid_pop_snapshot_digests`, requires the
+  aggregate production-readiness gate to tether both new metadata surfaces to
+  recognized artifact fingerprints, requires governance approval
+  `policy_digest_hex` to match one of those valid verifier policies, and blocks promotion when governance still
   points at the local
   transcript-digest-only proof foundation instead of a production
   privacy-preserving proof backend; the production
@@ -7150,7 +7330,20 @@ and completed history lives in [`status.md`](./status.md).
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness and
   latency thresholds, and emits a dry-run-visible verifier command,
   checker-backed `evidence_contract` map for the selected required kinds, plus
-  operator example args. The rollout-gate static contract now also pins the
+  operator example args; it now validates the schema-closed collection-plan
+  envelope, required kinds, thresholds, external evidence map, checker-backed
+  evidence contract, and command steps before dry-run output or verifier
+  execution. A new `scripts/build_sorafs_pop_credentials_canary.py` helper builds
+  payload-free SFM-4b1 canaries for issuer bundle, commitment root, revocation
+  registry, enrollment portal, juror client, verifier service, moderation
+  integration, metrics/alerts, and governance approval evidence from reviewed
+  deployment facts, requires every positive proof claim and route/metric
+  coverage set explicitly, requires reviewed verifier/governance policy-digest
+  input, forces raw credential/proof/identity/attestation/response-body flags
+  to `false`, rejects the transcript-digest-only privacy
+  backend before writing, validates generated artifacts through the PoP checker
+  contract, and writes atomically without following output symlinks. The
+  rollout-gate static contract now also pins the
   production verifier's fail-closed transcript-digest boundary and scans SoraFS
   docs so unshipped `sorafs pop sync|status|prove|revoke` commands can appear
   only as explicit not-shipped warnings until the service CLI/API actually
@@ -7224,14 +7417,29 @@ and completed history lives in [`status.md`](./status.md).
 	  quote/deposit/settlement/
 	  submitter/worker/Governance DAG/dashboard/reconciliation/governance artifacts
   to bind back to a valid pricing-config `config_digest_hex` in the same
-  evidence bundle, records config-digest mismatches on the offending artifact
-  through the shared scalar binding error recorder before required-kind summary
-  validity is reported, and requires at least four peers before promotion can
-  report `ready`. The matching collection planner accepts
+  evidence bundle, requires governance approval `policy_digest_hex` to match a
+  valid pricing-config `policy_digest_hex`, publishes valid staged pricing
+  policies as `valid_policy_digests`, records config- and policy-digest
+  mismatches on the offending artifact through the shared scalar binding error
+  recorder before required-kind summary validity is reported, and requires at
+  least four peers before promotion can report `ready`. The matching collection
+  planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
   latency, settlement-lag, and peer-count thresholds, and emits a dry-run-visible
   verifier command, checker-backed `evidence_contract` map for the selected
-  required kinds, plus operator example args. The rollout-gate static contract
+  required kinds, plus operator example args; it now validates the
+  schema-closed collection-plan envelope, required kinds, thresholds, external
+  evidence map, checker-backed evidence contract, and command steps before
+  dry-run output or verifier execution. A checked-in
+  `build_sorafs_appeal_finance_canary.py` helper now builds payload-free
+  pricing/config, quote, deposit, settlement, submitter, moderation-worker,
+  Governance DAG, dashboard, multi-peer reconciliation, and governance canary
+  artifacts with explicit verified claims, complete required route/class/
+  urgency/outcome/status/payload/metric coverage, shared config-digest binding,
+  pricing-config/governance policy-digest input, forced raw-payload omission
+  flags, checker-backed prevalidation, atomic symlink-safe writes, and
+  pricing-config plus multi-peer reconciliation example argfiles. The
+  rollout-gate static contract
   now pins the standalone pricing daemon, hosted/public appeal-finance
   dashboard promotion surface, and multi-peer ledger reconciliation promotion
   surface as unshipped while preserving local quote/deposit/settlement/report
@@ -7268,7 +7476,11 @@ and completed history lives in [`status.md`](./status.md).
   rollout evidence, case-digest binding failures use the shared scalar binding
   error recorder, and roster/tally tuple binding failures use the shared
   string-tuple binding error recorder so artifact invalidation cannot drift
-  from other rollout gates. The moderation-panel gate also requires reviewed
+  from other rollout gates. End-to-end panel artifacts must now carry
+  `policy_digest_hex`, valid e2e panel policy digests are published as
+  `valid_policy_digests`, and governance approval `policy_digest_hex` must
+  match one of those valid panel policy digests before the gate can report
+  ready. The moderation-panel gate also requires reviewed
   `deployment_id`/`environment` context on every artifact and blocks mixed
   reviewed deployment contexts across the same rollout bundle. The rollout-gate
   static contract now also pins the parent SFM-4b appeal intake service,
@@ -7276,7 +7488,15 @@ and completed history lives in [`status.md`](./status.md).
   publication, portal/jury workflow, durable public decision trail, and
   deployed moderation-panel promotion routes as unshipped while preserving the
   shipped local `ballots*` lifecycle API and adjacent local operator workflow
-  tooling.
+  tooling. A checked-in `build_sorafs_moderation_panel_canary.py` helper now
+  builds payload-free appeal-intake, sortition, evidence-viewer, operator,
+  juror-notification, commit/reveal, decision-publication, settlement,
+  transparency/reputation, e2e panel, metrics, and governance canary artifacts
+  with explicit verified claims, complete required route/viewer/scenario/
+  publication/metric coverage, shared case/roster/tally digest bindings,
+  reviewed e2e/governance policy-digest input, forced raw-payload omission
+  flags, checker-backed prevalidation, atomic
+  symlink-safe writes, and appeal-intake plus commit/reveal example argfiles.
   The evidence-viewer canary now covers SFM-4b3-specific controls for
   role-scoped manifests, short-lived URLs, attested/logged sessions, strict CSP,
   disabled offline mode, watermark overlay/metadata hashing, append-only access
@@ -7286,7 +7506,12 @@ and completed history lives in [`status.md`](./status.md).
   legal-hold receipt, transparency report, and audit digest, and rejection of
   signed URLs, session tokens, watermark secrets, raw evidence, raw access
   logs, legal-hold receipt payloads, transparency report payloads, and response
-  bodies. The rollout-gate static contract now pins the SFM-4b3 browser viewer,
+  bodies. The new payload-free `evidence_viewer` canary builder now turns
+  reviewed deployment facts into checker-validated digest-only canary JSON,
+  requires every positive viewer-control claim explicitly, forces raw
+  evidence/session-token/signed-URL/watermark-secret/body flags to `false`, and
+  writes the artifact atomically for staged review. The rollout-gate static
+  contract now pins the SFM-4b3 browser viewer,
   streaming backend, watermark engine, WebAuthn/session flow, access logger,
   and transparency exporter as unshipped service work, and rejects matching
   evidence-viewer routes or operator subcommands until those services exist.
@@ -7299,7 +7524,10 @@ and completed history lives in [`status.md`](./status.md).
   reviewed staged evidence paths,
   supports `@ARGFILE`, forwards freshness/latency/panel/peer thresholds, and
   emits a dry-run-visible verifier command, selected-kind `evidence_contract`,
-  and operator example args. The rollout-gate static contract now pins the
+  and operator example args; it now validates the schema-closed collection-plan
+  envelope, required kinds, thresholds, external evidence map, checker-backed
+  evidence contract, and command steps before dry-run output or verifier
+  execution. The rollout-gate static contract now pins the
   SFM-4b4 voting contract, durable ballot orchestrator, juror CLI/portal,
   challenge monitor, contract/ledger recording, and public decision/challenge
   DAG as unshipped production-service work, and rejects matching routes or
@@ -7332,9 +7560,12 @@ and completed history lives in [`status.md`](./status.md).
   rollout bundle, requires statement-publication, reconciliation, metrics/alert,
   and governance-approval artifacts to bind back to a valid staged billing
   cycle's `statement_bundle_digest_hex`/`reconciliation_digest_hex` tuple in
-  the same rollout bundle, marks reference-price and cycle-tuple binding
-  failures on the offending artifact through a shared string-tuple binding
-  error recorder before required-kind summary validity is reported, and
+  the same rollout bundle, requires billing-cycle artifacts to carry
+  `policy_digest_hex`, publishes valid cycle policy digests as
+  `valid_policy_digests`, requires governance approval `policy_digest_hex` to
+  match one of those valid cycle policies, marks reference-price, cycle-tuple,
+  and policy-digest binding failures on the offending artifact through shared
+  binding error recorders before required-kind summary validity is reported, and
   requires two distinct successful staged billing cycles before
   promotion can report `ready`. The checker and matching rollout
   collection planner now
@@ -7343,7 +7574,20 @@ and completed history lives in [`status.md`](./status.md).
   dry-run-visible verifier command plus operator example args. The planner now
   also mirrors the checker's required payload fields in dry-run
   `evidence_contract` output so operators can preflight staged billing artifact
-  shape before collection. A checked-in
+  shape before collection, and validates the schema-closed collection-plan
+  envelope, required kinds, thresholds, external evidence map, checker-backed
+  evidence contract, and command steps before dry-run output or verifier
+  execution. A new `scripts/build_sorafs_hedging_canary.py` helper builds
+  payload-free SFM-5 canaries for feed collector, reference price, billing
+  cycle, statement publication, reconciliation, metrics/alerts,
+  native-bridge release, and governance approval evidence from reviewed
+  deployment facts, requires every positive proof claim and route/source/metric
+  coverage set explicitly, forces raw feed/statement/financial-record/response/
+  debug payload flags to `false`, rejects ungoverned hedge-execution enablement
+  and duplicate native-bridge release artifact ids before writing, requires
+  reviewed `--policy-digest-hex` input for billing-cycle and
+  governance-approval canaries, validates generated artifacts through the hedging/billing
+  checker contract, and writes atomically without following output symlinks. A checked-in
   SFM-5 Grafana dashboard and Prometheus alert/test pack now
   defines the hedging/billing observability contract for feed lag/divergence,
   exposure drift, statement generation failures, acknowledgement backlog, and
@@ -7460,7 +7704,19 @@ and completed history lives in [`status.md`](./status.md).
   error recorder before required-kind summary validity is reported. The
   reserve/rent collection planner now mirrors the checker's required payload
   fields in dry-run `evidence_contract` output so operators can preflight live
-  artifact shape before collection, but SFM-6 still needs
+  artifact shape before collection, and validates the schema-closed
+  collection-plan envelope, required kinds, thresholds, external evidence map,
+  checker-backed evidence contract, and command steps before dry-run output or
+  verifier execution. A checked-in `build_sorafs_reserve_rent_canary.py`
+  helper now builds payload-free policy, matrix, ledger, lifecycle, signed-route,
+  movement, credit-line, appeal, metrics, provider-bake, and governance canary
+  artifacts with explicit verified claims, complete required route/metric/matrix
+  coverage, shared digest bindings, forced raw-payload omission flags,
+  checker-backed prevalidation, atomic symlink-safe writes, and policy/provider
+  bake example argfiles. Valid provider-bake rows now carry the accepted
+  `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple inside
+  `valid_provider_bakes`, and the aggregate production gate validates those
+  fields as payload-free hex metadata before promotion, but SFM-6 still needs
   live chain custody submission and automatic finality polling for signed movement intents,
   live account mutation for local credit-line state, broader downstream
   compliance application of governance source entries, and live provider bake
@@ -7496,16 +7752,31 @@ and completed history lives in [`status.md`](./status.md).
   observability, IPFS/IPNS end-to-end test, and governance approval evidence,
   requires mirror/recovery/dashboard/observability/IPFS/governance artifacts to
   bind back to the valid publisher-service `public_head_cid_hex` in the same
-  evidence bundle, marks public-head binding failures on the offending artifact
-  through the shared scalar binding error recorder before required-kind summary
-  validity is reported, and the matching collection
+  evidence bundle, requires governance approval `policy_digest_hex` to match a
+  valid publisher-service `policy_digest_hex`, marks public-head and policy
+  binding failures on the offending artifact through the shared scalar binding
+  error recorder before required-kind summary validity is reported, publishes
+  valid operator-recovery `checkpoint_digest_hex` values as
+  `valid_checkpoint_digests`, and the aggregate production-readiness gate
+  validates those checkpoint digests as payload-free lowercase-hex metadata
+  tethered to recognized artifact fingerprints before promotion, and the
+  matching collection
   planner accepts reviewed staged evidence paths,
   supports `@ARGFILE`, forwards age, route-latency, pin-lag, head-age, block,
   and payload-kind thresholds, and emits a dry-run-visible verifier command
   plus operator example args. It now also mirrors the checker's required
   payload fields in dry-run `evidence_contract` output so operators can
-  preflight live publication artifact shape before collection. The
-  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
+  preflight live publication artifact shape before collection, and validates
+	  the schema-closed collection-plan envelope, required kinds, thresholds,
+	  external evidence map, checker-backed evidence contract, and command steps
+	  before dry-run output or verifier execution. A new
+  `scripts/build_sorafs_governance_dag_canary.py` helper builds payload-free
+  canaries for all SF-12 evidence kinds from reviewed deployment facts, requires
+  explicit proof claims plus complete payload-kind, dashboard-route, and metric
+  coverage where applicable, forces raw block/head/CAR/checkpoint/response flags
+  to `false`, validates each generated artifact through the SF-12 checker, and
+  writes atomically without following output symlinks. The
+	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
   public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
   explicitly unshipped, and rejects matching public route families or
   operator subcommands until those services exist, but SF-12 still needs the
@@ -7540,14 +7811,29 @@ and completed history lives in [`status.md`](./status.md).
   evidence, requires signed auditor API, worker, event stream, governance
   handoff, and approval artifacts to bind to the valid auditor-roster digest,
   requires worker/event/handoff artifacts to bind to the valid failure-capture
-  evidence bundle digest, and records roster or failure-bundle mismatches on
-  the offending artifact through the shared scalar binding error recorder
-  before required-kind summary validity is reported. The
+  evidence bundle digest, requires governance approval artifacts to bind to the
+  valid governance handoff digest, requires governance handoff artifacts to
+  carry `policy_digest_hex`, publishes valid handoff policy digests as
+  `valid_policy_digests`, requires governance approval `policy_digest_hex` to
+  match a valid governance handoff policy digest, and records roster,
+  failure-bundle, handoff-digest, or policy-digest mismatches on the offending
+  artifact through the shared scalar binding error recorder before
+  required-kind summary validity is reported. The
   matching collection planner accepts reviewed staged evidence
   paths, supports `@ARGFILE`, forwards age, route-latency, event-lag,
   repair-latency, and auditor-count thresholds, and emits a dry-run-visible
   verifier command, checker-backed `evidence_contract` map for the selected
-  required kinds, plus operator example args. Remaining repair production work
+  required kinds, plus operator example args; it now validates the
+  schema-closed collection-plan envelope, required kinds, thresholds, external
+  evidence map, checker-backed evidence contract, and command steps before
+  dry-run output or verifier execution. `scripts/build_sorafs_repair_canary.py`
+  builds payload-free auditor-roster, failure-capture, signed-auditor-API,
+  worker-lifecycle, event-stream, governance-handoff, observability, and
+  governance-approval canary artifacts through the same checker before rollout
+  review, requiring complete failure-source, route, lifecycle-status,
+  handoff-target, and metric coverage plus roster/failure/handoff digest
+  bindings, reviewed policy-digest input for governance handoff and approval
+  canaries, and latency threshold facts before writing. Remaining repair production work
   is live PoR/PoTR failure, repair, escalation, and governance handoff evidence
   with the deployed auditor roster and coordinator that passes this gate. The
   rollout-gate static contract now pins live operator-evidence capture,
@@ -7556,7 +7842,8 @@ and completed history lives in [`status.md`](./status.md).
   while preserving the signed auditor report/slash endpoints, worker
   claim/heartbeat/complete/fail endpoints, local status and event-stream
   routes, `iroha sorafs repair`, `iroha sorafs gc`, `sorafs-validate repair`,
-  local repair telemetry, and the fail-closed SF-8b rollout evidence gate.
+  local repair telemetry, the fail-closed SF-8b rollout evidence gate, and the
+  payload-free canary builder.
 - SoraFS production promotion now has an aggregate readiness gate over the
   existing per-lane rollout/release evidence summaries:
   `scripts/check_sorafs_production_readiness.py` requires every selected
@@ -7569,25 +7856,40 @@ and completed history lives in [`status.md`](./status.md).
 	  metadata kept as a non-empty canonical non-negative integer map and preserved
 	  in each aggregate lane row for release review, extra top-level lane-summary
 	  fields outside the schema-closed payload-free lane summary contract rejected,
-	  allowed top-level lane metadata validated as payload-free canonical strings,
-	  non-negative integers, booleans, objects, and lists with expected container
-	  shapes, bound to the lane-specific contract that emits them, exact
-	  lowercase-hex binding-list metadata shapes validated before aggregate
-	  promotion, exact lowercase-hex and positive-integer scalar list metadata
-	  shapes validated before aggregate promotion, governance public-head
-	  identifiers validated as lowercase hex list metadata before aggregate
-	  promotion, exact object-list metadata shapes validated before aggregate
-	  promotion, exact duplicate object-list metadata entries rejected while
-	  preserving artifact order, exact object metadata shapes validated before
-	  aggregate promotion, set-derived lane metadata lists
-	  required to be duplicate-free and sorted in canonical order, malformed
+	  lane-specific top-level metadata required and validated as payload-free
+	  canonical strings, non-negative integers, booleans, objects, and lists with
+	  expected non-empty container shapes, bound to the lane-specific contract that
+	  emits them, exact lowercase-hex binding-list metadata shapes validated before
+	  aggregate promotion, exact lowercase-hex and positive-integer scalar list
+	  metadata shapes validated before aggregate promotion, governance
+	  public-head identifiers validated as lowercase hex list metadata before
+	  aggregate promotion, exact object-list metadata shapes validated before
+	  aggregate promotion, object-list detail rows including ids, counts, timing
+	  fields, and digests tethered to the owning required-row artifact
+	  fingerprints before aggregate promotion, exact duplicate object-list
+	  metadata entries rejected while preserving artifact order, exact object
+	  metadata shapes validated before aggregate promotion, set-derived lane
+	  metadata lists required to be duplicate-free and sorted in canonical order,
+	  reputation provider id and provider-count lists tethered to recognized
+	  artifact fingerprints before aggregate promotion, all hex-list anchor
+	  metadata fields tethered to their owning required artifact kind or
+	  jointly owning artifact kinds instead of any lane artifact before
+	  aggregate promotion across the 17 rollout/release lanes with a regression
+	  invariant and fail-closed aggregate-checker error for untethered future
+	  hex-list fields, concrete validator coverage for every declared lane
+	  metadata field with fail-closed errors for unclassified future fields,
+	  malformed
 	  sensitive-field path diagnostics sanitized before aggregate errors are
-	  written, and required-row schema labels kept canonical when present while
+	  written, explicit final `--deployment-id`/`--environment` required even
+	  for direct checker invocations, and required-row schema labels kept
+	  canonical when present while
 	  extra required-row fields outside the schema-closed payload-free required-row
 	  contract are rejected, before binding
 	  to the same `deployment_id`/
   `environment` and emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
+  aggregate row deployment contexts required to match the aggregate deployment
+  block before any ready summary is emitted. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed summary paths,
   requires exactly one summary input per required gate, requires an explicit
   canonical `--deployment-id`/`--environment` pair, supports `@ARGFILE`, and
@@ -7599,7 +7901,11 @@ and completed history lives in [`status.md`](./status.md).
   command plans. It also rejects plan-rendered verifier, output-directory, and
   summary-output paths plus runner input files/directories with secret-looking,
   control-character, parent/current, drive-prefix, or platform-specific
-  components before dry-run output through the shared runner preflight.
+  components before dry-run output through the shared runner preflight, and the
+  production-readiness runner now repeats rendered-path safety checks inside
+  collection-plan envelope validation for external summaries, artifacts, and
+  path-bearing command positions so validation drift cannot expose unsafe path
+  strings.
   URL-rendering SoraFS collection runners now also use the shared URL preflight
   so deployed service URLs with userinfo, query strings, fragments, control
   characters, or secret-looking host/path components cannot enter dry-run
@@ -7632,8 +7938,9 @@ and completed history lives in [`status.md`](./status.md).
   claim payload-free release-review anchors that are absent from its artifacts.
   Object-list detail metadata for billing cycles, E2E runs, multi-peer runs,
   and provider bakes must match the corresponding required artifact row
-  cardinality, so release review cannot promote missing or extra detail rows
-  while the artifact inventory stays ready.
+  cardinality, with provider-bake detail rows also carrying lowercase
+  policy/matrix/ledger digests, so release review cannot promote missing,
+  extra, or digestless detail rows while the artifact inventory stays ready.
   Aggregate lane rows are also
   schema-closed before release review, with archive-relative summary path
   labels derived from evidence-directory membership or safe explicit basenames,
@@ -18257,9 +18564,14 @@ operator-provided rollout bundles.
   cross-dataspace localnet fixture now uses the same canonical dataspace
   catalog and has non-ignored `zk-stark` genesis pre-execution coverage, while
   its native STARK/FRI proof runtime tests remain intentionally ignored until
-  AIR openings are implemented. Autoscale localnet evidence now covers both
-  the canonical expand/contract cycle and the public-profile strict transition
-  cycle after tightening stdout transition-marker parsing for real
+  AIR openings are implemented. The remaining runtime dataspace-registration
+  and wrong-ingress tx/query localnet fixtures now use the same canonical
+  dataspace catalog; tx/query runtime evidence also targets the current
+  `/v1/pipeline/transactions` submit route and uses production Torii read
+  fanout request budgets, with the full 12-peer wrong-ingress flow passing
+  locally. Autoscale localnet evidence now covers both the canonical
+  expand/contract cycle and the public-profile strict transition cycle after
+  tightening stdout transition-marker parsing for real
   tracing-target prefixes.
   The autoscale soak harness now also fails closed on stale prior scale-out
   logs and retry cleanup races: strict repeated cycles require fresh
@@ -18476,6 +18788,9 @@ operator-provided rollout bundles.
   and duplicate-retire destruction rejection paths through signed operator
   requests and now pins direct default-lane retire plus same-plan default-route
   replacement as public API errors without catalog or queue-limit mutation.
+  Empty signed lifecycle plans are now rejected before catalog, derived
+  lane-config, or queue-local limit mutation, so accepted lifecycle responses
+  cannot be produced by no-op operator payloads.
   Accepted signed add/retire plans are also covered at the endpoint wiring
   layer to prove lane-specific queue limits refresh from committed metadata and
   clear back to fallback values after retirement.
@@ -18489,11 +18804,113 @@ operator-provided rollout bundles.
   Core autoscale failure coverage now also proves failed internal scale-out and
   scale-in lifecycle attempts do not leave a pending staged catalog update for
   commit.
+  Autoscale ownership markers are now reserved as a pair: operator-authored
+  lanes cannot carry either `autoscale.managed` or `autoscale.created_height`
+  through signed lifecycle plans, external Nexus config swaps, TOML config
+  parsing, runtime autoscale prechecks, capacity accounting, or router
+  resolution. Marker-only corrupted lanes can be explicitly retired for repair
+  but cannot be preserved as manual lanes, selected as canonical/default/rule
+  routes, or counted as router-owned capacity. Core and Torii endpoint
+  regressions now also pin the valid-looking spoof shape where an
+  operator-authored lane uses the canonical elastic alias plus both reserved
+  autoscale markers.
+  Runtime autoscale transitions also reject autoscale-managed lanes whose
+  `autoscale.created_height` is greater than the current block height before
+  capacity, scale-out, or scale-in decisions run, so corrupted future-created
+  lanes cannot be counted by the autoscaler. Unrelated lifecycle/config updates
+  cannot silently preserve future-created autoscale lanes, while explicit
+  operator repair-retire plans can remove them. Live-state default-route
+  sharding applies the same committed-height boundary before selecting elastic
+  lanes, preventing future-created lanes from receiving default-route traffic or
+  appearing in route plans. Block execution, static execution-context
+  revalidation, transaction validation without embedded routing context, and
+  proposal routing refresh now use a block-height-aware Nexus/world routing
+  helper so candidate block height, not stale committed view height, decides
+  whether an autoscale lane is active. The older heightless Nexus/world routing
+  helper now fails closed to the configured default route for no-target default
+  traffic instead of sharding over autoscale lanes without a candidate height.
+  Lane relay authority applies the same activation-height boundary before
+  accepting manifest-bound or commit-topology-derived validator sets for
+  autoscale elastic lanes, so relays for not-yet-created lanes cannot be
+  accepted or cached, and corrupted manual lanes inside the reserved autoscale
+  elastic id range are denied relay authority as well; record-level relay
+  admission now checks lane activity before stale emergency overrides can fill a
+  committee. Merge candidate synthesis and commit-time merge snapshot validation
+  now apply the relay snapshot height before accepting lane snapshots, so stale
+  relay-store entries and persisted verified relay contract-state records for
+  future-created autoscale lanes cannot hydrate, restart-hydrate, or merge.
+  Public manifest validator-binding reads now also use the committed
+  lane-authority height, so Torii's manifest-preferred authoritative-peer and
+  proxy candidate paths cannot expose future-created autoscale lanes before
+  activation.
+  Lane-relay emergency override admission now uses the same
+  height-aware active-lane dataspace boundary before storing override validator
+  sets, so future-created autoscale lanes cannot gain emergency relay authority
+  through a catalog-only check. IVM
+  AXT policy snapshot derivation, cached-policy reads, and policy cache
+  rebuild/prune paths now also filter target lanes through that height-aware
+  active-lane boundary, so Space Directory manifests and stale cached policies
+  cannot expose or persist future-created autoscale lanes before activation.
+  Stake/QC active-lane
+  filters now also exclude autoscale-reserved lanes and manual occupants of the
+  elastic range before public validator stake can contribute as ordinary active
+  lane stake. Public-lane staking ISIs now reject inactive lanes at the
+  transaction block height, and Torii public lane validators/stake/rewards reads
+  hide stale persisted rows for future-created autoscale lanes at the committed
+  lane-authority height. Soracloud runtime validator-authority and HF placement
+  stake aggregation now use the same transaction-height active-lane boundary, so
+  future-created autoscale validator rows cannot authorize runtime actions or
+  inflate host placement weights before activation. Sumeragi NPoS penalty
+  derivation, penalty application, and election candidate-profile assembly now
+  apply active-lane filters before stale future-created autoscale rows can jail,
+  slash, or weight validator candidates. Torii route discovery now applies the
+  same active-lane filter before exposing direct dataspace routes,
+  all-dataspace fanout, restricted ingress routes, or public-dataspace
+  visibility, and explicit public-lane route resolution plus receiver-side
+  read/verified-query proxy validation reject future-created autoscale lane
+  hints as stale routes. Transaction gossip validation now applies the same
+  active-lane boundary to advertised routes and full Native AMX routing plans
+  before materialization or local admission. Soracloud status routing now
+  separates configured lanes from active lane ids/count and live
+  autoscale-capacity lane ids/count, reports sparse configured lane namespaces
+  separately from declared metadata entries, and accepted Nexus lifecycle
+  responses mirror the active/capacity split while preserving legacy
+  `lane_count` as configured count. The generated Torii OpenAPI surface and
+  latest/current portal snapshots now list `/v1/soracloud/status` with that
+  routing-field split, document `/v1/nexus/lifecycle` as a `202 Accepted`
+  `NexusLaneLifecycleResponse` operator action, and the Nexus operator docs
+  describe the expanded lifecycle response payload.
+  DA active proof-policy admission
+  rejects manual lanes in the autoscale elastic range and malformed
+  autoscale-reserved metadata while still
+  advertising proof policy for valid autoscale elastic lanes. State and
+  consensus DA commitment validation now enforce that same proof policy at the
+  candidate block/proposal height, so future-created autoscale lanes cannot
+  validate commitments before their declared creation height. DA pin-intent
+  sanitization, inbound block validation, state ingestion, Kura replay, and
+  feature-gated proposal assembly coverage now apply the same candidate-height
+  rule before sealing, hydrating, or accepting pin intents for autoscale lanes.
+  Block validation and proposal assembly now compute DA proof-policy header
+  hashes against the block/proposal height as well. State DA commitment
+  materialization and Kura replay use the commitment block height for
+  current-catalog query/identity visibility, while preserving canonical
+  historical bundles for removed lanes, and Torii DA ingest selects proof
+  schemes from the committed-height policy view.
+  Torii DA commitment/proof-policy/pin-intent read APIs now use
+  committed-height policy snapshots plus proof-block-height and
+  intent-block-height active-lane checks, so corrupted future-created
+  autoscale lanes cannot be advertised, listed, proven, or verified through
+  public read surfaces.
   Default-route autoscale capacity now counts fixed default-dataspace base
-  lanes below `min_lanes` toward the scale-in floor while still ignoring
-  unrelated manual lanes outside the elastic range, and accepted scale-out plus
-  public-profile scale-in tests pin the staged pending lifecycle height,
-  catalog, lane-config, reset lanes, and empty replacement set.
+  lanes below `min_lanes` and the configured default-route anchor itself toward
+  the scale-in floor, including valid anchors above the reserved elastic range,
+  while still ignoring unrelated manual lanes outside the elastic range. Live
+  default-route sharding now has matching high-anchor regression coverage so
+  no-target traffic can use the high anchor plus in-range autoscale lanes but
+  cannot leak onto unrelated manual sidecars.
+  Accepted scale-out plus public-profile scale-in tests pin the staged pending
+  lifecycle height, catalog, lane-config, reset lanes, and empty replacement
+  set.
   Same-id dataspace rebind pruning coverage now exercises a non-default lane,
   keeping default-route replacement rejection intact while still proving
   lane-scoped state is reset across lifecycle rebinds.

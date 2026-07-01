@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9282c522d94aab6cbc286ac4de9ee8780050b76d409fc4ce3f4aa369c9010282
+source_hash: 0665310b28953bf369d804830d1d05fc48805ece24ab8963f3ef48442be0b4dc
 source_last_modified: "2026-06-25T17:38:19+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -46,7 +46,9 @@ Implemented locally:
   checker exports its required top-level payload fields as
   `EVIDENCE_REQUIRED_FIELDS`, and the collection runner includes the
   checker-backed `evidence_contract` map in dry-run output for the selected
-  required kinds.
+  required kinds, and validates the schema-closed collection plan, required
+  kinds, thresholds, external evidence map, evidence contract, and command steps
+  before dry-run output or verifier execution.
 - `fixtures/sorafs_manifest/pdp/` now contains canonical PDP commitment,
   challenge, and proof `.to`/JSON pairs plus negative fixtures for duplicate
   hot-leaf challenge material and missing proof signatures. The fixture bundle
@@ -240,7 +242,8 @@ Completed local foundations:
 - Extend `generate_pdp_fixtures` so the expanded negative PDP fixture set is
   reproducible when fixture regeneration can run.
 - Keep the fail-closed PDP rollout evidence gate and collection planner covered
-  with proof-summary digest binding.
+  with proof-summary digest binding and rejection of evidence supplied for
+  excluded `--require-kind` values.
 
 Remaining production gates:
 

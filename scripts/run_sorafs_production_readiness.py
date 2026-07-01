@@ -22,7 +22,7 @@ from check_sorafs_production_readiness import (  # noqa: E402
     SUMMARY_SCHEMA,
     canonical_string,
     is_production_ready_environment,
-    require_reviewed_deployment_id_value,
+    require_production_deployment_id_value,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_gates,
@@ -62,6 +62,7 @@ PLAN_FIELDS = frozenset(
         "steps",
     }
 )
+COMMAND_PATH_FLAGS = frozenset({"--evidence", "--summary-out"})
 
 
 @dataclass(frozen=True)
@@ -186,7 +187,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             "production readiness runner deployment context must use canonical labels"
         )
     else:
-        require_reviewed_deployment_id_value(
+        require_production_deployment_id_value(
             args.deployment_id,
             errors,
             "production readiness runner deployment_id",
@@ -270,6 +271,35 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
     }
 
 
+def rendered_plan_paths_are_safe(rendered: Mapping[str, object]) -> bool:
+    """Return whether all rendered plan path strings are safe to expose."""
+
+    paths: list[str] = []
+    external_summaries = rendered.get("external_summaries")
+    if isinstance(external_summaries, Mapping):
+        for gate_paths in external_summaries.values():
+            if not isinstance(gate_paths, list):
+                continue
+            paths.extend(path for path in gate_paths if isinstance(path, str))
+    steps = rendered.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            artifact = step.get("artifact")
+            if isinstance(artifact, str):
+                paths.append(artifact)
+            command = step.get("command")
+            if isinstance(command, list):
+                for index, argument in enumerate(command):
+                    if not isinstance(argument, str):
+                        continue
+                    previous = command[index - 1] if index > 0 else None
+                    if index in {0, 1} or previous in COMMAND_PATH_FLAGS:
+                        paths.append(argument)
+    return all(plan_rendered_path_is_safe(Path(path)) for path in paths)
+
+
 def validate_plan_json(
     rendered: object,
     plan: Sequence[CommandPlan],
@@ -319,6 +349,16 @@ def validate_plan_json(
         errors.append(
             "production readiness runner plan deployment_context must be canonical"
         )
+    else:
+        require_production_deployment_id_value(
+            args.deployment_id,
+            errors,
+            "production readiness runner plan deployment_id",
+        )
+        if not is_production_ready_environment(args.environment):
+            errors.append(
+                "production readiness runner plan environment must be production"
+            )
 
     external_summaries = rendered.get("external_summaries")
     paths_by_gate = summary_paths_by_gate(args)
@@ -355,6 +395,8 @@ def validate_plan_json(
     ]
     if rendered.get("steps") != expected_steps:
         errors.append("production readiness runner plan steps must match command plan")
+    if not rendered_plan_paths_are_safe(rendered):
+        errors.append(PLAN_RENDERED_PATH_ERROR)
     try:
         render_runner_plan(rendered)
     except (TypeError, ValueError):
@@ -411,8 +453,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=non_negative_int_arg,
         default=DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
     )
-    parser.add_argument("--deployment-id")
-    parser.add_argument("--environment")
+    parser.add_argument(
+        "--deployment-id",
+        help=(
+            "Required final deployment id shared by every required lane summary "
+            "before aggregate production readiness can run."
+        ),
+    )
+    parser.add_argument(
+        "--environment",
+        help=(
+            "Required final prod/production environment shared by every required "
+            "lane summary before aggregate production readiness can run."
+        ),
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",

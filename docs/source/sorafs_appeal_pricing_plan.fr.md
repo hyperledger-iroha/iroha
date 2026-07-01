@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a198824eb738079cea112c31d42f259d98ce0ed631fd39a90ea461efafde5a3a
+source_hash: e1f786348317e0ff4391df40d8d7fe360d5ad60e74208a2b41cfec11491b9458
 source_last_modified: "2026-06-25T17:34:55+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -479,3 +479,5 @@ The rollout evidence scripts have focused Python coverage in:
 
 - `scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py`
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.

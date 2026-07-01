@@ -33,12 +33,32 @@ SF-8b rollout evidence gate for deployed repair promotion packets, and
 evidence collection planner/runner. The checker exports its required top-level
 payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
 checker-backed `evidence_contract` map in dry-run output for the selected
-required kinds. Signed auditor API, worker lifecycle, event stream, governance
+required kinds, and validates the schema-closed collection plan, required
+kinds, thresholds, external evidence map, evidence contract, and command steps
+before dry-run output or verifier execution. Signed auditor API, worker lifecycle, event stream, governance
 handoff, and approval artifacts must bind to a valid
 auditor roster digest; worker, event stream, and handoff artifacts must also
-bind to a valid failure-capture evidence bundle digest. Roster or failure
-bundle mismatches are recorded on the offending artifact in the JSON summary
-before required-kind validity is reported.
+bind to a valid failure-capture evidence bundle digest; governance approval
+artifacts must additionally bind to the valid governance handoff digest. Roster,
+failure-bundle, or handoff-digest mismatches are recorded on the offending
+artifact in the JSON summary before required-kind validity is reported.
+Governance handoff artifacts also publish `policy_digest_hex`; governance
+approval artifacts must bind `policy_digest_hex` to that valid handoff policy
+digest, and the checker emits those valid handoff policies as
+`valid_policy_digests`.
+`scripts/build_sorafs_repair_canary.py` builds individual payload-free SF-8b
+canary artifacts for auditor roster, failure capture, signed auditor API,
+worker lifecycle, event streams, governance handoff, observability, and
+governance approval evidence. The builder requires reviewed deployment
+context, complete failure-source, repair route, lifecycle-status,
+handoff-target, and metric coverage where applicable, auditor-roster and
+failure-bundle digest bindings, governance handoff digest bindings, auditor
+minimum counts, route, event-lag, and repair-latency threshold facts,
+config-backed governance metadata, reviewed policy-digest input for
+governance handoff and approval evidence, and
+validates every generated artifact through
+`scripts/check_sorafs_repair_rollout_evidence.py` before writing. Checked-in
+response-file examples cover auditor-roster and worker-lifecycle canaries.
 
 ## Component Overview
 | Component | Responsibilities | Implementation Notes |
@@ -383,9 +403,16 @@ auditor roster meets the configured minimum, governance is bound to
 handoff / governance approval artifacts carry a `roster_digest_hex` that
 matches a valid auditor-roster artifact, and worker lifecycle / event stream /
 governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches
-a valid PoR/PoTR failure-capture artifact in the same rollout bundle. Its
-collection planner exposes those exact required payload fields through
-`--dry-run` without touching live repair services.
+a valid PoR/PoTR failure-capture artifact in the same rollout bundle, and
+governance approval artifacts carry a `handoff_digest_hex` that matches a valid
+governance handoff artifact.
+Governance handoff artifacts also carry `policy_digest_hex`; the checker emits
+those values as `valid_policy_digests`, and governance approval artifacts must
+carry a matching `policy_digest_hex`.
+Its collection planner exposes those exact required payload fields through
+`--dry-run` and validates the schema-closed collection plan, required kinds,
+thresholds, external evidence map, evidence contract, and command steps before
+touching live repair services.
 
 ## Rollout Status
 Implemented engineering coverage:
@@ -394,10 +421,13 @@ Implemented engineering coverage:
 - Local golden and integration coverage now exercises the repair schemas, scheduler state transitions, auditor request validation, PoR failure binding, REST endpoints, and repair worker flows.
 - `iroha sorafs repair` and `iroha sorafs gc` provide operator CLI coverage;
   `sorafs-validate repair` provides release/fixture validation.
+- `scripts/build_sorafs_repair_canary.py` provides checked-in payload-free
+  canary generation for the local SF-8b rollout gate.
 - The SF-8b rollout evidence gate, collection planner, operator argfile
   templates, and focused tests are implemented for payload-free deployed
   evidence review, including cross-artifact auditor-roster and failure-bundle
-  digest binding.
+  digest binding plus governance handoff digest and handoff policy digest
+  binding.
 
 Remaining rollout work is live operator evidence: collect production PoR
 failure, repair, and governance handoff artifacts once the deployed auditor

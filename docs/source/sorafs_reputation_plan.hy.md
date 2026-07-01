@@ -3,7 +3,7 @@ lang: hy
 direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: needs-update
-source_hash: a2af63a1c75b42890f62f56139177adfdedd1c418edac3ac70414553d799aeb4
+source_hash: 90a0df7f136a68ee55011332d1ecad2dd8314953b2dcae130db22273ee06fd52
 source_last_modified: "2026-06-25T18:04:39+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -219,7 +219,9 @@ CREATE TABLE reputation_snapshots (
   proof coverage before touching a live Torii endpoint, and then runs the
   evidence gate. Its `--dry-run` output includes the checker-backed
   `evidence_contract` map for publish/latest, provider, events, verify,
-  metrics, transport, and consumption artifacts.
+  metrics, transport, and consumption artifacts, and the runner validates the
+  schema-closed collection plan, external evidence map, evidence contract, and
+  command steps before dry-run output or live collection.
   `scripts/examples/sorafs_reputation_rollout_evidence.args.example` provides
   a payload-free operator template.
 - Operator workflow notes live in

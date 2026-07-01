@@ -20,6 +20,8 @@ NOW_UNIX = 1_800_600_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ef" * 32
 DIGEST_2 = "12" * 32
+PQ_KEY_ROSTER_DIGEST = "34" * 32
+REPUTATION_POLICY_DIGEST = "56" * 32
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -67,7 +69,11 @@ def multi_provider_probe(
     return payload
 
 
-def receipt_validation(*, pq_keys: bool = True) -> dict:
+def receipt_validation(
+    *,
+    pq_keys: bool = True,
+    pq_key_roster_digest: str = PQ_KEY_ROSTER_DIGEST,
+) -> dict:
     payload = base("sorafs.potr.receipt_validation_canary.v1")
     payload.update(
         {
@@ -79,6 +85,7 @@ def receipt_validation(*, pq_keys: bool = True) -> dict:
             "gateway_signature_verified": True,
             "provider_signature_policy_enforced": True,
             "provider_pq_keys_governed": pq_keys,
+            "pq_key_roster_digest_hex": pq_key_roster_digest,
             "ml_dsa_provider_signature_verified": True,
             "receipts_validated": 6,
             "receipt_summary_digest_hex": DIGEST,
@@ -122,7 +129,11 @@ def proof_stream(*, norito: bool = True) -> dict:
     return payload
 
 
-def reputation_integration(*, governed: bool = True) -> dict:
+def reputation_integration(
+    *,
+    governed: bool = True,
+    reputation_weight_policy_digest: str = REPUTATION_POLICY_DIGEST,
+) -> dict:
     payload = base("sorafs.potr.reputation_integration_canary.v1")
     payload.update(
         {
@@ -131,6 +142,7 @@ def reputation_integration(*, governed: bool = True) -> dict:
             "latency_percentiles_updated": True,
             "degradation_alert_linked": True,
             "reputation_weight_governed": governed,
+            "reputation_weight_policy_digest_hex": reputation_weight_policy_digest,
             "missed_deadline_penalty_bound": True,
             "receipt_summary_digest_hex": DIGEST,
             "stats_digest_hex": DIGEST,
@@ -163,7 +175,11 @@ def observability(*, critical: bool = False) -> dict:
     return payload
 
 
-def governance_approval() -> dict:
+def governance_approval(
+    *,
+    pq_key_roster_digest: str = PQ_KEY_ROSTER_DIGEST,
+    reputation_weight_policy_digest: str = REPUTATION_POLICY_DIGEST,
+) -> dict:
     payload = base("sorafs.potr.governance_approval.v1")
     payload.update(
         {
@@ -172,7 +188,9 @@ def governance_approval() -> dict:
             "iroha_config_bound": True,
             "potr_policy_bound": True,
             "pq_key_roster_bound": True,
+            "pq_key_roster_digest_hex": pq_key_roster_digest,
             "reputation_weight_bound": True,
+            "reputation_weight_policy_digest_hex": reputation_weight_policy_digest,
             "governance_dag_bound": True,
             "config_source": "iroha_config",
             "receipt_summary_digest_hex": DIGEST,
@@ -204,6 +222,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.potr.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
+    assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["multi_provider_probe"]["valid"] is True
 
 
@@ -290,6 +309,29 @@ def test_receipt_validation_requires_pq_key_roster(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_receipt_validation_pq_key_roster_digest_must_match_governance(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "receipt-validation.json",
+        receipt_validation(pq_key_roster_digest=DIGEST_2),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["receipt_validation"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "receipt_validation pq_key_roster_digest_hex must reference a valid "
+        "governance_approval pq_key_roster_digest_hex"
+    ]
+
+
 def test_receipt_validation_requires_receipt_summary_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = receipt_validation()
@@ -331,6 +373,29 @@ def test_reputation_weight_must_be_governed(tmp_path: Path) -> None:
     write_json(tmp_path / "reputation-integration.json", reputation_integration(governed=False))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_reputation_weight_policy_digest_must_match_governance(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "reputation-integration.json",
+        reputation_integration(reputation_weight_policy_digest=DIGEST_2),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["reputation_integration"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "reputation_integration reputation_weight_policy_digest_hex must "
+        "reference a valid governance_approval reputation_weight_policy_digest_hex"
+    ]
 
 
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:

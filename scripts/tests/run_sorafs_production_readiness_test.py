@@ -59,6 +59,28 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
     assert "check_sorafs_production_readiness.py" in payload["steps"][0]["command"][1]
 
 
+def test_help_marks_final_deployment_context_required(capsys) -> None:
+    try:
+        MODULE.parse_args(["--help"])
+    except SystemExit as error:
+        assert error.code == 0
+    else:  # pragma: no cover - argparse always exits for --help
+        raise AssertionError("expected --help to exit")
+
+    help_text = " ".join(capsys.readouterr().out.split())
+
+    assert (
+        "Required final deployment id shared by every required lane summary"
+        in help_text
+    )
+    assert (
+        "Required final prod/production environment shared by every required"
+        in help_text
+    )
+    assert "Optional expected deployment id" not in help_text
+    assert "Optional expected environment" not in help_text
+
+
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     args = MODULE.parse_args(complete_args(tmp_path))
     plan = MODULE.build_command_plan(args)
@@ -103,6 +125,59 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "production readiness runner plan steps must match command plan" in diagnostics
     assert "runtime-only-key-material" not in diagnostics
     assert "summary-copy" not in diagnostics
+
+
+def test_plan_json_deployment_context_must_be_final_production(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-staging-a"
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+
+    assert (
+        "production readiness runner plan deployment_id must not contain "
+        "non-production deployment markers ['staging']"
+        in errors
+    )
+    assert "gateway-staging-a" not in "\n".join(errors)
+
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.environment = "staging"
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+
+    assert (
+        "production readiness runner plan environment must be production"
+        in errors
+    )
+    assert "staging" not in "\n".join(errors)
+
+
+def test_plan_json_rejects_unsafe_rendered_paths(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    unsafe_summary = write_json(tmp_path / "private_key_summary.json")
+    args.gateway_load_summary = [unsafe_summary]
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+
+    assert MODULE.PLAN_RENDERED_PATH_ERROR in errors
+    assert "private_key_summary" not in "\n".join(errors)
+
+
+def test_rendered_plan_path_guard_ignores_non_path_command_values(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["steps"][0]["command"].extend(["--future-label", "private_key_label"])
+
+    assert MODULE.rendered_plan_paths_are_safe(rendered)
 
 
 def test_execution_rejects_plan_validation_drift_before_running(
@@ -372,6 +447,90 @@ def test_unreviewed_deployment_id_fails(tmp_path: Path) -> None:
         in errors
     )
     assert "gateway-notproductionready-a" not in "\n".join(errors)
+
+
+def test_staging_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-staging-a"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-production deployment markers ['staging']"
+        in errors
+    )
+    assert "gateway-staging-a" not in "\n".join(errors)
+
+
+def test_joined_nonproduction_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-testproduction-202606"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-reviewed deployment markers ['testproduction']"
+        in errors
+    )
+    assert "gateway-testproduction-202606" not in "\n".join(errors)
+
+
+def test_prerelease_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-prerelease-202606"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-reviewed deployment markers ['prerelease']"
+        in errors
+    )
+    assert "gateway-prerelease-202606" not in "\n".join(errors)
+
+
+def test_tokenized_prerelease_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-prod-rc-202606"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-reviewed deployment markers ['rc']"
+        in errors
+    )
+    assert "gateway-prod-rc-202606" not in "\n".join(errors)
+
+
+def test_preview_prerelease_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-productionpreview-202606"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-reviewed deployment markers ['productionpreview']"
+        in errors
+    )
+    assert "gateway-productionpreview-202606" not in "\n".join(errors)
+
+
+def test_canary_deployment_id_fails(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.deployment_id = "gateway-prod-canary-202606"
+
+    errors = MODULE.validate_inputs(args)
+
+    assert (
+        "production readiness runner deployment_id must not contain "
+        "non-reviewed deployment markers ['canary']"
+        in errors
+    )
+    assert "gateway-prod-canary-202606" not in "\n".join(errors)
 
 
 def test_summary_input_path_components_must_be_plan_safe(

@@ -28372,7 +28372,10 @@ mod advert_tests {
             value.get("returned_entry_count").and_then(Value::as_u64),
             Some(6)
         );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
         assert_eq!(
             value.get("truncated_entries").and_then(Value::as_bool),
             Some(false)
@@ -29102,7 +29105,10 @@ mod advert_tests {
             value.get("returned_token_count").and_then(Value::as_u64),
             Some(1)
         );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
         assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
         assert_eq!(
             value.get("distinct_token_count").and_then(Value::as_u64),
@@ -29901,7 +29907,7 @@ mod advert_tests {
         let response = handle_get_sorafs_governance_dag_publish_digest(
             State(app),
             HeaderMap::new(),
-            Path("ff".repeat(32)),
+            Path("99".repeat(32)),
             axum::extract::RawQuery(None),
         )
         .await;

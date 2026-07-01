@@ -20519,7 +20519,7 @@ async fn submit_contract_call_request(
         transaction_ttl_ms,
         tx_hash_hex: None,
         pipeline_status: None,
-        entrypoint_hash_hex: Some(entrypoint_hash_hex),
+        entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
@@ -80934,6 +80934,10 @@ pub async fn handle_v1_nexus_public_lane_validators(
 ) -> Result<impl IntoResponse> {
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS);
 
+    if !state.is_lane_active_for_authority(lane_id) {
+        return lane_items_response(lane_id, Vec::new());
+    }
+
     let world = state.world_view();
     let mut entries = Vec::new();
     for (key, record) in world.public_lane_validators().iter() {
@@ -80950,17 +80954,10 @@ pub async fn handle_v1_nexus_public_lane_validators(
         );
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
-    let payload = build_lane_items_payload(
+    lane_items_response(
         lane_id,
         entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    )
 }
 
 #[iroha_futures::telemetry_future]
@@ -80996,6 +80993,10 @@ pub async fn handle_v1_nexus_public_lane_stake(
     };
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_STAKE);
 
+    if !state.is_lane_active_for_authority(lane_id) {
+        return lane_items_response(lane_id, Vec::new());
+    }
+
     let world = state.world_view();
     let mut entries = Vec::new();
     for (key, share) in world.public_lane_stake_shares().iter() {
@@ -81014,17 +81015,10 @@ pub async fn handle_v1_nexus_public_lane_stake(
         entries.push(stake_share_to_json(share));
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
-    let payload = build_lane_items_payload(
+    lane_items_response(
         lane_id,
         entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    )
 }
 
 #[iroha_futures::telemetry_future]
@@ -81069,6 +81063,10 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS);
     let upto_epoch = params.upto_epoch.unwrap_or(u64::MAX);
 
+    if !state.is_lane_active_for_authority(lane_id) {
+        return lane_items_response(lane_id, Vec::new());
+    }
+
     let world = state.world_view();
     let rewards = collect_pending_public_lane_rewards(
         lane_id,
@@ -81085,17 +81083,10 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         .collect::<Vec<_>>();
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
 
-    let payload = build_lane_items_payload(
+    lane_items_response(
         lane_id,
         entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -81191,6 +81182,18 @@ fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
     root.insert("total".into(), Value::from(items.len() as u64));
     root.insert("items".into(), Value::Array(items));
     root
+}
+
+#[cfg(feature = "app_api")]
+fn lane_items_response(lane_id: LaneId, items: Vec<Value>) -> Result<Response> {
+    let payload = build_lane_items_payload(lane_id, items);
+    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
 }
 
 #[cfg(feature = "app_api")]
@@ -81356,6 +81359,187 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
     record.lane_id = key.0;
     record.epoch = 9;
     assert!(!public_lane_reward_record_matches_key(&key, &record));
+}
+
+#[cfg(all(test, feature = "app_api"))]
+async fn public_lane_items_payload(response: Response) -> Value {
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .expect("collect lane items response")
+        .to_bytes();
+    norito::json::from_slice(&body).expect("decode lane items response")
+}
+
+#[cfg(all(test, feature = "app_api"))]
+fn assert_empty_public_lane_items(payload: &Value, lane_id: LaneId) {
+    assert_eq!(payload["lane_id"].as_u64(), Some(u64::from(lane_id)));
+    assert_eq!(payload["total"].as_u64(), Some(0));
+    assert!(
+        payload["items"].as_array().is_some_and(Vec::is_empty),
+        "inactive lane payload must contain an empty items array: {payload:?}"
+    );
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[tokio::test]
+async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
+    let future_lane = LaneId::new(1);
+    let validator = AccountId::new(
+        checked_routing_fixture_keypair(
+            0x79,
+            Algorithm::Ed25519,
+            "derive future-created public lane validator fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let staker = AccountId::new(
+        checked_routing_fixture_keypair(
+            0x7A,
+            Algorithm::Ed25519,
+            "derive future-created public lane staker fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let peer = PeerId::new(
+        checked_routing_fixture_keypair(
+            0x7B,
+            Algorithm::BlsNormal,
+            "derive future-created public lane peer fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554407a1"),
+        staker.clone(),
+    );
+
+    let state = CoreState::new_for_testing(
+        iroha_core::state::World::default(),
+        Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    );
+    {
+        let mut autoscale_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_owned(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            "7".to_owned(),
+        );
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            nonzero_ext::nonzero!(2_u32),
+            vec![LaneConfig::default(), autoscale_lane],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero_ext::nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero_ext::nonzero!(2_u32);
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+    {
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world.public_lane_validators_mut_for_testing().insert(
+            (future_lane, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: future_lane,
+                validator: validator.clone(),
+                peer_id: peer,
+                stake_account: validator.clone(),
+                total_stake: iroha_primitives::numeric::Numeric::new(7, 0),
+                self_stake: iroha_primitives::numeric::Numeric::new(7, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+        stx.world.public_lane_stake_shares_mut_for_testing().insert(
+            (future_lane, validator.clone(), staker.clone()),
+            PublicLaneStakeShare {
+                lane_id: future_lane,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                bonded: iroha_primitives::numeric::Numeric::new(5, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        stx.world.public_lane_rewards_mut_for_testing().insert(
+            (future_lane, 1),
+            PublicLaneRewardRecord {
+                lane_id: future_lane,
+                epoch: 1,
+                asset,
+                total_reward: iroha_primitives::numeric::Numeric::new(3, 0),
+                shares: vec![PublicLaneRewardShare {
+                    account: staker.clone(),
+                    role: PublicLaneRewardRole::Nominator,
+                    amount: iroha_primitives::numeric::Numeric::new(3, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        stx.apply();
+        block
+            .commit()
+            .expect("commit stale future-created lane fixture");
+    }
+
+    let state = Arc::new(state);
+    let validators = handle_v1_nexus_public_lane_validators(
+        Arc::clone(&state),
+        future_lane,
+        PublicLaneValidatorsQueryParams::default(),
+        MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect("validators handler should succeed")
+    .into_response();
+    assert_empty_public_lane_items(&public_lane_items_payload(validators).await, future_lane);
+
+    let stake = handle_v1_nexus_public_lane_stake(
+        Arc::clone(&state),
+        future_lane,
+        PublicLaneStakeQueryParams::default(),
+        MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect("stake handler should succeed")
+    .into_response();
+    assert_empty_public_lane_items(&public_lane_items_payload(stake).await, future_lane);
+
+    let rewards = handle_v1_nexus_public_lane_rewards(
+        state,
+        future_lane,
+        PublicLaneRewardsQueryParams {
+            account: Some(staker.to_string()),
+            asset_id: None,
+            upto_epoch: None,
+        },
+        MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect("rewards handler should succeed")
+    .into_response();
+    assert_empty_public_lane_items(&public_lane_items_payload(rewards).await, future_lane);
 }
 
 #[cfg(feature = "app_api")]
@@ -88568,6 +88752,42 @@ impl LaneLifecyclePlanDto {
     }
 }
 
+fn nexus_lifecycle_active_lane_ids_for_response(
+    state: &CoreState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| state.is_lane_active_for_authority(lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
+fn nexus_lifecycle_autoscale_capacity_lane_ids_for_response(
+    state: &CoreState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    if !nexus.autoscale.enabled {
+        return Vec::new();
+    }
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.is_autoscale_managed_elastic())
+        .filter(|lane| state.is_lane_active_for_authority(lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
 /// Apply a Nexus lane lifecycle plan and refresh queue routing/telemetry.
 pub async fn handle_post_nexus_lane_lifecycle(
     state: Arc<CoreState>,
@@ -88597,11 +88817,36 @@ pub async fn handle_post_nexus_lane_lifecycle(
     let lane_compliance = queue.lane_compliance_engine();
     queue.reconfigure_nexus_with_state(&nexus, state.as_ref(), lane_compliance);
 
+    let configured_lane_count = u64::from(nexus.lane_catalog.lane_count().get());
+    let active_lane_ids = nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus);
+    let active_lane_count = u64::try_from(active_lane_ids.len()).unwrap_or(u64::MAX);
+    let autoscale_capacity_lane_ids =
+        nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus);
+    let autoscale_capacity_lane_count =
+        u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
+
     let mut payload = norito::json::Map::new();
     payload.insert("ok".into(), norito::json::Value::from(true));
     payload.insert(
+        "configured_lane_count".into(),
+        norito::json::Value::from(configured_lane_count),
+    );
+    payload.insert(
         "lane_count".into(),
-        norito::json::Value::from(nexus.lane_catalog.lane_count().get()),
+        norito::json::Value::from(configured_lane_count),
+    );
+    payload.insert(
+        "active_lane_count".into(),
+        norito::json::Value::from(active_lane_count),
+    );
+    payload.insert("active_lane_ids".into(), json_value(&active_lane_ids));
+    payload.insert(
+        "autoscale_capacity_lane_count".into(),
+        norito::json::Value::from(autoscale_capacity_lane_count),
+    );
+    payload.insert(
+        "autoscale_capacity_lane_ids".into(),
+        json_value(&autoscale_capacity_lane_ids),
     );
     Ok(utils::respond_json_document_with_status_and_format(
         StatusCode::ACCEPTED,
@@ -88613,6 +88858,7 @@ pub async fn handle_post_nexus_lane_lifecycle(
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
     use super::*;
+    use core::num::{NonZeroU32, NonZeroU64};
 
     fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
         let mut state = CoreState::new_for_testing(
@@ -88658,6 +88904,107 @@ mod nexus_lane_lifecycle_tests {
         lane
     }
 
+    async fn response_body_json(response: Response) -> norito::json::Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect response body");
+        norito::json::from_slice(&body).expect("decode JSON response")
+    }
+
+    fn future_autoscale_lane_for_lifecycle_test(
+        lane_id: LaneId,
+        created_height: u64,
+    ) -> LaneConfig {
+        let mut lane = LaneConfig {
+            id: lane_id,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..Default::default()
+        };
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        lane
+    }
+
+    fn install_future_autoscale_catalog_for_lifecycle_test(
+        state: &CoreState,
+        lane: LaneConfig,
+        authority_height: u64,
+    ) {
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(lane.id.as_u32().saturating_add(1)).expect("nonzero lane count"),
+            vec![LaneConfig::default(), lane],
+        )
+        .expect("future autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..Default::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        {
+            let mut current = state.nexus.write();
+            *current = nexus;
+        }
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(authority_height).expect("nonzero authority height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+    }
+
+    #[test]
+    fn nexus_lifecycle_response_lane_ids_filter_inactive_autoscale_capacity() {
+        let state = enabled_state_for_lifecycle_test();
+        let future_lane = LaneId::new(1);
+        install_future_autoscale_catalog_for_lifecycle_test(
+            state.as_ref(),
+            future_autoscale_lane_for_lifecycle_test(future_lane, 7),
+            1,
+        );
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus),
+            vec![0],
+            "future-created autoscale lanes must not count as active before creation height"
+        );
+        assert_eq!(
+            nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus),
+            Vec::<u32>::new(),
+            "future-created autoscale lanes must not count as live capacity"
+        );
+
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(7).expect("nonzero authority height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        assert_eq!(
+            nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus),
+            vec![0, 1]
+        );
+        assert_eq!(
+            nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus),
+            vec![1]
+        );
+    }
+
     #[tokio::test]
     async fn nexus_lane_lifecycle_rejects_autoscale_spoof_without_queue_refresh() {
         let state = enabled_state_for_lifecycle_test();
@@ -88686,7 +89033,7 @@ mod nexus_lane_lifecycle_tests {
         assert!(matches!(
             err,
             Error::LaneLifecycle { reason }
-                if reason == "lane 1 uses reserved autoscale-managed metadata"
+                if reason == "lane 1 uses reserved autoscale metadata"
         ));
 
         let nexus = state.nexus_snapshot();
@@ -89063,11 +89410,62 @@ mod nexus_lane_lifecycle_tests {
         };
 
         let response =
-            handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-                .expect("manual lifecycle plan should be accepted")
-                .into_response();
+            utils::with_current_response_format(crate::utils::ResponseFormat::Json, async {
+                handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                    .await
+                    .expect("manual lifecycle plan should be accepted")
+                    .into_response()
+            })
+            .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let payload = response_body_json(response).await;
+        assert_eq!(
+            payload.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("configured_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2),
+            "legacy lane_count remains the configured lane count"
+        );
+        assert_eq!(
+            payload
+                .get("active_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("active_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![0, 1])
+        );
+        assert_eq!(
+            payload
+                .get("autoscale_capacity_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            payload
+                .get("autoscale_capacity_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty)
+        );
 
         let nexus = state.nexus_snapshot();
         assert!(

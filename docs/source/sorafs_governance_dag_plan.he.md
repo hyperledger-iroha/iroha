@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 99c9f1dbadd4c5a34835c7b1ebcdc90771982cda45333034a17a46f74897cfb0
+source_hash: a5e92da6e765ec9507e2929c651034101531ff4b2ed6e60c7b2ff22a78e32a37
 source_last_modified: "2026-06-25T17:58:13+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -84,14 +84,18 @@ Implemented foundations include:
   reviewed evidence collection planner/runner. The checker exports its required
   top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
   dry-run emits the checker-backed `evidence_contract` map for selected SF-12
-  evidence kinds. Mirror datastore, checkpoint
+  evidence kinds, and validates the schema-closed collection plan, required
+  kinds, thresholds, external evidence map, evidence contract, and command steps
+  before dry-run output or verifier execution. Mirror datastore, checkpoint
   recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance
   approval artifacts must carry the same `public_head_cid_hex` as a valid
   publisher-service artifact in the same bundle, so rollout evidence cannot mix
   mirror, recovery, dashboard, public IPFS/IPNS, or approval records from
-  different signed DAG heads. Public-head binding failures are recorded on the
-  offending artifact before required-kind validity is computed, so the JSON
-  summary matches the fail-closed rollout decision.
+  different signed DAG heads. Publisher-service artifacts must also carry
+  `policy_digest_hex`, and governance approval artifacts must match that
+  publisher policy digest before promotion. Public-head and policy binding
+  failures are recorded on the offending artifact before required-kind validity
+  is computed, so the JSON summary matches the fail-closed rollout decision.
 - Typed appeal finance transparency rollups: `sorafs_manifest` validates
   `SoraFsAppealFinanceWeeklyRollupV1` payloads and can aggregate validated
   finance reports into deterministic weekly dashboard rows for the filesystem
@@ -529,5 +533,5 @@ head age stay under configured thresholds, enough public blocks and payload
 kinds are covered, and governance is bound to `iroha_config`.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export, operator argfile templates, and focused tests.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, operator argfile templates, and focused tests.
 - Remaining: implement the always-on ingest/publisher services, IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service, live-head/public-checkpoint publication and recovery operator commands, runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests, and staged/live publication evidence that passes the SF-12 gate.

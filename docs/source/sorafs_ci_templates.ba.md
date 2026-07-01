@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_ci_templates.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8bf8692c60a466b4d7297c472ca4664bef7ebf94600c6690ffdbc7c94e8b34e3
+source_hash: decd68667245dfbefa7404b7820d8dace2a48437073371e458f0f8a3f32ec0c4
 source_last_modified: "2026-01-03T19:37:17.750649+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Templates & Release Hooks

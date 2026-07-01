@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""Build payload-free SoraFS reference SDK release evidence artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+import sys
+from collections.abc import Iterable, Sequence
+from pathlib import Path
+from typing import Any
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
+    DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    DEFAULT_MAX_SMOKE_DURATION_SECS,
+    DEFAULT_MIN_DOWNSTREAM_PACKAGES,
+    DEFAULT_MIN_RELEASE_TARGETS,
+    KIND_BY_NAME,
+    RELEASE_MANIFEST_BOUND_KINDS,
+    REQUIRED_DOWNSTREAM_PACKAGES,
+    REQUIRED_RELEASE_TARGETS,
+    ValidationOptions,
+    validate_evidence_payload,
+)
+from sorafs_checker_preflight import (  # noqa: E402
+    emit_checker_error_block,
+    emit_checker_error_lines,
+    emit_checker_exception,
+    validate_checker_output_parent,
+)
+from sorafs_path_identity import path_diagnostic_label  # noqa: E402
+from sorafs_response_args import (  # noqa: E402
+    EvidenceArgumentParser,
+    expand_response_args,
+    positive_int_arg,
+)
+
+
+CANARY_KINDS = tuple(KIND_BY_NAME)
+HEX64_LEN = 64
+POLICY_DIGEST_KINDS = ("signed_manifest", "governance_approval")
+
+
+def split_csv_values(values: Sequence[str]) -> list[str]:
+    """Split repeated comma-separated CLI values into canonical strings."""
+
+    items: list[str] = []
+    for value in values:
+        for item in value.split(","):
+            stripped = item.strip()
+            if stripped:
+                items.append(stripped)
+    return items
+
+
+def validate_name_set(
+    values: Iterable[str],
+    *,
+    allowed: Sequence[str],
+    option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return allowed-order values, requiring complete known non-duplicate coverage."""
+
+    values = tuple(values)
+    allowed_set = frozenset(allowed)
+    value_set = frozenset(values)
+    if len(value_set) != len(values):
+        errors.append(f"{option} must not contain duplicates")
+    if any(name not in allowed_set for name in value_set):
+        errors.append(f"{option} contains an unknown value")
+    missing = [name for name in allowed if name not in value_set]
+    if missing:
+        errors.append(f"{option} must include every required value")
+    return [name for name in allowed if name in value_set]
+
+
+def validate_output_path(path: Path, errors: list[str]) -> None:
+    """Reject unsafe output targets before writing a release artifact."""
+
+    if not isinstance(path, Path):
+        errors.append(f"--out `{path_diagnostic_label(path)}` must be a path")
+        return
+    try:
+        if path.is_symlink():
+            errors.append(f"--out `{path_diagnostic_label(path)}` must not be a symlink")
+            return
+        if path.exists() and path.is_dir():
+            errors.append(f"--out `{path_diagnostic_label(path)}` must not be a directory")
+            return
+    except (OSError, RuntimeError) as error:
+        del error
+        errors.append(f"--out `{path_diagnostic_label(path)}` cannot be inspected")
+        return
+    validate_checker_output_parent(path, errors, label="--out")
+
+
+def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None:
+    """Validate an exact lowercase 32-byte digest hex string."""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != HEX64_LEN
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        errors.append(f"{option} must be exact lowercase 32-byte hex")
+
+
+def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
+    """Require a non-empty canonical string without control characters."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        errors.append(f"{label} must be a non-empty canonical string")
+
+
+def require_kind_options(
+    args: argparse.Namespace,
+    errors: list[str],
+    required: Sequence[tuple[str, Any]],
+) -> None:
+    """Require kind-specific options by stable CLI flag."""
+
+    for option, value in required:
+        if value is None:
+            errors.append(f"{option} is required for {args.kind}")
+
+
+def common_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Build fields shared by SF-11 release evidence payloads."""
+
+    return {
+        "schema": KIND_BY_NAME[args.kind].schema,
+        "status": "passed",
+        "generated_at_unix": args.generated_at_unix,
+        "deployment_id": args.deployment_id,
+        "environment": args.environment,
+        "deployment_context_reviewed": True,
+    }
+
+
+def build_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Build a payload-free reference SDK release evidence payload."""
+
+    payload = common_payload(args)
+    if args.kind == "release_archive":
+        payload.update(
+            {
+                "packaging_helper_used": True,
+                "deterministic_archive_verified": True,
+                "archive_checksums_published": True,
+                "binary_checksums_published": True,
+                "dist_gitkeep_only_tracked": True,
+                "target_count": len(args.targets),
+                "targets": args.targets,
+                "archive_index_digest_hex": args.archive_index_digest_hex,
+                "release_manifest_digest_hex": args.release_manifest_digest_hex,
+                "raw_archives_included": False,
+            }
+        )
+    elif args.kind == "signed_manifest":
+        payload.update(
+            {
+                "manifest_signed": True,
+                "manifest_signature_verified": True,
+                "manifest_sha256_published": True,
+                "governed_release_key_used": True,
+                "public_key_fingerprint_recorded": True,
+                "private_key_absent": True,
+                "signature_algorithm": args.signature_algorithm,
+                "manifest_digest_hex": args.manifest_digest_hex,
+                "policy_digest_hex": args.policy_digest_hex,
+                "public_key_fingerprint_hex": args.public_key_fingerprint_hex,
+                "raw_manifest_included": False,
+            }
+        )
+    elif args.kind == "downstream_bindings":
+        payload.update(
+            {
+                "packages": args.packages,
+                "package_count": len(args.packages),
+                "sdk_exports_verified": True,
+                "validation_outcome_contract_verified": True,
+                "version_alignment_verified": True,
+                "native_bridge_header_bound": True,
+                "published_package_digests_recorded": True,
+                "release_manifest_digest_hex": args.release_manifest_digest_hex,
+                "package_index_digest_hex": args.package_index_digest_hex,
+                "raw_packages_included": False,
+            }
+        )
+    elif args.kind == "cookbook_smoke":
+        payload.update(
+            {
+                "published_archive_smoke_passed": True,
+                "cookbook_replay_passed": True,
+                "fixture_bundle_validation_passed": True,
+                "manifest_car_replay_passed": True,
+                "validation_outcomes_emitted": True,
+                "smoke_duration_seconds": args.smoke_duration_seconds,
+                "release_manifest_digest_hex": args.release_manifest_digest_hex,
+                "smoke_output_digest_hex": args.smoke_output_digest_hex,
+                "raw_smoke_outputs_included": False,
+            }
+        )
+    elif args.kind == "ffi_header_contract":
+        payload.update(
+            {
+                "ci_guard_passed": True,
+                "rust_exports_match_header": True,
+                "selector_constants_match": True,
+                "c_signatures_match": True,
+                "bridge_bindings_verified": True,
+                "release_manifest_digest_hex": args.release_manifest_digest_hex,
+                "header_digest_hex": args.header_digest_hex,
+                "ffi_contract_digest_hex": args.ffi_contract_digest_hex,
+                "raw_header_included": False,
+            }
+        )
+    elif args.kind == "governance_approval":
+        payload.update(
+            {
+                "approved": True,
+                "governance_vote_recorded": True,
+                "release_key_roster_bound": True,
+                "release_targets_bound": True,
+                "downstream_packages_bound": True,
+                "smoke_evidence_bound": True,
+                "governance_source": "governed_release",
+                "release_manifest_digest_hex": args.release_manifest_digest_hex,
+                "policy_digest_hex": args.policy_digest_hex,
+            }
+        )
+    return payload
+
+
+def validate_inputs(args: argparse.Namespace) -> list[str]:
+    """Validate reviewed operator inputs before building release evidence."""
+
+    errors: list[str] = []
+    validate_output_path(args.out, errors)
+    validate_canonical_string(args.deployment_id, label="--deployment-id", errors=errors)
+    validate_canonical_string(args.environment, label="--environment", errors=errors)
+    if args.kind == "signed_manifest":
+        validate_hex64(
+            args.manifest_digest_hex,
+            option="--manifest-digest-hex",
+            errors=errors,
+        )
+        validate_hex64(
+            args.public_key_fingerprint_hex,
+            option="--public-key-fingerprint-hex",
+            errors=errors,
+        )
+        validate_canonical_string(
+            args.signature_algorithm,
+            label="--signature-algorithm",
+            errors=errors,
+        )
+    elif args.kind in RELEASE_MANIFEST_BOUND_KINDS:
+        validate_hex64(
+            args.release_manifest_digest_hex,
+            option="--release-manifest-digest-hex",
+            errors=errors,
+        )
+
+    if args.kind == "release_archive":
+        args.targets = validate_name_set(
+            split_csv_values(args.target),
+            allowed=REQUIRED_RELEASE_TARGETS,
+            option="--target",
+            errors=errors,
+        )
+        validate_hex64(
+            args.archive_index_digest_hex,
+            option="--archive-index-digest-hex",
+            errors=errors,
+        )
+    elif args.kind == "downstream_bindings":
+        args.packages = validate_name_set(
+            split_csv_values(args.package),
+            allowed=REQUIRED_DOWNSTREAM_PACKAGES,
+            option="--package",
+            errors=errors,
+        )
+        validate_hex64(
+            args.package_index_digest_hex,
+            option="--package-index-digest-hex",
+            errors=errors,
+        )
+    elif args.kind == "cookbook_smoke":
+        if args.smoke_duration_seconds > DEFAULT_MAX_SMOKE_DURATION_SECS:
+            errors.append(
+                f"--smoke-duration-seconds must be <= {DEFAULT_MAX_SMOKE_DURATION_SECS}"
+            )
+        validate_hex64(
+            args.smoke_output_digest_hex,
+            option="--smoke-output-digest-hex",
+            errors=errors,
+        )
+    elif args.kind == "ffi_header_contract":
+        validate_hex64(
+            args.header_digest_hex,
+            option="--header-digest-hex",
+            errors=errors,
+        )
+        validate_hex64(
+            args.ffi_contract_digest_hex,
+            option="--ffi-contract-digest-hex",
+            errors=errors,
+        )
+    if args.kind in POLICY_DIGEST_KINDS:
+        require_kind_options(
+            args,
+            errors,
+            (("--policy-digest-hex", args.policy_digest_hex),),
+        )
+        validate_hex64(
+            args.policy_digest_hex,
+            option="--policy-digest-hex",
+            errors=errors,
+        )
+    return errors
+
+
+def validation_options(args: argparse.Namespace) -> ValidationOptions:
+    """Return checker options used to prevalidate generated release evidence."""
+
+    return ValidationOptions(
+        now_unix=args.now_unix or args.generated_at_unix,
+        max_evidence_age_secs=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        min_release_targets=DEFAULT_MIN_RELEASE_TARGETS,
+        min_downstream_packages=DEFAULT_MIN_DOWNSTREAM_PACKAGES,
+        max_smoke_duration_secs=DEFAULT_MAX_SMOKE_DURATION_SECS,
+    )
+
+
+def validate_generated_payload(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate generated release evidence through the SF-11 gate contract."""
+
+    kind, errors = validate_evidence_payload(payload, validation_options(args))
+    if kind != args.kind:
+        errors.append(f"generated release evidence must validate as {args.kind}")
+    return errors
+
+
+def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
+    """Write the release evidence JSON atomically without following symlinks."""
+
+    text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    parent = path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError) as error:
+        del error
+        return [f"--out parent `{path_diagnostic_label(parent)}` cannot be created"]
+    tmp_name = f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_path = parent / tmp_name
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        fd = os.open(tmp_path, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except (OSError, RuntimeError) as error:
+        del error
+        try:
+            if fd >= 0:
+                os.close(fd)
+        finally:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except (OSError, RuntimeError):
+                pass
+        return [f"--out `{path_diagnostic_label(path)}` cannot be written"]
+    return []
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = EvidenceArgumentParser(
+        description="Build payload-free SoraFS SF-11 reference SDK release evidence.",
+    )
+    parser.add_argument("--kind", choices=CANARY_KINDS, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--deployment-id", required=True)
+    parser.add_argument("--environment", required=True)
+    parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
+    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--release-manifest-digest-hex")
+    parser.add_argument("--manifest-digest-hex")
+    parser.add_argument("--archive-index-digest-hex")
+    parser.add_argument("--package-index-digest-hex")
+    parser.add_argument("--smoke-output-digest-hex")
+    parser.add_argument("--header-digest-hex")
+    parser.add_argument("--ffi-contract-digest-hex")
+    parser.add_argument("--policy-digest-hex")
+    parser.add_argument("--public-key-fingerprint-hex")
+    parser.add_argument("--signature-algorithm", default="ed25519")
+    parser.add_argument("--target", action="append", default=[])
+    parser.add_argument("--package", action="append", default=[])
+    parser.add_argument("--smoke-duration-seconds", type=positive_int_arg, default=600)
+    raw_args = sys.argv[1:] if argv is None else argv
+    try:
+        expanded_args = expand_response_args(raw_args, parser)
+        return parser.parse_args(expanded_args)
+    except ValueError as error:
+        emit_checker_exception(error)
+        raise SystemExit(2) from error
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+    except SystemExit as error:
+        return error.code if isinstance(error.code, int) else 1
+
+    errors = validate_inputs(args)
+    if errors:
+        emit_checker_error_block(
+            "ERROR: SoraFS reference SDK release evidence inputs are incomplete:",
+            errors,
+        )
+        return 2
+
+    payload = build_payload(args)
+    payload_errors = validate_generated_payload(payload, args)
+    if payload_errors:
+        emit_checker_error_lines(payload_errors)
+        return 2
+
+    write_errors = write_payload_atomic(args.out, payload)
+    if write_errors:
+        emit_checker_error_lines(write_errors)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

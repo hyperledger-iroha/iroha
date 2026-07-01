@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 168c1fa6961839f51931ab4c5b0457044df1d45c21d0146b42385f1692b68889
+source_hash: c2aa52cbcd509ac56b597b098fa5858f4f5f08acb87f279b1e684384387e48bc
 source_last_modified: "2026-06-25T17:05:30+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -220,7 +220,10 @@ moderation ledger publication service described by the original plan.
   unless explicitly waived, checks anchor metadata and verification flags, and
   emits `sorafs.transparency.publication_canary.v1` evidence with status,
   sizes, and BLAKE3 response hashes without archiving publication bodies,
-  source entries, or private payload material.
+  source entries, or private payload material. Publication canaries and the
+  transparency rollout collection runner reject non-lowercase, wrong-length, or
+  otherwise malformed `--cycle-id` values before rendering dry-run command
+  plans or contacting deployed cycle-detail routes.
 - Torii exposes `/v1/sorafs/transparency/explorer` as a local read-only
   explorer snapshot. The endpoint composes the Governance DAG publish-index into
   cycle summaries, proof-token issuance summaries, payload-kind counts, source
@@ -304,7 +307,9 @@ moderation ledger publication service described by the original plan.
   explorer canary artifacts and then running the rollout evidence verifier. It
   fails before live submission when required source-entry kinds, privacy
   source-event/publish-due payloads, proof-token issuance payloads, or
-  publication cycle-detail ids are missing, accepts repeated `--iroha-arg ARG`
+  publication cycle-detail ids are missing. It also rejects duplicate or
+  unsupported `--source-entry` kinds before rendering the plan or contacting live services. The runner accepts
+  repeated `--iroha-arg ARG`
   values for runtime-only client config/signing options that must be passed
   before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
   operator inputs, requires a reviewed `--deployment-id` plus `--environment`,

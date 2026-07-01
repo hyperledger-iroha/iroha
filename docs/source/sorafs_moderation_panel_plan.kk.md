@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 129fa8954c02e0189199ef8b5e74d313063bd81384fa4a10c02f5da3e63fb032
+source_hash: 835066659ead3d9ae9fda3bba62854aa2934e9b9d90a3bfef574aa3153e551d9
 source_last_modified: "2026-06-25T17:11:06+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -234,3 +234,5 @@ The rollout evidence scripts have focused Python coverage in:
 
 - `scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py`
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
