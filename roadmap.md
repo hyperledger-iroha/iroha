@@ -9883,8 +9883,11 @@ and completed history lives in [`status.md`](./status.md).
 	  their direct generator and strict-verifier adversarial regressions are green.
 - SCCP source-adapter deployment binding derivation is pinned to governed
   Solana/TON full-light-client audit hashes in Rust, JavaScript, and Python.
-  The strict release-source inventory now pins the governed binding helper
-  markers plus the non-governed Solana/TON drift negatives while live verifier
+  TON descriptor-to-binding promotion is mirrored in Swift, Kotlin/JVM, and
+  Java Android with valid-but-ungoverned audit drift negatives. The strict
+  release-source inventory now pins the governed binding helper markers plus
+  the non-governed Solana/TON drift negatives across Rust, JavaScript
+  source/dist, Python, Swift, Kotlin/JVM, and Java Android while live verifier
   deployment evidence remains open.
 - SCCP first-release network scope is limited to the currently advertised
   ETH/BSC, Solana, TON, TRON, and SORA lanes. SCCP will not support
