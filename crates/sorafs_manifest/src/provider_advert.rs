@@ -7,9 +7,7 @@
 use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Verifier, VerifyingKey};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -1164,7 +1162,12 @@ impl ProviderAdvertV1 {
 
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(&self.signature.signature);
-        let signature = DalekSignature::from_bytes(&signature);
+        let signature =
+            crate::checked_ed25519_signature_from_bytes(&signature).ok_or_else(|| {
+                AdvertSignatureError::Verification(
+                    "signature payload must not be all zero".to_owned(),
+                )
+            })?;
 
         let body_bytes = norito::to_bytes(&self.body)
             .map_err(|err| AdvertSignatureError::BodyEncoding(err.to_string()))?;
@@ -1346,6 +1349,20 @@ mod tests {
         advert.body.qos.max_retrieval_latency_ms += 1;
         let err = advert.verify_signature().unwrap_err();
         assert!(matches!(err, AdvertSignatureError::Verification(_)));
+    }
+
+    #[test]
+    fn verify_signature_rejects_all_zero_signature_material() {
+        let mut advert = signed_sample_advert(1_700_000_000);
+        advert.signature.signature.fill(0);
+
+        let err = advert
+            .verify_signature()
+            .expect_err("all-zero provider advert signature must be rejected");
+        assert!(matches!(
+            err,
+            AdvertSignatureError::Verification(reason) if reason.contains("all zero")
+        ));
     }
 
     #[test]

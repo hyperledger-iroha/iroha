@@ -4171,13 +4171,22 @@ object SccpSourceProofs {
         return admittedType
     }
 
+    private fun requireEvmLogNotRemoved(log: Map<*, *>, label: String) {
+        if (!log.containsKey("removed")) return
+        when (log["removed"]) {
+            false -> return
+            true -> throw IllegalArgumentException("$label must not be removed")
+            else -> throw IllegalArgumentException("$label.removed must be a boolean")
+        }
+    }
+
     private fun evmReceiptLogsForRlp(receipt: Map<String, Any?>): List<ByteArray> {
         val logs = receipt["logs"] as? List<*>
             ?: throw IllegalArgumentException("receipt.logs must be an array")
         return logs.mapIndexed { index, logInput ->
             val log = logInput as? Map<*, *>
                 ?: throw IllegalArgumentException("receipt.logs[$index] must be an object")
-            require(log["removed"] != true) { "receipt.logs[$index] must not be removed" }
+            requireEvmLogNotRemoved(log, "receipt.logs[$index]")
             val topics = log["topics"] as? List<*>
                 ?: throw IllegalArgumentException("receipt.logs[$index].topics must be an array")
             require(topics.size <= 4) {

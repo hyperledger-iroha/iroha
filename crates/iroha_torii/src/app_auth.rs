@@ -480,7 +480,11 @@ fn decode_signature_value(
             "invalid base64 in {context}"
         )))
     })?;
-    Ok(Signature::from_bytes(&signature_bytes))
+    Signature::try_from_bytes(&signature_bytes).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {context} payload"
+        )))
+    })
 }
 
 fn decode_witness_value(
@@ -951,7 +955,11 @@ pub fn verify_canonical_request(
             "invalid base64 in X-Iroha-Signature".to_owned(),
         ))
     })?;
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = Signature::try_from_bytes(&signature_bytes).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Signature payload".to_owned(),
+        ))
+    })?;
     let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
 
     let world = state.world_view();
@@ -1236,6 +1244,46 @@ mod tests {
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("signature"))
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_signature_payload_before_backend() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
+            .parse()
+            .expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let nonce = "all-zero-signature";
+        let account_literal = account.canonical_i105().expect("i105 account");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            axum::http::HeaderValue::from_str(&account_literal).unwrap(),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            axum::http::HeaderValue::from_str(&BASE64_STANDARD.encode([0u8; 64])).unwrap(),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
+        );
+        headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
+
+        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
+            .expect_err("inert signature payload must fail");
+        match err {
+            crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("X-Iroha-Signature payload"),
+                    "unexpected all-zero signature rejection: {msg}"
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }

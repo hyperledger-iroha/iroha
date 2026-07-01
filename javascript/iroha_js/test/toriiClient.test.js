@@ -21353,17 +21353,50 @@ test("registerContractCode posts manifest JSON", async () => {
 
 test("deployContract submits base64 payload and returns response", async () => {
   let captured;
+  const contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
   const responsePayload = {
     ok: true,
-    contract_alias: "router::universal",
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-    previous_contract_address: null,
-    upgraded: false,
-    dataspace: "universal",
-    deploy_nonce: 7,
-    tx_hash_hex: "a".repeat(64),
-    code_hash_hex: "b".repeat(64),
-    abi_hash_hex: "c".repeat(64),
+    bundle_name: "single:router::universal",
+    bundle_digest: "d".repeat(64),
+    chain_fingerprint: `0@${"e".repeat(64)}`,
+    dry_run: false,
+    completed_stages: ["deploy:router::universal"],
+    failure_point: null,
+    contracts: [
+      {
+        name: "router::universal",
+        contract_alias: "router::universal",
+        contract_address: contractAddress,
+        previous_contract_address: null,
+        upgraded: false,
+        dataspace: "universal",
+        deploy_nonce: 7,
+        tx_hash_hex: "a".repeat(64),
+        code_hash_hex: "b".repeat(64),
+        abi_hash_hex: "c".repeat(64),
+        status: "submitted",
+      },
+    ],
+    init_calls: [],
+    assertions: [],
+    operation_receipt: {
+      operation_kind: "contract_deploy",
+      status: "submitted",
+      transport: "torii",
+      dataspace: "universal",
+      contract_alias: "router::universal",
+      contract_address: contractAddress,
+      code_hash_hex: "b".repeat(64),
+      abi_hash_hex: "c".repeat(64),
+      tx_hash_hex: "a".repeat(64),
+      entrypoint: null,
+      entrypoint_hash_hex: null,
+      gas_limit: null,
+      gas_used: null,
+      gas_asset_id: null,
+      fee_sponsor: null,
+      payload_digest_hex: "f".repeat(64),
+    },
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -21395,28 +21428,43 @@ test("deployContract submits base64 payload and returns response", async () => {
 
 test("deployContract exposes optional pipeline_status diagnostics", async () => {
   const txHash = "a".repeat(64);
+  const pipelineStatus = {
+    hash: txHash,
+    status: { kind: "Queued", block_height: null, rejection_reason: null },
+    summary: "Queued",
+    diagnostics: [],
+    scope: "local",
+    resolved_from: "queue",
+  };
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
         ok: true,
-        contract_alias: "router::universal",
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-        previous_contract_address: null,
-        upgraded: false,
-        dataspace: "universal",
-        deploy_nonce: 7,
-        tx_hash_hex: txHash,
-        pipeline_status: {
-          hash: txHash,
-          status: { kind: "Queued", block_height: null, rejection_reason: null },
-          summary: "Queued",
-          diagnostics: [],
-          scope: "local",
-          resolved_from: "queue",
-        },
-        code_hash_hex: "b".repeat(64),
-        abi_hash_hex: "c".repeat(64),
+        bundle_name: "single:router::universal",
+        bundle_digest: "d".repeat(64),
+        chain_fingerprint: `0@${"e".repeat(64)}`,
+        dry_run: false,
+        completed_stages: ["deploy:router::universal"],
+        failure_point: null,
+        contracts: [
+          {
+            name: "router::universal",
+            contract_alias: "router::universal",
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            previous_contract_address: null,
+            upgraded: false,
+            dataspace: "universal",
+            deploy_nonce: 7,
+            tx_hash_hex: txHash,
+            pipeline_status: pipelineStatus,
+            code_hash_hex: "b".repeat(64),
+            abi_hash_hex: "c".repeat(64),
+            status: "submitted",
+          },
+        ],
+        init_calls: [],
+        assertions: [],
       },
       headers: { "content-type": "application/json" },
     });
@@ -21427,8 +21475,8 @@ test("deployContract exposes optional pipeline_status diagnostics", async () => 
     contractAlias: "router::universal",
     codeB64: Buffer.from("payload"),
   });
-  assert.equal(result.pipeline_status?.status?.kind, "Queued");
-  assert.equal(result.pipeline_status?.content?.hash, txHash);
+  assert.equal(result.contracts[0].pipeline_status?.status?.kind, "Queued");
+  assert.equal(result.contracts[0].pipeline_status?.content?.hash, txHash);
 });
 
 test("deployContract rejects invalid base64 payloads", async () => {

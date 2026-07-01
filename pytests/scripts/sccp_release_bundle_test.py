@@ -219,8 +219,12 @@ def phase_command_lines(fragments) -> list[str]:
                 ),
                 None,
             )
+            test_command += (
+                " --artifacts-path target/sccp-production-corridor/dotnet-artifacts"
+            )
             if filter_fragment is not None:
                 test_command += " --filter " + filter_fragment
+            test_command += " -p:ProduceReferenceAssembly=false"
             test_command += " --nologo"
             if "sccp-dotnet-sdk.trx" in fragments:
                 test_command += " --logger trx;LogFileName=sccp-dotnet-sdk.trx"
@@ -1926,9 +1930,12 @@ def test_release_bundle_verifier_boolean_domain_does_not_alias_eth_policy() -> N
         lane,
         {field: field for field in verifier.ALL_LANES_RECORD_KEYS},
     )
+    expected_domain_label = verifier._sccp_domain_constant_label(
+        verifier.ACTIVE_LAUNCH_DOMAIN
+    )
     assert (
-        f"active launch: active launch lane domain must be "
-        f"{verifier.ACTIVE_LAUNCH_DOMAIN}"
+        f"active launch: active {verifier.ACTIVE_LAUNCH_DISPLAY} launch lane "
+        f"domain must be {expected_domain_label}"
     ) in active_blockers
 
     lane_errors = "\n".join(
@@ -2287,10 +2294,94 @@ def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
     verifier = load_verify_helpers()
 
     for module in (report, verifier):
-        assert module.ACTIVE_LAUNCH_DOMAIN == 1
+        assert module.ACTIVE_LAUNCH_DOMAIN == module.SCCP_DOMAIN_ETH
         assert module.ACTIVE_LAUNCH_CHAIN == "eth"
         assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
         assert module.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
+        assert (
+            module._sccp_domain_constant_label(module.SCCP_DOMAIN_ETH)
+            == "SCCP_DOMAIN_ETH (1)"
+        )
+        assert module._sccp_domain_constant_label(True) == "non-integer domain"
+        assert "SCCP_DOMAIN_ETH" not in module._sccp_domain_constant_label(True)
+
+
+def test_release_bundle_verifier_domain_constant_loaders_reject_boolean_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bundle verifier constant imports must not coerce booleans to domain ids."""
+
+    bundle = load_bundle_module()
+    scalar_cases = (
+        ("_active_launch_domain", "_ACTIVE_LAUNCH_DOMAIN", "ACTIVE_LAUNCH_DOMAIN"),
+        ("_sccp_domain_eth", "_SCCP_DOMAIN_ETH", "SCCP_DOMAIN_ETH"),
+        ("_sccp_domain_bsc", "_SCCP_DOMAIN_BSC", "SCCP_DOMAIN_BSC"),
+        ("_sccp_domain_sora", "_SCCP_DOMAIN_SORA", "SCCP_DOMAIN_SORA"),
+        ("_sccp_domain_sol", "_SCCP_DOMAIN_SOL", "SCCP_DOMAIN_SOL"),
+        ("_sccp_domain_ton", "_SCCP_DOMAIN_TON", "SCCP_DOMAIN_TON"),
+        ("_sccp_domain_tron", "_SCCP_DOMAIN_TRON", "SCCP_DOMAIN_TRON"),
+    )
+    sequence_cases = (
+        (
+            "_all_lanes_required_domains",
+            "_ALL_LANES_REQUIRED_DOMAINS",
+            "ALL_LANES_REQUIRED_DOMAINS",
+            (1, True),
+        ),
+        (
+            "_all_lanes_supported_launch_domains",
+            "_ALL_LANES_SUPPORTED_LAUNCH_DOMAINS",
+            "ALL_LANES_SUPPORTED_LAUNCH_DOMAINS",
+            (True,),
+        ),
+        (
+            "_all_lanes_unsupported_launch_domains",
+            "_ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS",
+            "ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS",
+            (False,),
+        ),
+        (
+            "_all_lanes_evm_destination_domains",
+            "_ALL_LANES_EVM_DESTINATION_DOMAINS",
+            "ALL_LANES_EVM_DESTINATION_DOMAINS",
+            (True,),
+        ),
+    )
+
+    for helper_name, cache_name, constant_name in scalar_cases:
+        fake_verifier = type("FakeVerifier", (), {constant_name: True})
+        setattr(bundle, cache_name, None)
+        monkeypatch.setattr(bundle, "_verify_module", lambda fake=fake_verifier: fake)
+
+        with pytest.raises(TypeError, match=constant_name):
+            getattr(bundle, helper_name)()
+
+    for helper_name, cache_name, constant_name, value in sequence_cases:
+        fake_verifier = type("FakeVerifier", (), {constant_name: value})
+        setattr(bundle, cache_name, None)
+        monkeypatch.setattr(bundle, "_verify_module", lambda fake=fake_verifier: fake)
+
+        with pytest.raises(TypeError, match=constant_name):
+            getattr(bundle, helper_name)()
+
+    route_source_verifier = type(
+        "FakeVerifier",
+        (),
+        {"ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN": {True: "forged"}},
+    )
+    bundle._ROUTE_CANARY_SOURCE_BY_DOMAIN = None
+    monkeypatch.setattr(bundle, "_verify_module", lambda: route_source_verifier)
+    with pytest.raises(TypeError, match="ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN"):
+        bundle._route_canary_source_by_domain()
+
+    class BooleanRpcVerifier:
+        @staticmethod
+        def _expected_evm_rpc_chain_id(_domain, _chain):
+            return True
+
+    monkeypatch.setattr(bundle, "_verify_module", lambda: BooleanRpcVerifier)
+    with pytest.raises(TypeError, match="_expected_evm_rpc_chain_id return"):
+        bundle._expected_evm_rpc_chain_id(1, "eth")
 
 
 def test_release_bundle_verifier_submission_helper_lanes_match_supported_scope() -> None:
@@ -4071,6 +4162,83 @@ def test_release_bundle_phase_command_matchers_accept_corridor_dry_run() -> None
                     phase_block,
                     fragment,
                 ), f"{module.__name__} {phase} dry-run command missed {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_accept_dotnet_artifacts_path() -> None:
+    """Report and verifier .NET matchers must accept Windows-local artifacts output."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    command = (
+        "+ dotnet test "
+        "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+        "--artifacts-path C:/Users/runner/AppData/Local/Temp/iroha-dotnet-artifacts "
+        "--filter FullyQualifiedName~Sccp "
+        "-p:ProduceReferenceAssembly=false "
+        "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx"
+    )
+
+    for module in (report, verifier):
+        for fragment in (
+            "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+            "FullyQualifiedName~Sccp",
+            "sccp-dotnet-sdk.trx",
+        ):
+            assert fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+            assert module._phase_command_matches_required_fragment(
+                "dotnet-sdk",
+                command,
+                fragment,
+            ), f"{module.__name__} .NET artifacts-path command missed {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_reject_bad_dotnet_artifacts_path() -> None:
+    """Report and verifier .NET matchers must reject malformed artifacts commands."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    required_fragment = (
+        "dotnet test tests/Hyperledger.Iroha.Sdk.Tests/"
+        "Hyperledger.Iroha.Sdk.Tests.csproj"
+    )
+    cases = (
+        (
+            "missing-artifacts-path-value",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=false "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+        ),
+        (
+            "wrong-produce-reference-assembly",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path C:/tmp/iroha-dotnet-artifacts "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=true "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx",
+        ),
+        (
+            "trailing-extra-argument",
+            "+ dotnet test "
+            "tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj "
+            "--artifacts-path C:/tmp/iroha-dotnet-artifacts "
+            "--filter FullyQualifiedName~Sccp "
+            "-p:ProduceReferenceAssembly=false "
+            "--nologo --logger trx;LogFileName=sccp-dotnet-sdk.trx --list-tests",
+        ),
+    )
+
+    for module in (report, verifier):
+        assert required_fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+        for case_id, command in cases:
+            assert not module._phase_command_matches_required_fragment(
+                "dotnet-sdk",
+                command,
+                required_fragment,
+            ), f"{module.__name__} accepted malformed .NET command {case_id}"
 
 
 def test_release_bundle_phase_command_matchers_reject_echoed_fragments() -> None:
@@ -7845,6 +8013,10 @@ def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_rende
         "portal-review"
     ) in captured.err
     assert (
+        "bundled report.corridor.evidence_artifacts contains duplicate path #1"
+        in captured.err
+    )
+    assert (
         "bundled report.corridor phase js-sdk status must be passed or blocked"
         in captured.err
     )
@@ -8451,12 +8623,15 @@ def test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before
     bundle = load_bundle_module()
     label = "bundled report.cryptographic_evidence[0]"
     source_by_domain = bundle._route_canary_source_by_domain()
+    eth_domain = bundle._sccp_domain_eth()
+    bsc_domain = bundle._sccp_domain_bsc()
+    tron_domain = bundle._sccp_domain_tron()
 
     # Source-inventory marker: release bundle public crypto route-canary metadata exactness covers every message-proof launch domain
     for domain, chain in (
-        (1, "eth"),
-        (2, "bsc"),
-        (5, "tron"),
+        (eth_domain, "eth"),
+        (bsc_domain, "bsc"),
+        (tron_domain, "tron"),
     ):
         row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
         row.update(
@@ -8468,10 +8643,10 @@ def test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before
                 "route_canary_evidence_bound": False,
                 "route_canary_message_proof_used": True,
                 "route_canary_raw_data_owner_matches_transaction": (
-                    True if domain == 5 else None
+                    True if domain == tron_domain else None
                 ),
                 "route_canary_signature_recovers_to_owner": (
-                    True if domain == 5 else None
+                    True if domain == tron_domain else None
                 ),
                 "route_canary_log_index": 0,
                 "route_canary_target_domain": domain,
@@ -8485,7 +8660,7 @@ def test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before
                 "route_canary_finality_block_hash": fixed_hex32(0x7A + domain),
             }
         )
-        if domain == 5:
+        if domain == tron_domain:
             tron_owner = fixed_tron_address(0x44)
             row.update(
                 {
@@ -8571,6 +8746,99 @@ def test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before
         ) in errors, domain
 
 
+def test_release_bundle_public_crypto_uses_bsc_domain_helper_for_route_canary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BSC route-canary classification must not depend on a literal domain id."""
+
+    bundle = load_bundle_module()
+
+    class FakeVerifier:
+        SCCP_DOMAIN_ETH = 1
+        SCCP_DOMAIN_BSC = 222
+        SCCP_DOMAIN_SORA = 0
+        SCCP_DOMAIN_SOL = 3
+        SCCP_DOMAIN_TON = 4
+        SCCP_DOMAIN_TRON = 5
+        ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
+            SCCP_DOMAIN_ETH: "evm_message_proof_accepted_transaction",
+            SCCP_DOMAIN_BSC: "evm_message_proof_accepted_transaction",
+            SCCP_DOMAIN_SOL: "solana_live_programdata_snapshot",
+            SCCP_DOMAIN_TON: "ton_live_account_snapshot",
+            SCCP_DOMAIN_TRON: "tron_message_proof_accepted_transaction",
+        }
+
+        @staticmethod
+        def _source_adapter_gate_audit_keys_for_domain_chain(
+            domain: int,
+            chain: str,
+        ) -> frozenset[str] | None:
+            if domain == FakeVerifier.SCCP_DOMAIN_BSC and chain == "bsc":
+                return frozenset({"evm_source_gate_hash"})
+            return None
+
+        @staticmethod
+        def _source_adapter_gate_hash_key_for_domain_chain(
+            domain: int,
+            chain: str,
+        ) -> str | None:
+            if domain == FakeVerifier.SCCP_DOMAIN_BSC and chain == "bsc":
+                return "evm_source_gate_hash"
+            return None
+
+    monkeypatch.setattr(bundle, "_verify_module", lambda: FakeVerifier)
+    for cache_name in (
+        "_SCCP_DOMAIN_ETH",
+        "_SCCP_DOMAIN_BSC",
+        "_SCCP_DOMAIN_SORA",
+        "_SCCP_DOMAIN_SOL",
+        "_SCCP_DOMAIN_TON",
+        "_SCCP_DOMAIN_TRON",
+        "_ROUTE_CANARY_SOURCE_BY_DOMAIN",
+    ):
+        setattr(bundle, cache_name, None)
+
+    bsc_domain = bundle._sccp_domain_bsc()
+    assert bsc_domain == FakeVerifier.SCCP_DOMAIN_BSC
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": bsc_domain,
+            "chain": "bsc",
+            "route_canary_evidence_hash": fixed_hex32(0xBD),
+            "route_canary_evidence_source": "operator_attestation",
+            "route_canary_evidence_bound": False,
+            "route_canary_message_proof_used": False,
+            "route_canary_receipt_block_finalized": False,
+            "source_adapter_gate_required": False,
+            "source_adapter_gate_hash": "",
+            "source_adapter_gate_audit_hashes": {},
+        }
+    )
+
+    # Source-inventory marker: release bundle BSC route-canary domain membership must use _sccp_domain_bsc instead of a literal integer.
+    errors = bundle._cryptographic_evidence_row_bundle_errors(
+        row,
+        "bundled report.cryptographic_evidence[0]",
+    )
+
+    assert any(
+        "route_canary_evidence_source must be evm_message_proof_accepted_transaction "
+        "for message-proof route canary evidence" in error
+        for error in errors
+    )
+    assert any(
+        "route_canary_transaction_hash must be a non-zero canonical bytes32 hex "
+        "string for finalized EVM route canary evidence" in error
+        for error in errors
+    )
+    assert any(
+        "route_canary_receipt_block_finalized must be true for finalized EVM "
+        "route canary evidence" in error
+        for error in errors
+    )
+
+
 def test_release_bundle_treats_malformed_copied_crypto_route_canary_hash_as_absent_before_render() -> None:
     """Malformed truthy canary hashes must not open present-evidence branches."""
 
@@ -8578,6 +8846,11 @@ def test_release_bundle_treats_malformed_copied_crypto_route_canary_hash_as_abse
     label = "bundled report.cryptographic_evidence[0]"
     verifier = load_verify_helpers()
     source_by_domain = bundle._route_canary_source_by_domain()
+    message_proof_domains = {
+        bundle._sccp_domain_eth(),
+        bundle._sccp_domain_bsc(),
+        bundle._sccp_domain_tron(),
+    }
 
     for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
         row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
@@ -8589,7 +8862,7 @@ def test_release_bundle_treats_malformed_copied_crypto_route_canary_hash_as_abse
                 "route_canary_evidence_source": source_by_domain[domain],
                 "route_canary_evidence_bound": True,
                 "route_canary_message_proof_used": (
-                    True if domain in (1, 2, 5) else None
+                    True if domain in message_proof_domains else None
                 ),
                 "source_adapter_gate_required": True,
                 "source_adapter_gate_hash": fixed_hex32(0xB0 + domain),
@@ -8616,7 +8889,7 @@ def test_release_bundle_treats_malformed_copied_crypto_route_canary_hash_as_abse
             f"{label} route_canary_evidence_bound must be false when route "
             "canary evidence is absent"
         ) in errors, domain
-        if domain in (1, 2, 5):
+        if domain in message_proof_domains:
             assert (
                 f"{label} route_canary_message_proof_used must be null when "
                 "route canary evidence is absent"
@@ -8680,7 +8953,7 @@ def test_release_bundle_rejects_copied_crypto_non_evm_route_canary_evm_metadata_
 
     # Source-inventory marker: release bundle public crypto non-EVM route-canary EVM metadata null policy covers every non-EVM canary launch domain
     for domain, chain in sorted(chain_by_domain.items()):
-        if domain in (bundle._sccp_domain_eth(), 2):
+        if domain in (bundle._sccp_domain_eth(), bundle._sccp_domain_bsc()):
             continue
         row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
         row.update(
@@ -9008,10 +9281,13 @@ def test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render(
 
     bundle = load_bundle_module()
     label = "bundled report.cryptographic_evidence[0]"
+    eth_domain = bundle._sccp_domain_eth()
+    bsc_domain = bundle._sccp_domain_bsc()
+    tron_domain = bundle._sccp_domain_tron()
     for domain, chain, value in (
-        (1, "eth", False),
-        (2, "bsc", None),
-        (5, "tron", False),
+        (eth_domain, "eth", False),
+        (bsc_domain, "bsc", None),
+        (tron_domain, "tron", False),
     ):
         row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
         row.update(
@@ -9025,10 +9301,10 @@ def test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render(
                 "route_canary_evidence_bound": True,
                 "route_canary_message_proof_used": value,
                 "route_canary_raw_data_owner_matches_transaction": (
-                    True if domain == 5 else None
+                    True if domain == tron_domain else None
                 ),
                 "route_canary_signature_recovers_to_owner": (
-                    True if domain == 5 else None
+                    True if domain == tron_domain else None
                 ),
                 "route_canary_log_index": 0,
                 "route_canary_target_domain": domain,
@@ -9041,11 +9317,11 @@ def test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render(
                 "route_canary_finality_height": fixed_hex32(0xA5 + domain),
                 "route_canary_finality_block_hash": fixed_hex32(0xAA + domain),
                 "route_canary_receipt_block_finalized": (
-                    True if domain in (1, 2) else None
+                    True if domain in (eth_domain, bsc_domain) else None
                 ),
             }
         )
-        if domain == 5:
+        if domain == tron_domain:
             tron_owner = fixed_tron_address(0xE5)
             row.update(
                 {
@@ -9376,7 +9652,8 @@ def test_release_bundle_rejects_copied_crypto_non_tron_route_canary_block_metada
                 },
             }
         )
-        if domain in (bundle._sccp_domain_eth(), 2):
+        if domain in (bundle._sccp_domain_eth(), bundle._sccp_domain_bsc()):
+            # Source-inventory marker: release bundle public crypto BSC route-canary EVM metadata loop uses the BSC domain helper.
             row.update(
                 {
                     "route_canary_message_proof_used": True,
@@ -13638,12 +13915,21 @@ def test_release_bundle_rejects_malformed_copied_evidence_before_render(
         "bundled report.evidence required_domains must not contain duplicate integers"
     ) in captured.err
     assert (
+        "bundled report.evidence required_domains contains duplicate domains"
+    ) in captured.err
+    assert (
         "bundled report.evidence supported_launch_domains must not contain "
         "duplicate integers"
     ) in captured.err
     assert (
+        "bundled report.evidence supported_launch_domains contains duplicate domains"
+    ) in captured.err
+    assert (
         "bundled report.evidence unsupported_launch_domains must not contain "
         "duplicate integers"
+    ) in captured.err
+    assert (
+        "bundled report.evidence unsupported_launch_domains contains duplicate domains"
     ) in captured.err
     assert (
         "bundled report.evidence supported_launch_domains must be the supported "
@@ -26544,6 +26830,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     output_dir = build_ready_bundle(tmp_path)
     rogue_sdk = "rogue-sdk"
     secret_sdk = "secret-token-sdk"
+    private_sdk = "private-key-sdk"
 
     parity_relative_path = (
         "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
@@ -26553,6 +26840,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     parity_result = next(iter(parity_payload["sdk_results"].values()))
     parity_payload["sdk_results"][rogue_sdk] = dict(parity_result)
     parity_payload["sdk_results"][secret_sdk] = dict(parity_result)
+    parity_payload["sdk_results"][private_sdk] = dict(parity_result)
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -26567,6 +26855,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     self_test_result = next(iter(self_test_payload["sdk_results"].values()))
     self_test_payload["sdk_results"][rogue_sdk] = dict(self_test_result)
     self_test_payload["sdk_results"][secret_sdk] = dict(self_test_result)
+    self_test_payload["sdk_results"][private_sdk] = dict(self_test_result)
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -26607,7 +26896,12 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle cross_sdk_fixture_parity_artifact sdk_results contains "
-        "unknown sdk with sensitive name"
+        "unknown sdk with sensitive name #1"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results contains "
+        "unknown sdk with sensitive name #2"
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
@@ -26617,10 +26911,17 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle native_prover_self_test_artifact sdk_results contains "
-        "unknown sdk with sensitive name"
+        "unknown sdk with sensitive name #1"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results contains "
+        "unknown sdk with sensitive name #2"
     ) in verified.stdout
     assert secret_sdk not in verified.stdout
     assert secret_sdk not in verified.stderr
+    assert private_sdk not in verified.stdout
+    assert private_sdk not in verified.stderr
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -28934,6 +29235,26 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     assert (
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
+        "that strict `dotnet test` command carrying"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "`--artifacts-path <bridge-target>/dotnet-artifacts`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "`-p:ProduceReferenceAssembly=false`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "`--nologo`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
         "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
     ) in errors
     assert (
@@ -29138,28 +29459,8 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
-        "release evidence marker: TRX `UnitTestResult` outcome values must be "
-        "present and literal `Passed`"
-    ) in errors
-    assert (
-        "readiness report Markdown Required Release Evidence section missing "
-        "release evidence marker: missing, lowercase, padded, control-bearing, "
-        "or otherwise aliased outcomes remain forged evidence"
-    ) in errors
-    assert (
-        "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: requires every present `UnitTestResult` "
         "`isExecuted` flag to be `true`"
-    ) in errors
-    assert (
-        "readiness report Markdown Required Release Evidence section missing "
-        "release evidence marker: Present TRX `UnitTestResult` "
-        "`isExecuted` flags must be unpadded literal lowercase `true`"
-    ) in errors
-    assert (
-        "readiness report Markdown Required Release Evidence section missing "
-        "release evidence marker: truthy numeric, padded, control-bearing, "
-        "or case-variant aliases remain forged evidence"
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -29179,11 +29480,6 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
         "tab/control-whitespace separators remain forged evidence"
-    ) in errors
-    assert (
-        "readiness report Markdown Required Release Evidence section missing "
-        "release evidence marker: Accepted VSTest success summaries must match "
-        "raw canonical text before ANSI/control/format stripping"
     ) in errors
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -29234,6 +29530,55 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "release evidence marker: empty-component, padded/control-bearing, "
         "URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, "
         "XML-delimiter, or suffixed or nested `.dll` aliases"
+    ) in errors
+
+    trx_outcome_line = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith("- TRX `UnitTestResult` outcome values")
+    )
+    weakened = markdown.replace(f"{trx_outcome_line}\n", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: TRX `UnitTestResult` outcome values must be "
+        "present and literal `Passed`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: missing, lowercase, padded, control-bearing, "
+        "or otherwise aliased outcomes remain forged evidence"
+    ) in errors
+
+    trx_is_executed_line = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith("- Present TRX `UnitTestResult` `isExecuted` flags")
+    )
+    weakened = markdown.replace(f"{trx_is_executed_line}\n", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Present TRX `UnitTestResult` "
+        "`isExecuted` flags must be unpadded literal lowercase `true`"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: truthy numeric, padded, control-bearing, "
+        "or case-variant aliases remain forged evidence"
+    ) in errors
+
+    vstest_success_line = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith("- Accepted VSTest success summaries")
+    )
+    weakened = markdown.replace(f"{vstest_success_line}\n", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: Accepted VSTest success summaries must match "
+        "raw canonical text before ANSI/control/format stripping"
     ) in errors
 
     direct_trx_children_line = next(
@@ -29556,6 +29901,9 @@ def test_release_bundle_required_evidence_markers_are_unique_and_generated(
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
     assert "must not contain empty path-list segments" in required_evidence
+    assert "`--artifacts-path <bridge-target>/dotnet-artifacts`" in required_evidence
+    assert "`-p:ProduceReferenceAssembly=false`" in required_evidence
+    assert "`--nologo`" in required_evidence
     assert (
         "contains exactly the VSTest passed-test count of `UnitTestResult` rows"
         in required_evidence
@@ -34680,7 +35028,8 @@ def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata
         for blocker in item_by_id["governed_deployment_evidence"]["blockers"]
     )
     assert any(
-        "active EVM source adapter gate summary must be required" in blocker
+        f"active {verifier.ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required"
+        in blocker
         for blocker in item_by_id["governed_deployment_evidence"]["blockers"]
     )
     assert any(
@@ -34909,11 +35258,17 @@ def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_d
     summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
         encoding="utf-8"
     )
+    active_live_metadata_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        verifier.ACTIVE_LAUNCH_DISPLAY,
+    )
     cases = (
         (
             "evm_live_metadata",
             "operator secret-token live metadata root",
-            "active EVM live metadata summary is malformed",
+            active_live_metadata_blocker,
         ),
         (
             "source_record_hashes",
@@ -37346,6 +37701,48 @@ def test_release_bundle_verifier_rejects_corridor_evidence_artifacts_root_drift(
     assert "Traceback" not in verified.stderr
 
 
+def test_release_bundle_verifier_rejects_duplicate_corridor_evidence_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Tampered corridor artifact maps must keep duplicate safe paths visible."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    copied_artifact = report["corridor"]["evidence_artifacts"]["swift-sdk"]
+    report["corridor"]["evidence_artifacts"]["kotlin-sdk"] = dict(copied_artifact)
+    report["corridor"]["evidence_artifacts"]["java-android"] = (
+        "operator secret-token-corridor-artifact"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report corridor evidence_artifacts contains duplicate path #1"
+        in verified.stdout
+    )
+    assert (
+        "readiness report phase java-android artifact is not an object"
+        in verified.stdout
+    )
+    assert "operator secret-token-corridor-artifact" not in verified.stdout
+    assert "operator secret-token-corridor-artifact" not in verified.stderr
+    assert "Traceback" not in verified.stderr
+
+
 def test_release_bundle_verifier_rejects_corridor_phase_root_drift(
     tmp_path: Path,
 ) -> None:
@@ -37648,6 +38045,46 @@ def test_release_bundle_verifier_numbers_repeated_duplicate_input_provenance(
     )
     assert Path(copied_input).name not in verified.stdout
     assert Path(copied_input).name not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_mixed_malformed_duplicate_input_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Mixed malformed copied artifacts must still report duplicate safe paths."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    copied_artifact = report["input_artifacts"][0]
+    report["input_artifacts"] = [
+        dict(copied_artifact),
+        "operator secret-token-input-artifact",
+        dict(copied_artifact),
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report input_artifacts contains duplicate path #1"
+        in verified.stdout
+    )
+    assert "readiness report input artifact 1 is not an object" in verified.stdout
+    assert "operator secret-token-input-artifact" not in verified.stdout
+    assert "operator secret-token-input-artifact" not in verified.stderr
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_report_artifact_path_drift(
@@ -58018,6 +58455,8 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "native_sdk_artifacts[",
                 "native_sdk_artifacts contains duplicate sdk",
                 "native_sdk_artifacts contains unknown sdk",
+                "def _number_repeated_native_evm_sdk_name_blockers(",
+                "contains unknown sdk with sensitive name",
                 "implementation must be",
                 "prover_artifact_hash must match proof_artifact_hash",
                 "sha256 must match {hash_field}",
@@ -58117,6 +58556,7 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_missing_fields",
                 "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_value_drift",
                 "def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results",
+                "sdk_results contains unknown sdk with sensitive name #1",
                 "def test_release_readiness_report_blocks_native_evm_fixture_public_signal_shape",
                 "def test_release_readiness_report_blocks_native_evm_parity_fixture_role_reuse",
                 "def test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
@@ -58172,6 +58612,7 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_missing_fields",
                 "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_value_drift",
                 "def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results",
+                "sdk_results contains unknown sdk with sensitive name #1",
                 "def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape",
                 "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_role_reuse",
                 "def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
@@ -58308,6 +58749,22 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and "missing marker: sdk_results contains unknown sdk" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def _number_repeated_native_evm_sdk_name_blockers("
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: sdk_results contains unknown sdk with sensitive name #1"
+            in error
+        )
         for error in verified["errors"]
     )
     assert any(

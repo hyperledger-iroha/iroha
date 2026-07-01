@@ -39,7 +39,7 @@ use iroha_data_model::soracloud::{
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
     account::rekey::AccountAlias,
-    asset::AssetBalanceScope,
+    asset::{AssetBalancePolicy, AssetBalanceScope},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     escrow::EscrowId,
     events::time::Schedule,
@@ -788,6 +788,15 @@ pub trait QueryStateRefOps {
     ///
     /// Returns an [`ivm::VMError`] if the NFT is missing.
     fn nft_by_id(&self, nft_id: &NftId) -> Result<Nft, ivm::VMError>;
+    /// Load an asset definition's balance-scope policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the asset definition is missing.
+    fn asset_balance_policy(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalancePolicy, ivm::VMError>;
     /// Load a named parameter from the current parameter set.
     ///
     /// # Errors
@@ -920,6 +929,34 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             QueryStateRef::QueryView(view) => CoreHostImpl::<NoQueryState>::nft_by_id(view, nft_id),
             QueryStateRef::Block(block) => CoreHostImpl::<NoQueryState>::nft_by_id(block, nft_id),
             QueryStateRef::Transaction(tx) => CoreHostImpl::<NoQueryState>::nft_by_id(tx, nft_id),
+        }
+    }
+
+    fn asset_balance_policy(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalancePolicy, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => view
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+            QueryStateRef::QueryView(view) => view
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+            QueryStateRef::Block(block) => block
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+            QueryStateRef::Transaction(tx) => tx
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
         }
     }
 
@@ -7034,8 +7071,19 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
                 let dataspace: DataSpaceId =
                     Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
-                let asset_id =
-                    AssetId::with_scope(asset_def, from, AssetBalanceScope::Dataspace(dataspace));
+                let scope = {
+                    let state_ref = self
+                        .query_state
+                        .get()
+                        .ok_or(ivm::VMError::PermissionDenied)?;
+                    match state_ref.asset_balance_policy(&asset_def)? {
+                        AssetBalancePolicy::Global => AssetBalanceScope::Global,
+                        AssetBalancePolicy::DataspaceRestricted => {
+                            AssetBalanceScope::Dataspace(dataspace)
+                        }
+                    }
+                };
+                let asset_id = AssetId::with_scope(asset_def, from, scope);
                 let isi = Transfer::asset_numeric(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -13799,6 +13847,129 @@ seiyaku RecordFromPayload {
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
         assert_eq!(host.fastpq_batch_entries.as_ref().map(Vec::len), Some(1));
+    }
+
+    fn scoped_transfer_state(
+        authority: &AccountId,
+        destination: &AccountId,
+        asset_def: AssetDefinitionId,
+        balance_policy: AssetBalancePolicy,
+    ) -> State {
+        let domain = Domain::new(fixture_domain_id()).build(authority);
+        let source_account = build_fixture_account(authority, authority);
+        let destination_account = build_fixture_account(destination, authority);
+        let asset_def = AssetDefinition::numeric(asset_def)
+            .with_balance_scope_policy(balance_policy)
+            .build(authority);
+        let world = World::with([domain], [source_account, destination_account], [asset_def]);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        State::new_for_testing(world, kura, query)
+    }
+
+    fn prepare_scoped_transfer_syscall(
+        vm: &mut IVM,
+        from: &AccountId,
+        to: &AccountId,
+        asset_def: &AssetDefinitionId,
+        amount: &Numeric,
+        dataspace: DataSpaceId,
+    ) {
+        let from_ptr = store_tlv(vm, PointerType::AccountId, &norito_blob(from));
+        let to_ptr = store_tlv(vm, PointerType::AccountId, &norito_blob(to));
+        let asset_ptr = store_tlv(vm, PointerType::AssetDefinitionId, &norito_blob(asset_def));
+        let amount_ptr = store_tlv(
+            vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(amount).expect("encode amount"),
+        );
+        let dataspace_ptr = store_tlv(
+            vm,
+            PointerType::DataSpaceId,
+            &norito::to_bytes(&dataspace).expect("encode dataspace"),
+        );
+        vm.set_register(10, from_ptr);
+        vm.set_register(11, to_ptr);
+        vm.set_register(12, asset_ptr);
+        vm.set_register(13, amount_ptr);
+        vm.set_register(14, dataspace_ptr);
+    }
+
+    #[test]
+    fn transfer_asset_scoped_syscall_queues_global_source_for_global_definition() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::Global,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            DataSpaceId::new(7),
+        );
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .expect("global transfer should enqueue");
+
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+            AssetId::of(asset_def, authority),
+            amount,
+            destination,
+        )));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn transfer_asset_scoped_syscall_queues_dataspace_source_for_restricted_definition() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let dataspace = DataSpaceId::new(7);
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::DataspaceRestricted,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            dataspace,
+        );
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .expect("restricted transfer should enqueue");
+
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+            AssetId::with_scope(
+                asset_def,
+                authority,
+                AssetBalanceScope::Dataspace(dataspace),
+            ),
+            amount,
+            destination,
+        )));
+        assert_eq!(host.queued, vec![expected]);
     }
 
     #[test]

@@ -505,6 +505,20 @@ const accessorBackedRecord = (keys, value = "getter-value") => {
     readCount: () => reads,
   };
 };
+const defineThrowingAccessors = (record, keys) => {
+  let reads = 0;
+  for (const key of keys) {
+    Object.defineProperty(record, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error(`${key} accessor must not be read`);
+      },
+    });
+  }
+  return () => reads;
+};
 
 const readyReadback = (overrides = {}) => {
   const {
@@ -980,7 +994,10 @@ async function withRouteManifestPublishHarness(callback, options = {}) {
         typeof body === "string" ? body : JSON.stringify(body),
         {
           status: options.pipelineStatus ?? 202,
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type":
+              typeof body === "string" ? "text/plain" : "application/json",
+          },
         },
       );
     }
@@ -1034,6 +1051,11 @@ async function withRouteManifestPublishHarness(callback, options = {}) {
     }
   }
 }
+
+const routeManifestPipelineCalls = (calls) =>
+  calls.fetch.filter(
+    (call) => call.url === "https://taira.sora.org/v1/pipeline/transactions",
+  );
 
 const offlineFullTomlEvidence = (overrides = {}) => ({
   schema: "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1",
@@ -2389,8 +2411,10 @@ test("BSC publish-route-manifest records default gas limit in transaction metada
       "publish_sccp_route_manifest",
     );
     assert.deepEqual(calls.fetch.map((call) => call.url), [
+      "https://taira.sora.org/v1/node/capabilities",
       "https://taira.sora.org/v1/pipeline/transactions",
     ]);
+    assert.equal(routeManifestPipelineCalls(calls).length, 1);
     assert.doesNotMatch(
       JSON.stringify(artifact),
       /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
@@ -2597,7 +2621,7 @@ test("BSC publish-route-manifest supports explicit gas limit and rejects invalid
       assert.equal(await readFile(badOut, "utf8"), badOutSentinel);
     }
     assert.equal(calls.buildTransaction.length, 1);
-    assert.equal(calls.fetch.length, 1);
+    assert.equal(routeManifestPipelineCalls(calls).length, 1);
   });
 });
 
@@ -3087,6 +3111,38 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     "--out",
     outputPath,
   ];
+
+  const duplicateSpecifierSidecarPath = join(
+    dir,
+    "destination-browser-prover-duplicate-specifier.manifest.json",
+  );
+  await writeFile(
+    duplicateSpecifierSidecarPath,
+    `${JSON.stringify(
+      {
+        ...browserProverSidecarManifest({
+          direction: "destination",
+          nativeEvmProverBundleHash: expectedBundleHash,
+          rollout,
+        }),
+        moduleSpecifier: "@sora/sccp-bsc-destination-prover",
+        module_specifier: "@sora/sccp-bsc-destination-prover",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const duplicateSpecifierArgs = productionReadyRouteManifestArgs(
+    evidencePath,
+    join(dir, "route.duplicate-browser-specifier.manifest.json"),
+  );
+  duplicateSpecifierArgs[
+    duplicateSpecifierArgs.indexOf("--destination-browser-prover-manifest") + 1
+  ] = duplicateSpecifierSidecarPath;
+  await assert.rejects(
+    () => main(duplicateSpecifierArgs),
+    /destination browser prover manifest\.moduleSpecifier must not use multiple aliases/u,
+  );
 
   const result = await main(productionReadyRouteManifestArgs(evidencePath, out));
   const manifest = JSON.parse(await readFile(out, "utf8"));
@@ -4978,6 +5034,54 @@ test("BSC route-config rejects route material supplied only by prototypes", () =
   );
 });
 
+test("BSC route-config ignores accessor-backed scalar aliases before data aliases", () => {
+  const manifest = routeManifest({
+    production_ready: false,
+    counterparty_domain: SCCP_DOMAIN_BSC,
+    destinationRollout: {
+      source_domain: SCCP_DOMAIN_SORA,
+      target_domain: SCCP_DOMAIN_BSC,
+    },
+    tairaXorBurnRecord: {
+      gas_limit: 2_000_000,
+    },
+    postDeployLiveEvidence: {
+      full_toml_ready: false,
+    },
+  });
+  delete manifest.productionReady;
+  delete manifest.counterpartyDomain;
+  delete manifest.destinationRollout.sourceDomain;
+  delete manifest.destinationRollout.targetDomain;
+  delete manifest.tairaXorBurnRecord.gasLimit;
+  delete manifest.postDeployLiveEvidence.fullTomlReady;
+
+  const readCounts = [
+    defineThrowingAccessors(manifest, [
+      "productionReady",
+      "counterpartyDomain",
+    ]),
+    defineThrowingAccessors(manifest.destinationRollout, [
+      "sourceDomain",
+      "targetDomain",
+    ]),
+    defineThrowingAccessors(manifest.tairaXorBurnRecord, ["gasLimit"]),
+    defineThrowingAccessors(manifest.postDeployLiveEvidence, ["fullTomlReady"]),
+  ];
+
+  const toml = buildBscTairaXorRouteConfigToml(manifest, {
+    "allow-unready": "true",
+  });
+  assert.match(toml, /production_ready = false/u);
+  assert.match(toml, /counterparty_domain = 2/u);
+  assert.match(toml, /taira_burn_record_gas_limit = 2000000/u);
+  assert.match(toml, /post_deploy_full_toml_ready = false/u);
+  assert.equal(
+    readCounts.reduce((sum, readCount) => sum + readCount(), 0),
+    0,
+  );
+});
+
 test("BSC native-prover-bundle helper ignores accessor-backed options", async () => {
   const { record, readCount } = accessorBackedRecord([
     "artifact-root",
@@ -5226,6 +5330,16 @@ test("BSC route-config rejects duplicate route manifest container and scalar ali
       /route manifest destinationBrowserProver\.moduleHash must not use multiple aliases: moduleHash, module_hash/u,
     ],
     [
+      "destination browser prover malformed module hash alias",
+      routeManifest({
+        destinationBrowserProver: {
+          ...browserProverRef("destination"),
+          module_hash: null,
+        },
+      }),
+      /route manifest destinationBrowserProver\.moduleHash\.module_hash must be a non-empty canonical string/u,
+    ],
+    [
       "source browser prover manifest hash",
       routeManifest({
         sourceBrowserProver: {
@@ -5254,6 +5368,16 @@ test("BSC route-config rejects duplicate route manifest container and scalar ali
         },
       }),
       /route manifest sourceBrowserProver\.boundProofHash must not use multiple aliases: boundProofHash, proofArtifactHash/u,
+    ],
+    [
+      "source browser prover malformed proof hash alias",
+      routeManifest({
+        sourceBrowserProver: {
+          ...browserProverRef("source"),
+          proof_hash: 7,
+        },
+      }),
+      /route manifest sourceBrowserProver\.boundProofHash\.proof_hash must be a non-empty canonical string/u,
     ],
   ]) {
     assert.throws(
@@ -8636,8 +8760,9 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   const proofRemoteMarker = await writeNativeProverFixtureFiles({
     artifactByteOverrides: { proofArtifact: proofRemoteMarkerBytes },
   });
-  await assert.doesNotReject(
+  await assert.rejects(
     () => buildBscNativeEvmProverBundleFromArtifacts(proofRemoteMarker.options),
+    /proofArtifactBytes contains forbidden prover dependency marker: remote_prover/u,
   );
   const provingWasmMarkerBytes = bscNativeProverSnarkjsBytes(
     "zkey",

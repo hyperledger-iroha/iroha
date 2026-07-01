@@ -880,6 +880,7 @@ _ALL_LANES_REQUIRED_DOMAINS: tuple[int, ...] | None = None
 _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS: tuple[int, ...] | None = None
 _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS: tuple[int, ...] | None = None
 _SCCP_DOMAIN_ETH: int | None = None
+_SCCP_DOMAIN_BSC: int | None = None
 _ALL_LANES_EVM_DESTINATION_DOMAINS: frozenset[int] | None = None
 _ROUTE_CANARY_SOURCE_BY_DOMAIN: dict[int, str] | None = None
 _SCCP_DOMAIN_SORA: int | None = None
@@ -1005,20 +1006,46 @@ def _active_launch_chain() -> str:
     return _ACTIVE_LAUNCH_CHAIN
 
 
+def _verifier_exact_int_constant(value: Any, label: str) -> int:
+    """Return verifier-owned integer constants without bool coercion."""
+
+    if type(value) is not int:
+        raise TypeError(f"release-bundle verifier {label} must be an integer")
+    return value
+
+
+def _verifier_int_constant(name: str) -> int:
+    verifier = _verify_module()
+    return _verifier_exact_int_constant(getattr(verifier, name), name)
+
+
+def _verifier_int_sequence(name: str) -> tuple[int, ...]:
+    verifier = _verify_module()
+    value = getattr(verifier, name)
+    try:
+        items = tuple(value)
+    except TypeError:
+        raise TypeError(
+            f"release-bundle verifier {name} must be an integer sequence"
+        ) from None
+    return tuple(
+        _verifier_exact_int_constant(item, f"{name}[{index}]")
+        for index, item in enumerate(items)
+    )
+
+
 def _active_launch_domain() -> int:
     global _ACTIVE_LAUNCH_DOMAIN
     if _ACTIVE_LAUNCH_DOMAIN is None:
-        verifier = _verify_module()
-        _ACTIVE_LAUNCH_DOMAIN = int(verifier.ACTIVE_LAUNCH_DOMAIN)
+        _ACTIVE_LAUNCH_DOMAIN = _verifier_int_constant("ACTIVE_LAUNCH_DOMAIN")
     return _ACTIVE_LAUNCH_DOMAIN
 
 
 def _all_lanes_required_domains() -> tuple[int, ...]:
     global _ALL_LANES_REQUIRED_DOMAINS
     if _ALL_LANES_REQUIRED_DOMAINS is None:
-        verifier = _verify_module()
-        _ALL_LANES_REQUIRED_DOMAINS = tuple(
-            int(domain) for domain in verifier.ALL_LANES_REQUIRED_DOMAINS
+        _ALL_LANES_REQUIRED_DOMAINS = _verifier_int_sequence(
+            "ALL_LANES_REQUIRED_DOMAINS"
         )
     return _ALL_LANES_REQUIRED_DOMAINS
 
@@ -1026,9 +1053,8 @@ def _all_lanes_required_domains() -> tuple[int, ...]:
 def _all_lanes_supported_launch_domains() -> tuple[int, ...]:
     global _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
     if _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS is None:
-        verifier = _verify_module()
-        _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = tuple(
-            int(domain) for domain in verifier.ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
+        _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = _verifier_int_sequence(
+            "ALL_LANES_SUPPORTED_LAUNCH_DOMAINS"
         )
     return _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
 
@@ -1036,9 +1062,8 @@ def _all_lanes_supported_launch_domains() -> tuple[int, ...]:
 def _all_lanes_unsupported_launch_domains() -> tuple[int, ...]:
     global _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
     if _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS is None:
-        verifier = _verify_module()
-        _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = tuple(
-            int(domain) for domain in verifier.ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
+        _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = _verifier_int_sequence(
+            "ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS"
         )
     return _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
 
@@ -1046,49 +1071,50 @@ def _all_lanes_unsupported_launch_domains() -> tuple[int, ...]:
 def _sccp_domain_eth() -> int:
     global _SCCP_DOMAIN_ETH
     if _SCCP_DOMAIN_ETH is None:
-        verifier = _verify_module()
-        _SCCP_DOMAIN_ETH = int(verifier.SCCP_DOMAIN_ETH)
+        _SCCP_DOMAIN_ETH = _verifier_int_constant("SCCP_DOMAIN_ETH")
     return _SCCP_DOMAIN_ETH
+
+
+def _sccp_domain_bsc() -> int:
+    global _SCCP_DOMAIN_BSC
+    if _SCCP_DOMAIN_BSC is None:
+        _SCCP_DOMAIN_BSC = _verifier_int_constant("SCCP_DOMAIN_BSC")
+    return _SCCP_DOMAIN_BSC
 
 
 def _sccp_domain_sora() -> int:
     global _SCCP_DOMAIN_SORA
     if _SCCP_DOMAIN_SORA is None:
-        verifier = _verify_module()
-        _SCCP_DOMAIN_SORA = int(verifier.SCCP_DOMAIN_SORA)
+        _SCCP_DOMAIN_SORA = _verifier_int_constant("SCCP_DOMAIN_SORA")
     return _SCCP_DOMAIN_SORA
 
 
 def _sccp_domain_sol() -> int:
     global _SCCP_DOMAIN_SOL
     if _SCCP_DOMAIN_SOL is None:
-        verifier = _verify_module()
-        _SCCP_DOMAIN_SOL = int(verifier.SCCP_DOMAIN_SOL)
+        _SCCP_DOMAIN_SOL = _verifier_int_constant("SCCP_DOMAIN_SOL")
     return _SCCP_DOMAIN_SOL
 
 
 def _sccp_domain_ton() -> int:
     global _SCCP_DOMAIN_TON
     if _SCCP_DOMAIN_TON is None:
-        verifier = _verify_module()
-        _SCCP_DOMAIN_TON = int(verifier.SCCP_DOMAIN_TON)
+        _SCCP_DOMAIN_TON = _verifier_int_constant("SCCP_DOMAIN_TON")
     return _SCCP_DOMAIN_TON
 
 
 def _sccp_domain_tron() -> int:
     global _SCCP_DOMAIN_TRON
     if _SCCP_DOMAIN_TRON is None:
-        verifier = _verify_module()
-        _SCCP_DOMAIN_TRON = int(verifier.SCCP_DOMAIN_TRON)
+        _SCCP_DOMAIN_TRON = _verifier_int_constant("SCCP_DOMAIN_TRON")
     return _SCCP_DOMAIN_TRON
 
 
 def _all_lanes_evm_destination_domains() -> frozenset[int]:
     global _ALL_LANES_EVM_DESTINATION_DOMAINS
     if _ALL_LANES_EVM_DESTINATION_DOMAINS is None:
-        verifier = _verify_module()
         _ALL_LANES_EVM_DESTINATION_DOMAINS = frozenset(
-            int(domain) for domain in verifier.ALL_LANES_EVM_DESTINATION_DOMAINS
+            _verifier_int_sequence("ALL_LANES_EVM_DESTINATION_DOMAINS")
         )
     return _ALL_LANES_EVM_DESTINATION_DOMAINS
 
@@ -1374,15 +1400,23 @@ def _route_canary_source_by_domain() -> dict[int, str]:
     if _ROUTE_CANARY_SOURCE_BY_DOMAIN is None:
         verifier = _verify_module()
         _ROUTE_CANARY_SOURCE_BY_DOMAIN = {
-            int(domain): str(source)
-            for domain, source in verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN.items()
+            _verifier_exact_int_constant(
+                domain,
+                f"ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN key {index}",
+            ): str(source)
+            for index, (domain, source) in enumerate(
+                verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN.items()
+            )
         }
     return _ROUTE_CANARY_SOURCE_BY_DOMAIN
 
 
 def _expected_evm_rpc_chain_id(domain: int, chain: Any) -> int:
     verifier = _verify_module()
-    return int(verifier._expected_evm_rpc_chain_id(domain, chain))
+    return _verifier_exact_int_constant(
+        verifier._expected_evm_rpc_chain_id(domain, chain),
+        "_expected_evm_rpc_chain_id return",
+    )
 
 
 def _is_canonical_decimal_text(value: Any, *, positive: bool) -> bool:
@@ -3382,6 +3416,9 @@ def _launch_domain_list_bundle_errors(label: str, payload: dict[str, Any]) -> li
 
     # Source-inventory marker: supported_launch_domains must be the supported launch remote domains
     # Source-inventory marker: unsupported_launch_domains must be the diagnostic unsupported remote domains
+    # Source-inventory marker: required_domains contains duplicate domains
+    # Source-inventory marker: supported_launch_domains contains duplicate domains
+    # Source-inventory marker: unsupported_launch_domains contains duplicate domains
     expected_lists = (
         (
             "required_domains",
@@ -3403,6 +3440,15 @@ def _launch_domain_list_bundle_errors(label: str, payload: dict[str, Any]) -> li
     parsed: dict[str, list[int]] = {}
     for field, expected, detail in expected_lists:
         value = payload.get(field)
+        if isinstance(value, list):
+            seen_domains: set[int] = set()
+            for domain in value:
+                if type(domain) is not int:
+                    continue
+                if domain in seen_domains:
+                    errors.append(f"{label} {field} contains duplicate domains")
+                    break
+                seen_domains.add(domain)
         if isinstance(value, list) and all(type(domain) is int for domain in value):
             parsed[field] = value
             if value != list(expected):
@@ -4352,6 +4398,32 @@ def _release_checklist_bundle_errors(
     return errors
 
 
+def _corridor_evidence_artifact_duplicate_path_errors(
+    evidence_artifacts: Any,
+    label: str,
+) -> list[str]:
+    if not isinstance(evidence_artifacts, dict):
+        return []
+    seen_paths: set[str] = set()
+    duplicate_count = 0
+    errors: list[str] = []
+    for artifact in evidence_artifacts.values():
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path = artifact.get("path")
+        if (
+            not isinstance(artifact_path, str)
+            or _canonical_copied_input_path_errors(artifact_path, label)
+        ):
+            continue
+        if artifact_path in seen_paths:
+            duplicate_count += 1
+            errors.append(f"{label} contains duplicate path #{duplicate_count}")
+        else:
+            seen_paths.add(artifact_path)
+    return errors
+
+
 def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
     errors: list[str] = []
     payload = _require_report_mapping(summary, label, errors)
@@ -4773,14 +4845,14 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
     raw_domain = payload.get("domain")
     domain = raw_domain if type(raw_domain) is int else None
-    evm_route_canary_domains = {_sccp_domain_eth(), 2}
+    evm_route_canary_domains = {_sccp_domain_eth(), _sccp_domain_bsc()}
     snapshot_route_canary_domains = {
         _sccp_domain_sol(),
         _sccp_domain_ton(),
     }
     message_proof_route_canary_domains = {
         _sccp_domain_eth(),
-        2,
+        _sccp_domain_bsc(),
         _sccp_domain_tron(),
     }
     known_route_canary_domains = (
@@ -5466,7 +5538,7 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
         for field, lane_path in field_bindings:
             if field == "route_canary_message_id" and domain not in (
                 _sccp_domain_eth(),
-                2,
+                _sccp_domain_bsc(),
             ):
                 continue
             if field not in row:
@@ -7056,6 +7128,12 @@ def _release_report_bundle_errors(
                         artifact_label,
                     )
                 )
+        errors.extend(
+            _corridor_evidence_artifact_duplicate_path_errors(
+                evidence_artifacts,
+                f"{label}.corridor.evidence_artifacts",
+            )
+        )
         errors.extend(
             _number_repeated_corridor_phase_diagnostics(
                 evidence_phase_key_errors,

@@ -1972,6 +1972,10 @@ impl IVM {
                         return Ok(());
                     }
                 };
+                if crate::signature::signature_bytes_are_all_zero(&sig_bytes_arr) {
+                    self.registers.set(result_reg as usize, 0);
+                    return Ok(());
+                }
                 #[cfg(feature = "cuda")]
                 if self.use_cuda {
                     if let Some(res) =
@@ -2041,6 +2045,10 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
+                        if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                            self.registers.set(result_reg as usize, 0);
+                            return Ok(());
+                        }
                         let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
@@ -2064,6 +2072,10 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
+                        if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                            self.registers.set(result_reg as usize, 0);
+                            return Ok(());
+                        }
                         let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
@@ -2087,6 +2099,10 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
+                        if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                            self.registers.set(result_reg as usize, 0);
+                            return Ok(());
+                        }
                         let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
                             Ok(p) => p,
                             Err(_) => {
@@ -2809,6 +2825,9 @@ impl IVM {
                 Ok(bytes) => bytes,
                 Err(_) => return Some(Err(index)),
             };
+            if crate::signature::signature_bytes_are_all_zero(&sig_bytes) {
+                return Some(Err(index));
+            }
             let pk_bytes: [u8; 32] = match entry.public_key.as_slice().try_into() {
                 Ok(bytes) => bytes,
                 Err(_) => return Some(Err(index)),
@@ -2842,6 +2861,9 @@ impl IVM {
                 Ok(bytes) => bytes,
                 Err(_) => return Some(Err(index)),
             };
+            if crate::signature::signature_bytes_are_all_zero(&sig_bytes) {
+                return Some(Err(index));
+            }
             let pk_bytes: [u8; 32] = match entry.public_key.as_slice().try_into() {
                 Ok(bytes) => bytes,
                 Err(_) => return Some(Err(index)),
@@ -6265,6 +6287,14 @@ fn compute_instruction(
                     return Ok(res);
                 }
             };
+            if crate::signature::signature_bytes_are_all_zero(&sig_bytes_arr) {
+                res.push(ResultUpdate::Reg {
+                    index: result_reg,
+                    value: 0,
+                    tag: false,
+                });
+                return Ok(res);
+            }
             let pk = match VerifyingKey::from_bytes(&pk_bytes) {
                 Ok(k) => k,
                 Err(_) => {
@@ -6313,6 +6343,14 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
+                    if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                        res.push(ResultUpdate::Reg {
+                            index: result_reg,
+                            value: 0,
+                            tag: false,
+                        });
+                        return Ok(res);
+                    }
                     let pk = match dilithium2::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
@@ -6342,6 +6380,14 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
+                    if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                        res.push(ResultUpdate::Reg {
+                            index: result_reg,
+                            value: 0,
+                            tag: false,
+                        });
+                        return Ok(res);
+                    }
                     let pk = match dilithium3::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {
@@ -6371,6 +6417,14 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
+                    if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                        res.push(ResultUpdate::Reg {
+                            index: result_reg,
+                            value: 0,
+                            tag: false,
+                        });
+                        return Ok(res);
+                    }
                     let pk = match dilithium5::PublicKey::from_bytes(pk_slice) {
                         Ok(p) => p,
                         Err(_) => {

@@ -416,7 +416,7 @@ def _live_positive_u64(live: dict[str, Any], field: str, *, label: str) -> int:
 def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes:
     value = live.get(field)
     if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{label} must be present")
+        raise ValueError(f"{label} must be present") from None
     try:
         raw = base64.b64decode(value, validate=True)
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
@@ -424,6 +424,13 @@ def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
     return raw
+
+
+def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
+    value = live.get(field)
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{label} must be an exact non-empty string") from None
+    return value
 
 
 def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes, bytes]:
@@ -436,21 +443,29 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
 
     try:
         program_id = evidence.normalize_solana_program_id(
-            str(live.get("verifier_program_id", "")),
+            _exact_live_string(
+                live,
+                "verifier_program_id",
+                label="verifier_program_id",
+            ),
             label="verifier program id",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("Solana live verifier program id metadata is invalid") from None
     try:
         programdata_address = evidence.normalize_solana_program_id(
-            str(live.get("programdata_address", "")),
+            _exact_live_string(
+                live,
+                "programdata_address",
+                label="programdata_address",
+            ),
             label="programdata address",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("Solana live ProgramData address metadata is invalid") from None
     try:
         verifier_code_hash = _parse_hex32(
-            str(live.get("verifier_code_hash", "")),
+            _exact_live_string(live, "verifier_code_hash", label="verifier_code_hash"),
             label="verifier_code_hash",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -464,7 +479,9 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
         or not executable_base64
         or executable_base64 != executable_base64.strip()
     ):
-        raise ValueError("Solana ProgramData executable base64 metadata must be present")
+        raise ValueError(
+            "Solana ProgramData executable base64 metadata must be present"
+        ) from None
     try:
         program_bytes = evidence.parse_program_bytes_base64(
             executable_base64,
@@ -560,7 +577,11 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             "Solana ProgramData metadata base64 metadata must decode to 45 bytes"
         )
     metadata_hash = _parse_hex32(
-        str(live.get("programdata_metadata_blake2b256", "")),
+        _exact_live_string(
+            live,
+            "programdata_metadata_blake2b256",
+            label="programdata_metadata_blake2b256",
+        ),
         label="programdata_metadata_blake2b256",
     )
     derived_metadata_hash = hashlib.blake2b(

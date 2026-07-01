@@ -1044,6 +1044,75 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         }
     }
 
+    private static void ValidateResolveResponseMatchesEnvelope(
+        ToriiIdentifierResolveResponse value,
+        ToriiIdentifierResolveResponse envelopeValue)
+    {
+        if (!string.IsNullOrEmpty(value.SignaturePayloadHex))
+        {
+            throw new JsonException(
+                "identifier receipt.signature_payload_hex must be empty for the current payload/attestation envelope.");
+        }
+
+        RequireMatchingString(value.PolicyId, envelopeValue.PolicyId, nameof(value.PolicyId), "payload.policy_id");
+        RequireMatchingString(value.OpaqueId, envelopeValue.OpaqueId, nameof(value.OpaqueId), "payload.opaque_id");
+        RequireMatchingString(
+            value.ReceiptHash,
+            envelopeValue.ReceiptHash,
+            nameof(value.ReceiptHash),
+            "payload.receipt_hash");
+        RequireMatchingString(value.Uaid, envelopeValue.Uaid, nameof(value.Uaid), "payload.uaid");
+        RequireMatchingString(value.AccountId, envelopeValue.AccountId, nameof(value.AccountId), "payload.account_id");
+        RequireMatchingInt64(
+            value.ResolvedAtMilliseconds,
+            envelopeValue.ResolvedAtMilliseconds,
+            nameof(value.ResolvedAtMilliseconds),
+            "payload.execution.executed_at_ms");
+        RequireMatchingNullableInt64(
+            value.ExpiresAtMilliseconds,
+            envelopeValue.ExpiresAtMilliseconds,
+            nameof(value.ExpiresAtMilliseconds),
+            "payload.execution.expires_at_ms");
+        RequireMatchingString(value.Backend, envelopeValue.Backend, nameof(value.Backend), "payload.execution.backend");
+        RequireMatchingString(value.Signature, envelopeValue.Signature, nameof(value.Signature), "attestation.signature");
+    }
+
+    private static void RequireMatchingString(
+        string value,
+        string envelopeValue,
+        string propertyName,
+        string envelopeField)
+    {
+        if (!string.Equals(value, envelopeValue, StringComparison.Ordinal))
+        {
+            throw new JsonException($"identifier receipt.{propertyName} must match identifier receipt.{envelopeField}.");
+        }
+    }
+
+    private static void RequireMatchingInt64(
+        long value,
+        long envelopeValue,
+        string propertyName,
+        string envelopeField)
+    {
+        if (value != envelopeValue)
+        {
+            throw new JsonException($"identifier receipt.{propertyName} must match identifier receipt.{envelopeField}.");
+        }
+    }
+
+    private static void RequireMatchingNullableInt64(
+        long? value,
+        long? envelopeValue,
+        string propertyName,
+        string envelopeField)
+    {
+        if (value != envelopeValue)
+        {
+            throw new JsonException($"identifier receipt.{propertyName} must match identifier receipt.{envelopeField}.");
+        }
+    }
+
     public override void Write(
         Utf8JsonWriter writer,
         ToriiIdentifierResolveResponse value,
@@ -1065,7 +1134,8 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
             throw new JsonException("identifier receipt must use the current payload/attestation envelope.");
         }
 
-        _ = ReadNestedResolveResponse((JsonObject)payload.DeepClone(), (JsonObject)attestation.DeepClone());
+        var envelopeValue = ReadNestedResolveResponse((JsonObject)payload.DeepClone(), (JsonObject)attestation.DeepClone());
+        ValidateResolveResponseMatchesEnvelope(value, envelopeValue);
 
         writer.WriteStartObject();
         writer.WritePropertyName("payload");

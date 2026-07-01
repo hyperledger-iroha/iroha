@@ -161,6 +161,16 @@ _SOLANA_BASE58_INDEX = {
 SCCP_SOLANA_BORSH_INSTRUCTION_V1 = "borsh_instruction_v1"
 SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 = "submit_sccp_message_proof"
 SCCP_ZERO_HASH_V1 = "0x" + "00" * 32
+_SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = (
+    "0x" + "b7" * 32,
+    "0x" + "c8" * 32,
+    "0x" + "d9" * 32,
+)
+_SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = (
+    "0x" + "26" * 32,
+    "0x" + "27" * 32,
+    "0x" + "28" * 32,
+)
 
 SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN = 141
 
@@ -16546,10 +16556,36 @@ def sccp_source_adapter_deployment_binding_hash(input_value: Any) -> str:
     )
 
 
+def _require_governed_source_adapter_deployment_audit_for_binding(
+    deployment: Mapping[str, Any],
+) -> None:
+    if deployment["source_domain"] == SCCP_DOMAIN_SOL:
+        audit_hashes = (
+            deployment["solana_tower_replay_verifier_hash"],
+            deployment["solana_full_accountsdb_lattice_verifier_hash"],
+            deployment["solana_bank_fork_choice_verifier_hash"],
+        )
+        if audit_hashes != _SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1:
+            raise ValueError(
+                "sourceAdapterDeployment requires governed Solana full-light-client audit verifier hashes"
+            )
+    if deployment["source_domain"] == SCCP_DOMAIN_TON:
+        audit_hashes = (
+            deployment["ton_masterchain_config_verifier_hash"],
+            deployment["ton_validator_set_transition_verifier_hash"],
+            deployment["ton_shard_accounts_dictionary_verifier_hash"],
+        )
+        if audit_hashes != _SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1:
+            raise ValueError(
+                "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes"
+            )
+
+
 def sccp_source_adapter_deployment_binding_from_deployment(input_value: Any) -> Dict[str, Any]:
     """Derive source-adapter deployment binding material from a deployment descriptor."""
 
     deployment = normalize_sccp_source_adapter_engine_deployment(input_value)
+    _require_governed_source_adapter_deployment_audit_for_binding(deployment)
     return normalize_sccp_source_adapter_deployment_binding(
         {
             "source_domain": deployment["source_domain"],

@@ -1218,6 +1218,7 @@ fn add_allocation_counter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sumeragi::main_loop::PERMISSIONED_TAG;
     use crate::sumeragi::network_topology::commit_quorum_from_len;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::peer::PeerId;
@@ -1225,6 +1226,11 @@ mod tests {
     fn checked_sample_keypair(seed: impl Into<Vec<u8>>) -> KeyPair {
         KeyPair::try_from_seed(seed.into(), Algorithm::Ed25519)
             .expect("fixture seed must derive a valid peer keypair")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x44; 32], Algorithm::BlsNormal)
+            .expect("fixture seed must derive a valid BLS keypair")
     }
 
     #[test]
@@ -1265,6 +1271,63 @@ mod tests {
             rbc_chunk_target_count(roster_len, NonZeroUsize::new(32)),
             peers
         );
+    }
+
+    #[test]
+    fn rbc_ready_signature_valid_rejects_all_zero_signature_material() {
+        let chain: ChainId = "rbc-ready-all-zero-helper".parse().expect("chain id");
+        let keypair = checked_bls_keypair();
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            keypair.public_key().clone(),
+        )]);
+        let ready = RbcReady {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x44; Hash::LENGTH],
+            )),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::new(&topology.as_ref().to_vec().encode()),
+            chunk_root: Hash::prehashed([0x45; Hash::LENGTH]),
+            sender: 0,
+            signature: vec![0_u8; 96],
+        };
+
+        assert!(!rbc_ready_signature_valid(
+            &ready,
+            &topology,
+            &chain,
+            PERMISSIONED_TAG
+        ));
+    }
+
+    #[test]
+    fn rbc_deliver_signature_valid_rejects_all_zero_signature_material() {
+        let chain: ChainId = "rbc-deliver-all-zero-helper".parse().expect("chain id");
+        let keypair = checked_bls_keypair();
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            keypair.public_key().clone(),
+        )]);
+        let deliver = RbcDeliver {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x46; Hash::LENGTH],
+            )),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::new(&topology.as_ref().to_vec().encode()),
+            chunk_root: Hash::prehashed([0x47; Hash::LENGTH]),
+            sender: 0,
+            signature: vec![0_u8; 96],
+            ready_signatures: Vec::new(),
+        };
+
+        assert!(!rbc_deliver_signature_valid(
+            &deliver,
+            &topology,
+            &chain,
+            PERMISSIONED_TAG
+        ));
     }
 
     #[test]
@@ -1871,7 +1934,9 @@ pub(super) fn rbc_ready_signature_valid(
         return false;
     };
     let preimage = rbc_ready_preimage(chain_id, mode_tag, ready);
-    let signature = Signature::from_bytes(&ready.signature);
+    let Ok(signature) = Signature::try_from_bytes(&ready.signature) else {
+        return false;
+    };
     signature.verify(peer.public_key(), &preimage).is_ok()
 }
 
@@ -1888,7 +1953,9 @@ pub(super) fn rbc_deliver_signature_valid(
         return false;
     };
     let preimage = rbc_deliver_preimage(chain_id, mode_tag, deliver);
-    let signature = Signature::from_bytes(&deliver.signature);
+    let Ok(signature) = Signature::try_from_bytes(&deliver.signature) else {
+        return false;
+    };
     signature.verify(peer.public_key(), &preimage).is_ok()
 }
 

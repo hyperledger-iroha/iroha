@@ -327,6 +327,12 @@ mod ecdsa_secp256k1 {
             prehash: &[u8; 32],
             signature: &[u8; 65],
         ) -> Result<PublicKey, Error> {
+            if signature_payload_is_all_zero(&signature[..64]) {
+                return Err(Error::BadSignature);
+            }
+            if signature_payload_has_zero_scalar(&signature[..64]) {
+                return Err(Error::BadSignature);
+            }
             let recovery_id =
                 RecoveryId::from_byte(signature[64].checked_sub(27).ok_or(Error::BadSignature)?)
                     .ok_or(Error::BadSignature)?;
@@ -352,6 +358,9 @@ mod ecdsa_secp256k1 {
 
         pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
             if signature_payload_is_all_zero(signature) {
+                return Err(Error::BadSignature);
+            }
+            if signature_payload_has_zero_scalar(signature) {
                 return Err(Error::BadSignature);
             }
             let signature = Signature::from_slice(signature).map_err(|_| Error::BadSignature)?;
@@ -387,6 +396,12 @@ mod ecdsa_secp256k1 {
 
     fn signature_payload_is_all_zero(signature: &[u8]) -> bool {
         !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
+    }
+
+    fn signature_payload_has_zero_scalar(signature: &[u8]) -> bool {
+        signature.len() == 64
+            && (signature[..32].iter().all(|&byte| byte == 0)
+                || signature[32..].iter().all(|&byte| byte == 0))
     }
 }
 
@@ -564,6 +579,26 @@ mod test {
         let err = EcdsaSecp256k1Sha256::verify(b"inert secp256k1", &signature, &public);
 
         assert!(matches!(err, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn verify_rejects_zero_scalar_halves_before_backend() {
+        let secret = private_key();
+        let public = public_key();
+        let message = b"secp256k1 zero scalar half";
+        let signature = EcdsaSecp256k1Sha256::sign(message, &secret);
+
+        for (range, label) in [(0..32, "r"), (32..64, "s")] {
+            let mut tampered = signature.clone();
+            tampered[range].fill(0);
+
+            let err = EcdsaSecp256k1Sha256::verify(message, &tampered, &public);
+
+            assert!(
+                matches!(err, Err(Error::BadSignature)),
+                "zero {label} scalar must fail as bad signature"
+            );
+        }
     }
 
     #[cfg(feature = "crypto-parity-tests")]
@@ -753,6 +788,41 @@ mod test {
             EcdsaSecp256k1Sha256::evm_address(&public)
         );
         assert!(matches!(signature[64], 27 | 28));
+    }
+
+    #[test]
+    fn recoverable_prehash_rejects_all_zero_signature_payload_before_backend() {
+        let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-all-zero-recovery");
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&prehash);
+        let mut signature = [0u8; 65];
+        signature[64] = 27;
+
+        let err = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature);
+
+        assert!(matches!(err, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn recoverable_prehash_rejects_zero_scalar_halves_before_backend() {
+        let secret = private_key();
+        let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-zero-scalar-recovery");
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&prehash);
+        let signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
+            .expect("recoverable signature");
+
+        for (range, label) in [(0..32, "r"), (32..64, "s")] {
+            let mut tampered = signature;
+            tampered[range].fill(0);
+
+            let err = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &tampered);
+
+            assert!(
+                matches!(err, Err(Error::BadSignature)),
+                "zero {label} scalar must fail as bad recoverable signature"
+            );
+        }
     }
 
     #[test]

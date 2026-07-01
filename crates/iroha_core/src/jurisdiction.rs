@@ -640,7 +640,9 @@ impl JdgAttestationGuard {
                             actual: attestation.signature.signatures.len(),
                         },
                     )?;
-                    let signature = Signature::from_bytes(raw_sig);
+                    let signature = Signature::try_from_bytes(raw_sig).map_err(|_| {
+                        JdgAttestationGuardError::SignatureInvalid { index: sig_idx }
+                    })?;
                     if signature.verify(signer, hash_bytes).is_ok() {
                         valid += 1;
                     } else {
@@ -1576,6 +1578,30 @@ mod tests {
         assert!(matches!(
             err,
             JdgAttestationGuardError::UnknownSigner { .. }
+        ));
+    }
+
+    #[test]
+    fn attestation_guard_rejects_all_zero_simple_threshold_signature_material() {
+        let dataspace = DataSpaceId::new(10);
+        let (committee, signers) = committee_with_members(dataspace, 1, 5, 1, 2);
+        let manifest = JdgCommitteeManifest {
+            dataspace,
+            committees: vec![committee.clone()],
+        };
+        let schedule =
+            JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
+        let guard = JdgAttestationGuard::new(schedule, None, 4096, 4, simple_signature_schemes());
+
+        let mut attestation =
+            signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
+        attestation.signature.signatures[0].fill(0);
+        let err = guard
+            .validate(&attestation, dataspace, 3)
+            .expect_err("all-zero signature material must be rejected");
+        assert!(matches!(
+            err,
+            JdgAttestationGuardError::SignatureInvalid { index: 0 }
         ));
     }
 

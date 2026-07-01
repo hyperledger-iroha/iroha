@@ -362,7 +362,8 @@ impl OperatorSignatures {
         let signature_bytes = BASE64_STANDARD
             .decode(signature_str)
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
 
         self.ensure_freshness(timestamp_ms, nonce, &public_key)?;
 
@@ -634,6 +635,42 @@ mod tests {
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid signature");
+    }
+
+    #[test]
+    fn operator_signatures_reject_all_zero_signature_header() {
+        let key_pair = checked_ed25519_keypair();
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: false,
+            allowed_public_keys: vec![key_pair.public_key().clone()],
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(64).unwrap(),
+        };
+        let auth = OperatorSignatures::new(
+            cfg,
+            checked_ed25519_keypair().public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+        let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
+        let body = b"{\"foo\":1}";
+        let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
+            .expect("operator signature headers");
+        headers.insert(
+            HEADER_OPERATOR_SIGNATURE,
+            BASE64_STANDARD
+                .encode([0u8; 64])
+                .parse()
+                .expect("all-zero signature header"),
+        );
+
+        let error = auth
+            .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+            .expect_err("all-zero signature header must fail");
+
+        assert_eq!(error.code, "operator_signature_invalid");
     }
 
     #[test]

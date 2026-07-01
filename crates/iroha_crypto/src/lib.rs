@@ -1562,7 +1562,9 @@ pub fn pqc_verify_aggregate(
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
     // ML-DSA has no standard aggregate signature; fall back to per-signature checks.
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
         return Err(Error::BadSignature);
     }
     for ((m, s), pk) in messages
@@ -2162,12 +2164,9 @@ impl MlDsaSecretKey {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         use pqcrypto_traits::sign::SecretKey as _;
-        if bytes.len() == pqcrypto_mldsa::mldsa65::secret_key_bytes() && is_all_zero_material(bytes)
-        {
-            return Err(ParseError(
-                "invalid ML-DSA secret key: all-zero material".to_string(),
-            ));
-        }
+
+        soranet_pq::validate_mldsa_secret_key(soranet_pq::MlDsaSuite::MlDsa65, bytes)
+            .map_err(|err| ParseError(err.to_string()))?;
         let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
         let secret = Self::new(&inner);
@@ -3633,8 +3632,30 @@ mod tests {
         let err = PrivateKey::from_bytes(Algorithm::MlDsa, &all_zero)
             .expect_err("all-zero ML-DSA private key material must fail closed");
 
+        let rendered = err.to_string();
         assert!(
-            err.to_string().contains("all-zero material"),
+            rendered.contains("all-zero material") || rendered.contains("all zero"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ml_dsa_private_key_parse_uses_strict_secret_validator_for_component_drift() {
+        use crate::mldsa_seed::mldsa65 as seeded;
+
+        let (_, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:strict-secret-parse")
+            .expect("seeded ML-DSA keypair");
+        let mut private_bytes = private.to_bytes().1;
+        let last = private_bytes
+            .last_mut()
+            .expect("ML-DSA secret key has at least one byte");
+        *last ^= 0x01;
+
+        let err = PrivateKey::from_bytes(Algorithm::MlDsa, &private_bytes)
+            .expect_err("strict ML-DSA secret-key validation must reject component drift");
+
+        assert!(
+            err.to_string().contains("internally inconsistent"),
             "unexpected error: {err:?}"
         );
     }
@@ -3668,6 +3689,16 @@ mod tests {
             err.to_string().contains("all-zero material"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn pqc_verify_aggregate_rejects_empty_input() {
+        let empty: [&[u8]; 0] = [];
+
+        let err = pqc_verify_aggregate(&empty, &empty, &empty)
+            .expect_err("empty ML-DSA aggregate verification must fail closed");
+
+        assert_eq!(err, Error::BadSignature);
     }
 
     #[test]

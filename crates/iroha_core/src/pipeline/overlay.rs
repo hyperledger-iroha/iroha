@@ -1289,6 +1289,12 @@ impl TxOverlay {
     /// Whether this overlay carries durable smart-contract state changes.
     pub fn has_durable_state_changes(&self) -> bool {
         !self.durable_state_overlay.is_empty()
+            || self.instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+                    .is_some()
+            })
     }
 
     /// Iterate over instructions in this overlay.
@@ -2627,6 +2633,13 @@ mod tests {
         assert_eq!(overlay.byte_size(), expected);
     }
 
+    #[test]
+    fn sccp_record_overlay_has_durable_state_changes() {
+        let overlay = TxOverlay::from_ivm_proved_instructions(vec![sccp_record_instruction()]);
+
+        assert!(overlay.has_durable_state_changes());
+    }
+
     fn sccp_record_instruction() -> InstructionBox {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -2841,6 +2854,47 @@ mod tests {
         overlay
             .apply_with_chunk(&mut tx, &authority, 1)
             .expect("verified IVM-proved overlay may record SCCP messages");
+    }
+
+    #[test]
+    fn failed_ivm_proved_overlay_restores_sccp_recording_flag() {
+        let (state, authority) = sccp_overlay_state();
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        let malformed = TxOverlay::from_ivm_proved_instructions(vec![InstructionBox::from(
+            iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![0xFF]),
+        )]);
+
+        malformed
+            .apply_with_chunk(&mut tx, &authority, 1)
+            .expect_err("malformed IVM-proved SCCP record must fail");
+        assert!(
+            !tx.sccp_recording_proof_verified,
+            "failed IVM-proved overlay must restore the SCCP proof flag"
+        );
+
+        let plain = TxOverlay::from_instructions(vec![sccp_record_instruction()]);
+        let err = plain
+            .apply_with_chunk(&mut tx, &authority, 1)
+            .expect_err("plain overlay must not inherit SCCP proof authority");
+        match err {
+            ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    message,
+                ),
+            ) => assert!(
+                message.contains("requires verified IVM proof"),
+                "unexpected invariant violation: {message}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

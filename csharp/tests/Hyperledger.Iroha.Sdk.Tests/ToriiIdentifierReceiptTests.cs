@@ -158,6 +158,71 @@ public sealed class ToriiIdentifierReceiptTests
         Assert.Contains("positive", error.Message);
     }
 
+    [Theory]
+    [InlineData("policy_id", "PolicyId", "payload.policy_id")]
+    [InlineData("opaque_id", "OpaqueId", "payload.opaque_id")]
+    [InlineData("receipt_hash", "ReceiptHash", "payload.receipt_hash")]
+    [InlineData("uaid", "Uaid", "payload.uaid")]
+    [InlineData("account_id", "AccountId", "payload.account_id")]
+    [InlineData("resolved_at_ms", "ResolvedAtMilliseconds", "payload.execution.executed_at_ms")]
+    [InlineData("expires_at_ms", "ExpiresAtMilliseconds", "payload.execution.expires_at_ms")]
+    [InlineData("backend", "Backend", "payload.execution.backend")]
+    [InlineData("signature", "Signature", "attestation.signature")]
+    public void IdentifierResolveResponseWriteRejectsEnvelopeFieldMismatches(
+        string field,
+        string expectedProperty,
+        string expectedEnvelopeField)
+    {
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            ValidIdentifierResolveResponse().ToJsonString())!;
+        var response = field switch
+        {
+            "policy_id" => valid with { PolicyId = "email#retail" },
+            "opaque_id" => valid with { OpaqueId = "opaque-2" },
+            "receipt_hash" => valid with { ReceiptHash = "receipt-2" },
+            "uaid" => valid with { Uaid = "uaid:1111111111111111111111111111111111111111111111111111111111111111" },
+            "account_id" => valid with { AccountId = "sorauﾛ1Ncustomer" },
+            "resolved_at_ms" => valid with { ResolvedAtMilliseconds = 1710000000001L },
+            "expires_at_ms" => valid with { ExpiresAtMilliseconds = 1710003600001L },
+            "backend" => valid with { Backend = "bfv-programmed-sha3-256-v2" },
+            "signature" => valid with { Signature = "BEEF" },
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown receipt field."),
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
+
+        Assert.Contains(expectedProperty, error.Message);
+        Assert.Contains(expectedEnvelopeField, error.Message);
+        Assert.Contains("must match", error.Message);
+    }
+
+    [Fact]
+    public void IdentifierResolveResponseWriteRejectsSignaturePayloadHex()
+    {
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            ValidIdentifierResolveResponse().ToJsonString())!;
+        var response = valid with { SignaturePayloadHex = "ABCD" };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
+
+        Assert.Contains("signature_payload_hex", error.Message);
+        Assert.Contains("must be empty", error.Message);
+    }
+
+    [Fact]
+    public void IdentifierResolveResponseWritePreservesNestedReceiptEnvelope()
+    {
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            ValidIdentifierResolveResponse().ToJsonString())!;
+
+        var serialized = JsonSerializer.Serialize(valid);
+        var receipt = JsonNode.Parse(serialized)!.AsObject();
+
+        Assert.False(receipt.ContainsKey("policy_id"));
+        Assert.Equal("phone#retail", receipt["payload"]!["policy_id"]!.GetValue<string>());
+        Assert.Equal("ABCD", receipt["attestation"]!["signature"]!.GetValue<string>());
+    }
+
     [Fact]
     public void IdentifierResolveResponseDeserializesNestedReceiptEnvelope()
     {

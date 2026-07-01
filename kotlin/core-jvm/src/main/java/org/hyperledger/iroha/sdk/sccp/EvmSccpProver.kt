@@ -32,6 +32,19 @@ private fun sccpCallbackAnySnapshot(value: Any?): Any? =
         else -> value
     }
 
+private fun requireEvmReceiptLogNotRemoved(
+    log: Map<*, *>,
+    label: String,
+    removedMessage: String,
+) {
+    if (!log.containsKey("removed")) return
+    when (log["removed"]) {
+        false -> return
+        true -> throw IllegalArgumentException(removedMessage)
+        else -> throw IllegalArgumentException("$label.removed must be a boolean")
+    }
+}
+
 /** EVM-family SCCP Groth16 proof request helpers for local-first UI proof generation. */
 object SccpEvm {
     const val DOMAIN_SORA: Int = SccpSourceProofs.DOMAIN_SORA
@@ -5745,9 +5758,11 @@ class EthereumMainnetSccp(
         for ((index, logInput) in logs.withIndex()) {
             val log = logInput as? Map<*, *>
                 ?: throw IllegalArgumentException("receipt.logs[$index] must be an object")
-            if (log["removed"] == true) {
-                throw IllegalArgumentException("receipt.logs must not contain removed logs")
-            }
+            requireEvmReceiptLogNotRemoved(
+                log,
+                "receipt.logs[$index]",
+                "receipt.logs must not contain removed logs",
+            )
             val logAddress = normalizeRpcHex(
                 log["address"],
                 "receipt.logs[$index].address",
@@ -6549,9 +6564,11 @@ class BscMainnetSccp(
         for ((index, logInput) in logs.withIndex()) {
             val log = logInput as? Map<*, *>
                 ?: throw IllegalArgumentException("receipt.logs[$index] must be an object")
-            if (log["removed"] == true) {
-                throw IllegalArgumentException("receipt.logs must not contain removed logs")
-            }
+            requireEvmReceiptLogNotRemoved(
+                log,
+                "receipt.logs[$index]",
+                "receipt.logs must not contain removed logs",
+            )
             val logAddress = normalizeRpcHex(
                 log["address"],
                 "receipt.logs[$index].address",

@@ -726,7 +726,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         return try OfflineNorito.canonicalAssetIdLiteral(candidate)
     }
 
-    private static func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
+    fileprivate static func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
         guard trimmed == value,

@@ -87,6 +87,9 @@ impl AdmissionToken {
         let issuer_fingerprint = read_token_field::<32>(bytes, &mut cursor)?;
         let sig_len = u16::from_be_bytes(read_token_field::<2>(bytes, &mut cursor)?) as usize;
         let signature = read_token_signature(bytes, &mut cursor, sig_len)?;
+        if !signature.is_empty() && signature.iter().all(|&byte| byte == 0) {
+            return Err(DecodeError::InertSignature);
+        }
         if issued_at >= expires_at {
             return Err(DecodeError::InvalidTemporalBounds);
         }
@@ -1059,6 +1062,9 @@ pub enum DecodeError {
         /// UNIX-second timestamp carried by the frame.
         value: u64,
     },
+    /// Signature bytes were an inert all-zero placeholder.
+    #[error("admission token signature material must not be all zero")]
+    InertSignature,
 }
 
 /// Errors surfaced while serializing token frames.
@@ -1309,6 +1315,34 @@ mod tests {
         assert_eq!(token.token_id(), decoded.token_id());
         assert_eq!(token.relay_id, decoded.relay_id);
         assert_eq!(token.transcript_hash, decoded.transcript_hash);
+    }
+
+    #[test]
+    fn decode_rejects_all_zero_signature_material() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = UNIX_EPOCH + Duration::from_secs(1_700_000_600);
+        let mut rng = StdRng::seed_from_u64(0xF00D);
+        let mut token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.signature.fill(0);
+
+        let err = AdmissionToken::decode(&token.encode())
+            .expect_err("all-zero signature material must fail during decode");
+
+        assert!(matches!(err, DecodeError::InertSignature));
     }
 
     #[test]

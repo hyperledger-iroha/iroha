@@ -613,6 +613,43 @@ fn provider_cache_rejects_invalid_signature_when_strict() {
 }
 
 #[test]
+fn provider_cache_rejects_all_zero_signature_material_when_strict() {
+    let signing_key = SigningKey::from_bytes(&[0x9A; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xD1; 32],
+        [0xE2; 32],
+        vec![
+            CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            },
+            chunk_range_capability(12, 1),
+        ],
+        false,
+    );
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let mut cache = ProviderAdvertCache::new(
+        [
+            CapabilityType::ToriiGateway,
+            CapabilityType::ChunkRangeFetch,
+        ],
+        registry,
+    );
+
+    let mut advert = fixture.advert.clone();
+    advert.signature.signature.fill(0);
+
+    let err = cache
+        .ingest(advert, ISSUED_AT + 30)
+        .expect_err("strict advert must reject all-zero signature material");
+    assert!(
+        matches!(err, AdvertError::Signature(ref reason) if reason.contains("all zero")),
+        "expected all-zero signature failure, got: {err:?}"
+    );
+}
+
+#[test]
 fn provider_cache_warns_about_invalid_signature_when_bypassed() {
     let signing_key = SigningKey::from_bytes(&[0x93; 32]);
     let fixture = make_signed_advert(

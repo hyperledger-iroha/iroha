@@ -4161,6 +4161,16 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     }
     let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
         norito::decode_from_bytes(&key.key_material).ok()?;
+    let material_envelope_preflight =
+        governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_fallback(
+        &key,
+        &material_envelope,
+    );
+    if let Err(err) = material_envelope_preflight {
+        return Some(invalid_parameter(format!(
+            "FHE full-bootstrap execution verifier-key artifact material envelope failed validation before circuit diagnostic: {err}"
+        )));
+    }
     let native_material: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeProofKeyMaterialV1 =
         norito::decode_from_bytes(&material_envelope.native_key_material).ok()?;
     if let Ok(native_payload) = norito::decode_from_bytes::<
@@ -4188,6 +4198,150 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     } else {
         None
     }
+}
+
+#[cfg(feature = "zk-stark")]
+fn governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_fallback(
+    key: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1,
+    envelope: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1,
+) -> Result<(), String> {
+    if envelope.version
+        != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1
+    {
+        return Err(format!(
+            "version {} does not match canonical version {}",
+            envelope.version,
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1
+        ));
+    }
+    if envelope.field_count
+        != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1
+    {
+        return Err(format!(
+            "field count {} does not match canonical count {}",
+            envelope.field_count,
+            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1
+        ));
+    }
+
+    let canonical_envelope =
+        norito::to_bytes(envelope).map_err(|err| format!("canonical encoding failed: {err}"))?;
+    if canonical_envelope != key.key_material {
+        return Err("canonical bytes do not match proof key material".to_owned());
+    }
+
+    macro_rules! expect_envelope_field_match {
+        ($field:ident, $label:literal) => {
+            if envelope.$field != key.$field {
+                return Err(format!(
+                    "{label} does not match proof key metadata",
+                    label = $label
+                ));
+            }
+        };
+    }
+
+    expect_envelope_field_match!(key_role, "role");
+    expect_envelope_field_match!(backend, "backend");
+    expect_envelope_field_match!(key_format, "key format");
+    expect_envelope_field_match!(circuit_id, "circuit id");
+    expect_envelope_field_match!(parameter_digest, "parameter digest");
+    expect_envelope_field_match!(rns_modulus_chain_digest, "RNS modulus-chain digest");
+    expect_envelope_field_match!(
+        key_switch_decomposition_chain_digest,
+        "key-switch decomposition-chain digest"
+    );
+    expect_envelope_field_match!(
+        centered_scale_round_source_chain_digest,
+        "centered scale-round source-chain digest"
+    );
+    expect_envelope_field_match!(max_bootstrap_depth, "max bootstrap depth");
+    expect_envelope_field_match!(public_input_schema_digest, "public-input schema digest");
+    expect_envelope_field_match!(
+        evaluator_artifact_set_digest,
+        "evaluator artifact set digest"
+    );
+    expect_envelope_field_match!(statement_material_version, "statement material version");
+    expect_envelope_field_match!(
+        statement_material_field_count,
+        "statement material field count"
+    );
+    expect_envelope_field_match!(claim_version, "claim version");
+    expect_envelope_field_match!(claim_field_count, "claim field count");
+    expect_envelope_field_match!(witness_digest_domain, "witness digest domain");
+    expect_envelope_field_match!(witness_digest_material_version, "witness material version");
+    expect_envelope_field_match!(
+        witness_digest_material_field_count,
+        "witness material field count"
+    );
+    expect_envelope_field_match!(witness_trace_field_count, "witness trace field count");
+    expect_envelope_field_match!(
+        witness_trace_bounds_field_count,
+        "witness trace bounds field count"
+    );
+    expect_envelope_field_match!(public_input_hash_count, "public-input hash count");
+    expect_envelope_field_match!(public_input_hash_bytes, "public-input hash byte length");
+    expect_envelope_field_match!(
+        supports_exact_residual_multiple,
+        "exact residual-multiple support"
+    );
+    expect_envelope_field_match!(supports_bounded_noise, "bounded-noise support");
+    expect_envelope_field_match!(
+        derives_opening_schedule_from_statement_hash,
+        "statement-hash opening schedule derivation"
+    );
+    expect_envelope_field_match!(
+        derives_opening_schedule_from_trace_material_digest,
+        "trace-material opening schedule derivation"
+    );
+    expect_envelope_field_match!(
+        bounds_opening_schedule_rejection_sampling,
+        "bounded opening-schedule rejection sampling"
+    );
+    expect_envelope_field_match!(
+        validates_transcript_public_padding_openings,
+        "transcript public-padding opening replay"
+    );
+    expect_envelope_field_match!(
+        validates_transcript_public_opening_material,
+        "typed transcript public-opening material validation"
+    );
+    expect_envelope_field_match!(
+        requires_verifier_owned_trace_material_digest,
+        "verifier-owned trace material digest"
+    );
+    expect_envelope_field_match!(validates_merkle_path_shape, "Merkle path shape validation");
+    expect_envelope_field_match!(validates_merkle_path_roots, "Merkle path root validation");
+    expect_envelope_field_match!(validates_fri_query_chain, "FRI query-chain validation");
+    expect_envelope_field_match!(
+        binds_first_fri_values_to_opened_air_values,
+        "first-FRI/opened-AIR value binding"
+    );
+    expect_envelope_field_match!(
+        binds_fri_queries_to_air_commitment_roots,
+        "FRI query AIR-root binding"
+    );
+    expect_envelope_field_match!(
+        requires_canonical_base_transcript_label,
+        "canonical base transcript-label enforcement"
+    );
+    expect_envelope_field_match!(
+        rejects_suffixed_transcript_label_aliases,
+        "suffixed transcript-label alias rejection"
+    );
+    expect_envelope_field_match!(
+        validates_artifact_bound_prover_input,
+        "artifact-bound prover input validation"
+    );
+    expect_envelope_field_match!(
+        rejects_stale_galois_key_set_replay,
+        "stale Galois-key set replay rejection"
+    );
+    expect_envelope_field_match!(
+        rejects_stale_proof_key_artifacts,
+        "stale proof-key artifact replay rejection"
+    );
+    Ok(())
 }
 
 #[cfg(feature = "zk-stark")]
@@ -39930,6 +40084,23 @@ mod tests {
             "trusted release audit reviewer id failed validation",
         );
         assert_invalid_parameter_contains(err, "placeholder");
+
+        let mut separator_reviewer_id_policy = complete_policy.clone();
+        separator_reviewer_id_policy.full_bootstrap_release_audit_trusted_reviewer_id =
+            Some("sora-zk-audit-wg-2026;reviewer-id=other".to_owned());
+        let err = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+            &params,
+            &evaluation_keys,
+            &job,
+            Some(&artifacts),
+            &separator_reviewer_id_policy,
+        )
+        .expect_err("runtime release audit policy must reject reviewer marker-token separators");
+        assert_invalid_parameter_contains(
+            err.clone(),
+            "trusted release audit reviewer id failed validation",
+        );
+        assert_invalid_parameter_contains(err, "marker token separators");
 
         let non_ed25519_reviewer_key_pair =
             KeyPair::try_from_seed(vec![0x53; 32], iroha_crypto::Algorithm::BlsNormal)

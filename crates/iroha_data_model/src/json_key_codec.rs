@@ -311,6 +311,49 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
     }
 }
 
+impl JsonKeyCodec for crate::bridge::SccpOutboundMessageKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let encoded = format!(
+            "{}:{}:{}",
+            self.source_domain,
+            self.target_domain,
+            hex::encode_upper(self.message_id)
+        );
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.split(':');
+        let source_domain = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP source domain".into()))?
+            .parse::<u32>()
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        let target_domain = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP target domain".into()))?
+            .parse::<u32>()
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        let message_id_hex = parts
+            .next()
+            .ok_or_else(|| json::Error::Message("missing SCCP message id".into()))?;
+        if parts.next().is_some() {
+            return Err(json::Error::Message(
+                "too many SCCP outbound message key parts".into(),
+            ));
+        }
+        let message_id = hex::decode(message_id_hex)
+            .map_err(|err| json::Error::Message(err.to_string()))?
+            .try_into()
+            .map_err(|_| json::Error::Message("SCCP message id must be 32 bytes".into()))?;
+        Ok(Self {
+            source_domain,
+            target_domain,
+            message_id,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -318,6 +361,7 @@ mod tests {
     use norito::json::Parser;
 
     use crate::account::AccountId;
+    use crate::bridge::SccpOutboundMessageKey;
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
@@ -343,5 +387,20 @@ mod tests {
             err.to_string().contains("canonical I105"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn sccp_outbound_message_key_json_key_codec_roundtrip() {
+        let key = SccpOutboundMessageKey {
+            source_domain: 1,
+            target_domain: 2,
+            message_id: [0x42; 32],
+        };
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded json key");
+        let decoded = SccpOutboundMessageKey::decode_json_key(&raw_key).expect("decode json key");
+        assert_eq!(decoded, key);
     }
 }

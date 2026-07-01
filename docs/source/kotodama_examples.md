@@ -38,14 +38,15 @@ seiyaku TransferDemo {
       account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
       account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      10
+      10,
+      dataspace_id("0")
     );
   }
 }
 ```
 
 Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=&NoritoBytes(Numeric)`, `r14=&DataSpaceId(dataspace)`, then `SCALL 0x2C`
 
 ## Native Asset Escrow
 
@@ -123,7 +124,7 @@ seiyaku ThresholdEscrow {
   }
 
   kotoage fn deposit(amount: int) permission(Admin) {
-    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount);
+    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount, dataspace_id("0"));
     funded_amount_value = funded_amount_value + amount;
   }
 }
@@ -143,7 +144,7 @@ open.
 
 Mapping (pointer‑ABI):
 - `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=&NoritoBytes(Numeric)`, `r14=&DataSpaceId(dataspace)`, then `SCALL 0x2C`
 - Declared durable state is persisted under logical paths such as `payer_account`, `recipient_account`, `escrow_account_id`, `escrow_asset_definition`, `target_amount_value`, `funded_amount_value`, `is_open`, `is_released`, and `is_refunded`, which Torii exposes through `GET /v1/contracts/state?...&decode=json`
 
 ## NFT Create + Transfer

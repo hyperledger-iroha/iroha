@@ -559,9 +559,15 @@ def _require_ton_sora_lane(args: argparse.Namespace) -> None:
     source_domain = _require_exact_u32(args.source_domain, "source_domain", SystemExit)
     target_domain = _require_exact_u32(args.target_domain, "target_domain", SystemExit)
     if source_domain != SCCP_DOMAIN_TON:
-        raise SystemExit("TON production source evidence requires source_domain = 4")
+        raise SystemExit(
+            "TON production source evidence requires source_domain = "
+            f"SCCP_DOMAIN_TON ({SCCP_DOMAIN_TON})"
+        )
     if target_domain != SCCP_DOMAIN_SORA:
-        raise SystemExit("TON production source evidence requires target_domain = 0")
+        raise SystemExit(
+            "TON production source evidence requires target_domain = "
+            f"SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})"
+        )
 
 
 def _require_live_component_hashes(args: argparse.Namespace) -> None:

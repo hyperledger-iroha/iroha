@@ -2395,11 +2395,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeTransferWithAlgFn = connect_norito_encode_transfer_signed_transaction_alg
         self.encodeTransferWithFeeSponsorWithAlgFn =
             connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
-        self.encodeValidationFeeTransferFn =
-            connect_norito_encode_validation_fee_transfer_signed_transaction
+        let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        if let encodeValidationFeeSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_validation_fee_transfer_signed_transaction") }) {
+            self.encodeValidationFeeTransferFn = unsafeBitCast(
+                encodeValidationFeeSymbol,
+                to: EncodeValidationFeeTransferFn.self
+            )
+        } else {
+            self.encodeValidationFeeTransferFn = nil
+        }
         self.encodeMintFn = connect_norito_encode_mint_signed_transaction
         self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
-        let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
         loadPrivacySymbols(from: staticHandle)
         if let issueNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_issue_offline_note_signed_transaction") }) {
             self.encodeIssueOfflineNoteFn = unsafeBitCast(issueNoteSymbol, to: EncodeOfflineNoteTxFn.self)

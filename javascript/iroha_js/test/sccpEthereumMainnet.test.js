@@ -887,6 +887,22 @@ test("Ethereum receipt trie helper uses RLP transaction-index keys", () => {
       ),
     /removed/u,
   );
+  for (const removed of [null, 1, "secret-token-removed"]) {
+    assert.throws(
+      () =>
+        canonicalEvmReceiptRlp(
+          fullReceipt(0, { logs: [sourceEventLog({ removed })] }),
+        ),
+      (error) => {
+        assert.match(
+          error.message,
+          /receipt\.logs\[0\]\.removed must be a boolean/u,
+        );
+        assert.equal(error.message.includes("secret-token"), false);
+        return true;
+      },
+    );
+  }
   assert.throws(
     () =>
       canonicalEvmReceiptRlp(
@@ -3752,6 +3768,23 @@ test("EthereumMainnetSccp validates source bridge logs in receipt evidence", asy
       }),
     /removed logs/u,
   );
+  for (const removed of [null, 1, "secret-token-removed"]) {
+    await assert.rejects(
+      () =>
+        sdk.collectInboundEvidenceFromReceipt({
+          receipt: { ...receipt, logs: [sourceEventLog({ removed })] },
+          block,
+        }),
+      (error) => {
+        assert.match(
+          error.message,
+          /receipt\.logs\[0\]\.removed must be a boolean/u,
+        );
+        assert.equal(error.message.includes("secret-token"), false);
+        return true;
+      },
+    );
+  }
 
   await assert.rejects(
     () =>

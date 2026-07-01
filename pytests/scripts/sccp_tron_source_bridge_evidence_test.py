@@ -3479,6 +3479,7 @@ def test_toml_rendering_rejects_supported_non_sora_target_domain():
         module.render_toml(args, bytes.fromhex("11" * 32))
     except ValueError as exc:
         assert "TRON -> SORA" in str(exc)
+        assert "target_domain = SCCP_DOMAIN_SORA (0)" in str(exc)
     else:
         raise AssertionError("TRON production TOML accepted a non-SORA target")
 
@@ -3486,6 +3487,7 @@ def test_toml_rendering_rejects_supported_non_sora_target_domain():
         module.render_full_toml(args, bytes.fromhex("11" * 32))
     except ValueError as exc:
         assert "TRON -> SORA" in str(exc)
+        assert "target_domain = SCCP_DOMAIN_SORA (0)" in str(exc)
     else:
         raise AssertionError("TRON full production TOML accepted a non-SORA target")
 
@@ -3510,6 +3512,25 @@ def test_toml_rendering_rejects_supported_non_sora_target_domain():
         assert "destination_source_domain must be an exact u32" in str(exc)
     else:
         raise AssertionError("TRON full production TOML accepted a boolean destination source")
+
+
+def test_toml_rendering_rejects_wrong_source_lane_with_named_constants():
+    module = load_evidence_module()
+    args = SimpleNamespace(source_domain=module.SCCP_DOMAIN_SORA, target_domain=0)
+
+    try:
+        module.render_toml(args, bytes.fromhex("11" * 32))
+    except ValueError as exc:
+        assert "source_domain = SCCP_DOMAIN_TRON (5)" in str(exc)
+    else:
+        raise AssertionError("TRON production TOML accepted a non-TRON source")
+
+    try:
+        module.render_full_toml(args, bytes.fromhex("11" * 32))
+    except ValueError as exc:
+        assert "source_domain = SCCP_DOMAIN_TRON (5)" in str(exc)
+    else:
+        raise AssertionError("TRON full production TOML accepted a non-TRON source")
 
 
 def test_cli_full_toml_requires_destination_and_route_material():

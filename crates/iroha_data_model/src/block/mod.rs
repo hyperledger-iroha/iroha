@@ -1992,6 +1992,34 @@ mod tests {
     }
 
     #[test]
+    fn sccp_commitment_root_does_not_affect_block_hash() {
+        let mut header = BlockHeader {
+            height: NonZeroU64::new(123_456).unwrap(),
+            prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"prev_block_hash",
+            ))),
+            merkle_root: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"merkle_root",
+            ))),
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
+            npos_effects_hash: None,
+            execution_context_hash: None,
+            sccp_commitment_root: None,
+            creation_time_ms: 123_456_789_000,
+            view_change_index: 123,
+            confidential_features: None,
+        };
+        let hash0 = header.hash();
+        header.sccp_commitment_root = Some([0x42; 32]);
+        let hash1 = header.hash();
+        assert_eq!(hash0, hash1);
+    }
+
+    #[test]
     fn block_header_new_and_display() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         assert_eq!(header.to_string(), format!("{} (№1)", header.hash()));

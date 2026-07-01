@@ -764,9 +764,15 @@ def _require_bsc_sora_lane(args: argparse.Namespace) -> None:
     source_domain = _require_exact_u32(args.source_domain, "source_domain")
     target_domain = _require_exact_u32(args.target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_BSC:
-        raise ValueError("BSC production source evidence requires source_domain = 2")
+        raise ValueError(
+            "BSC production source evidence requires "
+            f"source_domain = SCCP_DOMAIN_BSC ({SCCP_DOMAIN_BSC})"
+        )
     if target_domain != SCCP_DOMAIN_SORA:
-        raise ValueError("BSC production source evidence requires target_domain = 0")
+        raise ValueError(
+            "BSC production source evidence requires "
+            f"target_domain = SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})"
+        )
 
 
 def _template_component_hashes(bsc_network: str | None = None) -> dict[str, bytes]:

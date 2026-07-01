@@ -136,13 +136,13 @@ def _summary_hex_bytes(
 ) -> bytes:
     value = record.get(field)
     if not isinstance(value, str):
-        raise ValueError(f"{label} must be an exact hex string")
+        raise ValueError(f"{label} must be an exact hex string") from None
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
     if value != _hex(raw):
-        raise ValueError(f"{label} must be canonical lowercase 0x hex")
+        raise ValueError(f"{label} must be canonical lowercase 0x hex") from None
     return raw
 
 
@@ -163,9 +163,9 @@ def _summary_runtime_bytes(
 ) -> bytes:
     value = record.get(field)
     if not isinstance(value, str) or not value.startswith("0x"):
-        raise ValueError(f"{label} must be exact 0x-prefixed hex")
+        raise ValueError(f"{label} must be exact 0x-prefixed hex") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
-        raise ValueError(f"{label} must not contain whitespace")
+        raise ValueError(f"{label} must not contain whitespace") from None
     invalid_metadata_errors = {
         "source bridge runtime bytecode": (
             "EVM source bridge runtime bytecode metadata is invalid"
@@ -178,7 +178,7 @@ def _summary_runtime_bytes(
             invalid_metadata_errors.get(label, f"EVM {label} metadata is invalid")
         ) from None
     if value != _hex(raw):
-        raise ValueError(f"{label} must be canonical lowercase 0x hex")
+        raise ValueError(f"{label} must be canonical lowercase 0x hex") from None
     return raw
 
 
@@ -1154,13 +1154,16 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
         )
     if (
         source_bridge.get("expected_source_bridge_code_hash_matches") is True
-        and source_bridge.get("expected_source_bridge_code_hash")
-        != _hex(bridge_code_hash)
     ):
-        raise ValueError(
-            "expected source bridge code hash metadata must match bridge_code_hash"
+        expected_source_bridge_code_hash = _summary_hex32(
+            source_bridge,
+            "expected_source_bridge_code_hash",
+            label="expected source bridge code hash",
         )
-
+        if expected_source_bridge_code_hash != bridge_code_hash:
+            raise ValueError(
+                "expected source bridge code hash metadata must match bridge_code_hash"
+            )
     if source_bridge.get("deployment_receipt_status") != "0x1":
         raise ValueError("source deployment receipt status must be 0x1")
     deployment_transaction_hash = _summary_hex32(
@@ -1366,10 +1369,12 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
                 "expected source verifier material hash argument must match "
                 "canonical inputs"
             )
-        if (
-            source_records.get("expected_source_verifier_material_hash")
-            != _hex(expected_material_hash)
-        ):
+        expected_material_hash_metadata = _summary_hex32(
+            source_records,
+            "expected_source_verifier_material_hash",
+            label="expected source verifier material hash",
+        )
+        if expected_material_hash_metadata != expected_material_hash:
             raise ValueError(
                 "expected source verifier material hash metadata must match "
                 "canonical inputs"
@@ -1383,14 +1388,99 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
                 "expected source adapter engine deployment hash argument must match "
                 "canonical inputs"
             )
-        if (
-            source_records.get("expected_source_adapter_engine_deployment_hash")
-            != _hex(expected_deployment_hash)
-        ):
+        expected_deployment_hash_metadata = _summary_hex32(
+            source_records,
+            "expected_source_adapter_engine_deployment_hash",
+            label="expected source adapter engine deployment hash",
+        )
+        if expected_deployment_hash_metadata != expected_deployment_hash:
             raise ValueError(
                 "expected source adapter engine deployment hash metadata must match "
                 "canonical inputs"
             )
+
+
+def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
+    source_bridge = summary.get("source_bridge")
+    if isinstance(source_bridge, dict):
+        domain = source_bridge.get("domain")
+        evidence = (
+            _load_evidence_module(domain)
+            if type(domain) is int and domain in EXPECTED_RPC_CHAIN_IDS
+            else None
+        )
+        if "bridge_address" in source_bridge:
+            _summary_address(
+                source_bridge,
+                "bridge_address",
+                label="source bridge address",
+            )
+        if "bridge_code_hash" in source_bridge:
+            _summary_hex32(
+                source_bridge,
+                "bridge_code_hash",
+                label="source bridge code hash",
+            )
+        if "expected_source_bridge_code_hash" in source_bridge:
+            _summary_hex32(
+                source_bridge,
+                "expected_source_bridge_code_hash",
+                label="expected source bridge code hash",
+            )
+        if evidence is not None and "bridge_runtime_bytecode_hex" in source_bridge:
+            _summary_runtime_bytes(
+                evidence,
+                source_bridge,
+                "bridge_runtime_bytecode_hex",
+                label="source bridge runtime bytecode",
+            )
+        for field, label in (
+            ("deployment_transaction_hash", "deployment transaction hash"),
+            (
+                "deployment_transaction_block_hash",
+                "deployment transaction block hash",
+            ),
+            (
+                "deployment_transaction_input_sha256",
+                "deployment transaction input SHA-256",
+            ),
+            ("deployment_receipt_block_hash", "deployment receipt block hash"),
+            (
+                "deployment_receipt_block_receipts_root",
+                "deployment receipt block receiptsRoot",
+            ),
+            (
+                "deployment_receipt_finalized_block_hash",
+                "deployment receipt finalized block hash",
+            ),
+        ):
+            if field in source_bridge:
+                _summary_hex32(source_bridge, field, label=label)
+        if "deployment_receipt_contract_address" in source_bridge:
+            _summary_address(
+                source_bridge,
+                "deployment_receipt_contract_address",
+                label="deployment receipt contract address",
+            )
+    source_records = summary.get("source_records")
+    if isinstance(source_records, dict):
+        for field, label in (
+            ("source_verifier_material_hash", "source verifier material hash"),
+            (
+                "source_adapter_engine_deployment_hash",
+                "source adapter engine deployment hash",
+            ),
+            (
+                "expected_source_verifier_material_hash",
+                "expected source verifier material hash",
+            ),
+            (
+                "expected_source_adapter_engine_deployment_hash",
+                "expected source adapter engine deployment hash",
+            ),
+        ):
+            if field in source_records:
+                _summary_hex32(source_records, field, label=label)
 
 
 def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
@@ -1457,6 +1547,7 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
 def render_offline_toml(summary: dict[str, Any]) -> str:
     """Render source material and deployment TOML from pinned live evidence."""
 
+    _validate_copied_source_summary_metadata(summary)
     missing = _toml_prerequisites(summary)
     if missing:
         raise ValueError("TOML output requires " + ", ".join(missing))

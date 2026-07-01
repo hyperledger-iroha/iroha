@@ -205,9 +205,6 @@ pub enum HarnessError {
     /// Rendering a JSON payload failed.
     #[error("failed to render JSON: {0}")]
     Json(#[from] json::Error),
-    /// Placeholder for features that have not yet been implemented.
-    #[error("feature not yet implemented: {0}")]
-    NotImplemented(&'static str),
     /// Propagated I/O failure while reading or writing fixtures.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -4820,9 +4817,11 @@ fn derive_session_key_and_confirmation(
             hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])?
         }
         HandshakeSuite::Nk3PqForwardSecure => {
-            let forward = forward_shared.ok_or(HarnessError::NotImplemented(
-                "nk3 forward-secure key schedule requires dual ML-KEM secret",
-            ))?;
+            let forward = forward_shared.ok_or_else(|| {
+                HarnessError::Validation(
+                    "nk3 forward-secure key schedule requires dual ML-KEM secret".to_string(),
+                )
+            })?;
             let dual_mix = Zeroizing::new(expand_material(
                 b"soranet.kem.dual.mix.v1",
                 &[primary_shared, forward, transcript_hash],
@@ -8144,12 +8143,10 @@ mod tests {
         };
 
         match err {
-            HarnessError::NotImplemented(message) => {
-                assert!(
-                    message.contains("forward-secure"),
-                    "unexpected error message: {message}"
-                );
-            }
+            HarnessError::Validation(message) => assert!(
+                message.contains("forward-secure"),
+                "unexpected error message: {message}"
+            ),
             other => panic!("unexpected error {other:?}"),
         }
     }

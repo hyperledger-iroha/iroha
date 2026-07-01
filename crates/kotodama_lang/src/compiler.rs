@@ -773,7 +773,10 @@ impl Default for CompilerOptions {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId, prelude::AssetBalanceScope};
+    use iroha_data_model::{
+        DomainId,
+        asset::{AssetBalanceScope, id::AssetDefinitionId},
+    };
 
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
@@ -3148,9 +3151,8 @@ fn main() {
         let src = r#"
 fn main() {
   let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-  let space = dataspace_id("0");
-  transfer_batch((authority(), authority(), asset, 5, space));
-  call transfer_batch((authority(), authority(), asset, 7, space));
+  transfer_batch((authority(), authority(), asset, 5));
+  call transfer_batch((authority(), authority(), asset, 7));
 }
 "#;
         let parsed = parse(src).expect("parse transfer_batch source");
@@ -3168,15 +3170,15 @@ fn main() {
         {
             match instr {
                 ir::Instr::TransferBatchBegin => begins += 1,
-                ir::Instr::TransferAsset { .. } => transfers += 1,
+                ir::Instr::TransferBatchAsset { .. } => transfers += 1,
                 ir::Instr::TransferBatchEnd => ends += 1,
                 _ => {}
             }
         }
 
-        assert_eq!(begins, 0, "high-level transfer_batch must not emit begin");
+        assert_eq!(begins, 2, "expected direct and call-sugar batch begin");
         assert_eq!(transfers, 2, "expected one transfer per batch entry");
-        assert_eq!(ends, 0, "high-level transfer_batch must not emit end");
+        assert_eq!(ends, 2, "expected direct and call-sugar batch end");
     }
 
     #[test]
@@ -12002,6 +12004,63 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::TransferBatchAsset {
+                            from,
+                            to,
+                            asset,
+                            amount,
+                        } => {
+                            let r_amt = src_reg(amount, scratch1, &mut code)?;
+                            if let Some(from_str) = string_map
+                                .get(&(func_idx, *from))
+                                .map(|s| DataKey(DataKind::Account, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, from_str);
+                            } else {
+                                let r_from = src_reg(from, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_from, 0)?);
+                            }
+                            if let Some(to_str) = string_map
+                                .get(&(func_idx, *to))
+                                .map(|s| DataKey(DataKind::Account, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, to_str);
+                            } else {
+                                let r_to = src_reg(to, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r_to, 0)?);
+                            }
+                            if let Some(asset_str) = string_map
+                                .get(&(func_idx, *asset))
+                                .map(|s| DataKey(DataKind::AssetDef, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 12, asset_str);
+                            } else {
+                                let r_asset = src_reg(asset, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_asset, 0)?);
+                            }
+                            push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 13, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(13, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 14, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_TRANSFER_V1 as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::EscrowOpenOffer {
                             escrow,
                             asset,
@@ -16839,6 +16898,24 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
+        ir::Instr::TransferBatchAsset {
+            from, to, asset, ..
+        } => {
+            let from =
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *from);
+            let to =
+                account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to);
+            if let Some(asset_def) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
+                add_asset_rw_for_optional_account_hint(access_set, &asset_def, from.as_ref());
+                add_asset_rw_for_optional_account_hint(access_set, &asset_def, to.as_ref());
+            } else {
+                add_dynamic_asset_definition_rw_for_optional_account_hint(
+                    access_set,
+                    from.as_ref(),
+                );
+                add_dynamic_asset_definition_rw_for_optional_account_hint(access_set, to.as_ref());
+            }
+        }
         ir::Instr::CallContract { .. } => {}
         ir::Instr::EscrowOpenOffer { escrow, asset, .. } => {
             let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
@@ -19200,6 +19277,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
         ir::Instr::RegisterAsset { .. }
             | ir::Instr::CreateNewAsset { .. }
             | ir::Instr::TransferAsset { .. }
+            | ir::Instr::TransferBatchAsset { .. }
             | ir::Instr::EscrowOpenOffer { .. }
             | ir::Instr::EscrowAccept { .. }
             | ir::Instr::EscrowMarkPaymentSent { .. }

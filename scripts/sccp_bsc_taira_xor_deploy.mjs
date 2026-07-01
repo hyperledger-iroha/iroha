@@ -1907,6 +1907,7 @@ function normalizeBrowserProverRefRecord(record, label) {
       },
     ],
     `${label}.moduleSpecifier`,
+    { allowNull: true },
   );
   const moduleSpecifier = readOptionalCanonicalManifestText(
     source,
@@ -2080,6 +2081,17 @@ async function readBscRouteBrowserProverManifestRef(
       `${label}.moduleUrl`,
     ),
     `${label}.moduleUrl`,
+  );
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: manifest,
+        keys: ["moduleSpecifier", "module_specifier", "specifier"],
+        pathName: label,
+      },
+    ],
+    `${label}.moduleSpecifier`,
+    { allowNull: true },
   );
   const moduleSpecifier = readOptionalCanonicalManifestText(
     manifest,
@@ -2890,8 +2902,12 @@ function readFirstValue(record, ...keys) {
     return undefined;
   }
   for (const key of keys) {
-    if (hasOwn(record, key)) {
-      return ownValue(record, key);
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = ownValue(record, key);
+    if (value !== undefined) {
+      return value;
     }
   }
   return undefined;
@@ -3846,8 +3862,27 @@ async function submitSignedTransactionRawToTairaPipeline(
   try {
     submitReceipt = await client.submitTransaction(txBuffer);
   } catch (error) {
-    const { getNativeBinding } = await import("../javascript/iroha_js/src/native.js");
-    const native = getNativeBinding();
+    if (error?.name === "ToriiHttpError" && typeof error.status === "number") {
+      const preview =
+        typeof error.errorMessage === "string" && error.errorMessage.trim()
+          ? error.errorMessage.trim()
+          : typeof error.bodyText === "string" && error.bodyText.trim()
+            ? error.bodyText.trim().slice(0, 512)
+            : "";
+      throw new Error(
+        `HTTP ${error.status} while submitting raw signed transaction${
+          preview ? `: ${preview}` : ""
+        }`,
+        { cause: error },
+      );
+    }
+    let native;
+    try {
+      const { getNativeBinding } = await import("../javascript/iroha_js/src/native.js");
+      native = getNativeBinding();
+    } catch {
+      throw error;
+    }
     if (!native || typeof native.decodeSignedTransactionJson !== "function") {
       throw error;
     }
@@ -12088,7 +12123,7 @@ function readConsistentString(record, keys, label) {
   return selected;
 }
 
-function collectStringEntries(record, keys, pathName) {
+function collectStringEntries(record, keys, pathName, { allowNull = false } = {}) {
   if (!isRecord(record)) {
     return [];
   }
@@ -12097,17 +12132,20 @@ function collectStringEntries(record, keys, pathName) {
     if (!hasOwn(record, key)) {
       continue;
     }
-    const value = canonicalRecordString(
-      ownValue(record, key),
-      `${pathName}.${key}`,
-    );
-    if (value) {
-      entries.push({
-        key,
-        path: `${pathName}.${key}`,
-        value,
-      });
+    const rawValue = ownValue(record, key);
+    if (rawValue === undefined) {
+      continue;
     }
+    if (rawValue === null && allowNull) {
+      continue;
+    }
+    const path = `${pathName}.${key}`;
+    const value = normalizeCanonicalManifestText(rawValue, path);
+    entries.push({
+      key,
+      path,
+      value,
+    });
   }
   return entries;
 }
@@ -12156,12 +12194,13 @@ function readConsistentNormalizedString(sources, label, normalizeValue) {
   return selected?.normalized ?? "";
 }
 
-function assertSingleStringAliasPerSource(sources, label) {
+function assertSingleStringAliasPerSource(sources, label, options = {}) {
   for (const source of sources) {
     const entries = collectStringEntries(
       source.record,
       source.keys,
       source.pathName,
+      options,
     );
     if (entries.length > 1) {
       throw new Error(
@@ -12248,6 +12287,9 @@ function readConsistentBoolean(record, keys, label) {
       continue;
     }
     const value = ownValue(record, key);
+    if (value === undefined) {
+      continue;
+    }
     if (typeof value !== "boolean") {
       throw new Error(`${label}.${key} must be boolean.`);
     }

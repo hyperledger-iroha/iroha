@@ -46,6 +46,13 @@ class HostilePublicKey:
         return "secret-token-hostile-key"
 
 
+class HostileImportedScalar:
+    """Copied scalar that must be rejected without string coercion."""
+
+    def __str__(self):
+        raise AssertionError("secret-token imported TRON metadata was stringified")
+
+
 def transaction_info_field(default, override):
     return default if override is DEFAULT_TRANSACTION_INFO_FIELD else override
 
@@ -1086,6 +1093,98 @@ def test_tron_live_boolean_controls_reject_non_booleans():
                 assert str(exc) == expected_message
             else:
                 raise AssertionError(failure_message)
+
+
+def test_live_tron_rejects_non_string_copied_hash_metadata_without_stringifying():
+    module = load_live_module()
+    hex_a = "0x" + "aa" * 32
+    hex_b = "0x" + "bb" * 32
+    hex_c = "0x" + "cc" * 32
+
+    cases = (
+        (
+            lambda hostile: module._check_source_destination_network_id_match(
+                {
+                    "source_bridge": {"source_bridge_network_id": hostile},
+                    "destination_verifier": {"network_id": hex_a},
+                }
+            ),
+            "source bridge network id must be an exact non-empty string",
+        ),
+        (
+            lambda hostile: module._check_source_destination_network_id_match(
+                {
+                    "source_bridge": {"source_bridge_network_id": hex_a},
+                    "destination_verifier": {"network_id": hostile},
+                }
+            ),
+            "destination verifier network id must be an exact non-empty string",
+        ),
+        (
+            lambda hostile: module._check_expected_source_config_hash(
+                {"source_bridge_config_hash": hostile},
+                SimpleNamespace(expected_source_bridge_config_hash=bytes.fromhex("aa" * 32)),
+            ),
+            "source bridge config hash must be an exact non-empty string",
+        ),
+        (
+            lambda hostile: module._check_expected_destination_binding_hash(
+                {"destination_binding_hash": hostile},
+                SimpleNamespace(expected_destination_binding_hash=bytes.fromhex("aa" * 32)),
+            ),
+            "destination binding hash must be an exact non-empty string",
+        ),
+        (
+            lambda hostile: module._validate_route_allowlist_hash(
+                supplied_hash=bytes.fromhex("11" * 32),
+                route_canary_evidence_hash=None,
+                source_records={
+                    "source_verifier_material_hash": hex_b,
+                    "source_adapter_engine_deployment_hash": hex_c,
+                },
+                destination_verifier={"destination_binding_hash": hostile},
+                destination_binding_pinned=True,
+            ),
+            "destination binding hash must be an exact non-empty string",
+        ),
+        (
+            lambda hostile: module._validate_route_allowlist_hash(
+                supplied_hash=bytes.fromhex("11" * 32),
+                route_canary_evidence_hash=None,
+                source_records={
+                    "source_verifier_material_hash": hostile,
+                    "source_adapter_engine_deployment_hash": hex_c,
+                },
+                destination_verifier={"destination_binding_hash": hex_a},
+                destination_binding_pinned=True,
+            ),
+            "source verifier material hash must be an exact non-empty string",
+        ),
+        (
+            lambda hostile: module._validate_route_allowlist_hash(
+                supplied_hash=bytes.fromhex("11" * 32),
+                route_canary_evidence_hash=None,
+                source_records={
+                    "source_verifier_material_hash": hex_b,
+                    "source_adapter_engine_deployment_hash": hostile,
+                },
+                destination_verifier={"destination_binding_hash": hex_a},
+                destination_binding_pinned=True,
+            ),
+            "source adapter engine deployment hash must be an exact non-empty string",
+        ),
+    )
+    for action, expected_error in cases:
+        try:
+            action(HostileImportedScalar())
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("non-string copied TRON hash metadata was accepted")
 
 
 def test_witness_schedule_transition_json_rejects_duplicate_keys(tmp_path):

@@ -57,7 +57,7 @@ seiyaku TransferDemo {
 ```
 
 Картинг (пункт-АБИ):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, Norito, һуңынан Kotodama.
+- `transfer_asset(from, to, def, amt, dataspace)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, Norito, һуңынан Kotodama.
 
 ## NFT булдырыу + Трансфер
 

@@ -26,16 +26,16 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
 VERIFY_RELEASE_BUNDLE_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
-ACTIVE_LAUNCH_DOMAIN = 1
-ACTIVE_LAUNCH_CHAIN = "eth"
-ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
-ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
 SCCP_DOMAIN_SOL = 3
 SCCP_DOMAIN_TON = 4
 SCCP_DOMAIN_TRON = 5
+ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
 ALL_LANES_CHAIN_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "eth",
     SCCP_DOMAIN_BSC: "bsc",
@@ -43,6 +43,27 @@ ALL_LANES_CHAIN_BY_DOMAIN = {
     SCCP_DOMAIN_TON: "ton",
     SCCP_DOMAIN_TRON: "tron",
 }
+SCCP_DOMAIN_CONSTANT_NAME_BY_DOMAIN = {
+    SCCP_DOMAIN_SORA: "SCCP_DOMAIN_SORA",
+    SCCP_DOMAIN_ETH: "SCCP_DOMAIN_ETH",
+    SCCP_DOMAIN_BSC: "SCCP_DOMAIN_BSC",
+    SCCP_DOMAIN_SOL: "SCCP_DOMAIN_SOL",
+    SCCP_DOMAIN_TON: "SCCP_DOMAIN_TON",
+    SCCP_DOMAIN_TRON: "SCCP_DOMAIN_TRON",
+}
+
+
+def _sccp_domain_constant_label(domain: Any) -> str:
+    """Return a public SCCP domain label with the named constant when known."""
+
+    if type(domain) is not int:
+        return "non-integer domain"
+    name = SCCP_DOMAIN_CONSTANT_NAME_BY_DOMAIN.get(domain)
+    if name is None:
+        return f"domain {domain}"
+    return f"{name} ({domain})"
+
+
 MESSAGE_PROOF_ROUTE_CANARY_DOMAINS = frozenset(
     domain
     for domain, chain in ALL_LANES_CHAIN_BY_DOMAIN.items()
@@ -55,9 +76,9 @@ SNAPSHOT_ROUTE_CANARY_DOMAINS = frozenset(
 )
 ALL_LANES_REQUIRED_DOMAINS = tuple(ALL_LANES_CHAIN_BY_DOMAIN)
 ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
-    1: frozenset(("evm_source_gate_hash",)),
-    2: frozenset(("evm_source_gate_hash",)),
-    3: frozenset(
+    SCCP_DOMAIN_ETH: frozenset(("evm_source_gate_hash",)),
+    SCCP_DOMAIN_BSC: frozenset(("evm_source_gate_hash",)),
+    SCCP_DOMAIN_SOL: frozenset(
         (
             "solana_tower_replay_verifier_hash",
             "solana_full_accountsdb_lattice_verifier_hash",
@@ -65,7 +86,7 @@ ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
             "solana_full_light_client_gate_hash",
         )
     ),
-    4: frozenset(
+    SCCP_DOMAIN_TON: frozenset(
         (
             "ton_masterchain_config_verifier_hash",
             "ton_validator_set_transition_verifier_hash",
@@ -73,14 +94,14 @@ ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
             "ton_full_light_client_gate_hash",
         )
     ),
-    5: frozenset(("tron_dpos_source_gate_hash",)),
+    SCCP_DOMAIN_TRON: frozenset(("tron_dpos_source_gate_hash",)),
 }
 ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
-    1: "evm_source_gate_hash",
-    2: "evm_source_gate_hash",
-    3: "solana_full_light_client_gate_hash",
-    4: "ton_full_light_client_gate_hash",
-    5: "tron_dpos_source_gate_hash",
+    SCCP_DOMAIN_ETH: "evm_source_gate_hash",
+    SCCP_DOMAIN_BSC: "evm_source_gate_hash",
+    SCCP_DOMAIN_SOL: "solana_full_light_client_gate_hash",
+    SCCP_DOMAIN_TON: "ton_full_light_client_gate_hash",
+    SCCP_DOMAIN_TRON: "tron_dpos_source_gate_hash",
 }
 READINESS_REPORT_PUBLIC_FIELDS = (
     "production_ready",
@@ -3649,6 +3670,7 @@ def _native_evm_prover_bundle_artifact_summary(
     rows: list[dict[str, Any]] = []
     by_sdk: dict[str, dict[str, Any]] = {}
     semantic_sdk_order: list[str] = []
+    sdk_name_blockers: list[str] = []
     for index, artifact in enumerate(artifacts):
         label = f"native_sdk_artifacts[{index}]"
         if not isinstance(artifact, dict):
@@ -3671,20 +3693,18 @@ def _native_evm_prover_bundle_artifact_summary(
             continue
         semantic_sdk_order.append(sdk)
         if sdk in by_sdk:
-            if _native_evm_sdk_name_has_sensitive_marker(sdk):
-                blockers.append(
-                    "native_sdk_artifacts contains duplicate sdk with sensitive name"
-                )
-            else:
-                blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
+            # Source-inventory marker: native_sdk_artifacts contains duplicate sdk
+            sdk_name_blockers.append(
+                _native_evm_sdk_name_blocker("native_sdk_artifacts", sdk, "duplicate")
+            )
         expected_implementation = NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.get(sdk)
         if expected_implementation is None:
+            # Source-inventory marker: native_sdk_artifacts contains unknown sdk
+            sdk_name_blockers.append(
+                _native_evm_sdk_name_blocker("native_sdk_artifacts", sdk, "unknown")
+            )
             if _native_evm_sdk_name_has_sensitive_marker(sdk):
-                blockers.append(
-                    "native_sdk_artifacts contains unknown sdk with sensitive name"
-                )
                 continue
-            blockers.append(f"native_sdk_artifacts contains unknown sdk: {sdk}")
         elif implementation != expected_implementation:
             blockers.append(
                 f"{sdk} implementation must be {expected_implementation}"
@@ -3721,6 +3741,12 @@ def _native_evm_prover_bundle_artifact_summary(
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
     if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
         blockers.append("native_sdk_artifacts must match expected SDK order")
+    blockers.extend(
+        _number_repeated_native_evm_sdk_name_blockers(
+            sdk_name_blockers,
+            "native_sdk_artifacts",
+        )
+    )
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
 
@@ -3758,6 +3784,7 @@ def _native_evm_prover_sdk_results_by_sdk(
 
     blockers: list[str] = []
     canonical_results: dict[str, Any] = {}
+    sdk_name_blockers: list[str] = []
     for sdk, result in sorted(
         sdk_results.items(),
         key=lambda item: _safe_public_key_sort_key(item[0]),
@@ -3771,16 +3798,20 @@ def _native_evm_prover_sdk_results_by_sdk(
     for sdk in sorted(
         set(canonical_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
     ):
-        if _native_evm_sdk_name_has_sensitive_marker(sdk):
-            blockers.append(
-                f"{prefix} sdk_results contains unknown sdk with sensitive name"
-            )
-        else:
-            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+        # Source-inventory marker: sdk_results contains unknown sdk
+        sdk_name_blockers.append(
+            _native_evm_sdk_name_blocker(f"{prefix} sdk_results", sdk, "unknown")
+        )
     for sdk in sorted(
         set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(canonical_results)
     ):
         blockers.append(f"{prefix} sdk_results missing sdk: {sdk}")
+    blockers.extend(
+        _number_repeated_native_evm_sdk_name_blockers(
+            sdk_name_blockers,
+            f"{prefix} sdk_results",
+        )
+    )
     return canonical_results, blockers
 
 
@@ -3930,6 +3961,44 @@ def _native_evm_sdk_name_blocker(label: str, sdk: str, issue: str) -> str:
     if _native_evm_sdk_name_has_sensitive_marker(sdk):
         return f"{label} contains {issue} sdk with sensitive name"
     return f"{label} contains {issue} sdk: {sdk}"
+
+
+def _native_evm_sdk_name_diagnostic_numbering_key(
+    blocker: str,
+    label: str,
+) -> str | None:
+    """Return a native EVM SDK-name blocker key that needs numbering."""
+
+    numbered_suffixes = (
+        "contains duplicate sdk with sensitive name",
+        "contains unknown sdk with sensitive name",
+    )
+    if blocker in {f"{label} {suffix}" for suffix in numbered_suffixes}:
+        return blocker
+    return None
+
+
+def _number_repeated_native_evm_sdk_name_blockers(
+    sdk_name_blockers: list[str],
+    label: str,
+) -> list[str]:
+    """Number repeated redacted native EVM SDK-name blockers."""
+
+    blocker_totals: dict[str, int] = {}
+    for blocker in sdk_name_blockers:
+        numbering_key = _native_evm_sdk_name_diagnostic_numbering_key(blocker, label)
+        if numbering_key is not None:
+            blocker_totals[numbering_key] = blocker_totals.get(numbering_key, 0) + 1
+    blocker_counts: dict[str, int] = {}
+    numbered_blockers: list[str] = []
+    for blocker in sdk_name_blockers:
+        numbering_key = _native_evm_sdk_name_diagnostic_numbering_key(blocker, label)
+        if numbering_key is None or blocker_totals.get(numbering_key, 0) == 1:
+            numbered_blockers.append(blocker)
+            continue
+        blocker_counts[numbering_key] = blocker_counts.get(numbering_key, 0) + 1
+        numbered_blockers.append(f"{blocker} #{blocker_counts[numbering_key]}")
+    return numbered_blockers
 
 
 def _required_record_summary_unknown_field_blocker(
@@ -5342,7 +5411,7 @@ def _node_check_command_matches(tokens: list[str], expected_path: str) -> bool:
 
 
 def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
-    if len(tokens) < 8 or _command_token_basename(tokens[0]) != "dotnet":
+    if len(tokens) != 11 or _command_token_basename(tokens[0]) != "dotnet":
         return False
     project_fragment = next(
         (
@@ -5362,27 +5431,18 @@ def _dotnet_sdk_command_matches(tokens: list[str]) -> bool:
     )
     project_tokens = shlex.split(project_fragment)
     expected_project = project_tokens[2] if len(project_tokens) > 2 else ""
-    if tokens[1] != "test" or tokens[2] != expected_project:
-        return False
-    index = 3
-    if index < len(tokens) and tokens[index] == "--artifacts-path":
-        index += 1
-        if index >= len(tokens) or not tokens[index] or tokens[index].startswith("-"):
-            return False
-        index += 1
-    if index + 1 >= len(tokens) or tokens[index] != "--filter":
-        return False
-    if tokens[index + 1].replace("\\|", "|") != filter_fragment.replace("\\|", "|"):
-        return False
-    index += 2
-    if index < len(tokens) and tokens[index] == "-p:ProduceReferenceAssembly=false":
-        index += 1
     return (
-        index + 2 < len(tokens)
-        and tokens[index] == "--nologo"
-        and tokens[index + 1] == "--logger"
-        and tokens[index + 2] == "trx;LogFileName=sccp-dotnet-sdk.trx"
-        and index + 3 == len(tokens)
+        tokens[1] == "test"
+        and tokens[2] == expected_project
+        and tokens[3] == "--artifacts-path"
+        and bool(tokens[4])
+        and not tokens[4].startswith("-")
+        and tokens[5] == "--filter"
+        and tokens[6].replace("\\|", "|") == filter_fragment.replace("\\|", "|")
+        and tokens[7] == "-p:ProduceReferenceAssembly=false"
+        and tokens[8] == "--nologo"
+        and tokens[9] == "--logger"
+        and tokens[10] == "trx;LogFileName=sccp-dotnet-sdk.trx"
     )
 
 
@@ -7321,7 +7381,7 @@ def _active_launch_evm_live_metadata_blockers(
     if not isinstance(evm_live_metadata, dict):
         if "evm_live_metadata" in lane:
             blockers.append(
-                f"{lane_label}: active EVM live metadata summary is malformed"
+                f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed"
             )
         evm_live_metadata = {}
     expected_chain_id = ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
@@ -7666,12 +7726,12 @@ def _active_launch_governed_deployment_metadata_blockers(
         blockers.append(f"{lane_label}: source adapter gate summary must be ready")
     if source_gate.get("required") is not True:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate summary must be required"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required"
         )
     gate_hash = source_gate.get("gate_hash")
     if not _is_nonzero_hex32(gate_hash):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string"
         )
     blockers.extend(
         _active_launch_hash_role_reuse_blockers(
@@ -7688,15 +7748,15 @@ def _active_launch_governed_deployment_metadata_blockers(
     audit_hashes = source_gate.get("audit_hashes")
     if not isinstance(audit_hashes, dict):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be an object"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must be an object"
         )
     elif set(audit_hashes) != {"evm_source_gate_hash"}:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash"
         )
     elif audit_hashes.get("evm_source_gate_hash") != gate_hash:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must match audit hash evm_source_gate_hash"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash"
         )
     return blockers
 
@@ -7772,7 +7832,7 @@ def _active_launch_required_record_metadata_blockers(
         or lane.get("domain") != ACTIVE_LAUNCH_DOMAIN
     ):
         blockers.append(
-            f"{lane_label}: active launch lane domain must be {ACTIVE_LAUNCH_DOMAIN}"
+            f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} launch lane domain must be {_sccp_domain_constant_label(ACTIVE_LAUNCH_DOMAIN)}"
         )
     if lane.get("chain") != ACTIVE_LAUNCH_CHAIN:
         blockers.append(
@@ -10364,7 +10424,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, that strict `dotnet test` command carrying `--artifacts-path <bridge-target>/dotnet-artifacts`, `-p:ProduceReferenceAssembly=false`, and `--nologo`, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
@@ -10382,8 +10442,8 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
-            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, browser-prover duplicate-alias rejection, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
-            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
@@ -10429,7 +10489,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
-            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
+            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, BSC proof-artifact remote-prover marker rejection, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
@@ -10639,6 +10699,31 @@ def _readiness_report_unknown_field_blocker(field: Any) -> str:
     )
 
 
+def _public_input_path_duplicate_errors(value: Any) -> list[str]:
+    """Return duplicate-path blockers from inspectable public input paths."""
+
+    if not isinstance(value, list):
+        return []
+    seen_paths: set[str] = set()
+    errors: list[str] = []
+    duplicate_reported = False
+    for item in value:
+        if (
+            not isinstance(item, str)
+            or not item
+            or _public_blocker_text_issue(item) is not None
+            or not _native_evm_markdown_path_is_safe(item)
+        ):
+            continue
+        if item in seen_paths:
+            if not duplicate_reported:
+                errors.append("readiness report inputs contains duplicate path")
+                duplicate_reported = True
+        else:
+            seen_paths.add(item)
+    return errors
+
+
 def _public_release_checklist_errors(value: Any) -> list[str]:
     """Return bounded blockers for malformed public release-checklist payloads."""
 
@@ -10750,6 +10835,30 @@ def _public_release_checklist_errors(value: Any) -> list[str]:
     return errors
 
 
+def _public_input_artifact_duplicate_path_errors(value: Any) -> list[str]:
+    """Return duplicate-path blockers from inspectable public input artifacts."""
+
+    if not isinstance(value, list):
+        return []
+    seen_paths: set[str] = set()
+    duplicate_path_count = 0
+    errors: list[str] = []
+    for artifact in value:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path = artifact.get("path")
+        if not _native_evm_markdown_path_is_safe(artifact_path):
+            continue
+        if artifact_path in seen_paths:
+            duplicate_path_count += 1
+            errors.append(
+                "readiness report input_artifacts contains duplicate path "
+                f"#{duplicate_path_count}"
+            )
+        seen_paths.add(artifact_path)
+    return errors
+
+
 def _public_input_artifact_errors(value: Any) -> list[str]:
     """Return bounded blockers for malformed public input artifact rows."""
 
@@ -10757,8 +10866,6 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
         return ["readiness report input_artifacts must be a list of objects"]
 
     errors: list[str] = []
-    seen_paths: set[str] = set()
-    duplicate_path_count = 0
     for index, artifact in enumerate(value):
         artifact_label = f"readiness report input_artifacts[{index}]"
         for field in sorted(
@@ -10778,15 +10885,6 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
             artifact.get("path")
         ):
             errors.append(f"{artifact_label} path must be a canonical public path")
-        elif "path" in artifact:
-            artifact_path = artifact.get("path")
-            if artifact_path in seen_paths:
-                duplicate_path_count += 1
-                errors.append(
-                    "readiness report input_artifacts contains duplicate path "
-                    f"#{duplicate_path_count}"
-                )
-            seen_paths.add(artifact_path)
         artifact_bytes = artifact.get("bytes")
         if "bytes" in artifact and (
             type(artifact_bytes) is not int or artifact_bytes <= 0
@@ -10794,6 +10892,32 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
             errors.append(f"{artifact_label} bytes must be a positive integer")
         if "sha256" in artifact:
             errors.extend(_sha256_text_errors(artifact_label, artifact.get("sha256")))
+    errors.extend(_public_input_artifact_duplicate_path_errors(value))
+    return errors
+
+
+def _public_corridor_evidence_artifact_duplicate_path_errors(value: Any) -> list[str]:
+    """Return duplicate-path blockers from inspectable corridor artifacts."""
+
+    if not isinstance(value, dict):
+        return []
+    seen_paths: set[str] = set()
+    duplicate_path_count = 0
+    errors: list[str] = []
+    for artifact in value.values():
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path = artifact.get("path")
+        if not _native_evm_markdown_path_is_safe(artifact_path):
+            continue
+        if artifact_path in seen_paths:
+            duplicate_path_count += 1
+            errors.append(
+                "readiness report corridor evidence_artifacts contains "
+                f"duplicate path #{duplicate_path_count}"
+            )
+        else:
+            seen_paths.add(artifact_path)
     return errors
 
 
@@ -10939,6 +11063,11 @@ def _public_corridor_errors(value: Any) -> list[str]:
                         f"readiness report corridor evidence_artifacts.{phase}",
                     )
                 )
+        errors.extend(
+            _public_corridor_evidence_artifact_duplicate_path_errors(
+                evidence_artifacts
+            )
+        )
 
     if (
         production_ready is True
@@ -11741,6 +11870,29 @@ def _public_user_prover_submission_surface_errors(value: Any) -> list[str]:
     return errors
 
 
+def _public_user_prover_duplicate_lane_errors(value: Any) -> list[str]:
+    """Return duplicate-lane blockers from inspectable user-prover rows."""
+
+    if not isinstance(value, list):
+        return []
+    errors: list[str] = []
+    seen_lanes: set[str] = set()
+    for index, surface in enumerate(value):
+        if not isinstance(surface, dict):
+            continue
+        lanes = surface.get("lanes")
+        if not isinstance(lanes, str) or lanes not in USER_PROVER_REQUIRED_LANE_BACKENDS:
+            continue
+        if lanes in seen_lanes:
+            errors.append(
+                "readiness report user_prover_submission_surfaces"
+                f"[{index}] lanes is duplicated"
+            )
+        else:
+            seen_lanes.add(lanes)
+    return errors
+
+
 def _public_crypto_text_is_safe(value: Any) -> bool:
     return (
         value is None
@@ -12150,9 +12302,10 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
                     )
         if (
             type(domain) is int
-            and domain == 5
+            and domain == SCCP_DOMAIN_TRON
             and has_route_canary_evidence
         ):
+            # Source-inventory marker: readiness public crypto TRON exactness must use SCCP_DOMAIN_TRON instead of a literal domain id.
             for field in (
                 "route_canary_transaction_id",
                 "route_canary_signature_sha256",
@@ -12198,8 +12351,9 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
                     )
         if (
             type(domain) is int
-            and domain != 5
+            and domain != SCCP_DOMAIN_TRON
         ):
+            # Source-inventory marker: readiness public crypto non-TRON cleanup must use SCCP_DOMAIN_TRON instead of a literal domain id.
             for field in (
                 "route_canary_transaction_id",
                 "route_canary_transaction_owner_address",
@@ -12369,6 +12523,29 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
     return errors
 
 
+def _public_cryptographic_evidence_duplicate_domain_errors(value: Any) -> list[str]:
+    """Return duplicate-domain blockers from inspectable crypto evidence rows."""
+
+    if not isinstance(value, list):
+        return []
+    seen_domains: set[int] = set()
+    errors: list[str] = []
+    for row in value:
+        if not isinstance(row, dict):
+            continue
+        domain = row.get("domain")
+        if type(domain) is not int:
+            continue
+        if domain in seen_domains:
+            errors.append(
+                "readiness report cryptographic_evidence contains duplicate "
+                f"domain: {domain}"
+            )
+        else:
+            seen_domains.add(domain)
+    return errors
+
+
 def _public_cryptographic_source_adapter_gate_hash_role_errors(
     row_label: str,
     row: dict[str, Any],
@@ -12505,10 +12682,12 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
             and _public_blocker_text_issue(item) is None
             for item in inputs
         ):
+            blockers.extend(_public_input_path_duplicate_errors(inputs))
             root_errors["inputs"] = (
                 "readiness report inputs must be a list of canonical strings"
             )
         elif not all(_native_evm_markdown_path_is_safe(item) for item in inputs):
+            blockers.extend(_public_input_path_duplicate_errors(inputs))
             root_errors["inputs"] = (
                 "readiness report inputs must be a list of canonical public paths"
             )
@@ -12523,9 +12702,14 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
 
     input_artifacts = report.get("input_artifacts")
     if "input_artifacts" in report:
-        if not isinstance(input_artifacts, list) or not all(
-            isinstance(item, dict) for item in input_artifacts
-        ):
+        if not isinstance(input_artifacts, list):
+            root_errors["input_artifacts"] = (
+                "readiness report input_artifacts must be a list of objects"
+            )
+        elif not all(isinstance(item, dict) for item in input_artifacts):
+            blockers.extend(
+                _public_input_artifact_duplicate_path_errors(input_artifacts)
+            )
             root_errors["input_artifacts"] = (
                 "readiness report input_artifacts must be a list of objects"
             )
@@ -12544,9 +12728,18 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
     }
     for field, message in list_root_messages.items():
         value = report.get(field)
-        if field in report and (
-            not isinstance(value, list) or not all(isinstance(item, dict) for item in value)
-        ):
+        if field not in report:
+            continue
+        if not isinstance(value, list):
+            root_errors[field] = message
+            continue
+        if not all(isinstance(item, dict) for item in value):
+            if field == "cryptographic_evidence":
+                blockers.extend(
+                    _public_cryptographic_evidence_duplicate_domain_errors(value)
+                )
+            elif field == "user_prover_submission_surfaces":
+                blockers.extend(_public_user_prover_duplicate_lane_errors(value))
             root_errors[field] = message
     native_bundle = report.get("native_evm_prover_bundle")
     if "native_evm_prover_bundle" in report and not isinstance(native_bundle, dict):
